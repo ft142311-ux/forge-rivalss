@@ -49,6 +49,10 @@ Local emulator mode remains isolated: when `NEXT_PUBLIC_USE_FIREBASE_EMULATORS=t
 5. The season orchestrator and match resolver write game state. They must not be called automatically until staging is initialized, isolated, and verified.
 6. Hosting provider selection remains open until the project's commercial/non-commercial use is clarified.
 
+## Branch validation workflow
+
+`.github/workflows/staging-validation.yml` runs on pushes and pull requests targeting `hosting/vercel-free-staging`, and can also be started manually. It installs dependencies, runs TypeScript checks, core regression tests, the full test suite, and a production build. It uses the local emulator configuration and requires no Firebase credentials. It does not deploy the application or execute game operations.
+
 ## Read-only smoke check
 
 `.github/workflows/staging-health-check.yml` adds a manual GitHub Actions workflow. It accepts an HTTPS deployment URL and calls only `GET /api/health`. The health endpoint reads `system_v1/global_stats`; it does not intentionally modify game data.
@@ -112,6 +116,7 @@ Until those checks pass, the GitHub Actions workflow remains manual and read-onl
 ## Current safe milestone
 
 The staging branch contains:
+- A branch validation workflow for typecheck, regression tests, full tests, and production build.
 - A manual HTTPS health-check workflow calling `GET /api/health`.
 - Environment-driven Firebase Web configuration with explicit production validation.
 - Firebase Admin initialization that requires an explicit hosted credential source and checks the service-account project ID.
