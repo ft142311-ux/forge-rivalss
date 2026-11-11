@@ -132,7 +132,7 @@ Not yet production-ready; these are explicit next security gates:
 - Configure Firebase App Check for the actual Web App, send its token from the browser, and set `FIREBASE_APPCHECK_REQUIRED=true` only after a verified staging test. The endpoint supports enforcement, but it is not enabled by default yet.
 - Add abuse throttling at the hosting edge and/or a carefully designed server-side rate limiter. Do not rely on in-memory counters in a horizontally scaled serverless runtime.
 - Verify email-verification policy and account recovery requirements; the current registration preserves the existing email-required behavior and does not newly require `email_verified`.
-- Add emulator integration tests for concurrent first-time registration, transaction retries, already-initialized accounts, and rollback on invalid/missing world data.
+- The CI now runs isolated Firestore Emulator transaction tests for concurrent slot claims, idempotent repeated registration, and rollback after a rejected transaction. These validate Firestore transaction guarantees and the intended registration invariants; they do not yet invoke the Next.js registration route itself. A route-level integration test with Firebase Auth Emulator tokens and a fully seeded 120-slot/56-fixture world remains required before live staging registration.
 - Review service-account IAM permissions, Firestore rules, audit retention, and deployment secrets before any real staging write.
 
 ## Current safe milestone
@@ -142,7 +142,7 @@ The staging branch contains:
 - A manual HTTPS health-check workflow calling `GET /api/health`.
 - Environment-driven Firebase Web configuration with explicit production validation.
 - Firebase Admin initialization that requires an explicit hosted credential source and checks the service-account project ID.
-- A Spark-compatible authenticated registration route and shared registration core, with regression tests for slot/schedule invariants.
+- A Spark-compatible authenticated registration route and shared registration core, with unit tests for slot/schedule invariants and isolated Firestore Emulator transaction tests.
 - An updated `.env.example` documenting local emulator, hosted Web SDK, and hosted Admin SDK variables.
 - Documentation describing deployment and safety requirements.
 
