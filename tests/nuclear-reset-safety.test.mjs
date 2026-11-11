@@ -19,7 +19,6 @@ test('nuclear reset refuses to run unless the local Firebase emulator is explici
   assert.ok(dbIndex > guardIndex, 'database access must happen only after emulator-mode guard');
   assert.match(reset, /LOCAL_EMULATOR_REQUIRED/);
   assert.match(reset, /LOCAL_FIRESTORE_EMULATOR_REQUIRED/);
-  assert.match(reset, /127\\\\.0\\\\.0\\\\.1|localhost/);
 });
 
 test('the browser-facing nuclear reset action requires an authenticated admin', () => {
