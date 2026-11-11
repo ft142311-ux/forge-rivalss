@@ -13,7 +13,7 @@
     "test:core": "node scripts/test-v2-core.cjs",
     "test": "tsx --test tests/*.test.mjs",
     "scheduler:local": "node scripts/local-match-scheduler.cjs",
-    "test:registration:emulator": "firebase emulators:exec --only auth,firestore --project demo-forge-rivals \"tsx --test tests/registration-emulator.integration.test.mjs tests/registration-api.integration.test.mjs\""
+    "test:registration:emulator": "firebase emulators:exec --only auth,firestore --project demo-forge-rivals \"tsx --test tests/registration-emulator.integration.test.mjs tests/registration-api.integration.test.mjs tests/firestore-rules-emulator.integration.test.mjs\""
   },
   "dependencies": {
     "@genkit-ai/google-genai": "^1.28.0",
