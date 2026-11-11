@@ -82,7 +82,7 @@ Do not add or enable a write-capable schedule yet. First complete the staging de
 
 ## Firebase Admin credentials
 
-The current `src/lib/firebase-admin.ts` initializes with Application Default Credentials when emulator mode is disabled and no `FIREBASE_ADMIN_SDK` value is present. This is suitable only where the runtime supplies a correctly scoped Google service identity.
+The current `src/lib/firebase-admin.ts` now has three explicit modes: local Emulator Suite initialization; hosted initialization from the `FIREBASE_ADMIN_SDK` JSON secret; or Application Default Credentials only when `FIREBASE_ADMIN_USE_ADC=true` is deliberately set. Hosted service-account credentials are checked against the configured project ID when the credential JSON contains `project_id`. Missing credentials fail closed instead of silently attempting ADC.
 
 Before using an external host:
 - Create a dedicated staging service account in the staging Google Cloud project.
@@ -114,7 +114,8 @@ Until those checks pass, the GitHub Actions workflow remains manual and read-onl
 The staging branch contains:
 - A manual HTTPS health-check workflow calling `GET /api/health`.
 - Environment-driven Firebase Web configuration with explicit production validation.
-- An updated `.env.example` documenting local emulator and hosted client variables.
+- Firebase Admin initialization that requires an explicit hosted credential source and checks the service-account project ID.
+- An updated `.env.example` documenting local emulator, hosted Web SDK, and hosted Admin SDK variables.
 - Documentation describing deployment and safety requirements.
 
 No service credentials, Firestore rules, scheduled write operations, game data, local files, or production deployment have been changed by this milestone.
