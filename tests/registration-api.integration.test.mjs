@@ -78,15 +78,25 @@ test('registration HTTP API enforces its boundary and safely initializes a club'
     const email = `registration-${runId}@example.test`;
     const password = `Test-${randomUUID()}-Aa1!`;
     const user = await auth.createUser({ email, password, emailVerified: true });
+    const contenderEmail = `registration-contender-${runId}@example.test`;
+    const contenderPassword = `Test-${randomUUID()}-Bb2!`;
+    const contender = await auth.createUser({
+      email: contenderEmail,
+      password: contenderPassword,
+      emailVerified: true,
+    });
     const uid = user.uid;
+    const contenderUid = contender.uid;
     const slotRefs = [];
     const matchRefs = [];
-    const auditQuery = db.collection('security_audit_v1').where('actorUid', '==', uid);
+    const auditQuery = db.collection('security_audit_v1')
+      .where('actorUid', 'in', [uid, contenderUid]);
     const tableRef = db.collection('league_tables_v2')
       .doc(`table_v140_S${season}_LALPHA_V${division}_G${group}`);
     const configRef = db.collection('system_v1').doc('season_config');
     const statsRef = db.collection('system_v1').doc('global_stats');
     const playerRef = db.collection('players_v14').doc(uid);
+    const contenderPlayerRef = db.collection('players_v14').doc(contenderUid);
     const botPlayerRef = db.collection('players_v14').doc(botId);
 
     t.after(async () => {
@@ -99,6 +109,7 @@ test('registration HTTP API enforces its boundary and safely initializes a club'
         configRef,
         statsRef,
         playerRef,
+        contenderPlayerRef,
         botPlayerRef,
       ];
       for (let i = 0; i < cleanupRefs.length; i += 400) {
@@ -106,7 +117,10 @@ test('registration HTTP API enforces its boundary and safely initializes a club'
         for (const ref of cleanupRefs.slice(i, i + 400)) batch.delete(ref);
         await batch.commit();
       }
-      await auth.deleteUser(uid).catch(() => undefined);
+      await Promise.all([
+        auth.deleteUser(uid).catch(() => undefined),
+        auth.deleteUser(contenderUid).catch(() => undefined),
+      ]);
       await deleteApp(app);
     });
 
@@ -185,30 +199,64 @@ test('registration HTTP API enforces its boundary and safely initializes a club'
       }
     }
 
-    const signIn = await fetch(
-      `http://${authHost}/identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=fake-api-key`,
-      {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ email, password, returnSecureToken: true }),
-      },
-    );
-    assert.equal(signIn.status, 200, 'Auth Emulator should issue an ID token');
-    const { idToken } = await signIn.json();
-    assert.equal(typeof idToken, 'string');
+    async function signInWithEmulator(userEmail, userPassword) {
+      const signIn = await fetch(
+        `http://${authHost}/identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=fake-api-key`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            email: userEmail,
+            password: userPassword,
+            returnSecureToken: true,
+          }),
+        },
+      );
+      assert.equal(signIn.status, 200, 'Auth Emulator should issue an ID token');
+      const body = await signIn.json();
+      assert.equal(typeof body.idToken, 'string');
+      return body.idToken;
+    }
 
-    const request = () => POST(new Request('http://localhost/api/registration/initialize', {
+    const [idToken, contenderIdToken] = await Promise.all([
+      signInWithEmulator(email, password),
+      signInWithEmulator(contenderEmail, contenderPassword),
+    ]);
+
+    const request = (token, clubName) => POST(new Request('http://localhost/api/registration/initialize', {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
-        authorization: `Bearer ${idToken}`,
+        authorization: `Bearer ${token}`,
       },
-      body: JSON.stringify({ clubName: 'Forge Test Club' }),
+      body: JSON.stringify({ clubName }),
     }));
 
-    const response = await request();
-    const responseBody = await response.json();
-    assert.equal(response.status, 200, JSON.stringify(responseBody));
+    // Both authenticated users race for the only free slot in the isolated world.
+    const concurrentResponses = await Promise.all([
+      request(idToken, 'Forge Test Club A'),
+      request(contenderIdToken, 'Forge Test Club B'),
+    ]);
+    const concurrentBodies = await Promise.all(concurrentResponses.map((response) => response.json()));
+    const winnerIndex = concurrentResponses.findIndex((response) => response.status === 200);
+    const loserIndex = winnerIndex === 0 ? 1 : 0;
+    assert.notEqual(winnerIndex, -1, JSON.stringify(concurrentBodies));
+    assert.equal(concurrentResponses.filter((response) => response.status === 200).length, 1);
+    assert.equal(concurrentResponses[loserIndex].status, 409, JSON.stringify(concurrentBodies[loserIndex]));
+    assert.equal(concurrentBodies[loserIndex].error, 'NO_FREE_SLOTS_IN_LEAGUE');
+
+    const winnerUid = winnerIndex === 0 ? uid : contenderUid;
+    const loserUid = winnerIndex === 0 ? contenderUid : uid;
+    const winnerToken = winnerIndex === 0 ? idToken : contenderIdToken;
+    const winnerClubName = winnerIndex === 0 ? 'Forge Test Club A' : 'Forge Test Club B';
+    const response = concurrentResponses[winnerIndex];
+    const responseBody = concurrentBodies[winnerIndex];
+    const winnerPlayerRef = db.collection('players_v14').doc(winnerUid);
+    const loserPlayerRef = db.collection('players_v14').doc(loserUid);
+    const winnerAuditQuery = db.collection('security_audit_v1').where('actorUid', '==', winnerUid);
+    assert.equal(responseBody.success, true);
+    assert.equal(responseBody.alreadyInitialized, false);
+    assert.equal(responseBody.clubName, winnerClubName);
     assert.equal(responseBody.success, true);
     assert.equal(responseBody.alreadyInitialized, false);
     assert.equal(responseBody.clubName, 'Forge Test Club');
@@ -217,29 +265,45 @@ test('registration HTTP API enforces its boundary and safely initializes a club'
     assert.equal(responseBody.rank, 8);
 
     const [player, botPlayer, table, slotQuery, matches, stats, audit] = await Promise.all([
-      playerRef.get(),
+      winnerPlayerRef.get(),
+      loserPlayerRef.get(),
       botPlayerRef.get(),
       tableRef.get(),
       db.collection('league_slots_v1').where('season', '==', season).get(),
       db.collection('matches_v2').where('season', '==', season).get(),
       statsRef.get(),
-      auditQuery.get(),
+      winnerAuditQuery.get(),
     ]);
 
     assert.equal(player.exists, true);
     assert.equal(player.get('ownedPlayers').length, 10);
+    assert.equal(loserPlayer.exists, false);
     assert.equal(botPlayer.exists, false);
-    assert.equal(table.get(`stats.${uid}.rank`), 8);
-    assert.equal(table.get(`stats.${uid}.isBot`), false);
+    assert.equal(table.get(`stats.${winnerUid}.rank`), 8);
+    assert.equal(table.get(`stats.${winnerUid}.isBot`), false);
     assert.equal(table.get(`stats.${botId}`), undefined);
+
+    const ownedPlayers = player.get('ownedPlayers');
+    const ownedPlayerIds = ownedPlayers.map((ownedPlayer) => ownedPlayer.id);
+    assert.equal(new Set(ownedPlayerIds).size, 10, 'starting squad player IDs must be unique');
+    const lineup = player.get('lineup');
+    assert.equal(Object.keys(lineup).length, 10);
+    for (const [position, playerId] of Object.entries(lineup)) {
+      assert.ok(ownedPlayerIds.includes(playerId), `lineup position ${position} must reference an owned player`);
+    }
+
+    const tableTeams = Object.entries(table.get('stats') || {});
+    assert.equal(tableTeams.length, 8);
+    assert.equal(new Set(tableTeams.map(([, team]) => Number(team.rank))).size, 8);
+    assert.equal(tableTeams.filter(([, team]) => Number(team.rank) === 8).length, 1);
     const claimedSlot = slotQuery.docs.find((doc) => doc.get('rank') === 8 &&
       doc.get('division') === division && doc.get('group') === group);
     assert.ok(claimedSlot);
     assert.equal(claimedSlot.get('status'), 'OCCUPIED');
-    assert.equal(claimedSlot.get('occupantId'), uid);
+    assert.equal(claimedSlot.get('occupantId'), winnerUid);
     assert.equal(matches.size, 56);
     assert.equal(matches.docs.filter((doc) =>
-      doc.get('homeId') === uid || doc.get('awayId') === uid
+      doc.get('homeId') === winnerUid || doc.get('awayId') === winnerUid
     ).length, 14);
     assert.equal(matches.docs.some((doc) =>
       doc.get('homeId') === botId || doc.get('awayId') === botId
@@ -247,8 +311,13 @@ test('registration HTTP API enforces its boundary and safely initializes a club'
     assert.equal(stats.get('totalPlayers'), 1001);
     assert.equal(audit.size, 1);
     assert.equal(audit.docs[0].get('event'), 'CLUB_REGISTRATION_COMPLETED');
+    assert.equal(audit.docs[0].get('actorUid'), winnerUid);
 
-    const retryResponse = await request();
+    const matchesBeforeRetry = matches.docs
+      .map((doc) => [doc.id, doc.get('homeId'), doc.get('awayId'), doc.get('homeName'), doc.get('awayName')])
+      .sort((a, b) => a[0].localeCompare(b[0]));
+
+    const retryResponse = await request(winnerToken, winnerClubName);
     const retryBody = await retryResponse.json();
     assert.equal(retryResponse.status, 200);
     assert.equal(retryBody.alreadyInitialized, true);
@@ -256,11 +325,20 @@ test('registration HTTP API enforces its boundary and safely initializes a club'
 
     const [afterRetryStats, afterRetryAudit, afterRetrySlots] = await Promise.all([
       statsRef.get(),
-      auditQuery.get(),
+      winnerAuditQuery.get(),
       db.collection('league_slots_v1').where('season', '==', season).get(),
+      db.collection('matches_v2').where('season', '==', season).get(),
+      loserPlayerRef.get(),
     ]);
     assert.equal(afterRetryStats.get('totalPlayers'), 1001);
     assert.equal(afterRetryAudit.size, 1);
-    assert.equal(afterRetrySlots.docs.filter((doc) => doc.get('occupantId') === uid).length, 1);
+    assert.equal(afterRetrySlots.docs.filter((doc) => doc.get('occupantId') === winnerUid).length, 1);
+    assert.equal(afterRetrySlots.docs.filter((doc) => doc.get('occupantId') === loserUid).length, 0);
+    assert.equal(afterRetryMatches.size, 56);
+    assert.equal(afterRetryLoserPlayer.exists, false);
+    const matchesAfterRetry = afterRetryMatches.docs
+      .map((doc) => [doc.id, doc.get('homeId'), doc.get('awayId'), doc.get('homeName'), doc.get('awayName')])
+      .sort((a, b) => a[0].localeCompare(b[0]));
+    assert.deepEqual(matchesAfterRetry, matchesBeforeRetry, 'retry must not mutate the existing schedule');
   });
 });
