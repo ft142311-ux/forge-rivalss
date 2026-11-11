@@ -12,16 +12,20 @@ test('nuclear reset is an internal server module, not a directly exposed Server 
   assert.doesNotMatch(reset, /^['"]use server['"];/);
 });
 
-test('nuclear reset refuses to run unless the local Firebase emulator is explicitly enabled', () => {
-  const guardIndex = reset.indexOf("process.env.NEXT_PUBLIC_USE_FIREBASE_EMULATORS !== 'true'");
-  const dbIndex = reset.indexOf('const db = adminDb;');
-  assert.notEqual(guardIndex, -1, 'missing explicit emulator-mode guard');
-  assert.ok(dbIndex > guardIndex, 'database access must happen only after emulator-mode guard');
+test('nuclear reset refuses to access Firestore unless the local emulator is explicitly enabled', () => {
+  const modeGuardIndex = reset.indexOf("process.env.NEXT_PUBLIC_USE_FIREBASE_EMULATORS !== 'true'");
+  const hostGuardIndex = reset.indexOf('LOCAL_FIRESTORE_EMULATOR_REQUIRED');
+  const dbAccessIndex = reset.indexOf('const db = getAdminDb();');
+
+  assert.notEqual(modeGuardIndex, -1, 'missing explicit emulator-mode guard');
+  assert.notEqual(hostGuardIndex, -1, 'missing loopback Firestore host guard');
+  assert.ok(dbAccessIndex > modeGuardIndex, 'Admin DB must be initialized after emulator-mode guard');
+  assert.ok(dbAccessIndex > hostGuardIndex, 'Admin DB must be initialized after loopback host guard');
   assert.match(reset, /LOCAL_EMULATOR_REQUIRED/);
   assert.match(reset, /LOCAL_FIRESTORE_EMULATOR_REQUIRED/);
 });
 
 test('the browser-facing nuclear reset action requires an authenticated admin', () => {
-  assert.match(adminActions, /export async function totalNuclearResetAction/);
-  assert.match(adminActions, /totalNuclearResetAction\\(idToken: string\\)[\\s\\S]*?requireAdminActor\\(idToken\\)/);
+  assert.match(adminActions, /export async function totalNuclearResetAction\(idToken: string\)/);
+  assert.match(adminActions, /totalNuclearResetAction\(idToken: string\)\s*\{\s*await requireAdminActor\(idToken\);\s*return totalNuclearResetV131\(\);/);
 });
