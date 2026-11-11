@@ -4,7 +4,7 @@ import {
   isEligibleRegistrationSlot,
   validateRegistrationSchedule,
   generateStartingSquad,
-} from '../src/lib/registration/registration-core.js';
+} from '../functions/registration-core.js';
 
 function createRoundRobin(botRank = 3, botId = 'bot-3') {
   const ids = Array.from({ length: 8 }, (_, index) =>
