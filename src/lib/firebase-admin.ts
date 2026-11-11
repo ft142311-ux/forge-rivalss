@@ -47,7 +47,7 @@ function getOrInitializeAdminApp(useEmulators: boolean): App {
     }
 
     return initializeApp({
-      credential: cert(serviceAccount as Parameters<typeof cert>[0]),
+      credential: cert(serviceAccount as any),
       projectId: FIREBASE_PROJECT_ID,
     });
   }
