@@ -48,5 +48,8 @@ jobs:
       - name: Test suite
         run: npm test
 
+      - name: Firestore emulator registration transactions
+        run: npm run test:registration:emulator
+
       - name: Production build
         run: npm run build
