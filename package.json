@@ -12,7 +12,8 @@
     "typecheck": "tsc --noEmit",
     "test:core": "node scripts/test-v2-core.cjs",
     "test": "tsx --test tests/*.test.mjs",
-    "scheduler:local": "node scripts/local-match-scheduler.cjs"
+    "scheduler:local": "node scripts/local-match-scheduler.cjs",
+    "test:registration:emulator": "firebase emulators:exec --only firestore --project demo-forge-rivals \"node --test tests/registration-emulator.integration.test.mjs\""
   },
   "dependencies": {
     "@genkit-ai/google-genai": "^1.28.0",
