@@ -15,8 +15,8 @@ import { useUser, useFirebase } from '@/firebase';
  * СТРАНИЦА ИНИЦИАЛИЗАЦИИ v166.
  * После успешной регистрации ждёт фактическую синхронизацию players_v14 вместо
  * безусловного router.replace('/'), чтобы не попадать в бесконечный preloader.
- * Вызывает Cloud Function initializeClub в регионе us-central1.
- * Осуществляет строгую проверку версии и детальную диагностику ошибок.
+ * Вызывает защищённый Next.js API endpoint регистрации клуба.
+ * Сервер проверяет Firebase ID Token и выполняет атомарную транзакцию Firestore.
  */
 export default function SetupPage() {
   const router = useRouter();
@@ -92,7 +92,7 @@ export default function SetupPage() {
       }
       console.log("[SETUP] Server response:", result);
 
-      // Проверка версии функции
+      // Проверка версии серверного registration endpoint
       if (result.version !== 'v170') {
         console.error("[SETUP] Outdated function version detected:", result.version);
         throw new Error("REGISTRATION_FUNCTION_OUTDATED");
