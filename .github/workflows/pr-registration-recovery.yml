@@ -1,0 +1,51 @@
+name: PR registration recovery validation
+
+on:
+  pull_request:
+    branches:
+      - hosting/vercel-free-staging
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-registration-recovery-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    if: github.head_ref == 'test/registration-concurrency-hardening'
+    name: Isolated registration and Firestore validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      NEXT_PUBLIC_USE_FIREBASE_EMULATORS: 'true'
+      GCLOUD_PROJECT: demo-forge-rivals
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: TypeScript check
+        run: npm run typecheck
+
+      - name: Core regression tests
+        run: npm run test:core
+
+      - name: Test suite
+        run: npm test
+
+      - name: Firestore emulator registration and security rules
+        run: npm run test:registration:emulator
+
+      - name: Production build
+        run: npm run build
