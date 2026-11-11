@@ -338,7 +338,7 @@ export async function POST(request: NextRequest) {
     if (errorCode.includes('id-token-revoked') || message.toLowerCase().includes('id token has been revoked')) {
       return json(401, { success: false, error: 'AUTH_TOKEN_REVOKED' });
     }
-    if (errorCode.includes('id-token-expired') || errorCode.includes('invalid-id-token') || message.toLowerCase().includes('id token has expired')) {
+    if (errorCode.includes('id-token-expired') || errorCode.includes('invalid-id-token') || errorCode.includes('argument-error') || errorCode.includes('invalid-argument') || message.toLowerCase().includes('id token has expired') || message.toLowerCase().includes('decoding firebase id token failed')) {
       return json(401, { success: false, error: 'AUTH_TOKEN_INVALID' });
     }
     if (message === 'AUTHENTICATION_REQUIRED') {
