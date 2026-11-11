@@ -1,6 +1,6 @@
 const functions = require('firebase-functions');
 const admin = require('firebase-admin');
-const { isEligibleRegistrationSlot, validateRegistrationSchedule, generateStartingSquad } = require('../src/lib/registration/registration-core');
+const { isEligibleRegistrationSlot, validateRegistrationSchedule, generateStartingSquad } = require('./registration-core');
 
 /**
  * @fileOverview Р•РґРёРЅРѕРµ СЃРµСЂРІРµСЂРЅРѕРµ СЏРґСЂРѕ СЂРµРіРёСЃС‚СЂР°С†РёРё v165.
