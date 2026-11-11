@@ -13,7 +13,7 @@ type RegistrationCore = {
 };
 
 // Keep the same audited invariants and squad generator as the emulator callable.
-const registrationCore = require('../../../../../lib/registration/registration-core') as RegistrationCore;
+const registrationCore = require('../../../../lib/registration/registration-core') as RegistrationCore;
 
 const REGISTRATION_VERSION = 'v170';
 const LEAGUE_ID = 'ALPHA';
@@ -315,10 +315,13 @@ export async function POST(request: NextRequest) {
     return json(200, result);
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : '';
-    if (message.includes('auth/id-token-revoked')) {
+    const errorCode = typeof error === 'object' && error !== null && 'code' in error
+      ? String((error as { code?: unknown }).code || '').toLowerCase()
+      : '';
+    if (errorCode.includes('id-token-revoked') || message.toLowerCase().includes('id token has been revoked')) {
       return json(401, { success: false, error: 'AUTH_TOKEN_REVOKED' });
     }
-    if (message.includes('auth/id-token-expired') || message.includes('auth/invalid-id-token')) {
+    if (errorCode.includes('id-token-expired') || errorCode.includes('invalid-id-token') || message.toLowerCase().includes('id token has expired')) {
       return json(401, { success: false, error: 'AUTH_TOKEN_INVALID' });
     }
     if (message === 'AUTHENTICATION_REQUIRED') {
