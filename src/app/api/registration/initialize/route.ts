@@ -13,7 +13,7 @@ type RegistrationCore = {
 };
 
 // Keep the same audited invariants and squad generator as the emulator callable.
-const registrationCore = require('../../../../lib/registration/registration-core') as RegistrationCore;
+const registrationCore = require('../../../../../functions/registration-core') as RegistrationCore;
 
 const REGISTRATION_VERSION = 'v170';
 const LEAGUE_ID = 'ALPHA';
