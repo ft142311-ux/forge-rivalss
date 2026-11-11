@@ -150,7 +150,7 @@ export default function ProfilePage() {
     setIsResetting(true);
     try {
       // 1. Возвращаем слот боту и удаляем профиль на сервере
-      await releasePlayerSlot(user.uid);
+      await releasePlayerSlot(await user.getIdToken());
       
       // 2. Очищаем локальное хранилище
       await resetProfile();

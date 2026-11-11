@@ -43,3 +43,81 @@ next-env.d.ts
 # firebase
 firebase-debug.log
 firestore-debug.log
+
+# Local credentials and emulator data (never commit or distribute)
+/accounts.json
+/**/accounts.json
+/emulator-data/
+/emulator-data-*/
+**/auth_export/
+**/auth_export/**
+/firebase-debug.log
+/firestore-debug.log
+
+# Keep the safe template; never distribute local secrets.
+!.env.example
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+
+# Firebase emulator exports and local state
+/firebase-export-*/
+/firebase-debug.log
+/firestore-debug.log
+/firebase.emulator-s2.json
+/firebase.restore-check.json
+/accounts.json
+/emulator-data/
+/emulator-data-*/
+
+# Local archives, backups and diagnostic outputs
+*.zip
+*.7z
+*.rar
+*.bak
+*.backup
+*.log
+*.before-rules.bak
+node_modules.install-broken-*/
+
+# Local generated diagnostics and recovery snapshots
+/recovery-snapshots/
+/npm-install-v2*.log
+/typecheck*.txt
+/build_output.log
+/next-debug.log
+
+# Dependencies in any project directory
+**/node_modules/
+
+# Local diagnostics and exported data
+/firebase-export-*/
+/firebase.emulator-s2.json
+/firebase.restore-check.json
+/firestore-*.txt
+/firestore-*.json
+/season1-*.txt
+/unfinished-*.txt
+/match-recovery-*.txt
+/build-v*.txt
+/forge-rivals-audit.txt
+/*.log
+
+# Backups and patch artifacts
+*.bak
+*.bak-*
+*.backup
+*.backup-*
+*.before-*
+*.fragment.txt
+*.broken-backup
+
+# Local install and test artifacts
+/playwright-register-check.png
+/node_modules.install-broken-*/
+
+# Local development backups and logs
+/.local-backups/
+/.local-logs/

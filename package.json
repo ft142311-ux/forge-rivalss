@@ -1,15 +1,18 @@
 {
-  "name": "nextn",
-  "version": "0.1.0",
+  "name": "forge-rivals-v2",
+  "version": "2.0.0",
   "private": true,
   "scripts": {
     "dev": "next dev --turbopack -p 9002",
     "genkit:dev": "genkit start -- tsx src/ai/dev.ts",
     "genkit:watch": "genkit start -- tsx --watch src/ai/dev.ts",
-    "build": "NODE_ENV=production next build",
+    "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:core": "node scripts/test-v2-core.cjs",
+    "test": "tsx --test tests/*.test.mjs",
+    "scheduler:local": "node scripts/local-match-scheduler.cjs"
   },
   "dependencies": {
     "@genkit-ai/google-genai": "^1.28.0",
@@ -61,9 +64,12 @@
     "@types/nodemailer": "^6.4.17",
     "@types/react": "^19.2.1",
     "@types/react-dom": "^19.2.1",
+    "firebase-tools": "^15.34.0",
     "genkit-cli": "^1.28.0",
+    "playwright": "^1.63.0",
     "postcss": "^8",
     "tailwindcss": "^3.4.1",
+    "tsx": "^4.19.2",
     "typescript": "^5"
   }
 }

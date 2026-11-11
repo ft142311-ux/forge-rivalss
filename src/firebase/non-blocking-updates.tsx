@@ -45,7 +45,6 @@ export function setDocumentNonBlocking(docRef: DocumentReference, data: any, opt
       new FirestorePermissionError({
         path: docRef.path,
         operation: 'write',
-        requestResourceData: cleanData,
       })
     )
   })
@@ -65,7 +64,6 @@ export function addDocumentNonBlocking(colRef: CollectionReference, data: any) {
         new FirestorePermissionError({
           path: colRef.path,
           operation: 'create',
-          requestResourceData: cleanData,
         })
       )
     });
@@ -85,7 +83,6 @@ export function updateDocumentNonBlocking(docRef: DocumentReference, data: any) 
         new FirestorePermissionError({
           path: docRef.path,
           operation: 'update',
-          requestResourceData: cleanData,
         })
       )
     });

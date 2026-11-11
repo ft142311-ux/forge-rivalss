@@ -28,7 +28,7 @@ export default function RegisterPage() {
     en: {
       title: "Initialize Profile",
       subtitle: "Define your tactical identity and access key",
-      callsign: "Team Name",
+      callsign: "Login / Team Name",
       passLabel: "Access Key",
       emailLabel: "Operational Email",
       submitBtn: "ESTABLISH COMMAND LINK",
@@ -42,7 +42,7 @@ export default function RegisterPage() {
     ru: {
       title: "Инициация профиля",
       subtitle: "Определите тактический позывной и ключ доступа",
-      callsign: "Название команды",
+      callsign: "Логин / название команды",
       passLabel: "Ключ доступа",
       emailLabel: "Ваш Email",
       submitBtn: "УСТАНОВИТЬ СВЯЗЬ",
@@ -115,7 +115,7 @@ export default function RegisterPage() {
               onChange={e => setUsername(e.target.value)} 
               required 
               className="bg-secondary/40 border-white/5 h-12 text-sm font-bold uppercase tracking-tight focus-visible:ring-primary" 
-              placeholder="COMMANDER_X"
+              placeholder="FORGE_TEAM"
               disabled={isProcessing}
             />
           </div>

@@ -9,6 +9,7 @@ import { BottomNav } from "@/components/game/BottomNav";
 import { AutoMatchManager } from "@/components/game/AutoMatchManager";
 import { DailyRewardManager } from "@/components/game/DailyRewardManager";
 import { GiftGenerationManager } from "@/components/game/GiftGenerationManager";
+import { FriendlyMatchListener } from "@/components/game/FriendlyMatchListener";
 import { AuthGuard } from "@/components/game/AuthGuard";
 import { Suspense } from 'react';
 import { LoadingScreen } from '@/components/game/LoadingScreen';
@@ -53,6 +54,7 @@ function GameInterface({ children }: { children: React.ReactNode }) {
             <>
               <DailyRewardManager />
               <GiftGenerationManager />
+              <FriendlyMatchListener />
             </>
           )}
           

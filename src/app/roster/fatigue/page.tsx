@@ -14,10 +14,14 @@ import Link from 'next/link';
 import { LoadingScreen } from '@/components/game/LoadingScreen';
 import { useToast } from '@/hooks/use-toast';
 import { Badge } from '@/components/ui/badge';
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
+import { useUser } from '@/firebase';
+import { recoverSquadEnergyAction } from '@/app/actions/player-care';
 
 export default function RecoverFatiguePage() {
-  const { ownedPlayers, lineup, language, isLoaded, credits, crystals, recoverAllFatigue } = useGameState();
+  const { ownedPlayers, lineup, language, isLoaded, credits, crystals } = useGameState();
+  const { user } = useUser();
+  const [isRecovering, setIsRecovering] = useState(false);
   const { toast } = useToast();
 
   // Фильтруем игроков: только те, кто назначен в любой слот состава (основа, запас или резерв)
@@ -58,17 +62,36 @@ export default function RecoverFatiguePage() {
       : "Low energy reduces combat efficiency. Only players assigned to the squad are subject to physical wear."
   };
 
-  const handleRecover = (type: 'credits' | 'crystals') => {
-    if (recoverAllFatigue(type)) {
+  const handleRecover = async (type: 'credits' | 'crystals') => {
+    if (!user || isRecovering) return;
+    const cost = type === 'credits' ? 75_000 : 150;
+    if ((type === 'credits' ? credits : crystals) < cost) {
+      toast({ variant: 'destructive', title: t.insufficient });
+      return;
+    }
+    setIsRecovering(true);
+    try {
+      const result = await recoverSquadEnergyAction(
+        await user.getIdToken(),
+        type,
+        crypto.randomUUID(),
+      );
+      if (!result.success) throw new Error(result.error || 'SQUAD_RECOVERY_FAILED');
       toast({
         title: t.success,
-        description: language === 'ru' ? "Все игроки готовы к новым сражениям." : "All players are ready for new battles.",
+        description: language === 'ru'
+          ? `Восстановлено игроков: ${result.recoveredPlayers}.`
+          : `Players recovered: ${result.recoveredPlayers}.`,
       });
-    } else {
+    } catch (error: any) {
+      const code = String(error?.message || 'SQUAD_RECOVERY_FAILED');
       toast({
-        variant: "destructive",
-        title: t.insufficient,
+        variant: 'destructive',
+        title: language === 'ru' ? 'Не удалось восстановить состав' : 'Squad recovery failed',
+        description: code === 'INSUFFICIENT_FUNDS' ? t.insufficient : code,
       });
+    } finally {
+      setIsRecovering(false);
     }
   };
 
@@ -124,7 +147,7 @@ export default function RecoverFatiguePage() {
             <Sparkles className="w-3.5 h-3.5" /> {t.massRecover}
           </h2>
 
-          <Card className="glass-card border-white/5 hover:border-primary/30 transition-all cursor-pointer overflow-hidden" onClick={() => handleRecover('credits')}>
+          <Card className="glass-card border-white/5 hover:border-primary/30 transition-all cursor-pointer overflow-hidden" aria-disabled={isRecovering} onClick={() => handleRecover('credits')}>
             <CardContent className="p-5 flex items-center justify-between">
               <div className="flex items-center gap-4">
                 <div className="p-3 rounded-xl bg-yellow-500/10 border border-yellow-500/20">
@@ -141,7 +164,7 @@ export default function RecoverFatiguePage() {
             </CardContent>
           </Card>
 
-          <Card className="glass-card border-white/5 hover:border-accent/30 transition-all cursor-pointer overflow-hidden" onClick={() => handleRecover('crystals')}>
+          <Card className="glass-card border-white/5 hover:border-accent/30 transition-all cursor-pointer overflow-hidden" aria-disabled={isRecovering} onClick={() => handleRecover('crystals')}>
             <CardContent className="p-5 flex items-center justify-between">
               <div className="flex items-center gap-4">
                 <div className="p-3 rounded-xl bg-blue-500/10 border border-blue-500/20">

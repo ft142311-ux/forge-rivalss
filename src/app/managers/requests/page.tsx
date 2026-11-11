@@ -1,10 +1,12 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { useUser, useFirestore, useCollection, useMemoFirebase, addDocumentNonBlocking } from '@/firebase';
+import { useUser, useAuth, useFirestore, useCollection, useMemoFirebase } from '@/firebase';
+import { acceptFriendRequestAction } from '@/app/actions/social';
+import { runWithFreshIdToken } from '@/lib/client-auth-action';
 import { useGameState } from '@/app/lib/store';
-import { collection, query, where, doc, setDoc, deleteDoc } from 'firebase/firestore';
+import { collection, query, where, doc, deleteDoc } from 'firebase/firestore';
 import { 
   ChevronLeft, UserPlus, Shield, User,
   Check, X, Loader2, Lock
@@ -19,6 +21,7 @@ import { cn } from '@/lib/utils';
 
 export default function FriendRequestsPage() {
   const { user, isUserLoading } = useUser();
+  const auth = useAuth();
   const router = useRouter();
   const db = useFirestore();
   const { toast } = useToast();
@@ -35,18 +38,6 @@ export default function FriendRequestsPage() {
   }, [db, user?.uid]);
 
   const { data: requests, isLoading: isRequestsLoading } = useCollection(requestsQuery);
-
-  const sendNotification = useCallback((targetUserId: string, title: string, description: string) => {
-    if (!db) return;
-    addDocumentNonBlocking(collection(db, 'notifications_v7'), {
-      userId: targetUserId,
-      title,
-      description,
-      type: 'social',
-      read: false,
-      createdAt: new Date().toISOString()
-    });
-  }, [db]);
 
   useEffect(() => {
     if (!isUserLoading && !user) {
@@ -106,18 +97,11 @@ export default function FriendRequestsPage() {
     try {
       const requestRef = doc(db, 'friend_requests_v4', request.id);
       if (accept) {
-        const nowIso = new Date().toISOString();
-        await setDoc(requestRef, {
-          status: 'accepted',
-          updatedAt: nowIso
-        }, { merge: true });
-        
-        sendNotification(
-          request.fromId,
-          language === 'ru' ? "Запрос принят!" : "Request Accepted!",
-          language === 'ru' ? `Менеджер ${request.toName} теперь ваш друг.` : `Manager ${request.toName} is now your friend.`
+        if (!user) throw new Error('AUTHENTICATION_REQUIRED');
+        const result = await runWithFreshIdToken(auth, user, (idToken) =>
+          acceptFriendRequestAction(idToken, request.id, language === 'ru' ? 'ru' : 'en')
         );
-
+        if (!result.success) throw new Error(result.error || 'FRIEND_REQUEST_ACCEPT_FAILED');
         toast({ title: t.success });
       } else {
         await deleteDoc(requestRef);

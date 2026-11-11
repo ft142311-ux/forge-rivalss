@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
-import { useUser, useFirestore, useCollection, useMemoFirebase, useDoc } from '@/firebase';
+import { useUser, useFirestore, useCollection, useMemoFirebase, useAuth } from '@/firebase';
 import { useGameState } from '@/app/lib/store';
 import { 
   ChevronLeft, Swords, Search, ShieldAlert, 
@@ -12,13 +12,16 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import Link from 'next/link';
-import { query, collection, where, doc, updateDoc, serverTimestamp } from 'firebase/firestore';
+import { query, collection, where, doc } from 'firebase/firestore';
+import { challengeFriendlyLobbyAction } from '@/app/actions/friendly-matchmaking';
+import { runWithFreshIdToken } from '@/lib/client-auth-action';
 import { useToast } from '@/hooks/use-toast';
 import { LoadingScreen } from '@/components/game/LoadingScreen';
 import { cn } from '@/lib/utils';
 
 export default function OpenFriendliesPage() {
   const { user, isUserLoading } = useUser();
+  const auth = useAuth();
   const router = useRouter();
   const db = useFirestore();
   const { toast } = useToast();
@@ -38,25 +41,15 @@ export default function OpenFriendliesPage() {
 
   const { data: rawLobbies, isLoading: isLobbiesLoading } = useCollection(lobbiesQuery);
   
-  const myBasketRef = useMemoFirebase(() => {
-    if (!db || !user) return null;
-    return doc(db, 'cw_basket_v2', user.uid);
-  }, [db, user]);
-  
-  const { data: myBasket } = useDoc(myBasketRef);
-
-  const userRef = useMemoFirebase(() => {
-    if (!db || !user) return null;
-    return doc(db, 'players_v12', user.uid);
-  }, [db, user]);
-  
-  const { data: profile } = useDoc(userRef);
 
   const lobbies = useMemo(() => {
     if (!rawLobbies) return [];
     return rawLobbies.filter(lobby => {
-      const createdAt = lobby.updatedAt?.toMillis() || now;
-      return now - createdAt < 60000;
+      // The request lifetime is exactly 5 minutes from creation.
+      // Never keep a lobby visible merely because updatedAt changed or is missing.
+      const createdAtMs = lobby.createdAt?.toMillis?.() || 0;
+      const expiresAtMs = lobby.expiresAt?.toMillis?.() || (createdAtMs ? createdAtMs + 5 * 60 * 1000 : 0);
+      return !!expiresAtMs && expiresAtMs > now;
     });
   }, [rawLobbies, now]);
 
@@ -110,21 +103,30 @@ export default function OpenFriendliesPage() {
     );
   }
 
-  const handleChallenge = async (lobbyId: string, hostName: string) => {
-    if (!user || !profile || myBasket) {
-      if (myBasket) toast({ title: t.busy, variant: "destructive" });
-      return;
-    }
+  const handleChallenge = async (lobbyId: string) => {
+    if (!user || isChallenging) return;
     setIsChallenging(lobbyId);
     try {
-      await updateDoc(doc(db, 'friendly_lobbies_v3', lobbyId), {
-        status: 'challenged',
-        challengerId: user.uid,
-        challengerName: profile.displayName || "Manager",
-        updatedAt: serverTimestamp()
-      });
+      await runWithFreshIdToken(auth, user, (token) => challengeFriendlyLobbyAction(token, lobbyId));
       toast({ title: t.toastSent });
-    } finally { setIsChallenging(null); }
+    } catch (error: any) {
+      console.error('[friendly] challenge failed', error);
+      const code = String(error?.message || 'UNKNOWN_ERROR');
+      const descriptions: Record<string, string> = {
+        FRIENDLY_LOBBY_NOT_FOUND: 'Заявка больше недоступна.',
+        FRIENDLY_LOBBY_EXPIRED: 'Срок заявки 5 минут уже истёк.',
+        FRIENDLY_LOBBY_BUSY: 'Эта заявка уже получила запрос от другой команды.',
+        FRIENDLY_CHALLENGE_REJECTED: 'Вы уже получали отказ по этой заявке.',
+        OWN_FRIENDLY_LOBBY: 'Нельзя отправить запрос самому себе.',
+      };
+      toast({
+        title: language === 'ru' ? 'Не удалось отправить запрос' : 'Challenge failed',
+        description: descriptions[code] || code,
+        variant: 'destructive',
+      });
+    } finally {
+      setIsChallenging(null);
+    }
   };
 
   return (
@@ -144,7 +146,7 @@ export default function OpenFriendliesPage() {
                   <User className="w-10 h-10 text-muted-foreground" />
                   <div><h3 className="text-sm font-bold uppercase">{lobby.hostName}</h3></div>
                 </div>
-                {lobby.hostId === user.uid ? <span className="text-[8px] uppercase">{t.selfRequest}</span> : <Button size="sm" className="hero-gradient" onClick={() => handleChallenge(lobby.id, lobby.hostName)} disabled={!!isChallenging}>{t.challenge}</Button>}
+                {lobby.hostId === user.uid ? <span className="text-[8px] uppercase">{t.selfRequest}</span> : <Button size="sm" className="hero-gradient" onClick={() => handleChallenge(lobby.id)} disabled={!!isChallenging}>{t.challenge}</Button>}
               </CardContent>
             </Card>
           ))}

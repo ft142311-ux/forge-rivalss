@@ -10,10 +10,12 @@ import { useToast } from '@/hooks/use-toast';
 import { useGameState } from '@/app/lib/store';
 import { LoadingScreen } from '@/components/game/LoadingScreen';
 import { useUser, useFirebase } from '@/firebase';
-import { getFunctions, httpsCallable } from 'firebase/functions';
+import { getFunctions, httpsCallable, connectFunctionsEmulator } from 'firebase/functions';
 
 /**
- * СТРАНИЦА ИНИЦИАЛИЗАЦИИ v165.
+ * СТРАНИЦА ИНИЦИАЛИЗАЦИИ v166.
+ * После успешной регистрации ждёт фактическую синхронизацию players_v14 вместо
+ * безусловного router.replace('/'), чтобы не попадать в бесконечный preloader.
  * Вызывает Cloud Function initializeClub в регионе us-central1.
  * Осуществляет строгую проверку версии и детальную диагностику ошибок.
  */
@@ -30,9 +32,25 @@ export default function SetupPage() {
 
   useEffect(() => {
     if (isInitialSyncDone && isTeamLoaded) {
+      console.log('[AUTH HANDOFF] players_v14 loaded; redirecting to /', { uid: user?.uid });
       router.replace('/');
     }
-  }, [isInitialSyncDone, isTeamLoaded, router]);
+  }, [isInitialSyncDone, isTeamLoaded, router, user?.uid]);
+
+  useEffect(() => {
+    if (step !== 'SUCCESS' || isTeamLoaded) return;
+    const timer = window.setTimeout(() => {
+      console.error('[AUTH HANDOFF] players_v14 snapshot timeout after registration', {
+        uid: user?.uid,
+        isInitialSyncDone,
+        isTeamLoaded
+      });
+      setError('PLAYER_SYNC_TIMEOUT');
+      setStep('IDLE');
+      setIsUpdating(false);
+    }, 12000);
+    return () => window.clearTimeout(timer);
+  }, [step, isTeamLoaded, isInitialSyncDone, user?.uid]);
 
   const handleCompleteSetup = async () => {
     if (isUpdating || !user || !firebaseApp) return;
@@ -44,9 +62,30 @@ export default function SetupPage() {
     try {
       // Явно указываем регион us-central1
       const functions = getFunctions(firebaseApp, 'us-central1');
+      if (process.env.NEXT_PUBLIC_USE_FIREBASE_EMULATORS === 'true') {
+        try {
+          connectFunctionsEmulator(functions, '127.0.0.1', 5001);
+        } catch {
+          // Functions emulator may already be connected.
+        }
+      }
       const initializeClubFn = httpsCallable(functions, 'initializeClub');
       
       const clubName = localStorage.getItem('pending_club_name') || "";
+      // Keep the original forced-refresh requirement for the registration flow,
+      // but make the local emulator branch resilient to the auth/network-request-failed
+      // token refresh symptom that can occur during the emulator token exchange.
+      try {
+        await user.getIdToken(true);
+      } catch (refreshError: any) {
+        const useLocalEmulators = process.env.NEXT_PUBLIC_USE_FIREBASE_EMULATORS === 'true';
+        if (useLocalEmulators) {
+          console.warn('[SETUP] Forced token refresh failed in emulator mode; retrying with cached token:', refreshError);
+          await user.getIdToken();
+        } else {
+          throw refreshError;
+        }
+      }
       
       const response = await initializeClubFn({ clubName });
       const result = response.data as any;
@@ -54,7 +93,7 @@ export default function SetupPage() {
       console.log("[SETUP] Server response:", result);
 
       // Проверка версии функции
-      if (result.version !== 'v165') {
+      if (result.version !== 'v169') {
         console.error("[SETUP] Outdated function version detected:", result.version);
         throw new Error("REGISTRATION_FUNCTION_OUTDATED");
       }
@@ -64,35 +103,46 @@ export default function SetupPage() {
       }
 
       setStep('SUCCESS');
+      localStorage.removeItem('pending_club_name');
+      console.log('[AUTH HANDOFF] initializeClub success; waiting for players_v14 snapshot', { uid: user.uid });
       toast({ title: language === 'ru' ? "Штаб развернут!" : "HQ Fully Operational!" });
-      
-      setTimeout(() => {
-        router.replace('/');
-      }, 1500);
+      // Не уходим на '/' по таймеру. AuthGuard должен увидеть isTeamLoaded=true
+      // после реального snapshot players_v14 и сам выполнит переход.
 
     } catch (e: any) {
+      const originalCode = e?.details?.originalErrorCode || e?.code;
+      const originalMessage = e?.details?.originalErrorMessage || e?.message;
+      const originalName = e?.details?.originalErrorName || e?.name;
+
       console.error("[SETUP ERROR DETAILS]", {
         code: e.code,
         message: e.message,
         details: e.details,
         name: e.name,
-        stack: e.stack
+        stack: e.stack,
+        originalCode,
+        originalMessage,
+        originalName
       });
       
       let errorMsg = "CLUB_INITIALIZATION_FAILED";
       const msg = e.message || "";
-      
+      const details = e.details || {};
+
       // Анализ диагностических сообщений от HttpsError
       if (msg.includes('SEASON_CONFIG_MISSING')) errorMsg = "SEASON_CONFIG_MISSING";
+      else if (msg.includes('WORLD_INITIALIZING')) errorMsg = "WORLD_INITIALIZING";
       else if (msg.includes('SEASON_TRANSITION_IN_PROGRESS')) errorMsg = "SEASON_TRANSITION_IN_PROGRESS";
       else if (msg.includes('LEAGUE_TABLE_MISSING')) errorMsg = "LEAGUE_TABLE_MISSING";
       else if (msg.includes('LEAGUE_TABLE_MISMATCH')) errorMsg = "LEAGUE_TABLE_MISMATCH";
       else if (msg.includes('BOT_NOT_FOUND_IN_SLOT')) errorMsg = "BOT_NOT_FOUND_IN_SLOT";
       else if (msg.includes('INVALID_LEAGUE_SLOT')) errorMsg = "INVALID_LEAGUE_SLOT";
-      else if (msg.includes('NO_FREE_SLOTS_IN_STARTING_DIVISION')) errorMsg = "NO_FREE_SLOTS_IN_STARTING_DIVISION";
+      else if (msg.includes('NO_FREE_SLOTS_IN_LEAGUE') || originalMessage?.includes('NO_FREE_SLOTS_IN_LEAGUE')) errorMsg = "NO_FREE_SLOTS_IN_LEAGUE";
       else if (msg.includes('REGISTRATION_FUNCTION_OUTDATED')) errorMsg = "REGISTRATION_FUNCTION_OUTDATED";
       else if (msg.includes('AUTHENTICATION_REQUIRED') || e.code === 'functions/unauthenticated') errorMsg = "AUTHENTICATION_REQUIRED";
       else if (msg.includes('EMAIL_REQUIRED')) errorMsg = "EMAIL_REQUIRED";
+      else if (details?.originalErrorCode) errorMsg = `${details.originalErrorCode}`;
+      else if (originalCode) errorMsg = `${originalCode}`;
       
       setError(errorMsg);
       setIsUpdating(false);

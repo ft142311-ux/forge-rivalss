@@ -16,9 +16,8 @@ import { collection, query, doc } from 'firebase/firestore';
 import { useMemo, useState } from 'react';
 import { cn } from '@/lib/utils';
 import { TOTAL_GROUPS } from '../lib/leagues-data';
-import { initializeLeagueWorld } from '../actions/world-engine';
-import { totalNuclearResetV131 } from '../actions/nuclear-reset';
-import { resolveDailyMatches } from '../actions/autonomous-cycle';
+import { initializeLeagueWorldAction, totalNuclearResetAction, resolveDailyMatchesAction } from '../actions/admin-actions';
+import { useUser } from '@/firebase';
 import { useToast } from '@/hooks/use-toast';
 import {
   Dialog,
@@ -30,6 +29,7 @@ import {
 
 export default function SystemPage() {
   const { language, seasonNumber, selectedLeagueId } = useGameState();
+  const { user } = useUser();
   const db = useFirestore();
   const { toast } = useToast();
   
@@ -84,11 +84,12 @@ export default function SystemPage() {
 
   const handleAction = async (action: string) => {
     if (isProcessing) return;
+    if (!user) return;
     setIsProcessing(true);
     
     try {
       if (action === 'nuclear') {
-        const res = await totalNuclearResetV131();
+        const res = await totalNuclearResetAction(await user.getIdToken());
         if (!res?.success) throw new Error("Purge Failed");
         setPurgeStats(prev => ({ total: prev.total + (res.deletedCount || 0) }));
         if (res.isComplete) {
@@ -98,15 +99,15 @@ export default function SystemPage() {
         }
       }
       else if (action === 'forceBuild') {
-        const res = await initializeLeagueWorld(selectedLeagueId || "ALPHA", seasonNumber);
-        if (res?.status === 'COMPLETE') {
+        const res = await initializeLeagueWorldAction(await user.getIdToken(), selectedLeagueId || "ALPHA", seasonNumber);
+        if ('status' in res && res.status === 'COMPLETE') {
           toast({ title: "Universe Complete", description: "511 groups initialized." });
         } else {
-          toast({ title: `Batch Success`, description: `Progress: ${res?.currentIndex} / 511` });
+          toast({ title: `Batch Success`, description: `Progress: ${'currentIndex' in res ? res.currentIndex : 0} / 511` });
         }
       }
       else if (action === 'resolve') {
-        const res = await resolveDailyMatches();
+        const res = await resolveDailyMatchesAction(await user.getIdToken());
         toast({ title: "Resolve Complete", description: res?.progress });
       }
     } catch (e: any) {

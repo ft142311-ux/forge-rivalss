@@ -3,6 +3,7 @@
 
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useGameState } from '../../lib/store';
+import { LoadingScreen } from '@/components/game/LoadingScreen';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { 
@@ -129,19 +130,19 @@ export default function HQPage() {
     return Math.min(Math.max((elapsed / total) * 100, 0), 100);
   }, [hq.constructionStarts, hq.constructionFinishes]);
 
-  const handleFacilityUpgrade = () => {
+  const handleFacilityUpgrade = async () => {
     if (!selectedFacility) return;
     const currentLevel = (hq as any)[selectedFacility];
     const cost = 25000 * (currentLevel + 1);
-    if (startHQConstruction(selectedFacility as any, cost)) {
+    if (await startHQConstruction(selectedFacility as any, cost)) {
       toast({ title: t.inProgress });
       setSelectedFacility(null);
     }
   };
 
-  const handleAccelerate = (multiplier: number, price: number) => {
+  const handleAccelerate = async (multiplier: number) => {
     if (!acceleratingFacility) return;
-    if (accelerateConstruction('hq', acceleratingFacility, multiplier, price)) {
+    if (await accelerateConstruction('hq', acceleratingFacility, multiplier, ACCEL_CREWS.find((crew) => crew.multiplier === multiplier)?.price ?? 0)) {
       toast({ title: language === 'ru' ? "Ускорение применено!" : "Project Rushed!" });
       setAcceleratingFacility(null);
     } else {
@@ -283,7 +284,7 @@ export default function HQPage() {
             </div>
             <div className="p-4 space-y-2">
               {ACCEL_CREWS.map((crew) => (
-                <Card key={crew.id} className="glass-card border-white/5 hover:border-orange-500/30 cursor-pointer transition-all" onClick={() => handleAccelerate(crew.multiplier, crew.price)}>
+                <Card key={crew.id} className="glass-card border-white/5 hover:border-orange-500/30 cursor-pointer transition-all" onClick={() => handleAccelerate(crew.multiplier)}>
                   <CardContent className="p-4 flex items-center justify-between">
                     <div>
                       <h4 className="text-xs font-bold uppercase text-white">{language === 'ru' ? crew.labelRu : crew.labelEn}</h4>

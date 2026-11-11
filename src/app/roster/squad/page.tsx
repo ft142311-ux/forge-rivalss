@@ -23,7 +23,7 @@ import { useToast } from '@/hooks/use-toast';
 import { useUser, useFirestore, useDoc, useMemoFirebase } from '@/firebase';
 import { doc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { LoadingScreen } from '@/components/game/LoadingScreen';
-import { renderStars, STAT_KEYS } from '@/app/transfers/quick-search/page';
+import { renderStars, STAT_KEYS } from '@/components/game/transfer-stats';
 import {
   Dialog,
   DialogContent,
@@ -68,7 +68,7 @@ export default function SquadPage() {
   }, []);
 
   // Use players_v14 for active profile
-  const userRef = useMemoFirebase(() => (user?.uid ? doc(db, 'players_v14', user.uid) : null), [db, user?.uid]);
+  const userRef = useMemoFirebase(() => (user?.uid && db ? doc(db, 'players_v14', user.uid) : null), [db, user?.uid]);
   const { data: profile } = useDoc(userRef);
 
   const squadLimit = useMemo(() => {
@@ -97,7 +97,7 @@ export default function SquadPage() {
     emptySlot: language === 'ru' ? "Назначить" : "Assign",
     teamOverall: language === 'ru' ? "ОБЩ" : "OVR",
     selectPlayer: language === 'ru' ? "Выберите игрока" : "Select player",
-    availablePlayers: language === 'ru' ? "Подходящие игроки" : "Compatible Players",
+    availablePlayers: language === 'ru' ? "Свободные игроки" : "Available Players",
     assigned: language === 'ru' ? "ЗАНЯТ" : "ASSIGNED",
     cancel: language === 'ru' ? "ОТМЕНА" : "CANCEL",
     tooYoung: language === 'ru' ? "Игрок в Академии! Нужно 18 лет." : "In Academy! Needs age 18.",
@@ -155,60 +155,44 @@ export default function SquadPage() {
 
   const getPlayerById = (id: string | null) => allAvailablePlayers.find(p => p.id === id);
 
-  const teamOvr = useMemo(() => {
-    const activeSlots: LineupSlot[] = ['carry', 'mid', 'offlane', 'support', 'full_support'];
-    const activePlayers = activeSlots.map(slot => getPlayerById(lineup[slot])).filter(Boolean) as Player[];
-    if (activePlayers.length === 0) return 0;
-    return Math.round(activePlayers.reduce((acc, p) => acc + p.overallRating, 0) / activePlayers.length);
-  }, [lineup, allAvailablePlayers]);
 
   const handleSlotClick = (slotKey: LineupSlot) => {
-    const currentPlayerId = lineup[slotKey];
-    
+    const clickedPlayerId = lineup[slotKey];
+
+    // First click selects the whole player block.
+    // The selected block is highlighted; no automatic cycling happens.
     if (!selectedSlotForSwap) {
-      if (!currentPlayerId) {
-        setManagedSlot(slotKey);
-      } else {
+      if (clickedPlayerId) {
         setSelectedSlotForSwap(slotKey);
+      } else {
+        setManagedSlot(slotKey);
       }
       return;
     }
 
+    // Clicking the same block cancels selection.
     if (selectedSlotForSwap === slotKey) {
       setSelectedSlotForSwap(null);
       return;
     }
 
     const sourcePlayerId = lineup[selectedSlotForSwap];
-    const targetPlayerId = lineup[slotKey];
+    const targetPlayerId = clickedPlayerId;
 
-    if (!sourcePlayerId) {
+    // Move/swap directly between any roster blocks: a starter can be
+    // replaced by a substitute and a substitute can become a starter.
+    // The same mechanism also works for reserve slots.
+    if (sourcePlayerId) {
+      updateLineup({
+        [selectedSlotForSwap]: targetPlayerId || null,
+        [slotKey]: sourcePlayerId,
+      });
       setSelectedSlotForSwap(null);
-      return;
+      toast({
+        title: language === 'ru' ? 'Игрок перемещён' : 'Player moved',
+        description: language === 'ru' ? 'Игроки основы и замены теперь можно менять местами.' : 'Starters and substitutes can now be swapped freely.'
+      });
     }
-
-    const sourcePlayer = getPlayerById(sourcePlayerId);
-    const targetPlayer = getPlayerById(targetPlayerId);
-
-    if (sourcePlayer && !roleMapping[slotKey].includes(sourcePlayer.role)) {
-      toast({ variant: "destructive", title: t.roleError });
-      setSelectedSlotForSwap(null);
-      return;
-    }
-
-    if (targetPlayer && !roleMapping[selectedSlotForSwap].includes(targetPlayer.role)) {
-      toast({ variant: "destructive", title: t.roleError });
-      setSelectedSlotForSwap(null);
-      return;
-    }
-
-    updateLineup({ 
-      [selectedSlotForSwap]: targetPlayerId || null, 
-      [slotKey]: sourcePlayerId 
-    });
-    
-    toast({ title: t.swapSuccess });
-    setSelectedSlotForSwap(null);
   };
 
   const handlePlayerAssign = (player: Player) => {
@@ -222,6 +206,50 @@ export default function SquadPage() {
     assignToRole(managedSlot, player.id);
     setManagedSlot(null);
     toast({ title: language === 'ru' ? "Состав обновлен" : "Squad Updated" });
+  };
+
+  const activeRoleSlots: LineupSlot[] = ['carry', 'mid', 'offlane', 'support', 'full_support'];
+  const slotRole: Record<string, string> = { carry: 'Carry', mid: 'Midlaner', offlane: 'Tank', support: 'Jungler', full_support: 'Support' };
+  const roleFitPercent = (player: Player, slot: LineupSlot) => {
+    const target = slotRole[slot];
+    if (!target) return 100;
+    if (player.role === target) return 100;
+    const stat = player.proStats || ({} as any);
+    const weights: Record<string, Record<string, number>> = {
+      Carry: { lastHitting: .25, positioning: .20, reflexes: .18, tiltResistance: .13, versatility: .10 },
+      Midlaner: { reflexes: .22, lastHitting: .18, ganking: .18, positioning: .15, tiltResistance: .10 },
+      Tank: { objectiveControl: .24, positioning: .20, tiltResistance: .16, mapAwareness: .14, versatility: .10 },
+      Jungler: { ganking: .22, objectiveControl: .18, communication: .18, mapAwareness: .15, positioning: .12 },
+      Support: { communication: .22, objectiveControl: .18, positioning: .18, mapAwareness: .15, tiltResistance: .12 }
+    };
+    const w = weights[target] || weights.Carry;
+    const values = Object.entries(w).reduce((sum, [key, weight]) => sum + Number((stat as any)[key] || 0) * weight, 0) / Math.max(.01, Object.values(w).reduce((a,b)=>a+b,0));
+    const best = Object.values(stat).map(Number).filter(Number.isFinite).reduce((a,b)=>a+b,0) / Math.max(1,Object.values(stat).length);
+    return Math.max(45, Math.min(100, Math.round(72 + ((values - best) / Math.max(1,best)) * 70)));
+  };
+  const fitColor = (fit: number) => fit >= 92 ? 'text-white' : fit >= 78 ? 'text-green-400' : fit >= 62 ? 'text-yellow-400' : 'text-red-500';
+  const effectiveOverall = (player: Player, slot: LineupSlot) => {
+    const fit = roleFitPercent(player, slot);
+    // Correct role = full OVR. Off-role placement lowers the displayed
+    // effective rating, while the player's base OVR remains unchanged.
+    const multiplier = 0.75 + (fit / 100) * 0.25;
+    return Math.max(1, Math.round(Number(player.overallRating || 0) * multiplier));
+  };
+  const teamOvr = useMemo(() => {
+    const activeSlots: LineupSlot[] = ['carry', 'mid', 'offlane', 'support', 'full_support'];
+    const activePlayers = activeSlots.map(slot => ({
+      slot,
+      player: getPlayerById(lineup[slot])
+    })).filter(item => item.player) as { slot: LineupSlot; player: Player }[];
+    if (activePlayers.length === 0) return 0;
+    return Math.round(activePlayers.reduce((acc, item) => acc + effectiveOverall(item.player, item.slot), 0) / activePlayers.length);
+  }, [lineup, allAvailablePlayers]);
+
+  const statusLabel = (player: Player) => {
+    const nowMs = Date.now();
+    const suspended = !!player.suspensionUntil && new Date(player.suspensionUntil).getTime() > nowMs;
+    const tilted = Number(player.tilt || 0) > 0;
+    return suspended ? (language === 'ru' ? 'ДИСКВАЛИФИКАЦИЯ' : 'SUSPENDED') : tilted ? (language === 'ru' ? `ТИЛЬТ ${Math.round(Number(player.tilt))}%` : `TILT ${Math.round(Number(player.tilt))}%`) : null;
   };
 
   const renderSlot = (slotKey: LineupSlot) => {
@@ -250,7 +278,13 @@ export default function SquadPage() {
               </div>
               <div className="flex-1 min-w-0">
                 <p className={cn("text-[7px] uppercase font-black tracking-widest", player ? "text-primary" : "text-muted-foreground")}>{roleInfo.label}</p>
-                <h3 className="text-[11px] font-bold leading-tight truncate">{player ? player.name : t.emptySlot}</h3>
+                <h3 className={cn("text-[11px] font-bold leading-tight truncate", player && statusLabel(player) && "text-red-400")}>{player ? player.name : t.emptySlot}</h3>
+                {player && <div className="flex items-center gap-1 mt-0.5">
+                  <span className={cn("text-[7px] font-black uppercase", fitColor(roleFitPercent(player, slotKey)))}>
+                    {language === 'ru' ? `РОЛЬ ${roleFitPercent(player, slotKey)}%` : `ROLE ${roleFitPercent(player, slotKey)}%`}
+                  </span>
+                  {statusLabel(player) && <span className="text-[7px] font-black uppercase text-red-500">• {statusLabel(player)}</span>}
+                </div>}
               </div>
             </div>
             
@@ -266,7 +300,7 @@ export default function SquadPage() {
                 </div>
                 <div className="flex flex-col items-center min-w-[28px]">
                   <p className="text-[6px] font-black text-primary uppercase tracking-widest mb-0.5">{t.metrics.overall}</p>
-                  <span className="text-lg font-headline font-bold text-accent italic leading-none">{teamOvr}</span>
+                  <span className={cn("text-lg font-headline font-bold italic leading-none", fitColor(roleFitPercent(player, slotKey)))}>{effectiveOverall(player, slotKey)}</span>
                 </div>
               </div>
             )}
@@ -283,9 +317,9 @@ export default function SquadPage() {
 
   const managedSlotInfo = managedSlot ? (t.roles as any)[managedSlot] : null;
   const compatiblePlayers = managedSlot ? allAvailablePlayers.filter(p => 
-    roleMapping[managedSlot].includes(p.role) && 
     !Object.values(lineup).includes(p.id) &&
-    !p.isYouth
+    !p.isYouth &&
+    (!p.onTransferUntil || new Date(p.onTransferUntil) <= new Date())
   ) : [];
 
   const rolesRu: Record<string, string> = {
@@ -345,7 +379,7 @@ export default function SquadPage() {
                 </div>
                 <div>
                    <DialogTitle className="text-xl font-headline font-bold uppercase tracking-tight text-white">{managedSlotInfo?.label}</DialogTitle>
-                   <DialogDescription className="text-[10px] font-black uppercase text-muted-foreground tracking-widest">{language === 'ru' ? 'УПРАВЛЕНИЕ ПОЗИЦИЕЙ' : 'POSITION MANAGEMENT'}</DialogDescription>
+                   <DialogDescription className="text-[10px] font-black uppercase text-muted-foreground tracking-widest">{language === 'ru' ? 'НАЖМИТЕ НА ИГРОКА, ЧТОБЫ ВЫБРАТЬ ЕГО НА ЭТУ ПОЗИЦИЮ' : 'SELECT ANY PLAYER FOR THIS POSITION'}</DialogDescription>
                 </div>
              </div>
           </DialogHeader>
@@ -419,7 +453,7 @@ export default function SquadPage() {
                 <section className="space-y-3">
                   <h3 className="text-[9px] font-black text-primary uppercase tracking-[0.2em] mb-4 flex items-center gap-2 opacity-80 px-1"><Info className="w-3.5 h-3.5" /> {language === 'ru' ? 'ОБЩИЕ ДАННЫЕ' : 'GENERAL INTEL'}</h3>
                   <div className="grid grid-cols-2 gap-2">
-                    <div className="flex items-center justify-between p-3 bg-secondary/10 rounded-xl border border-white/5 min-h-[64px]"><span className="text-[9px] font-bold text-muted-foreground uppercase">{language === 'ru' ? 'Возраст' : 'Age'}</span><span className="text-[10px] font-bold">{calculateLiveAge(profilePlayer.baseAge, profilePlayer.hiredAt).display} {language === 'ru' ? 'лет' : 'yrs'}</span></div>
+                    <div className="flex items-center justify-between p-3 bg-secondary/10 rounded-xl border border-white/5 min-h-[64px]"><span className="text-[9px] font-bold text-muted-foreground uppercase">{language === 'ru' ? 'Возраст' : 'Age'}</span><span className="text-[10px] font-bold">{calculateLiveAge(profilePlayer.baseAge, profilePlayer.hiredAt, profilePlayer.birthDate).display} {language === 'ru' ? 'лет' : 'yrs'}</span></div>
                     <div className="flex items-center justify-between p-3 bg-secondary/10 rounded-xl border border-white/5 min-h-[64px]"><span className="text-[9px] font-bold text-muted-foreground uppercase whitespace-nowrap">{language === 'ru' ? 'Талант' : 'Talent'}</span><div className="flex items-center">{renderStars(Math.max(...Object.values(profilePlayer.proTalents || {}).map(v => normTalent(v))))}</div></div>
                     <div className="flex items-center justify-between p-3 bg-secondary/10 rounded-xl border border-white/5 min-h-[64px]"><span className="text-[9px] font-bold text-muted-foreground uppercase">{language === 'ru' ? 'Зарплата' : 'Salary'}</span><span className="text-[10px] font-bold text-primary">€{(profilePlayer.salary || 0).toLocaleString()}</span></div>
                     <div className="flex items-center justify-between p-3 bg-secondary/10 rounded-xl border border-white/5 min-h-[64px]">

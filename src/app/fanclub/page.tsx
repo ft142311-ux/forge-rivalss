@@ -34,7 +34,7 @@ export default function FanclubPage() {
   const [isProcessing, setIsProcessing] = useState(false);
 
   const teamRef = useMemoFirebase(() => {
-    if (!user || !selectedLeagueId) return null;
+    if (!db || !user || !selectedLeagueId) return null;
     const seasonId = `season_1`; // Simplified for now
     const prefixedGroupId = `${seasonId}_league_${selectedLeagueId}_group_${groupId}`;
     return doc(db, 'leagues_v2', selectedLeagueId, 'divisions', String(leagueLevel), 'groups', prefixedGroupId, 'teams', user.uid);

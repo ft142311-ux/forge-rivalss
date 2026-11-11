@@ -5,10 +5,6 @@ import { useAuth, useUser } from '@/firebase';
 import { syncTelegramUser } from '@/firebase/telegram-auth';
 import { useToast } from '@/hooks/use-toast';
 
-/**
- * Компонент-обработчик среды Telegram.
- * Автоматически синхронизирует пользователя, если он зашел через Telegram WebApp.
- */
 export function TelegramSyncHandler() {
   const auth = useAuth();
   const { user, isUserLoading } = useUser();
@@ -16,33 +12,36 @@ export function TelegramSyncHandler() {
   const syncStartedRef = useRef(false);
 
   useEffect(() => {
-    // Проверка наличия объекта Telegram WebApp
+    if (!auth || isUserLoading || syncStartedRef.current) return;
+
     const tg = (window as any).Telegram?.WebApp;
+    const tgUser = tg?.initDataUnsafe?.user;
 
-    if (tg && tg.initDataUnsafe?.user && !user && !isUserLoading && !syncStartedRef.current) {
-      syncStartedRef.current = true;
-      
-      const handleSync = async () => {
-        try {
-          tg.expand(); // Разворачиваем приложение на весь экран
-          tg.ready();
+    // We only auto-enter through Telegram when there is no active user.
+    // This also lets the handler restore the session after the auction action
+    // signs out a revoked Firebase session.
+    if (user || !tgUser?.id) return;
 
-          const result = await syncTelegramUser(auth, tg.initDataUnsafe.user);
-          
-          if (result.status === 'registered') {
-            toast({
-              title: "Telegram Sync Complete",
-              description: "Your operational profile has been initialized.",
-            });
-          }
-        } catch (e) {
-          console.error("Telegram Auto-Sync Error:", e);
-          syncStartedRef.current = false;
-        }
-      };
+    syncStartedRef.current = true;
 
-      handleSync();
-    }
+    const handleSync = async () => {
+      try {
+        tg.expand?.();
+        tg.ready?.();
+
+        await syncTelegramUser(auth, tgUser);
+      } catch (error) {
+        console.error('[TELEGRAM AUTH] Auto-Sync Error:', error);
+        syncStartedRef.current = false;
+        toast({
+          title: 'Ошибка авторизации',
+          description: 'Не удалось восстановить Telegram-сессию.',
+          variant: 'destructive',
+        });
+      }
+    };
+
+    void handleSync();
   }, [auth, user, isUserLoading, toast]);
 
   return null;

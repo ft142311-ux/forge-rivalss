@@ -16,9 +16,13 @@ export interface Player {
   image: string;
   description: string;
   price: number;
+  marketValue?: number;
   baseAge: number; 
-  hiredAt: string; 
-  age: number; 
+  hiredAt: string;
+  birthDate?: string;
+  age: number;
+  ageDisplay?: string;
+  ageSystemVersion?: number;
   salary: number;
   form: number; 
   fatigue: number; 
@@ -60,12 +64,26 @@ export interface Player {
   matchesPlayedToday?: number; 
   lastMatchDateXP?: string; 
   totalMatchesPlayed?: number; 
-  moral?: number; 
+  moral?: number;
+  currentRole?: Role;
+  tilt?: number;
+  tiltUntil?: string | null;
+  suspensionUntil?: string | null;
+  warningCount?: number;
+  chemistryMatches?: number;
+  trainingPropensity?: number;
+  physical?: number;
+  resilience?: number;
+  lineupMatches?: number;
+  trainingProgress?: Record<string, number>;
+  skillCaps?: Record<string, number>;
+  skillInclinations?: Record<string, number>;
   titles?: {
     league: number;
     cup: number;
     friendly: number;
   };
+  seasonStats?: { matches?: number; wins?: number; successfulActions?: number; warnings?: number; disqualifications?: number; kills?: number; deaths?: number; assists?: number; postMatchRating?: number; };
   isYouth?: boolean;
 }
 
@@ -140,10 +158,41 @@ function getRandomStat(min: number, max: number, rng?: SeededRandom) {
   return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
+
+const PLAYER_GAME_YEAR_DAYS = 7;
+const PLAYER_GAME_MONTHS = 12;
+const PLAYER_GAME_YEAR_MS = PLAYER_GAME_YEAR_DAYS * 24 * 60 * 60 * 1000;
+const PLAYER_GAME_MONTH_MS = PLAYER_GAME_YEAR_MS / PLAYER_GAME_MONTHS;
+
+/** Random starting age in the game's month-based age format. */
+function randomGameAge(minYears: number, maxYears: number, rng?: SeededRandom) {
+  const years = getRandomStat(minYears, maxYears, rng);
+  const month = getRandomStat(0, 12, rng);
+  return { years, month, numeric: years + month / PLAYER_GAME_MONTHS, display: `${years}.${month}` };
+}
+
+/** Converts a game age into a birth timestamp so the age can advance from server time. */
+function birthDateForGameAge(years: number, month: number, nowMs = Date.now()) {
+  const ageMs = (years * PLAYER_GAME_YEAR_MS) + (month * PLAYER_GAME_MONTH_MS);
+  return new Date(nowMs - ageMs).toISOString();
+}
+
+
+/** Canonical indicative market value. Actual transfer price is determined by the auction. */
+export function calculatePlayerMarketValue(player: Pick<Player, 'overallRating' | 'proStats' | 'form' | 'fatigue' | 'role'> | any): number {
+  const stats = player?.proStats && typeof player.proStats === 'object' ? Object.values(player.proStats).map(Number).filter(Number.isFinite) : [];
+  const skillAverage = stats.length ? stats.reduce((a, b) => a + b, 0) / stats.length : Number(player?.overallRating || 0);
+  const ovr = Math.max(0, Math.min(100, Number(player?.overallRating || skillAverage || 0)));
+  const skillComponent = Math.max(0, Math.min(100, skillAverage));
+  return Math.max(0, Math.round(ovr * 1200 + skillComponent * 800 + 40000));
+}
+
 export function generateVtunePlayer(seed?: string): Player {
   const rng = new SeededRandom(seed || Date.now());
-  const age = (rng.range(183, 189) / 10);
-  const careerEnd = rng.range(30, 36);
+  const startAge = randomGameAge(18, 30, rng);
+  const age = startAge.numeric;
+  const careerEnd = rng.range(30, 35);
+  const birthDate = birthDateForGameAge(startAge.years, startAge.month);
 
   return {
     id: 'legend_vtune',
@@ -157,7 +206,10 @@ export function generateVtunePlayer(seed?: string): Player {
     price: 0,
     baseAge: age,
     hiredAt: new Date().toISOString(),
+    birthDate,
     age: age,
+    ageDisplay: startAge.display,
+    ageSystemVersion: 5,
     careerEndAge: careerEnd,
     salary: 45000,
     form: 95,
@@ -187,7 +239,8 @@ export function generateUniquePlayer(role: Role, index: number, isStarter: boole
   const nameIdx = rng ? rng.range(0, PLAYER_NAMES.length - 1) : Math.floor(Math.random() * PLAYER_NAMES.length);
   const name = `${PLAYER_NAMES[nameIdx]} ${index + 1}`;
   
-  const startAge = getRandomStat(isStarter ? 17 : 18, isStarter ? 28 : 32, rng);
+  // Adult/first-team players start randomly at 18.0–30.12.
+  const startAge = randomGameAge(18, 30, rng);
   const playerId = seed ? `p_det_${seed}` : `player_${Date.now()}_${index}_${Math.random().toString(36).substr(2, 5)}`;
 
   // Принудительный диапазон 28-37 для стартового состава
@@ -203,16 +256,19 @@ export function generateUniquePlayer(role: Role, index: number, isStarter: boole
     image: country.url,
     description: `Уникальный талант из страны: ${country.name}.`,
     price: 0,
-    baseAge: startAge,
+    baseAge: startAge.numeric,
     hiredAt: new Date().toISOString(),
-    age: startAge,
+    birthDate: birthDateForGameAge(startAge.years, startAge.month),
+    age: startAge.numeric,
+    ageDisplay: startAge.display,
+    ageSystemVersion: 5,
     careerEndAge: isPro ? 35 : 38,
     salary: isPro ? 25000 : 2500,
     form: isStarter ? 75 : 90,
     fatigue: isStarter ? 75 : 100,
     country: { code, name: country.name, flag: country.flag },
     isInjured: false,
-    isYouth: isStarter ? false : (startAge < 18),
+    isYouth: false,
     proStats: {
       lastHitting: getRandomStat(10, 20, rng), mapAwareness: getRandomStat(10, 20, rng),
       positioning: getRandomStat(10, 20, rng), reflexes: getRandomStat(10, 20, rng),
@@ -226,7 +282,15 @@ export function generateUniquePlayer(role: Role, index: number, isStarter: boole
       manaManagement: getRandomStat(35, 55, rng), objectiveControl: getRandomStat(35, 55, rng),
       communication: getRandomStat(35, 55, rng), tiltResistance: getRandomStat(35, 55, rng),
       versatility: getRandomStat(35, 55, rng), ganking: getRandomStat(35, 55, rng),
-    }
+    },
+    trainingProgress: {},
+    skillCaps: {},
+    skillInclinations: {},
+    chemistryMatches: 0,
+    lineupMatches: 0,
+    tilt: 0,
+    suspensionUntil: null,
+    warningCount: 0
   };
 }
 
@@ -235,8 +299,12 @@ export function generateScoutedPlayer(index: number, scoutLevel: number, seed?: 
   const roles: Role[] = ['Tank', 'Carry', 'Midlaner', 'Jungler', 'Support'];
   const role = roles[rng.range(0, roles.length - 1)];
   const player = generateUniquePlayer(role, index, false, seed);
-  player.baseAge = getRandomStat(14, 17, rng);
-  player.age = player.baseAge;
+  const startAge = randomGameAge(14, 16, rng);
+  player.baseAge = startAge.numeric;
+  player.age = startAge.numeric;
+  player.ageDisplay = startAge.display;
+  player.ageSystemVersion = 5;
+  player.birthDate = birthDateForGameAge(startAge.years, startAge.month);
   player.isYouth = true;
   return player;
 }
@@ -260,12 +328,12 @@ export function generateStaffMember(role: StaffRole): StaffMember {
   };
 }
 
-export function generateBotSquad(targetOvr: number = 10): any[] {
+export function generateBotSquad(targetOvr: number = 25): any[] {
   const roles: Role[] = ['Carry', 'Midlaner', 'Tank', 'Jungler', 'Support'];
   const countryCodes = Object.keys(COUNTRY_PHOTOS);
 
   return roles.map((role, idx) => {
-    const val = Math.floor(targetOvr - 3 + Math.random() * 4); 
+    const val = Math.max(23, Math.min(27, Math.floor(targetOvr - 1 + Math.random() * 3))); 
     const nameSeed = Math.floor(Math.random() * PLAYER_NAMES.length);
     const countryIdx = Math.floor(Math.random() * countryCodes.length);
     const countryCode = countryCodes[countryIdx];
@@ -273,7 +341,7 @@ export function generateBotSquad(targetOvr: number = 10): any[] {
     const name = PLAYER_NAMES[nameSeed];
     const image = COUNTRY_PHOTOS[countryCode].url;
     
-    const skillBase = Math.max(1, Math.floor(val * 0.25));
+    const skillBase = Math.max(20, Math.min(27, val + Math.floor(Math.random() * 5) - 2));
 
     return {
       name: name,

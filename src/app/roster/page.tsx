@@ -1,7 +1,7 @@
 
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useUser } from '@/firebase';
 import { useGameState } from '../lib/store';
@@ -9,18 +9,53 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { 
   Users, Link as LinkIcon, Swords, Dumbbell, 
-  Clock, Scroll, BarChart3, HeartPulse, 
+  Scroll, BarChart3, HeartPulse, Target, 
   ChevronLeft, ChevronRight, Shield
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import Link from 'next/link';
 import { Badge } from '@/components/ui/badge';
 import { LoadingScreen } from '@/components/game/LoadingScreen';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
+import { CalendarDays } from 'lucide-react';
+import { getFoundationDailyEventAction } from '@/app/actions/foundation-management';
+import { resolveFoundationEventAction } from '@/app/actions/foundation-advanced';
+import { useToast } from '@/hooks/use-toast';
 
 export default function RosterPage() {
   const { user, isUserLoading } = useUser();
   const router = useRouter();
   const { language, isLoaded } = useGameState();
+  const { toast } = useToast();
+  const [dailyEvent, setDailyEvent] = useState<any>(null);
+  const [eventBusy, setEventBusy] = useState(false);
+
+  useEffect(() => {
+    if (!user) return;
+    let active = true;
+    (async () => {
+      try {
+        const result = await getFoundationDailyEventAction(await user.getIdToken(true));
+        if (active && result.success && result.event && !result.event.resolvedAt) setDailyEvent(result.event);
+      } catch {}
+    })();
+    return () => { active = false; };
+  }, [user]);
+
+  const resolveDailyEvent = async (choice: 'accept' | 'decline') => {
+    if (!dailyEvent?.event?.id || eventBusy || !user) return;
+    setEventBusy(true);
+    try {
+      const result = await resolveFoundationEventAction(await user.getIdToken(true), dailyEvent.event.id, choice);
+      if ('error' in result) throw new Error(result.error || 'EVENT_RESOLVE_FAILED');
+      setDailyEvent(null);
+      toast({ title: language === 'ru' ? 'Событие обработано' : 'Event resolved' });
+    } catch (e: any) {
+      toast({ title: e?.message || 'Error', variant: 'destructive' });
+    } finally {
+      setEventBusy(false);
+    }
+  };
 
   useEffect(() => {
     if (!isUserLoading && !user) {
@@ -41,9 +76,10 @@ export default function RosterPage() {
         { label: 'Squad', desc: 'Manage your active hero lineup', icon: Users, href: '/roster/squad', active: true, color: 'text-primary' },
         { label: 'Team Synergy', desc: 'Cohesion based on official matches', icon: LinkIcon, href: '/roster/synergy', active: true, color: 'text-accent' },
         { label: 'Tactics', desc: 'Strategic positioning and roles', icon: Swords, href: '/roster/tactics', active: true, color: 'text-red-400' },
+        { label: 'Heroes & Draft', desc: 'Hero pools, preferred picks and bans', icon: Target, href: '/roster/heroes', active: true, color: 'text-purple-400' },
         { label: 'Training', desc: 'Select skills to improve after matches', icon: Dumbbell, href: '/roster/training', active: true, color: 'text-green-400' },
-        { label: 'Daily Training', desc: '24-hour intensive cycle', icon: Clock, href: '/roster/daily-training', active: true, color: 'text-orange-400' },
-        { label: 'Contracts', desc: 'Financial agreements and tenure', icon: Scroll, href: '/roster/contracts', active: true, color: 'text-yellow-400' },
+        { label: 'Skills & Roles', desc: 'Role suitability and player role assignment', icon: Target, href: '/roster/roles', active: true, color: 'text-orange-400' },
+        { label: 'Player Management', desc: 'Sell, recover, boost form, heal and release', icon: Scroll, href: '/roster/contracts', active: true, color: 'text-yellow-400' },
         { label: 'Player Stats', desc: 'Individual performance metrics', icon: BarChart3, href: '/roster/stats', active: true, color: 'text-blue-400' },
         { label: 'Recover Fatigue', desc: 'Squad-wide stamina restoration', icon: HeartPulse, href: '/roster/fatigue', active: true, color: 'text-red-500' },
       ]
@@ -56,9 +92,10 @@ export default function RosterPage() {
         { label: 'Состав', desc: 'Управление активным составом', icon: Users, href: '/roster/squad', active: true, color: 'text-primary' },
         { label: 'Сыгранность состава', desc: 'Взаимодействие в официальных играх', icon: LinkIcon, href: '/roster/synergy', active: true, color: 'text-accent' },
         { label: 'Тактика', desc: 'Стратегические роли и позиции', icon: Swords, href: '/roster/tactics', active: true, color: 'text-red-400' },
+        { label: 'Герои и драфт', desc: 'Пулы героев, предпочтения и баны', icon: Target, href: '/roster/heroes', active: true, color: 'text-purple-400' },
         { label: 'Тренировки', desc: 'Выбор навыков для прокачки после игр', icon: Dumbbell, href: '/roster/training', active: true, color: 'text-green-400' },
-        { label: 'Тренировка за сутки', desc: '24-часовой цикл подготовки', icon: Clock, href: '/roster/daily-training', active: true, color: 'text-orange-400' },
-        { label: 'Контракты', desc: 'Финансовые соглашения и сроки', icon: Scroll, href: '/roster/contracts', active: true, color: 'text-yellow-400' },
+        { label: 'Навыки и роли', desc: 'Пригодность игроков и смена роли', icon: Target, href: '/roster/roles', active: true, color: 'text-orange-400' },
+        { label: 'Управление игроками', desc: 'Продажа, восстановление, форма, лечение и увольнение', icon: Scroll, href: '/roster/contracts', active: true, color: 'text-yellow-400' },
         { label: 'Статистика игроков', desc: 'Индивидуальные метрики игроков', icon: BarChart3, href: '/roster/stats', active: true, color: 'text-blue-400' },
         { label: 'Снять усталость', desc: 'Массовое восстановление выносливости состава', icon: HeartPulse, href: '/roster/fatigue', active: true, color: 'text-red-500' },
       ]
@@ -117,6 +154,45 @@ export default function RosterPage() {
           </Link>
         ))}
       </div>
+
+      <Dialog open={!!dailyEvent} onOpenChange={(open) => { if (!open && !eventBusy) setDailyEvent(null); }}>
+        <DialogContent className="max-w-md border-primary/20 glass-card">
+          <DialogHeader>
+            <DialogTitle className="uppercase font-black flex items-center gap-2">
+              <CalendarDays className="w-5 h-5 text-fuchsia-400" />
+              {language === 'ru' ? 'Случайное событие' : 'Daily event'}
+            </DialogTitle>
+            <DialogDescription className="text-[10px] uppercase tracking-widest">
+              {language === 'ru' ? 'Событие команды на сегодня' : "Today's team event"}
+            </DialogDescription>
+          </DialogHeader>
+          {dailyEvent?.event && (
+            <div className="space-y-4">
+              <div className="rounded-2xl bg-secondary/30 p-4">
+                <div className="text-[9px] text-muted-foreground uppercase mb-2">{dailyEvent.date}</div>
+                <h2 className="text-lg font-black uppercase">{dailyEvent.event.title}</h2>
+                <p className="text-sm text-muted-foreground mt-2 leading-relaxed">{dailyEvent.event.description}</p>
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                {Object.entries(dailyEvent.event.effects || {}).map(([key, value]: any) => (
+                  <div key={key} className="rounded-xl bg-secondary/30 p-3 text-center">
+                    <div className="text-[8px] text-muted-foreground uppercase">{key}</div>
+                    <div className="font-black">{Number(value) > 0 ? '+' : ''}{value}</div>
+                  </div>
+                ))}
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <Button disabled={eventBusy} onClick={() => resolveDailyEvent('accept')}>
+                  {language === 'ru' ? 'ПРИНЯТЬ' : 'ACCEPT'}
+                </Button>
+                <Button variant="outline" disabled={eventBusy} onClick={() => resolveDailyEvent('decline')}>
+                  {language === 'ru' ? 'ОТКАЗАТЬСЯ' : 'DECLINE'}
+                </Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -1,21 +1,32 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useUser, useFirestore, useDoc, useMemoFirebase } from '@/firebase';
 import { useGameState } from '@/app/lib/store';
-import { 
-  ChevronLeft, ShoppingBasket, Search, Swords, 
-  Loader2, Radar, ShieldAlert, Timer, Users, User, Lock
-} from 'lucide-react';
+import { cancelCwBasketQueueAction, joinCwBasketQueueAction } from '@/app/actions/cw-basket';
+import { useToast } from '@/hooks/use-toast';
+import { LoadingScreen } from '@/components/game/LoadingScreen';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import Link from 'next/link';
-import { doc, setDoc, deleteDoc, serverTimestamp, collection, query, where, getDocs, limit } from 'firebase/firestore';
-import { useToast } from '@/hooks/use-toast';
-import { LoadingScreen } from '@/components/game/LoadingScreen';
-import { cn } from '@/lib/utils';
+import { doc } from 'firebase/firestore';
+import { ChevronLeft, Loader2, Lock, Radar, ShoppingBasket, Swords, Timer, Users } from 'lucide-react';
+
+function timestampMs(value: any): number {
+  if (value && typeof value.toMillis === 'function') return value.toMillis();
+  if (typeof value === 'number') return value;
+  if (typeof value === 'string') return Date.parse(value) || 0;
+  return 0;
+}
+
+function countdownLabel(targetMs: number, nowMs: number): string {
+  const remaining = Math.max(0, targetMs - nowMs);
+  const minutes = Math.floor(remaining / 60_000).toString().padStart(2, '0');
+  const seconds = Math.floor((remaining % 60_000) / 1_000).toString().padStart(2, '0');
+  return `${minutes}:${seconds}`;
+}
 
 export default function CWBasketPage() {
   const { user, isUserLoading } = useUser();
@@ -24,250 +35,164 @@ export default function CWBasketPage() {
   const { toast } = useToast();
   const { language, isLoaded } = useGameState();
   const [isActionLoading, setIsActionLoading] = useState(false);
+  const [now, setNow] = useState(Date.now());
+  const isRussian = language === 'ru';
 
-  const myEntryRef = useMemoFirebase(() => {
+  const queueRef = useMemoFirebase(() => {
     if (!db || !user) return null;
     return doc(db, 'cw_basket_v2', user.uid);
   }, [db, user]);
-  
-  const { data: myEntry, isLoading: isEntryLoading } = useDoc(myEntryRef);
-
-  const myLobbyRef = useMemoFirebase(() => {
-    if (!db || !user) return null;
-    return doc(db, 'friendly_lobbies_v3', user.uid);
-  }, [db, user]);
-  
-  const { data: myLobby } = useDoc(myLobbyRef);
-
-  const userRef = useMemoFirebase(() => {
-    if (!db || !user) return null;
-    return doc(db, 'players_v12', user.uid);
-  }, [db, user]);
-  
-  const { data: profile } = useDoc(userRef);
+  const { data: entry, isLoading: isEntryLoading } = useDoc(queueRef);
 
   useEffect(() => {
-    if (!isUserLoading && !user) {
-      router.push('/auth/login');
-    }
+    const timer = window.setInterval(() => setNow(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    if (!isUserLoading && !user) router.push('/auth/login');
   }, [user, isUserLoading, router]);
 
-  const isBusy = useMemo(() => !!myLobby && !myEntry, [myLobby, myEntry]);
+  const isMatched = entry?.status === 'matched';
+  const isSearching = entry?.status === 'searching';
+  const queueExpiresAt = timestampMs(entry?.expiresAt) || (timestampMs(entry?.createdAt) + 5 * 60_000);
+  const isQueueExpired = isSearching && queueExpiresAt > 0 && queueExpiresAt <= now;
+  const matchStartsAt = timestampMs(entry?.scheduledStartAt || entry?.matchStartTime);
+  const matchCountdown = useMemo(() => countdownLabel(matchStartsAt, now), [matchStartsAt, now]);
 
-  if (isUserLoading || !isLoaded || !user) {
-    return <LoadingScreen />;
-  }
+  if (isUserLoading || !isLoaded || !user) return <LoadingScreen />;
 
-  const translations = {
-    en: {
-      title: "CW BASKET",
-      subtitle: "Quick Matchmaking Protocol",
-      startSearch: "START SEARCH",
-      stopSearch: "STOP SEARCH",
-      matched: "OPPONENT SECURED",
-      matchDesc: "Match will commence in 15 minutes.",
-      searching: "Scanning frequencies for active managers...",
-      found: "Matching established. Preparing deployment.",
-      toastFound: "Match Found!",
-      toastFoundDesc: "Your tactical engagement is being prepared.",
-      busy: "Operational Conflict",
-      busyDesc: "You have a scheduled Friendly or Trial match. Complete it first.",
-      offline: "OFFLINE: Basket terminal restricted."
+  const t = isRussian ? {
+    title: 'КВ КОРЗИНА', subtitle: 'Быстрый случайный подбор', start: 'НАЧАТЬ ПОИСК', stop: 'ОСТАНОВИТЬ ПОИСК',
+    expired: 'ПОВТОРИТЬ ПОИСК', searching: 'Поиск соперника...', matched: 'СОПЕРНИК НАЙДЕН',
+    opponent: 'ВАШ СОПЕРНИК', starts: 'До начала матча', scheduled: 'Матч назначен',
+    delay: 'Матч будет назначен через 15 минут после подбора.',
+    busy: 'Матч или другой поиск уже активен.',
+    matchLocked: 'Соперник найден. Отменить назначенный матч нельзя.',
+    errors: {
+      CW_USER_HAS_ACTIVE_FRIENDLY_LOBBY: 'Сначала завершите или отмените поиск товарищеского матча.',
+      CW_USER_HAS_ACTIVE_FRIENDLY_MATCH: 'У вас уже есть назначенный товарищеский матч.',
+      CW_MATCH_ALREADY_ASSIGNED: 'Соперник уже найден. Отмена недоступна.',
+      PLAYER_NOT_FOUND: 'Не удалось найти профиль клуба.',
     },
-    ru: {
-      title: "КВ КОРЗИНА",
-      subtitle: "Протокол быстрого подбора",
-      startSearch: "НАЧАТЬ ПОИСК",
-      stopSearch: "ОСТАНОВИТЬ ПОИСК",
-      matched: "СОПЕРНИК НАЙДЕН",
-      matchDesc: "Матч начнется через 15 минут.",
-      searching: "Сканирование частот на наличие менеджеров...",
-      found: "Связь установлена. Подготовка к развертыванию.",
-      toastFound: "Соперник найден!",
-      toastFoundDesc: "Ваше тактическое сражение подготавливается.",
-      busy: "Оперативный конфликт",
-      busyDesc: "У вас уже назначен Дружеский или Пробный матч. Завершите его сначала.",
-      offline: "ОФЛАЙН: Терминал подбора КВ недоступен."
-    }
+  } : {
+    title: 'CW BASKET', subtitle: 'Quick random matchmaking', start: 'START SEARCH', stop: 'STOP SEARCH',
+    expired: 'SEARCH AGAIN', searching: 'Searching for an opponent...', matched: 'OPPONENT FOUND',
+    opponent: 'YOUR OPPONENT', starts: 'Match starts in', scheduled: 'Match scheduled',
+    delay: 'The match is scheduled 15 minutes after pairing.',
+    busy: 'A match or another matchmaking request is already active.',
+    matchLocked: 'An opponent has been found. The scheduled match cannot be cancelled.',
+    errors: {
+      CW_USER_HAS_ACTIVE_FRIENDLY_LOBBY: 'Finish or cancel your friendly matchmaking request first.',
+      CW_USER_HAS_ACTIVE_FRIENDLY_MATCH: 'You already have a scheduled friendly match.',
+      CW_MATCH_ALREADY_ASSIGNED: 'An opponent has already been found. Cancellation is unavailable.',
+      PLAYER_NOT_FOUND: 'Your club profile could not be found.',
+    },
   };
 
-  const t = translations[language as keyof typeof translations] || translations.ru;
-
-  if (!db) {
-    return (
-      <div className="max-w-md mx-auto px-4 pt-8 text-center">
-        <header className="mb-6 flex items-center gap-4">
-          <Link href="/tournaments"><Button variant="ghost" size="icon" className="rounded-full"><ChevronLeft className="w-6 h-6" /></Button></Link>
-          <div><h1 className="text-2xl font-headline font-bold uppercase">{t.title}</h1></div>
-        </header>
-        <div className="py-20 opacity-30 flex flex-col items-center gap-6">
-           <Lock className="w-16 h-16" />
-           <p className="text-xs font-black uppercase tracking-widest">{t.offline}</p>
-        </div>
-      </div>
-    );
-  }
-
   const handleToggleSearch = async () => {
-    if (!user || !profile || isActionLoading) return;
-
-    if (!myEntry && isBusy) {
-      toast({ title: t.busy, description: t.busyDesc, variant: "destructive" });
-      return;
-    }
-
+    if (!user || isActionLoading) return;
     setIsActionLoading(true);
-
     try {
-      if (myEntry) {
-        await deleteDoc(doc(db, 'cw_basket_v2', user.uid));
+      const token = await user.getIdToken(true);
+      if (isSearching && !isQueueExpired) {
+        await cancelCwBasketQueueAction(token);
+        toast({ title: isRussian ? 'Поиск остановлен' : 'Search stopped' });
       } else {
-        // 1. Try to find someone searching
-        const q = query(
-          collection(db, 'cw_basket_v2'), 
-          where('status', '==', 'searching'), 
-          limit(1)
-        );
-        const snap = await getDocs(q);
-        const opponentDoc = snap.docs.find(d => d.id !== user.uid);
-
-        const matchStartTime = new Date(Date.now() + 15 * 60 * 1000).toISOString();
-
-        if (opponentDoc) {
-          const opponent = opponentDoc.data();
-          
-          // 2. Match with found opponent
-          await setDoc(doc(db, 'cw_basket_v2', opponentDoc.id), {
-            status: 'matched',
-            matchedWithId: user.uid,
-            matchedWithName: profile.displayName || "Manager",
-            matchStartTime,
-            updatedAt: serverTimestamp()
-          }, { merge: true });
-
-          await setDoc(doc(db, 'cw_basket_v2', user.uid), {
-            userId: user.uid,
-            userName: profile.displayName || "Manager",
-            status: 'matched',
-            matchedWithId: opponentDoc.id,
-            matchedWithName: opponent.userName || "Unknown",
-            matchStartTime,
-            updatedAt: serverTimestamp()
+        const result = await joinCwBasketQueueAction(token);
+        if (result.status === 'matched') {
+          toast({
+            title: isRussian ? 'Соперник найден!' : 'Opponent found!',
+            description: result.matchedWithName || undefined,
           });
-
-          toast({ title: t.toastFound, description: t.toastFoundDesc });
         } else {
-          // 3. Start own search
-          await setDoc(doc(db, 'cw_basket_v2', user.uid), {
-            userId: user.uid,
-            userName: profile.displayName || "Manager",
-            status: 'searching',
-            matchedWithId: null,
-            matchedWithName: null,
-            matchStartTime: null,
-            updatedAt: serverTimestamp()
-          });
+          toast({ title: isRussian ? 'Поиск начат' : 'Search started' });
         }
       }
-    } catch (e) {
-      console.error(e);
+    } catch (error: any) {
+      const code = String(error?.message || 'CW_BASKET_FAILED');
+      toast({
+        title: isRussian ? 'Не удалось выполнить поиск' : 'Matchmaking failed',
+        description: t.errors[code as keyof typeof t.errors] || t.busy,
+        variant: 'destructive',
+      });
     } finally {
       setIsActionLoading(false);
     }
   };
 
-  const isMatched = myEntry?.status === 'matched';
-  const isSearching = myEntry?.status === 'searching';
+  if (!db) {
+    return (
+      <div className="max-w-md mx-auto px-4 pt-8 text-center">
+        <Link href="/tournaments"><Button variant="ghost" size="icon"><ChevronLeft className="w-6 h-6" /></Button></Link>
+        <Lock className="w-16 h-16 mx-auto my-12 opacity-40" />
+      </div>
+    );
+  }
 
   return (
-    <div className="max-w-md mx-auto px-4 pt-8 pb-20">
+    <div className="max-w-md mx-auto px-4 pt-8 pb-24">
       <header className="mb-6 flex items-center gap-4">
         <Link href="/tournaments">
-          <Button variant="ghost" size="icon" className="rounded-full">
-            <ChevronLeft className="w-6 h-6" />
-          </Button>
+          <Button variant="ghost" size="icon" className="rounded-full"><ChevronLeft className="w-6 h-6" /></Button>
         </Link>
         <div>
           <h1 className="text-2xl font-headline font-bold uppercase tracking-tighter flex items-center gap-2">
-            <ShoppingBasket className="w-6 h-6 text-primary" />
-            {t.title}
+            <ShoppingBasket className="w-6 h-6 text-primary" />{t.title}
           </h1>
           <p className="text-muted-foreground text-[10px] uppercase tracking-widest">{t.subtitle}</p>
         </div>
       </header>
 
-      <div className="space-y-6">
-        <Card className={cn(
-          "glass-card border-white/5 overflow-hidden transition-all duration-500",
-          isSearching && "border-primary/30 bg-primary/5",
-          isMatched && "border-green-500/30 bg-green-500/5"
-        )}>
-          <CardContent className="p-8 text-center flex flex-col items-center">
-            {isMatched ? (
-              <div className="animate-in zoom-in duration-500">
-                <div className="w-24 h-24 rounded-full bg-green-500/20 border-2 border-green-500 flex items-center justify-center mb-6 shadow-[0_0_30px_rgba(34,197,94,0.3)]">
-                  <Swords className="w-12 h-12 text-green-400" />
-                </div>
-                <h2 className="text-2xl font-headline font-bold uppercase tracking-tight text-white mb-2">{t.matched}</h2>
-                <Badge className="bg-green-500 text-white uppercase text-[10px] mb-4">MATCH SECURED</Badge>
-                <div className="bg-background/50 p-4 rounded-xl border border-white/5 space-y-2 mb-6">
-                  <p className="text-[10px] uppercase font-black text-muted-foreground">{language === 'ru' ? 'ВАШ СОПЕРНИК' : 'YOUR OPPONENT'}</p>
-                  <p className="text-xl font-headline font-bold text-primary italic uppercase">{myEntry.matchedWithName}</p>
-                </div>
-                <div className="flex items-center justify-center gap-2 text-accent">
-                  <Timer className="w-4 h-4 animate-pulse" />
-                  <p className="text-xs font-bold uppercase tracking-widest">{t.matchDesc}</p>
+      <Card className={`glass-card border-white/10 overflow-hidden ${isSearching ? 'border-primary/30 bg-primary/5' : ''} ${isMatched ? 'border-green-500/30 bg-green-500/5' : ''}`}>
+        <CardContent className="p-8 text-center flex flex-col items-center min-h-[300px] justify-center">
+          {isEntryLoading ? <Loader2 className="w-8 h-8 animate-spin text-primary" /> : isMatched ? (
+            <>
+              <div className="w-24 h-24 rounded-full bg-green-500/20 border-2 border-green-500 flex items-center justify-center mb-5">
+                <Swords className="w-12 h-12 text-green-400" />
+              </div>
+              <h2 className="text-2xl font-headline font-bold uppercase text-white mb-2">{t.matched}</h2>
+              <Badge className="bg-green-500 text-white uppercase text-[10px] mb-4">{t.scheduled}</Badge>
+              <p className="text-[10px] uppercase font-black text-muted-foreground mb-2">{t.opponent}</p>
+              <p className="text-xl font-headline font-bold text-primary italic uppercase mb-5">{entry?.matchedWithName || 'Manager'}</p>
+              <div className="flex items-center gap-2 text-accent">
+                <Timer className="w-4 h-4" />
+                <p className="text-xs font-bold uppercase tracking-widest">{t.starts}: {matchCountdown}</p>
+              </div>
+              <p className="text-xs text-muted-foreground mt-4">{t.matchLocked}</p>
+            </>
+          ) : isSearching && !isQueueExpired ? (
+            <>
+              <div className="relative w-32 h-32 mb-6">
+                <div className="absolute inset-0 rounded-full border-2 border-primary/20 animate-ping" />
+                <div className="absolute inset-0 rounded-full border-2 border-primary/40 animate-pulse" />
+                <div className="relative w-full h-full rounded-full bg-primary/10 flex items-center justify-center">
+                  <Radar className="w-12 h-12 text-primary animate-spin" />
                 </div>
               </div>
-            ) : isSearching ? (
-              <div className="space-y-6 w-full">
-                <div className="relative w-32 h-32 mx-auto">
-                  <div className="absolute inset-0 rounded-full border-2 border-primary/20 animate-ping" />
-                  <div className="absolute inset-0 rounded-full border-2 border-primary/40 animate-pulse" />
-                  <div className="relative w-full h-full rounded-full bg-primary/10 flex items-center justify-center">
-                    <Radar className="w-12 h-12 text-primary animate-spin" />
-                  </div>
-                </div>
-                <div>
-                  <h3 className="text-lg font-headline font-bold text-primary uppercase animate-pulse">{language === 'ru' ? 'ИДЕТ ПОИСК...' : 'SEARCHING...'}</h3>
-                  <p className="text-[10px] text-muted-foreground uppercase font-bold tracking-widest mt-2">{t.searching}</p>
-                </div>
-              </div>
-            ) : (
-              <div className="py-6 opacity-40">
-                <Users className="w-20 h-20 mx-auto mb-4 text-muted-foreground" />
-                <p className="text-xs uppercase font-black tracking-widest leading-relaxed">
-                  {language === 'ru' ? 'БЫСТРЫЙ ПОИСК СЛУЧАЙНОГО СОПЕРНИКА ДЛЯ ПРАКТИКИ' : 'RAPID RANDOM MATCHMAKING FOR OPERATIONAL PRACTICE'}
-                </p>
-              </div>
-            )}
-          </CardContent>
-        </Card>
+              <h2 className="text-lg font-headline font-bold text-primary uppercase animate-pulse">{t.searching}</h2>
+              <p className="text-xs text-muted-foreground mt-3">{countdownLabel(queueExpiresAt, now)}</p>
+            </>
+          ) : (
+            <>
+              <Users className="w-20 h-20 mb-5 text-muted-foreground opacity-40" />
+              <p className="text-xs uppercase font-black tracking-widest leading-relaxed text-muted-foreground">
+                {isQueueExpired ? (isRussian ? 'Время поиска истекло. Можно начать заново.' : 'Search expired. You can start again.') : t.delay}
+              </p>
+            </>
+          )}
+        </CardContent>
+      </Card>
 
-        {!isMatched && (
-          <Button 
-            className={cn(
-              "w-full h-16 font-headline font-bold text-lg uppercase tracking-widest shadow-xl transition-all active:scale-95",
-              isSearching ? "bg-red-500/10 border-red-500/20 text-red-400 hover:bg-red-500/20" : "hero-gradient"
-            )}
-            onClick={handleToggleSearch}
-            disabled={isActionLoading || isEntryLoading}
-          >
-            {isActionLoading ? <Loader2 className="w-6 h-6 animate-spin" /> : isSearching ? t.stopSearch : t.startSearch}
-          </Button>
-        )}
-
-        {isMatched && (
-          <Button 
-            variant="outline" 
-            className="w-full h-12 uppercase font-bold text-[10px] border-white/10"
-            onClick={handleToggleSearch}
-            disabled={isActionLoading}
-          >
-            {language === 'ru' ? 'ВЫЙТИ ИЗ ОЧЕРЕДИ' : 'ABANDON QUEUE'}
-          </Button>
-        )}
-      </div>
+      {!isMatched && (
+        <Button
+          className={`w-full h-16 mt-6 font-headline font-bold text-lg uppercase tracking-widest ${isSearching && !isQueueExpired ? 'bg-red-500/10 border border-red-500/30 text-red-400 hover:bg-red-500/20' : 'hero-gradient'}`}
+          onClick={handleToggleSearch}
+          disabled={isActionLoading || isEntryLoading}
+        >
+          {isActionLoading ? <Loader2 className="w-6 h-6 animate-spin" /> : isSearching && !isQueueExpired ? t.stop : isQueueExpired ? t.expired : t.start}
+        </Button>
+      )}
     </div>
   );
 }

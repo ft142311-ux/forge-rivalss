@@ -1,6 +1,6 @@
 import { initializeApp, getApps, getApp, FirebaseApp } from "firebase/app";
-import { getAuth } from "firebase/auth";
-import { getFirestore, initializeFirestore } from "firebase/firestore";
+import { getAuth, connectAuthEmulator } from "firebase/auth";
+import { getFirestore, initializeFirestore, connectFirestoreEmulator } from "firebase/firestore";
 import { firebaseConfig } from "./config";
 
 /**
@@ -17,7 +17,6 @@ function getSdks(app: FirebaseApp) {
     // long polling и отключение fetch streams значительно повышает стабильность.
     firestore = initializeFirestore(app, {
       experimentalForceLongPolling: true,
-      useFetchStreams: false,
     });
   } catch (e) {
     // Если Firestore уже инициализирован, просто получаем инстанс.
@@ -26,9 +25,27 @@ function getSdks(app: FirebaseApp) {
     firestore = getFirestore(app);
   }
 
+  const auth = getAuth(app);
+  const useLocalEmulators = process.env.NEXT_PUBLIC_USE_FIREBASE_EMULATORS === 'true';
+  const isBrowser = typeof window !== 'undefined';
+
+  if (useLocalEmulators && isBrowser) {
+    try {
+      connectAuthEmulator(auth, 'http://localhost:9099');
+    } catch {
+      // Auth emulator may already be connected.
+    }
+
+    try {
+      connectFirestoreEmulator(firestore, '127.0.0.1', 8080);
+    } catch {
+      // Firestore emulator may already be connected.
+    }
+  }
+
   return {
     firebaseApp: app,
-    auth: getAuth(app),
+    auth,
     firestore,
   };
 }

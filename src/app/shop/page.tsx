@@ -28,7 +28,16 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Badge } from '@/components/ui/badge';
-import { useRouter } from 'next/navigation';
+import { useUser } from '@/firebase';
+import {
+  purchaseLicenseAction,
+  purchasePremiumShopAction,
+  purchaseDiamondPackAction,
+  exchangeCrystalsForCreditsAction,
+  changeClubNameAction,
+  changeClubCountryAction,
+  createShopPlayerAction,
+} from '@/app/actions/shop';
 
 type ShopTab = 
   | 'menu'
@@ -43,15 +52,13 @@ type ShopTab =
 export default function ShopPage() {
   const { 
     language, isLoaded, credits, crystals, numericId,
-    addCrystals, addCredits, addYouthPlayerDirectly, addPlayerDirectly,
-    updateProfileName, updateProfileCountry, purchaseLicense, purchasePremium,
     activeLicenseTier, country: currentCountry, isPremium, premiumUntil
   } = useGameState();
   const [activeTab, setActiveTab] = useState<ShopTab>('menu');
   const [newName, setNewName] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
   const { toast } = useToast();
-  const router = useRouter();
+  const { user } = useUser();
 
   const [heroNickname, setHeroNickname] = useState('');
   const [heroRole, setHeroRole] = useState<Role>('Carry');
@@ -247,83 +254,121 @@ export default function ShopPage() {
 
   const t = translations[language as keyof typeof translations] || translations.ru;
 
-  const handleBuyPremium = () => {
-    if (purchasePremium()) {
-      toast({ title: language === 'ru' ? "Статус активирован!" : "Status activated!" });
-      setActiveTab('menu');
-    } else {
-      toast({ title: t.insufficient, variant: "destructive" });
-    }
+  const getToken = async () => {
+    if (!user) throw new Error('AUTHENTICATION_REQUIRED');
+    return user.getIdToken(true);
   };
 
-  const handleCreatePlayer = () => {
-    if (crystals < creationCost) { toast({ title: t.insufficient, variant: "destructive" }); return; }
-    setIsProcessing(true);
-    setTimeout(() => {
-      const country = COUNTRIES.find(c => c.code === heroCountryCode) || COUNTRIES[0];
-      const ageNum = parseInt(heroAge);
-      const isAdult = ageNum >= 18;
-      
-      const newPlayer: Player = { 
-        id: `custom_${Date.now()}`, 
-        name: heroNickname.trim(), 
-        role: heroRole, 
-        baseStats: { attack: 40, defense: 40, health: 900, abilityPower: 40, speed: 320 }, 
-        overallRating: 30, 
-        abilitiesFocus: 'Balanced', 
-        image: 'https://i.postimg.cc/mg3yfqj5/rus-2.jpg', 
-        description: "Specially commissioned elite asset.", 
-        price: 0, 
-        baseAge: ageNum, 
-        hiredAt: new Date().toISOString(), 
-        age: ageNum, 
-        salary: 1500, 
-        form: 95, 
-        fatigue: 0, 
-        country: { code: country.code, name: country.name, flag: country.flag }, 
-        isInjured: false, 
-        isYouth: !isAdult,
-        proStats: { lastHitting: 50, mapAwareness: 50, positioning: 50, reflexes: 50, manaManagement: 50, objectiveControl: 50, communication: 50, tiltResistance: 50, versatility: 50, ganking: 50 }, 
-        proTalents: { lastHitting: parseFloat(heroTalent), mapAwareness: parseFloat(heroTalent), positioning: parseFloat(heroTalent), reflexes: parseFloat(heroTalent), manaManagement: parseFloat(heroTalent), objectiveControl: parseFloat(heroTalent), communication: parseFloat(heroTalent), tiltResistance: parseFloat(heroTalent), versatility: parseFloat(heroTalent), ganking: parseFloat(heroTalent) } 
-      };
-      
-      if (isAdult) {
-        addPlayerDirectly(newPlayer);
-      } else {
-        addYouthPlayerDirectly(newPlayer);
-      }
-      
-      addCrystals(-creationCost);
-      toast({ title: isAdult ? "Elite unit commissioned to main roster!" : "Elite cadet assigned to Academy!" });
+  const handleBuyPremium = async () => {
+    try {
+      setIsProcessing(true);
+      const res = await purchasePremiumShopAction(await getToken());
+      if ('error' in res) throw new Error(res.error || 'PREMIUM_PURCHASE_FAILED');
+      toast({ title: language === 'ru' ? 'Элитный статус активирован на 30 дней!' : 'Elite status activated for 30 days!' });
+      setActiveTab('menu');
+    } catch (e: any) {
+      toast({ title: e?.message || t.insufficient, variant: 'destructive' });
+    } finally {
       setIsProcessing(false);
-      setActiveTab('menu');
-    }, 1500);
-  };
-
-  const handleBuyDiamonds = (amount: number) => { addCrystals(amount); toast({ title: "Diamonds added!" }); };
-  
-  const handleBuyLicense = (tier: number, cost: number) => { 
-    if (purchaseLicense(tier, cost)) {
-      toast({ title: language === 'ru' ? "Уровень допуска повышен!" : "License Tier Upgraded!" });
-      setActiveTab('menu');
-    } else {
-      toast({ title: t.insufficient, variant: "destructive" });
     }
   };
 
-  const handleExchange = (amount: number) => {
-    if (crystals < amount) { toast({ title: t.insufficient, variant: "destructive" }); return; }
-    addCrystals(-amount); addCredits(amount * 10000); toast({ title: "Assets converted" });
+  const handleCreatePlayer = async () => {
+    const country = COUNTRIES.find(c => c.code === heroCountryCode) || COUNTRIES[0];
+    try {
+      setIsProcessing(true);
+      const res = await createShopPlayerAction(await getToken(), {
+        nickname: heroNickname.trim(),
+        role: heroRole,
+        talent: Number(heroTalent),
+        age: Number(heroAge),
+        country: { code: country.code, name: country.name, flag: country.flag },
+      });
+      if ('error' in res) throw new Error(res.error || 'PLAYER_CREATION_FAILED');
+      toast({ title: ('isYouth' in res && res.isYouth) ? 'Игрок отправлен в Академию!' : 'Игрок добавлен в состав!' });
+      setHeroNickname('');
+      setActiveTab('menu');
+    } catch (e: any) {
+      toast({ title: e?.message || t.insufficient, variant: 'destructive' });
+    } finally {
+      setIsProcessing(false);
+    }
   };
-  const handleChangeName = () => {
-    if (crystals < 100) return;
-    addCrystals(-100); updateProfileName(newName.trim()); toast({ title: "Rebranded" });
-    setNewName(''); setActiveTab('menu');
+
+  const handleBuyDiamonds = async (amount: number) => {
+    try {
+      setIsProcessing(true);
+      const res = await purchaseDiamondPackAction(await getToken(), amount);
+      if ('error' in res && res.error) throw new Error(res.error || 'DIAMOND_PURCHASE_FAILED');
+      toast({
+        title: res.pending
+          ? (language === 'ru' ? 'Заказ создан. Ожидается подтверждение платежа.' : 'Order created. Payment confirmation required.')
+          : (language === 'ru' ? `Зачислено +${amount} 💎` : `+${amount} 💎 added`),
+      });
+    } catch (e: any) {
+      toast({ title: e?.message || 'DIAMOND_PURCHASE_FAILED', variant: 'destructive' });
+    } finally {
+      setIsProcessing(false);
+    }
   };
-  const handleChangeCountry = (countryName: string) => {
-    if (crystals < 100) return;
-    addCrystals(-100); updateProfileCountry(countryName); toast({ title: "Relocated" });
-    setActiveTab('menu');
+  
+  const handleBuyLicense = async (tier: number) => {
+    try {
+      setIsProcessing(true);
+      const res = await purchaseLicenseAction(await getToken(), tier);
+      if ('error' in res) throw new Error(res.error || 'LICENSE_PURCHASE_FAILED');
+      toast({ title: language === 'ru' ? 'Уровень допуска повышен!' : 'License tier upgraded!' });
+      setActiveTab('menu');
+    } catch (e: any) {
+      toast({ title: e?.message || t.insufficient, variant: 'destructive' });
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleExchange = async (amount: number) => {
+    try {
+      setIsProcessing(true);
+      const res = await exchangeCrystalsForCreditsAction(await getToken(), amount);
+      if ('error' in res) throw new Error(res.error || 'EXCHANGE_FAILED');
+      toast({ title: language === 'ru' ? `Обменено ${amount} 💎 на €${(amount * 10000).toLocaleString()}` : 'Assets converted' });
+    } catch (e: any) {
+      toast({ title: e?.message || t.insufficient, variant: 'destructive' });
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleChangeName = async () => {
+    if (!newName.trim()) return;
+    try {
+      setIsProcessing(true);
+      const res = await changeClubNameAction(await getToken(), newName.trim());
+      if ('error' in res) throw new Error(res.error || 'RENAME_FAILED');
+      toast({ title: language === 'ru' ? 'Название команды изменено!' : 'Club name updated!' });
+      setNewName('');
+      setActiveTab('menu');
+    } catch (e: any) {
+      toast({ title: e?.message || t.insufficient, variant: 'destructive' });
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleChangeCountry = async (countryName: string) => {
+    const country = COUNTRIES.find(c => c.name === countryName);
+    if (!country) return;
+    try {
+      setIsProcessing(true);
+      const res = await changeClubCountryAction(await getToken(), { code: country.code, name: country.name, flag: country.flag });
+      if ('error' in res) throw new Error(res.error || 'COUNTRY_CHANGE_FAILED');
+      toast({ title: language === 'ru' ? 'Страна команды изменена!' : 'Club country updated!' });
+      setActiveTab('menu');
+    } catch (e: any) {
+      toast({ title: e?.message || t.insufficient, variant: 'destructive' });
+    } finally {
+      setIsProcessing(false);
+    }
   };
 
   const renderContent = () => {
@@ -394,8 +439,8 @@ export default function ShopPage() {
 
                       <Button 
                         className="w-full h-14 hero-gradient font-black text-xs tracking-widest uppercase shadow-xl active:scale-95 transition-all"
-                        onClick={() => handleBuyLicense(nextTier.tier, nextTier.cost)}
-                        disabled={crystals < nextTier.cost}
+                        onClick={() => handleBuyLicense(nextTier.tier)}
+                        disabled={isProcessing || crystals < nextTier.cost}
                       >
                         {language === 'ru' ? 'КУПИТЬ ЛИЦЕНЗИЮ' : 'ACQUIRE LICENSE'}
                       </Button>
@@ -454,7 +499,7 @@ export default function ShopPage() {
                 <Button 
                   className="w-full h-16 hero-gradient font-black text-lg tracking-widest uppercase shadow-2xl shadow-yellow-500/20 active:scale-95 transition-all" 
                   onClick={handleBuyPremium}
-                  disabled={crystals < 5000}
+                  disabled={isProcessing || crystals < 5000}
                 >
                   {t.premiumInfo.buy}
                 </Button>
@@ -619,7 +664,7 @@ export default function ShopPage() {
                   </div>
                   <div className="pt-4 border-t border-white/5 text-center">
                     <p className="text-[10px] font-black text-blue-400 uppercase tracking-widest mb-4">Cost: 100 💎</p>
-                    <Button className="w-full h-12 hero-gradient font-black text-xs uppercase" onClick={handleChangeName} disabled={crystals < 100 || !newName.trim()}>
+                    <Button className="w-full h-12 hero-gradient font-black text-xs uppercase" onClick={handleChangeName} disabled={isProcessing || crystals < 100 || !newName.trim()}>
                       UPDATE CALLSIGN
                     </Button>
                   </div>

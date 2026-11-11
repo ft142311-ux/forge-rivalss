@@ -3,8 +3,41 @@
 
 import { FieldValue } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
-import { MAX_LEVELS, getGroupsCountInLevel, getTableId } from '@/app/lib/leagues-data';
-import { getRandomStartingSquad, Player, LineupSlot } from '@/app/lib/moba-data';
+import { MAX_LEVELS, getGroupsCountInLevel, getTableId, getBotId, getBotName } from '@/app/lib/leagues-data';
+import { getRandomStartingSquad, Player } from '@/app/lib/moba-data';
+import { requireServerActor } from '@/lib/server-auth';
+
+
+const PLAYER_GAME_YEAR_DAYS = 7;
+const PLAYER_GAME_MONTHS = 12;
+const PLAYER_GAME_YEAR_MS = PLAYER_GAME_YEAR_DAYS * 24 * 60 * 60 * 1000;
+const PLAYER_GAME_MONTH_MS = PLAYER_GAME_YEAR_MS / PLAYER_GAME_MONTHS;
+
+function normalizeStarterAges(players: Player[]): Player[] {
+  const now = Date.now();
+  return players.map((player, index) => {
+    // A fresh registration must never give every starter 18.0.
+    // If an older generator produced a uniform 18-year-old squad, repair it once.
+    const allLegacy18 = Number(player.age) === 18 && !player.birthDate;
+    if (!allLegacy18 && player.birthDate && player.ageDisplay) return player;
+
+    const isYouth = Boolean(player.isYouth);
+    const minYears = isYouth ? 14 : 18;
+    const maxYears = isYouth ? 16 : 30;
+    const years = minYears + ((index * 7 + Math.floor(Math.random() * (maxYears - minYears + 1))) % (maxYears - minYears + 1));
+    const month = Math.floor(Math.random() * 13);
+    const ageMs = years * PLAYER_GAME_YEAR_MS + month * PLAYER_GAME_MONTH_MS;
+    const birthDate = new Date(now - ageMs).toISOString();
+    return {
+      ...player,
+      baseAge: years + month / PLAYER_GAME_MONTHS,
+      age: years + month / PLAYER_GAME_MONTHS,
+      ageDisplay: `${years}.${month}`,
+      birthDate,
+      ageSystemVersion: 5,
+    };
+  });
+}
 
 /**
  * @fileOverview Атомарная инициализация клуба.
@@ -20,8 +53,8 @@ interface ProvisionResult {
 /**
  * Генерирует полное начальное состояние клуба.
  */
-export function createInitialClubState(userId: string, email: string, clubName: string, placement: any, seasonNum: number) {
-  const startingSquad = getRandomStartingSquad();
+function createInitialClubState(userId: string, email: string, clubName: string, placement: any, seasonNum: number) {
+  const startingSquad = normalizeStarterAges(getRandomStartingSquad());
   
   // Создаем Lineup на основе сгенерированного состава
   const lineup: Record<string, string | null> = {
@@ -74,7 +107,7 @@ export function createInitialClubState(userId: string, email: string, clubName: 
 /**
  * Атомарная регистрация клуба.
  */
-export async function provisionClubComplete(userId: string, email: string, clubName: string): Promise<ProvisionResult> {
+async function provisionClubComplete(userId: string, email: string, clubName: string): Promise<ProvisionResult> {
   const db = getAdminDb();
   const cleanName = clubName.trim().substring(0, 25);
   
@@ -161,5 +194,102 @@ export async function provisionClubComplete(userId: string, email: string, clubN
   } catch (e: any) {
     console.error("[PROVISIONING FAILED]:", e);
     return { success: false, error: "REGISTRATION_FAILED" };
+  }
+}
+
+/**
+ * Reverses the current callable registration allocation: the manager is
+ * removed, their exact Division 4 slot becomes FREE again, and the bot that
+ * occupied that rank is restored in the table and scheduled matches.
+ */
+export async function releasePlayerSlot(idToken: string) {
+  const { uid: userId } = await requireServerActor(idToken);
+  const db = getAdminDb();
+  const playerRef = db.collection('players_v14').doc(userId);
+
+  try {
+    return await db.runTransaction(async (transaction) => {
+      const playerSnap = await transaction.get(playerRef);
+      if (!playerSnap.exists) return { success: true, alreadyReleased: true };
+
+      const player = playerSnap.data()!;
+      const season = Number(player.lastProcessedSeason);
+      const leagueId = player.selectedLeagueId || 'ALPHA';
+      const division = Number(player.leagueLevel);
+      const group = Number(player.groupId);
+      const rank = Number(player.rank);
+
+      if (!Number.isInteger(season) || !Number.isInteger(division) || !Number.isInteger(group) || !Number.isInteger(rank)) {
+        throw new Error('PLAYER_LEAGUE_PLACEMENT_INVALID');
+      }
+
+      const slotRef = db.collection('league_slots_v1').doc(`S${season}_L${leagueId}_D${division}_G${group}_R${rank}`);
+      const tableRef = db.collection('league_tables_v2').doc(getTableId(season, leagueId, division, group));
+      const matchesQuery = db.collection('matches_v2')
+        .where('season', '==', season)
+        .where('leagueId', '==', leagueId)
+        .where('level', '==', division)
+        .where('groupId', '==', group);
+
+      const [slotSnap, tableSnap, matchesSnap] = await Promise.all([
+        transaction.get(slotRef),
+        transaction.get(tableRef),
+        transaction.get(matchesQuery)
+      ]);
+
+      if (!tableSnap.exists) throw new Error('LEAGUE_TABLE_MISSING');
+      if (slotSnap.exists && slotSnap.data()?.occupantId && slotSnap.data()?.occupantId !== userId) {
+        throw new Error('LEAGUE_SLOT_OCCUPIED_BY_ANOTHER_PLAYER');
+      }
+      const table = tableSnap.data()!;
+      const botId = getBotId(leagueId, division, group, rank);
+      const restoredBot = {
+        id: botId,
+        name: getBotName(division, group, rank),
+        rank,
+        matchesPlayed: 0,
+        wins: 0,
+        draws: 0,
+        losses: 0,
+        points: 0,
+        diff: 0,
+        isBot: true
+      };
+      const restoredStats = { ...(table.stats || {}) };
+      delete restoredStats[userId];
+      restoredStats[botId] = restoredBot;
+
+      transaction.set(slotRef, {
+        season,
+        leagueId,
+        division,
+        group,
+        rank,
+        status: 'FREE',
+        occupantId: null,
+        updatedAt: FieldValue.serverTimestamp()
+      }, { merge: true });
+      transaction.update(tableRef, { stats: restoredStats, updatedAt: FieldValue.serverTimestamp() });
+
+      matchesSnap.forEach((matchDoc) => {
+        const match = matchDoc.data();
+        const updates: Record<string, string> = {};
+        if (match.homeId === userId) {
+          updates.homeId = botId;
+          updates.homeName = restoredBot.name;
+        }
+        if (match.awayId === userId) {
+          updates.awayId = botId;
+          updates.awayName = restoredBot.name;
+        }
+        if (Object.keys(updates).length > 0) transaction.update(matchDoc.ref, updates);
+      });
+
+      transaction.delete(playerRef);
+      return { success: true };
+    });
+  } catch (error: any) {
+    console.error('[RELEASE PLAYER SLOT FAILED]', { code: error?.code, message: error?.message, userId });
+    return { success: false, error: 'PROFILE_RESET_FAILED' };
   }
 }

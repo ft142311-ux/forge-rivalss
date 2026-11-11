@@ -1,18 +1,20 @@
-'use server';
+import 'server-only';
+
 
 /**
  * @fileOverview MMO-Двигатель v40 (Admin SDK Transition).
  */
 
 import { FieldValue } from 'firebase-admin/firestore';
-import { adminDb } from '@/lib/firebase-admin';
+import { getAdminDb } from '@/lib/firebase-admin';
 import { isMatchOverdue } from '@/app/lib/time-utils';
 import { simulateMobaMatch } from '@/ai/flows/simulate-moba-match';
 import { getTableId } from '@/app/lib/leagues-data';
 import { getActiveSeasonNumber } from './season-cycle';
+import { buildMatchTeamSnapshot } from '@/app/lib/match-simulation';
 
 export async function forceResolveGroupMatches(leagueId: string, divisionId: number, groupId: string) {
-  const db = adminDb;
+  const db = getAdminDb();
   
   if (!leagueId || !groupId) return { success: false, error: "Invalid parameters" };
 
@@ -45,31 +47,31 @@ export async function forceResolveGroupMatches(leagueId: string, divisionId: num
           db.collection('players_v14').doc(m.awayId).get()
         ]);
 
-        const getTeamData = (clubSnap: any) => {
+        const getTeamData = (clubSnap: any, fallbackName: string, id: string) => {
           if (!clubSnap.exists) return { heroes: [], strategy: 'Balanced Play', staffBonus: 0, infraBonus: 0 };
-          const data = clubSnap.data();
-          const lineupIds = Object.values(data.lineup || {});
-          
-          let squad = (data.ownedPlayers || []).filter((p: any) => lineupIds.includes(p.id));
-          if (squad.length < 5) squad = (data.ownedPlayers || []).slice(0, 5);
-
+          const snapshot = buildMatchTeamSnapshot(clubSnap.data(), fallbackName, id);
           return {
-            heroes: squad,
-            strategy: data.strategy || 'Balanced Play',
-            staffBonus: data.staff?.coach?.skills?.primary || 0,
-            infraBonus: data.bootcamp?.bootcampLevel || 0
+            heroes: snapshot.players || [],
+            strategy: snapshot.strategy || 'Balanced Play',
+            tactics: snapshot.tactics || {},
+            staffBonus: snapshot.staffBonus || 0,
+            analystBonus: snapshot.analystBonus || 0,
+            infraBonus: snapshot.infraBonus || 0,
+            synergy: snapshot.synergy || 50
           };
         };
 
-        const teamA = getTeamData(homeSnap);
-        const teamB = getTeamData(awaySnap);
+        const teamA = getTeamData(homeSnap, m.homeName, m.homeId);
+        const teamB = getTeamData(awaySnap, m.awayName, m.awayId);
 
         const simulation = await simulateMobaMatch({
           teamA: { name: m.homeName, ...teamA },
           teamB: { name: m.awayName, ...teamB },
           isBo2: true,
+          isBo3: false,
           scoreA: undefined, 
-          scoreB: undefined
+          scoreB: undefined,
+          matchId: docSnap.id
         });
 
         const seriesScoreParts = simulation.seriesScore.split('-');

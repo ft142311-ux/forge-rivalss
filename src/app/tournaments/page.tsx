@@ -21,7 +21,8 @@ import { cn } from '@/lib/utils';
 import Link from 'next/link';
 import { Badge } from '@/components/ui/badge';
 import { LoadingScreen } from '@/components/game/LoadingScreen';
-import { doc, setDoc, deleteDoc, serverTimestamp } from 'firebase/firestore';
+import { doc } from 'firebase/firestore';
+import { createFriendlyLobbyAction, cancelFriendlyLobbyAction } from '@/app/actions/friendly-matchmaking';
 import { useToast } from '@/hooks/use-toast';
 
 export default function TournamentsPage() {
@@ -29,7 +30,7 @@ export default function TournamentsPage() {
   const router = useRouter();
   const db = useFirestore();
   const { toast } = useToast();
-  const { language, isLoaded, displayName, runTrialMatch } = useGameState();
+  const { language, isLoaded, runTrialMatch } = useGameState();
   const [isActionLoading, setIsActionLoading] = useState(false);
 
   const myLobbyRef = useMemoFirebase(() => {
@@ -39,12 +40,6 @@ export default function TournamentsPage() {
   
   const { data: myLobby, isLoading: isLobbyLoading } = useDoc(myLobbyRef);
 
-  const myBasketRef = useMemoFirebase(() => {
-    if (!db || !user) return null;
-    return doc(db, 'cw_basket_v2', user.uid);
-  }, [db, user]);
-  
-  const { data: myBasket } = useDoc(myBasketRef);
 
   useEffect(() => {
     if (!isUserLoading && !user) {
@@ -62,9 +57,10 @@ export default function TournamentsPage() {
       subtitle: "Operational Terminals",
       offline: "OFFLINE: Tournament frequency jammed.",
       menu: [
-        { id: 'schedule', label: myLobby ? 'Cancel Match' : 'Schedule Friendly', desc: myLobby ? 'Abort active request' : 'Wait for an opponent', icon: myLobby ? XCircle : UserPlus, color: myLobby ? 'text-red-400' : 'text-accent' },
+        { id: 'schedule', label: myLobby?.status === 'accepted' ? 'Friendly Match Assigned' : myLobby ? 'Cancel Match' : 'Schedule Friendly', desc: myLobby?.status === 'accepted' ? 'Match assigned — cancellation unavailable' : myLobby ? 'Abort active request' : 'Wait for an opponent', icon: myLobby?.status === 'accepted' ? Lock : myLobby ? XCircle : UserPlus, color: myLobby?.status === 'accepted' ? 'text-primary' : myLobby ? 'text-red-400' : 'text-accent' },
         { id: 'open', label: 'Open Friendlies', desc: 'Browse available challenges', icon: Search, href: '/tournaments/open-friendlies', color: 'text-primary' },
         { id: 'cw', label: 'CW Basket', desc: 'Instant random pairing', icon: ShoppingBasket, href: '/tournaments/cw-basket', color: 'text-green-400' },
+        { id: 'pyramid', label: 'Pyramid Cup', desc: 'All 120 league teams · Knockout', icon: Trophy, href: '/tournaments/cup', color: 'text-yellow-500' },
         { id: 'list', label: 'Open Tournaments', desc: 'Active competition schedule', icon: Globe, href: '/tournaments/open', color: 'text-blue-400' },
         { id: 'trial', label: 'Trial Match', desc: 'Instant combat test vs Bot', icon: Zap, color: 'text-yellow-500' },
         { id: 'history', label: 'Tournament History', desc: 'Official record of achievements', icon: History, href: '/tournaments/history', color: 'text-slate-400' }
@@ -75,9 +71,10 @@ export default function TournamentsPage() {
       subtitle: "Операционные терминалы",
       offline: "ОФЛАЙН: Частоты турниров заглушены.",
       menu: [
-        { id: 'schedule', label: myLobby ? 'Отменить тов. матч' : 'Назначить тов. матч', desc: myLobby ? 'Прервать активный поиск' : 'Ожидать вызова соперника', icon: myLobby ? XCircle : UserPlus, color: myLobby ? 'text-red-400' : 'text-accent' },
+        { id: 'schedule', label: myLobby?.status === 'accepted' ? 'Тов. матч назначен' : myLobby ? 'Отменить тов. матч' : 'Назначить тов. матч', desc: myLobby?.status === 'accepted' ? 'Тов. матч уже назначен' : myLobby ? 'Прервать активный поиск' : 'Ожидать вызова соперника', icon: myLobby?.status === 'accepted' ? Lock : myLobby ? XCircle : UserPlus, color: myLobby?.status === 'accepted' ? 'text-primary' : myLobby ? 'text-red-400' : 'text-accent' },
         { id: 'open', label: 'Открытые тов. матчи', desc: 'Список доступных вызовов', icon: Search, href: '/tournaments/open-friendlies', color: 'text-primary' },
         { id: 'cw', label: 'КВ (Корзина)', desc: 'Мгновенный случайный подбор', icon: ShoppingBasket, href: '/tournaments/cw-basket', color: 'text-green-400' },
+        { id: 'pyramid', label: 'Кубок Пирамиды', desc: 'Все 120 команд лиги · на выбывание', icon: Trophy, href: '/tournaments/cup', color: 'text-yellow-500' },
         { id: 'list', label: 'Открытые турниры', desc: 'Список активных чемпионатов', icon: Globe, href: '/tournaments/open', color: 'text-blue-400' },
         { id: 'trial', label: 'Пробный матч', desc: 'Мгновенный тест состава против Бота', icon: Zap, color: 'text-yellow-500' },
         { id: 'history', label: 'История турниров', desc: 'Архив официальных достижений', icon: History, href: '/tournaments/history', color: 'text-slate-400' }
@@ -89,18 +86,19 @@ export default function TournamentsPage() {
     if (!user || isActionLoading || !db) return;
     setIsActionLoading(true);
     try {
+      if (myLobby?.status === 'accepted') {
+        toast({
+          title: language === 'ru' ? 'Тов. матч назначен' : 'Friendly match assigned',
+          description: language === 'ru' ? 'Матч уже создан. Отмена недоступна.' : 'The match is already created. Cancellation is unavailable.'
+        });
+        return;
+      }
+
       if (myLobby) {
-        await deleteDoc(doc(db, 'friendly_lobbies_v3', user.uid));
+        await cancelFriendlyLobbyAction(await user.getIdToken(true));
         toast({ title: language === 'ru' ? "Поиск отменен" : "Search cancelled" });
       } else {
-        if (myBasket) {
-          toast({ title: language === 'ru' ? "Вы уже в КВ Корзине" : "Already in CW Basket", variant: "destructive" });
-          return;
-        }
-        await setDoc(doc(db, 'friendly_lobbies_v3', user.uid), {
-          hostId: user.uid, hostName: displayName || "Manager",
-          status: 'searching', challengerId: null, challengerName: null, isTrial: false, updatedAt: serverTimestamp()
-        });
+        await createFriendlyLobbyAction(await user.getIdToken(true));
         toast({ title: language === 'ru' ? "Поиск начат" : "Search initiated" });
       }
     } finally { setIsActionLoading(false); }
@@ -113,7 +111,9 @@ export default function TournamentsPage() {
       const matchId = await runTrialMatch();
       if (matchId) {
         toast({ title: language === 'ru' ? "Пробный матч завершен!" : "Trial match finished!" });
-        router.push(`/match?id=${matchId}`);
+        // Матч не открывается автоматически. Он попадает в общий unread-очередь
+        // и открывается вручную через «Обзор матча».
+        void matchId;
       } else {
         toast({ 
           variant: "destructive",
@@ -155,7 +155,8 @@ export default function TournamentsPage() {
               onClick={clickHandler}
               className={cn(
                 "glass-card border-white/5 transition-all group overflow-hidden cursor-pointer hover:bg-white/5",
-                item.id === 'schedule' && myLobby && "border-red-500/30 bg-red-500/5"
+                item.id === 'schedule' && myLobby?.status === 'accepted' && "border-primary/30 bg-primary/5",
+                item.id === 'schedule' && myLobby?.status === 'searching' && "border-red-500/30 bg-red-500/5"
               )}
             >
               <CardContent className="p-4 flex items-center justify-between">

@@ -7,15 +7,15 @@ import { Button } from '@/components/ui/button';
 import { ChevronLeft, Loader2, Package, Search, Lock } from 'lucide-react';
 import Link from 'next/link';
 import { useUser, useFirestore, useCollection, useMemoFirebase, useDoc } from '@/firebase';
-import { collection, query, where, doc, updateDoc, arrayUnion, serverTimestamp } from 'firebase/firestore';
-import { addDocumentNonBlocking } from '@/firebase/non-blocking-updates';
+import { collection, query, where, doc } from 'firebase/firestore';
 import { LoadingScreen } from '@/components/game/LoadingScreen';
-import { TransferPlayerCard } from '../quick-search/page';
+import { placePlayerBidAction } from '@/app/actions/gameplay';
+import { TransferPlayerCard } from '@/components/game/TransferPlayerCard';
 import { useToast } from '@/hooks/use-toast';
 import { getMoscowTime } from '@/app/lib/time-utils';
 
 export default function MyBidsPage() {
-  const { language, isLoaded: isStoreLoaded, credits, addCredits } = useGameState();
+  const { language, isLoaded: isStoreLoaded } = useGameState();
   const { user, isUserLoading } = useUser();
   const db = useFirestore();
   const { toast } = useToast();
@@ -40,47 +40,36 @@ export default function MyBidsPage() {
   const { data: profile } = useDoc(userDocRef);
 
   const handleGlobalBid = useCallback(async (agent: any, amount: number) => {
-    if (!db || !user || !profile) return;
-    if (credits < amount) { 
-      toast({ title: language === 'ru' ? "Недостаточно средств" : "Insufficient funds", variant: "destructive" }); 
-      return; 
-    }
+    if (!user) return;
     try {
-      const prevBidder = agent.highestBidderId;
-      const heroName = agent.heroData?.name || "Player";
-      
-      const mskNow = getMoscowTime().getTime();
-      const expiryTime = new Date(agent.expiresAt).getTime();
-      const timeLeft = expiryTime - mskNow;
-      let finalExpiresAt = agent.expiresAt;
-      
-      if (timeLeft < 600000) { 
-        finalExpiresAt = new Date(mskNow + 600000).toISOString(); 
+      const idToken = await user.getIdToken(true);
+      const result: any = await placePlayerBidAction(idToken, String(agent.id), Math.floor(amount));
+      if (!result.success) {
+        const code = String(result.error || 'BID_FAILED');
+        const description = code.startsWith('MIN_BID_')
+          ? (language === 'ru' ? `Минимальная ставка: €${Number(code.slice(8)).toLocaleString('ru-RU')}` : `Minimum bid: €${Number(code.slice(8)).toLocaleString('en-US')}`)
+          : code.startsWith('MAX_BID_')
+            ? (language === 'ru' ? `Максимальная ставка: €${Number(code.slice(8)).toLocaleString('ru-RU')}` : `Maximum bid: €${Number(code.slice(8)).toLocaleString('en-US')}`)
+            : code === 'INSUFFICIENT_FUNDS'
+              ? (language === 'ru' ? 'Недостаточно средств' : 'Insufficient funds')
+              : code === 'AUCTION_EXPIRED'
+                ? (language === 'ru' ? 'Аукцион уже завершён' : 'Auction already ended')
+                : code === 'CANNOT_BID_OWN_PLAYER'
+                  ? (language === 'ru' ? 'Нельзя делать ставку на своего игрока' : 'You cannot bid on your own player')
+                  : code;
+        toast({ title: language === 'ru' ? 'Ставка отклонена' : 'Bid rejected', description, variant: 'destructive' });
+        return;
       }
-
-      await updateDoc(doc(db, 'market_v7', agent.id), { 
-        currentBid: amount, highestBidderId: user.uid, highestBidderName: profile.displayName || "Unknown Manager", 
-        bidders: arrayUnion(user.uid), updatedAt: serverTimestamp(),
-        expiresAt: finalExpiresAt
+      toast({
+        title: language === 'ru' ? 'Ставка принята!' : 'Bid confirmed!',
+        description: result.extended
+          ? (language === 'ru' ? 'Окончание аукциона перенесено на 10 минут от момента ставки.' : 'Auction end moved to 10 minutes after your bid.')
+          : undefined,
       });
-
-      addCredits(-amount);
-      if (prevBidder && prevBidder !== user.uid) {
-        addDocumentNonBlocking(collection(db, 'notifications_v7'), {
-          userId: prevBidder, title: language === 'ru' ? "Ставка перебита!" : "Outbid!",
-          description: language === 'ru' ? `Ставка на "${heroName}" перебита` : `Bid on "${heroName}" outbid`,
-          type: 'market', read: false, createdAt: new Date().toISOString()
-        });
-      }
-      
-      toast({ 
-        title: language === 'ru' ? "Ставка принята!" : "Bid Confirmed!",
-        description: timeLeft < 600000 ? (language === 'ru' ? "Аукцион продлен на 10 минут!" : "Auction extended by 10 minutes!") : undefined
-      });
-    } catch (e) {
-      toast({ title: "Error placing bid", variant: "destructive" });
+    } catch (e: any) {
+      toast({ title: language === 'ru' ? 'Ошибка ставки' : 'Bid error', description: e?.message || 'BID_FAILED', variant: 'destructive' });
     }
-  }, [user, profile, credits, language, toast, db, addCredits]);
+  }, [user, language, toast]);
 
   const activeBids = useMemo(() => {
     return (agents || []).filter(a => {

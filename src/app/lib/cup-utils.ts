@@ -1,4 +1,6 @@
-import { getMatchResult, MAX_LEVELS } from './leagues-data';
+import { MAX_LEVELS } from './leagues-data';
+import { createDeterministicBotSquad } from './match-simulation';
+import { runMatchEngine } from './match-engine';
 
 export interface CupParticipant {
   id: string;
@@ -99,8 +101,14 @@ export function getWinnerOfBranch(
     return h;
   }
 
-  const [scoreH, scoreA] = getMatchResult(h.id, a.id, round, season);
-  const winner = scoreH > scoreA ? h : a; 
+  const simulation = runMatchEngine({
+      mode: 'cup',
+    matchId: `cup_${season}_${round}_${h.id}_${a.id}`,
+    teamA: { id: h.id, name: h.name, players: createDeterministicBotSquad(`cup:${h.id}:${h.level}`, Math.max(23, 28 - h.level)), strategy: 'Balanced Play' },
+    teamB: { id: a.id, name: a.name, players: createDeterministicBotSquad(`cup:${a.id}:${a.level}`, Math.max(23, 28 - a.level)), strategy: 'Balanced Play' },
+    bestOf: 1,
+  });
+  const winner = simulation.winnerSide === 'home' ? h : a; 
   
   cache.set(key, winner);
   return winner;

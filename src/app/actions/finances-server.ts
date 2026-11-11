@@ -5,19 +5,21 @@
  */
 
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
-import { adminDb } from '@/lib/firebase-admin';
+import { getAdminDb } from '@/lib/firebase-admin';
 import { FinancialOpSchema } from '@/app/lib/validation-schemas';
 import { logger } from '@/app/lib/logger';
+import { requireServerActor } from '@/lib/server-auth';
 
 /**
  * Выполняет финансовую операцию с проверкой ключа идемпотентности через Admin SDK.
  */
-export async function processFinancialOperation(userId: string, data: any) {
+export async function processFinancialOperation(idToken: string, data: any) {
+  const { uid: userId } = await requireServerActor(idToken);
   const validation = FinancialOpSchema.safeParse(data);
   if (!validation.success) return { success: false, error: "INVALID_INPUT" };
 
   const { idempotencyKey, amount, type, description } = validation.data;
-  const db = adminDb;
+  const db = getAdminDb();
 
   try {
     const result = await db.runTransaction(async (transaction) => {

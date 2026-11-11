@@ -5,12 +5,14 @@
  */
 
 import { FieldValue } from 'firebase-admin/firestore';
-import { adminDb } from '@/lib/firebase-admin';
+import { randomInt } from 'node:crypto';
+import { getAdminDb } from '@/lib/firebase-admin';
 import nodemailer from 'nodemailer';
 import { EmailInputSchema, VerifyCodeSchema } from '@/app/lib/validation-schemas';
 import { logger } from '@/app/lib/logger';
 
-const RATE_LIMIT_MS = 60000; 
+const RATE_LIMIT_MS = 60000;
+const MAX_VERIFICATION_ATTEMPTS = 5; 
 
 const transporter = process.env.SMTP_HOST ? nodemailer.createTransport({
   host: process.env.SMTP_HOST,
@@ -23,27 +25,49 @@ export async function sendVerificationEmail(email: string) {
   const validation = EmailInputSchema.safeParse({ email });
   if (!validation.success) return { success: false, error: "INVALID_EMAIL" };
 
-  const db = adminDb;
-  const normalizedEmail = email.toLowerCase();
+  const db = getAdminDb();
+  const normalizedEmail = String(validation.data.email).trim().toLowerCase();
   const codeRef = db.collection('verification_codes').doc(normalizedEmail);
+  const rateLimitRef = db.collection('verification_rate_limits').doc(normalizedEmail);
+  const code = String(randomInt(100000, 1000000));
+  const expiresAt = new Date(Date.now() + 15 * 60000);
 
   try {
-    const existingSnap = await codeRef.get();
-    if (existingSnap.exists) {
-      const data = existingSnap.data()!;
-      if (Date.now() - (data.createdAt?.toMillis() || 0) < RATE_LIMIT_MS) {
-        return { success: false, error: "RATE_LIMIT_EXCEEDED" };
+    const allowed = await db.runTransaction(async (tx) => {
+      const [existingSnap, rateLimitSnap] = await Promise.all([
+        tx.get(codeRef),
+        tx.get(rateLimitRef),
+      ]);
+      const rateLimit = rateLimitSnap.exists ? (rateLimitSnap.data() || {}) : {};
+      const rawLastSent = rateLimit.lastSentAt;
+      const lastSentAtMs = rawLastSent?.toMillis?.()
+        ?? (rawLastSent instanceof Date ? rawLastSent.getTime() : Date.parse(String(rawLastSent || '')));
+      if (Number.isFinite(lastSentAtMs) && Date.now() - lastSentAtMs < RATE_LIMIT_MS) return false;
+
+      // Compatibility fallback for a code created before the persistent rate
+      // limit record existed.
+      if (existingSnap.exists && !rateLimitSnap.exists) {
+        const existing = existingSnap.data() || {};
+        const rawCreatedAt = existing.createdAt;
+        const createdAtMs = rawCreatedAt?.toMillis?.()
+          ?? (rawCreatedAt instanceof Date ? rawCreatedAt.getTime() : Date.parse(String(rawCreatedAt || '')));
+        if (Number.isFinite(createdAtMs) && Date.now() - createdAtMs < RATE_LIMIT_MS) return false;
       }
-    }
 
-    const code = Math.floor(100000 + Math.random() * 900000).toString();
-    const expiresAt = new Date(Date.now() + 15 * 60000);
+      tx.set(codeRef, {
+        code,
+        attempts: 0,
+        expiresAt,
+        createdAt: FieldValue.serverTimestamp(),
+      });
+      tx.set(rateLimitRef, {
+        lastSentAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
+      }, { merge: true });
+      return true;
+    });
 
-    await codeRef.set({
-      code,
-      expiresAt: expiresAt,
-      createdAt: FieldValue.serverTimestamp()
-    }, { merge: true });
+    if (!allowed) return { success: false, error: "RATE_LIMIT_EXCEEDED" };
 
     if (transporter) {
       try {
@@ -78,23 +102,43 @@ export async function verifyEmailCode(email: string, inputCode: string) {
   const validation = VerifyCodeSchema.safeParse({ email, code: inputCode });
   if (!validation.success) return { success: false, error: "INVALID_INPUT" };
 
-  const db = adminDb;
+  const db = getAdminDb();
+  const normalizedEmail = String(validation.data.email).trim().toLowerCase();
+  const normalizedCode = String(validation.data.code).trim();
   try {
-    const codeRef = db.collection('verification_codes').doc(email.toLowerCase());
-    const codeSnap = await codeRef.get();
+    const codeRef = db.collection('verification_codes').doc(normalizedEmail);
+    return await db.runTransaction(async (tx) => {
+      const codeSnap = await tx.get(codeRef);
+      if (!codeSnap.exists) return { success: false, error: "CODE_NOT_FOUND" };
+      const data = codeSnap.data() || {};
+      const expiresAtMs = data.expiresAt?.toMillis?.()
+        ?? (data.expiresAt instanceof Date ? data.expiresAt.getTime() : Date.parse(String(data.expiresAt || '')));
 
-    if (!codeSnap.exists) return { success: false, error: "CODE_NOT_FOUND" };
-    const data = codeSnap.data()!;
-    
-    if (Date.now() > data.expiresAt.toMillis()) {
-      await codeRef.delete();
-      return { success: false, error: "CODE_EXPIRED" };
-    }
+      if (!Number.isFinite(expiresAtMs) || Date.now() > expiresAtMs) {
+        tx.delete(codeRef);
+        return { success: false, error: "CODE_EXPIRED" };
+      }
 
-    if (data.code !== inputCode) return { success: false, error: "INVALID_CODE" };
+      const attemptsSoFar = Math.max(0, Number(data.attempts || 0));
+      if (attemptsSoFar >= MAX_VERIFICATION_ATTEMPTS) {
+        return { success: false, error: "TOO_MANY_ATTEMPTS" };
+      }
 
-    await codeRef.delete();
-    return { success: true };
+      if (String(data.code || '') !== normalizedCode) {
+        const attempts = attemptsSoFar + 1;
+        if (attempts >= MAX_VERIFICATION_ATTEMPTS) {
+          // Keep the document (and its original createdAt) so a caller cannot
+          // bypass the resend throttle by exhausting the code and deleting it.
+          tx.update(codeRef, { attempts: MAX_VERIFICATION_ATTEMPTS, code: null, lockedAt: FieldValue.serverTimestamp() });
+          return { success: false, error: "TOO_MANY_ATTEMPTS" };
+        }
+        tx.update(codeRef, { attempts });
+        return { success: false, error: "INVALID_CODE", attemptsRemaining: MAX_VERIFICATION_ATTEMPTS - attempts };
+      }
+
+      tx.delete(codeRef);
+      return { success: true };
+    });
   } catch (e: any) {
     logger.error("verifyEmailCode Error", e);
     return { success: false, error: "INTERNAL_ERROR" };

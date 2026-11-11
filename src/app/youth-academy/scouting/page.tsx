@@ -17,7 +17,7 @@ import { LoadingScreen } from '@/components/game/LoadingScreen';
 import { Badge } from '@/components/ui/badge';
 import { Player } from '../../lib/moba-data';
 import { calculateLiveAge, getMoscowTime } from '@/app/lib/time-utils';
-import { renderStars, STAT_KEYS } from '@/app/transfers/quick-search/page';
+import { renderStars, STAT_KEYS } from '@/components/game/transfer-stats';
 import { useToast } from '@/hooks/use-toast';
 import {
   Dialog,

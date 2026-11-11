@@ -3,7 +3,7 @@
 
 /**
  * @fileOverview ОФИЦИАЛЬНЫЙ ПЛЕЕР МАТЧЕЙ v130 (V2 COLLECTIONS).
- * Работает с матчами из matches_v2 и игроками v14.
+ * Загружает отчёты из отдельных коллекций игровых режимов и игроков v14.
  */
 
 import { useState, useEffect, useMemo, Suspense, useRef } from 'react';
@@ -25,7 +25,9 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 import { LoadingScreen } from '@/components/game/LoadingScreen';
-import { doc, getDoc, collection, query, where } from 'firebase/firestore';
+import { doc, collection, query, where } from 'firebase/firestore';
+import { getMatchReportAction } from '@/app/actions/match-report';
+import { getCompletedSeriesScore, normalizeMatchTimeline, parseMatchSeriesScore, resolveMatchSimulation } from '../lib/match-report-utils';
 
 type MatchStep = 'preview' | 'live' | 'stats';
 
@@ -43,9 +45,12 @@ function MatchContent() {
   const [step, setStep] = useState<MatchStep>('preview');
   const [matchData, setMatchData] = useState<any | null>(null);
   const [isDataLoading, setIsDataLoading] = useState(true);
+  const [isFinalizingReview, setIsFinalizingReview] = useState(false);
   
   const [activeGameIdx, setActiveGameIdx] = useState(0);
   const [visibleEvents, setVisibleEvents] = useState<any[]>([]);
+  const [liveKillScore, setLiveKillScore] = useState({ home: 0, away: 0 });
+  const [liveSeriesScore, setLiveSeriesScore] = useState({ home: 0, away: 0 });
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const groupPlayersQuery = useMemoFirebase(() => {
@@ -72,38 +77,70 @@ function MatchContent() {
   }, [groupPlayers]);
 
   useEffect(() => {
-    if (!matchIdFromUrl || !db) {
-      if (!matchIdFromUrl) setIsDataLoading(false);
+    if (!matchIdFromUrl) {
+      setMatchData(null);
+      setIsDataLoading(false);
       return;
     }
 
+    // Restore local history before falling back when a mode-specific report
+    // cannot be loaded from the server.
+    if (!isLoaded) {
+      setIsDataLoading(true);
+      return;
+    }
+
+    let cancelled = false;
     const fetchMatch = async () => {
       setIsDataLoading(true);
-      try {
-        let snap = await getDoc(doc(db, 'matches_v2', matchIdFromUrl));
-        
-        if (snap.exists()) {
-          setMatchData({ ...snap.data(), id: snap.id });
-        } else {
-          const hist = (matchHistory || []).find(m => m.id === matchIdFromUrl);
-          if (hist) setMatchData(hist);
-        }
-      } catch (e) {
-        console.error("Match fetch failed", e);
-      } finally { setIsDataLoading(false); }
-    };
-    fetchMatch();
-  }, [matchIdFromUrl, db, matchHistory]);
+      const localMatch = (matchHistory || []).find(
+        (match: any) => String(match?.id || '') === matchIdFromUrl
+      );
 
-  const currentSimulation = useMemo(() => {
-    if (!matchData) return null;
-    return matchData.simulation || { 
-      games: matchData.games || [matchData],
-      seriesScore: matchData.seriesScore || `${matchData.scoreA}-${matchData.scoreB}`,
-      winner: matchData.winner,
-      isTbdWin: matchData.isTbdWin
+      try {
+        // If Firestore is not ready, use the local history fallback instead
+        // of leaving the full-page loader active forever.
+        if (!db || !user) {
+          if (!cancelled) setMatchData(localMatch || null);
+          return;
+        }
+
+        const idToken = await user.getIdToken();
+        const response = await getMatchReportAction(idToken, matchIdFromUrl);
+        if (cancelled) return;
+        setMatchData(response.success ? response.match : localMatch || null);
+      } catch (error) {
+        console.error('[MATCH] Firestore lookup failed; trying local history:', error);
+        if (!cancelled) setMatchData(localMatch || null);
+      } finally {
+        if (!cancelled) setIsDataLoading(false);
+      }
     };
-  }, [matchData]);
+
+    void fetchMatch();
+    return () => { cancelled = true; };
+  }, [matchIdFromUrl, db, matchHistory, isLoaded, user]);
+
+  const currentSimulation = useMemo(() => resolveMatchSimulation(matchData), [matchData]);
+
+  const currentDraft = useMemo(() => {
+    const draft = currentSimulation?.draft || matchData?.draft;
+    if (!draft || typeof draft !== 'object') return null;
+    const picks = draft.picks && typeof draft.picks === 'object' ? draft.picks : {};
+    const bans = draft.bans && typeof draft.bans === 'object' ? draft.bans : {};
+    return {
+      homePicks: Array.isArray(picks.home) ? picks.home : [],
+      awayPicks: Array.isArray(picks.away) ? picks.away : [],
+      homeBans: Array.isArray(bans.home) ? bans.home : [],
+      awayBans: Array.isArray(bans.away) ? bans.away : [],
+      notes: Array.isArray(draft.notes) ? draft.notes.filter((note: unknown) => typeof note === 'string').slice(0, 6) : [],
+    };
+  }, [currentSimulation, matchData]);
+
+  const seriesDisplayScore = useMemo(
+    () => parseMatchSeriesScore(currentSimulation?.seriesScore, matchData),
+    [currentSimulation, matchData]
+  );
 
   const resolvedMatchData = useMemo(() => {
     if (!matchData) return null;
@@ -132,30 +169,53 @@ function MatchContent() {
     if (currentSimulation.isTbdWin) { setStep('stats'); return; }
     const game = currentSimulation.games[activeGameIdx];
     if (!game) { setStep('stats'); return; }
-    const events = (game.timeline || []).filter((e: any) => !!e);
+    // Preserve all engine event fields (especially score) for the live scoreboard.
+    const events = normalizeMatchTimeline(game);
     if (events.length === 0) { setStep('stats'); return; }
     setVisibleEvents([]);
+    setLiveKillScore({ home: 0, away: 0 });
+    setLiveSeriesScore(getCompletedSeriesScore(currentSimulation.games, activeGameIdx));
     let currentEvt = 0;
     const timer = setInterval(() => {
       if (currentEvt < events.length) {
-        setVisibleEvents(prev => [...prev, events[currentEvt]]);
+        const nextEvent = events[currentEvt];
+        setVisibleEvents(prev => [...prev, nextEvent]);
+        const scoreValue = nextEvent?.score;
+        const scoreText = typeof scoreValue === 'string'
+          ? scoreValue
+          : scoreValue && typeof scoreValue === 'object'
+            ? `${scoreValue.home ?? scoreValue.killsHome ?? scoreValue.a ?? ''}:${scoreValue.away ?? scoreValue.killsAway ?? scoreValue.b ?? ''}`
+            : '';
+        const scoreRaw = scoreText.match(/(\d+)\s*:\s*(\d+)/);
+        if (scoreRaw) setLiveKillScore({ home: Number(scoreRaw[1]), away: Number(scoreRaw[2]) });
         currentEvt++;
         if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
       } else {
         clearInterval(timer);
         if (activeGameIdx < currentSimulation.games.length - 1) {
+          const finishedGame = currentSimulation.games[activeGameIdx];
+          setLiveSeriesScore(prev => ({ home: prev.home + Number(finishedGame?.homeScore || 0), away: prev.away + Number(finishedGame?.awayScore || 0) }));
           setTimeout(() => { setActiveGameIdx(prev => prev + 1); setVisibleEvents([]); }, 1000); 
         } else { setTimeout(() => setStep('stats'), 1500); }
       }
-    }, 400); 
+    }, 750); 
     return () => clearInterval(timer);
   }, [step, activeGameIdx, currentSimulation]);
 
-  const handleNext = (e?: React.MouseEvent) => {
+  const handleNext = async (e?: React.MouseEvent) => {
     if (e && (e.target as HTMLElement).closest('[data-stop-propagation]')) return;
     if (step === 'preview') { if (currentSimulation?.isTbdWin) setStep('stats'); else setStep('live'); }
-    else if (step === 'live') setStep('stats'); 
-    else { if (matchIdFromUrl) markMatchIdAsSeen(matchIdFromUrl); router.push('/reports'); }
+    else if (step === 'live') setStep('stats');
+    else {
+      // Не полагаемся только на Firestore: отчет мог быть удалён после его открытия.
+      // В таком случае Finish Viewing всё равно должен убрать его из счетчика.
+      const viewedId = matchIdFromUrl || String(matchData?.id || '');
+      if (viewedId) {
+        setIsFinalizingReview(true);
+        await markMatchIdAsSeen(viewedId);
+      }
+      router.replace('/');
+    }
   };
 
   if (isUserLoading || isDataLoading || !isLoaded || !user) return <LoadingScreen />;
@@ -171,6 +231,7 @@ function MatchContent() {
       compFarm: "Total Resource Farm", compTactics: "Tactical Execution", compTeam: "Strategic Unity", compRef: "Combat Reflexes",
       tbdTitle: "TECHNICAL WIN SECURED",
       tbdDesc: "Opponent (TBD) failed to deploy for tactical engagement.",
+      draftTitle: "PRE-MATCH DRAFT", picks: "PICKS", bans: "BANS", mastery: "Mastery", noDraft: "Draft data is not available for this match.",
       victory: "VICTORY:", draw: "MATCH DRAWN", map: "MAP"
     },
     ru: {
@@ -182,9 +243,50 @@ function MatchContent() {
       compFarm: "Суммарный фарм", compTactics: "Тактическая точность", compTeam: "Стратегическое единство", compRef: "Боевые рефлексы",
       tbdTitle: "ТЕХНИЧЕСКАЯ ПОБЕДА",
       tbdDesc: "Соперник (TBD) не явился на поле боя.",
+      draftTitle: "ДРАФТ ПЕРЕД МАТЧЕМ", picks: "ВЫБОР", bans: "БАНЫ", mastery: "Мастерство", noDraft: "Данные драфта для этого матча отсутствуют.",
       victory: "ПОБЕДА:", draw: "НИЧЬЯ В СЕРИИ", map: "КАРТА"
     }
   }[language === 'ru' ? 'ru' : 'en'];
+
+  const renderDraftPanel = () => {
+    if (!currentDraft) return null;
+    const renderPicks = (picks: any[], side: 'home' | 'away') => (
+      <div className="space-y-2">
+        {picks.map((pick: any, index: number) => (
+          <div key={`${pick?.playerId || pick?.playerName || side}-${pick?.heroId || index}`} className="rounded-xl border border-white/5 bg-background/40 p-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[9px] font-black uppercase text-white truncate">{String(pick?.playerName || 'Игрок')}</span>
+              <Badge variant="outline" className="shrink-0 text-[7px] border-white/10">{String(pick?.role || '')}</Badge>
+            </div>
+            <div className="mt-1 flex items-center justify-between gap-2">
+              <span className="text-[10px] font-bold text-primary truncate">{String(pick?.heroName || pick?.heroId || '—')}</span>
+              <span className="text-[8px] text-muted-foreground shrink-0">{t.mastery}: {Math.max(0, Math.min(100, Number(pick?.mastery) || 0))}</span>
+            </div>
+          </div>
+        ))}
+        {picks.length === 0 && <p className="text-[9px] text-muted-foreground">—</p>}
+      </div>
+    );
+    const renderBans = (bans: any[]) => bans.length ? bans.map((ban: any, index: number) => (
+      <Badge key={`${String(ban)}-${index}`} variant="outline" className="text-[8px] border-red-400/20 text-red-300">{String(ban)}</Badge>
+    )) : <span className="text-[9px] text-muted-foreground">—</span>;
+    return (
+      <Card className="glass-card border-white/10 bg-secondary/10 overflow-hidden">
+        <div className="px-4 py-3 border-b border-white/5 flex items-center gap-2"><Swords className="w-4 h-4 text-primary"/><h3 className="text-[10px] font-black uppercase tracking-widest">{t.draftTitle}</h3></div>
+        <CardContent className="p-4 space-y-4">
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-2"><p className="text-[8px] font-black uppercase tracking-widest text-primary">{resolvedMatchData.homeName} · {t.picks}</p>{renderPicks(currentDraft.homePicks, 'home')}</div>
+            <div className="space-y-2"><p className="text-[8px] font-black uppercase tracking-widest text-accent text-right">{resolvedMatchData.awayName} · {t.picks}</p>{renderPicks(currentDraft.awayPicks, 'away')}</div>
+          </div>
+          <div className="grid grid-cols-2 gap-3 border-t border-white/5 pt-3">
+            <div className="space-y-1.5"><p className="text-[8px] font-black uppercase tracking-widest text-red-300">{resolvedMatchData.homeName} · {t.bans}</p><div className="flex flex-wrap gap-1">{renderBans(currentDraft.homeBans)}</div></div>
+            <div className="space-y-1.5"><p className="text-[8px] font-black uppercase tracking-widest text-red-300 text-right">{resolvedMatchData.awayName} · {t.bans}</p><div className="flex flex-wrap gap-1 justify-end">{renderBans(currentDraft.awayBans)}</div></div>
+          </div>
+          {currentDraft.notes.length > 0 && <div className="space-y-1 border-t border-white/5 pt-3">{currentDraft.notes.map((note: string, index: number) => <p key={`${index}-${note}`} className="text-[9px] leading-relaxed text-muted-foreground">• {note}</p>)}</div>}
+        </CardContent>
+      </Card>
+    );
+  };
 
   const renderStatsTable = (game: any) => {
     if (currentSimulation.isTbdWin) {
@@ -217,7 +319,7 @@ function MatchContent() {
             <p className="text-[12px] font-black uppercase truncate text-white leading-none mb-1">{p.name}</p>
             <div className={cn("flex items-center gap-2", side === 'right' && "justify-end")}>
                <Badge variant="outline" className="text-[7px] h-4 px-1.5 border-white/10 opacity-70 uppercase font-black">{p.role}</Badge>
-               <span className="text-10px] font-mono font-bold text-primary">{p.kills}/{p.deaths}/{p.assists}</span>
+               <span className="text-[10px] font-mono font-bold text-primary">{p.kills}/{p.deaths}/{p.assists}</span>
             </div>
           </div>
         </div>
@@ -255,8 +357,8 @@ function MatchContent() {
         )}
 
         <div className="grid grid-cols-2 gap-4">
-          <div className="space-y-2.5"><p className="text-[9px] font-black uppercase tracking-widest text-primary mb-3">{t.home}</p>{homeHeroes.map(p => renderHeroRow(p, 'left'))}</div>
-          <div className="space-y-2.5"><p className="text-[9px] font-black uppercase tracking-widest text-muted-foreground mb-3 text-right">{t.away}</p>{awayHeroes.map(p => renderHeroRow(p, 'right'))}</div>
+          <div className="space-y-2.5"><p className="text-[9px] font-black uppercase tracking-widest text-primary mb-3">{t.home}</p>{homeHeroes.map((p: any) => renderHeroRow(p, 'left'))}</div>
+          <div className="space-y-2.5"><p className="text-[9px] font-black uppercase tracking-widest text-muted-foreground mb-3 text-right">{t.away}</p>{awayHeroes.map((p: any) => renderHeroRow(p, 'right'))}</div>
         </div>
       </div>
     );
@@ -267,7 +369,7 @@ function MatchContent() {
   const isDraw = currentSimulation.winner === "Ничья" || currentSimulation.winner === "Draw";
 
   return (
-    <div className="min-h-screen bg-background text-foreground pb-32 relative overflow-hidden" onClick={handleNext}>
+    <div className="min-h-screen bg-background text-foreground pb-32 relative overflow-hidden">
       <div className="max-w-md mx-auto relative z-10 px-4 pt-6">
         <header className="text-center space-y-4 mb-8">
           <h1 className="text-sm font-headline font-bold text-white uppercase tracking-tighter">{t.reportTitle}</h1>
@@ -279,7 +381,12 @@ function MatchContent() {
         </header>
 
         {step === 'preview' && (
-          <Card className="glass-card border-white/10 bg-gradient-to-br from-primary/10 to-transparent overflow-hidden">
+          <>
+            <Card className="glass-card border-white/10 bg-gradient-to-br from-primary/10 to-transparent overflow-hidden">
+            <div className="px-5 py-3 border-b border-white/5 flex items-center justify-between">
+              <Badge variant="outline" className="text-[8px] font-black uppercase">ПРОБНЫЙ МАТЧ • BO2</Badge>
+              <span className="text-[9px] text-muted-foreground uppercase">Итог: {seriesDisplayScore.home}-{seriesDisplayScore.away}</span>
+            </div>
             <div className="grid grid-cols-2 divide-x divide-white/5">
               <div className="p-6 flex flex-col items-center gap-4 text-center">
                 <div className="w-20 h-20 rounded-2xl bg-secondary/50 border border-primary/30 flex items-center justify-center overflow-hidden p-2">
@@ -294,24 +401,73 @@ function MatchContent() {
                 <h3 className="text-[11px] font-headline font-bold uppercase truncate text-white leading-tight">{resolvedMatchData.awayName}</h3>
               </div>
             </div>
-          </Card>
+            </Card>
+            {renderDraftPanel()}
+          </>
+        )}
+
+        {step === 'live' && (
+          <div onClick={() => setStep('stats')} className="space-y-5 animate-in slide-in-from-right-4 pb-20 cursor-pointer select-none">
+            <Card className="glass-card border-primary/20 bg-primary/5 overflow-hidden">
+              <CardContent className="p-5">
+                <div className="text-center mb-4">
+                  <p className="text-[8px] font-black uppercase tracking-[0.25em] text-muted-foreground">СЧЁТ СЕРИИ</p>
+                  <div className="text-2xl font-headline font-black text-blue-400 tracking-widest">{liveSeriesScore.home}:{liveSeriesScore.away}</div>
+                  <p className="text-[8px] font-black uppercase tracking-[0.25em] text-muted-foreground mt-2">СЧЁТ ИГРЫ {activeGameIdx + 1}</p>
+                </div>
+                <div className="grid grid-cols-[1fr_90px_1fr] items-center gap-3 mb-5">
+                  <p className="text-[10px] font-black uppercase text-center truncate">{resolvedMatchData.homeName}</p>
+                  <div className="text-center text-4xl font-headline font-black tracking-widest">{liveKillScore.home}:{liveKillScore.away}</div>
+                  <p className="text-[10px] font-black uppercase text-center truncate">{resolvedMatchData.awayName}</p>
+                </div>
+                <p className="text-center text-[7px] text-muted-foreground uppercase tracking-widest mb-3">Нажмите в любое место, чтобы перейти к статистике</p>
+                <div ref={scrollRef} className="max-h-[320px] overflow-y-auto space-y-2 pr-1">
+                  {visibleEvents.filter((event: any) => event != null).length ? visibleEvents.filter((event: any) => event != null).map((event: any, idx: number) => {
+                    const safeEvent = typeof event === 'object' ? event : { minute: '', text: String(event ?? '') };
+                    const minute = safeEvent?.minute ?? safeEvent?.time ?? safeEvent?.timestamp ?? `${idx + 1}:00`;
+                    const text = safeEvent?.text ?? safeEvent?.description ?? safeEvent?.message ?? '';
+                    return (
+                      <div key={idx} className="rounded-xl border border-white/5 bg-secondary/20 p-3 flex gap-3">
+                        <span className="text-[9px] font-mono text-primary font-black shrink-0">{minute}</span>
+                        <span className="text-[10px] leading-relaxed text-white/80">{text}</span>
+                      </div>
+                    );
+                  }) : <p className="text-center text-[9px] uppercase tracking-widest text-muted-foreground py-8">Загрузка трансляции...</p>}
+                </div>
+              </CardContent>
+            </Card>
+          </div>
         )}
 
         {step === 'stats' && (
           <div className="space-y-6 animate-in slide-in-from-right-4 pb-20">
             <div className="text-center py-6">
               <div className="flex items-center justify-center gap-2 mb-4 px-2">
-                <span className="text-4xl font-headline font-black italic text-white">{resolvedMatchData.scoreA} : {resolvedMatchData.scoreB}</span>
+                <span className="text-4xl font-headline font-black italic text-white">{seriesDisplayScore.home} : {seriesDisplayScore.away}</span>
               </div>
               <Badge className={cn("mt-2 text-[10px] font-black px-8 py-1 uppercase tracking-widest", currentSimulation.isTbdWin ? "bg-green-500/20 text-green-400" : (isDraw ? "bg-secondary" : "bg-primary/20 text-primary"))}>
                 {currentSimulation.isTbdWin ? 'TECHNICAL VICTORY' : (isDraw ? t.draw : `${t.victory} ${currentSimulation.winner}`)}
               </Badge>
             </div>
+            {renderDraftPanel()}
             {currentSimulation.games.map((game: any, idx: number) => (
               <div key={idx} className="mt-4">{renderStatsTable(game)}</div>
             ))}
           </div>
         )}
+
+        <div className="mt-6 flex justify-center">
+          {step === 'preview' && (
+            <Button type="button" onClick={() => handleNext()} className="w-full uppercase font-black tracking-widest text-[10px]">
+              {t.next} <ArrowRight className="ml-2 w-4 h-4" />
+            </Button>
+          )}
+          {step === 'stats' && (
+            <Button type="button" onClick={() => void handleNext()} disabled={isFinalizingReview} className="w-full uppercase font-black tracking-widest text-[10px]">
+              {isFinalizingReview ? (language === 'ru' ? 'СОХРАНЯЕМ ПРОСМОТР…' : 'SAVING REVIEW…') : t.accept} <ChevronRight className="ml-2 w-4 h-4" />
+            </Button>
+          )}
+        </div>
       </div>
     </div>
   );

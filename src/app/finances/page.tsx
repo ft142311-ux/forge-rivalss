@@ -14,6 +14,7 @@ import {
 import { cn, formatCurrency } from '@/lib/utils';
 import Link from 'next/link';
 import { LoadingScreen } from '@/components/game/LoadingScreen';
+import { getMoscowTime } from '@/app/lib/time-utils';
 import { Badge } from '@/components/ui/badge';
 import {
   ChartConfig,
@@ -34,7 +35,7 @@ type FinanceTab =
   | 'match_reports';
 
 export default function FinancesPage() {
-  const { language, isLoaded, credits, ownedPlayers, arena, managerSkills, isPremium } = useGameState();
+  const { language, isLoaded, credits, ownedPlayers, staff, arena, managerSkills, isPremium } = useGameState();
   const [activeTab, setActiveTab] = useState<FinanceTab>('menu');
 
   if (!isLoaded) return <LoadingScreen />;
@@ -50,7 +51,7 @@ export default function FinancesPage() {
         reports: { label: "Financial Reports", desc: "Detailed transaction history", icon: FileText, color: "text-blue-400" },
         charts: { label: "Analytics Charts", desc: "Visual growth and cashflow data", icon: BarChart3, color: "text-accent" },
         budget: { label: "Transfer Budget", desc: "Available liquidity for roster growth", icon: Wallet, color: "text-yellow-400" },
-        salaries: { label: "Sponsored Salaries", desc: "Contract coverage and subsidies", icon: PiggyBank, color: "text-primary" },
+        salaries: { label: "Daily Salaries", desc: "Player and staff payroll charged at 00:00 MSK", icon: PiggyBank, color: "text-primary" },
         match_reports: { label: "Last Match Outcomes", desc: "Revenue from recent deployments", icon: History, color: "text-slate-400" }
       },
       bankruptcyInfo: {
@@ -81,7 +82,7 @@ export default function FinancesPage() {
         reports: { label: "Отчёты", desc: "Детальная история транзакций", icon: FileText, color: "text-blue-400" },
         charts: { label: "Графики", desc: "Визуализация роста и денежных потоков", icon: BarChart3, color: "text-accent" },
         budget: { label: "Трансферный бюджет", desc: "Ликвидность для усиления ростера", icon: Wallet, color: "text-yellow-400" },
-        salaries: { label: "Спонсированные зарплаты", desc: "Покрытие контрактов и субсидии", icon: PiggyBank, color: "text-primary" },
+        salaries: { label: "Ежедневные зарплаты", desc: "Зарплата игроков и персонала списывается в 00:00 МСК", icon: PiggyBank, color: "text-primary" },
         match_reports: { label: "Отчёты о последних матчах", desc: "Выручка от недавних операций", icon: History, color: "text-slate-400" }
       },
       bankruptcyInfo: {
@@ -282,46 +283,32 @@ export default function FinancesPage() {
           </div>
         );
 
-      case 'salaries':
-        const totalSalary = ownedPlayers.reduce((acc, h) => acc + (h.salary || 0), 0);
-        const leagueSubsidy = totalSalary * 0.45;
-        const clubCost = totalSalary - leagueSubsidy;
-
+      case 'salaries': {
+        const playerSalary = ownedPlayers.reduce((sum, p) => sum + Number(p.salary || 0), 0);
+        const staffSalary = Object.values(staff || {}).reduce((sum: number, member: any) => sum + Number(member?.salary || 0), 0);
+        const totalSalary = playerSalary + staffSalary;
+        const now = getMoscowTime();
+        const nextMidnight = new Date(now.getTime());
+        nextMidnight.setUTCHours(21, 0, 0, 0);
+        if (nextMidnight.getTime() <= now.getTime()) nextMidnight.setUTCDate(nextMidnight.getUTCDate() + 1);
+        const hours = Math.floor((nextMidnight.getTime() - now.getTime()) / 3600000);
+        const minutes = Math.floor(((nextMidnight.getTime() - now.getTime()) % 3600000) / 60000);
         return (
           <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-500 pb-6">
             <div className="p-6 bg-primary/5 rounded-2xl border border-primary/20 text-center">
-              <p className="text-[10px] font-black uppercase tracking-[0.2em] text-muted-foreground mb-2">Total Salary Bill</p>
+              <p className="text-[10px] font-black uppercase tracking-[0.2em] text-muted-foreground mb-2">{language === 'ru' ? 'Ежедневный фонд зарплат' : 'Daily salary bill'}</p>
               <p className="text-3xl font-headline font-bold text-white">{totalSalary.toLocaleString()} €</p>
-              <Badge className="mt-4 bg-primary text-primary-foreground text-[8px] font-black uppercase">Weekly Payment Cycle</Badge>
+              <Badge className="mt-4 bg-primary text-primary-foreground text-[8px] font-black uppercase">00:00 MSK</Badge>
             </div>
-
-            <div className="space-y-3">
-              <div className="bg-secondary/20 p-4 rounded-xl border border-white/5 flex items-center justify-between">
-                <div>
-                  <p className="text-[10px] font-bold text-muted-foreground uppercase">League Subsidy (45%)</p>
-                  <p className="text-xs text-green-400 mt-0.5">Sponsor covered</p>
-                </div>
-                <span className="text-sm font-bold text-green-400">-{leagueSubsidy.toLocaleString()} €</span>
-              </div>
-              <div className="bg-secondary/20 p-4 rounded-xl border border-white/5 flex items-center justify-between">
-                <div>
-                  <p className="text-[10px] font-bold text-muted-foreground uppercase">Actual Club Cost</p>
-                  <p className="text-xs text-primary mt-0.5">Payable from budget</p>
-                </div>
-                <span className="text-sm font-bold text-primary">{clubCost.toLocaleString()} €</span>
-              </div>
+            <div className="grid grid-cols-2 gap-3">
+              <Card className="glass-card"><CardContent className="p-4"><p className="text-[9px] text-muted-foreground uppercase">{language === 'ru' ? 'Игроки' : 'Players'}</p><p className="text-lg font-black">{playerSalary.toLocaleString()} €</p></CardContent></Card>
+              <Card className="glass-card"><CardContent className="p-4"><p className="text-[9px] text-muted-foreground uppercase">{language === 'ru' ? 'Персонал' : 'Staff'}</p><p className="text-lg font-black">{staffSalary.toLocaleString()} €</p></CardContent></Card>
             </div>
-
-            <div className="p-4 bg-accent/5 rounded-xl border border-accent/20 flex gap-4">
-              <Info className="w-5 h-5 text-accent shrink-0" />
-              <p className="text-[10px] text-muted-foreground leading-relaxed italic">
-                "League sponsors cover 45% of your professional roster costs to maintain competitive parity across divisions."
-              </p>
-            </div>
+            <Card className="glass-card border-white/5"><CardContent className="p-4 flex items-center justify-between"><span className="text-xs text-muted-foreground">{language === 'ru' ? 'До следующего списания' : 'Until next payroll'}</span><span className="font-black">{hours}ч {minutes}м</span></CardContent></Card>
           </div>
         );
+      }
 
-      case 'reports':
       case 'match_reports':
       case 'budget':
         return (

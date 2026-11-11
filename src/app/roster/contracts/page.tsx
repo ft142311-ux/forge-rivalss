@@ -2,6 +2,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+
 import { useGameState } from '../../lib/store';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -18,10 +19,18 @@ import Link from 'next/link';
 import { LoadingScreen } from '@/components/game/LoadingScreen';
 import { Player } from '../../lib/moba-data';
 import { useToast } from '@/hooks/use-toast';
-import { useUser, useFirestore, useDoc, useMemoFirebase } from '@/firebase';
-import { doc, setDoc, serverTimestamp } from 'firebase/firestore';
+import { listPlayerOnMarketAction } from '@/app/actions/gameplay';
+import { purchasePlayerCareAction } from '@/app/actions/player-care';
+import { signOut } from 'firebase/auth';
+import { useUser, useAuth, useFirestore, useDoc, useMemoFirebase } from '@/firebase';
+import { doc } from 'firebase/firestore';
 import { getMoscowDateString, getMoscowTime, calculateLiveAge } from '@/app/lib/time-utils';
-import { renderStars, STAT_KEYS } from '@/app/transfers/quick-search/page';
+import { STAT_KEYS } from '@/app/lib/store';
+
+const renderStars = (value: number) => {
+  const count = Math.max(0, Math.min(5, Math.round(Number(value) / 20)));
+  return <span aria-label={`${count} of 5`} className="text-amber-400 tracking-tight">{'★'.repeat(count)}{'☆'.repeat(5 - count)}</span>;
+};
 
 const normTalent = (val: any) => {
   const n = Number(val);
@@ -37,12 +46,14 @@ const getStatusColor = (val: number) => {
 };
 
 export default function ContractsPage() {
-  const { ownedPlayers, language, isLoaded, credits, crystals, updatePlayer, removePlayer, managerSkills, displayName } = useGameState();
+  const { ownedPlayers, language, isLoaded, credits, crystals, removePlayer, displayName } = useGameState();
   const { user } = useUser();
+  const auth = useAuth();
   const db = useFirestore();
   const [profilePlayer, setProfilePlayer] = useState<Player | null>(null);
   const [now, setNow] = useState(Date.now());
   const [isTransferring, setIsTransferring] = useState(false);
+  const [isCareProcessing, setIsCareProcessing] = useState(false);
   const { toast } = useToast();
 
   useEffect(() => {
@@ -51,7 +62,7 @@ export default function ContractsPage() {
   }, []);
 
   // Use players_v14 for active profile
-  const userRef = useMemoFirebase(() => (user?.uid ? doc(db, 'players_v14', user.uid) : null), [db, user?.uid]);
+  const userRef = useMemoFirebase(() => (db && user?.uid ? doc(db, 'players_v14', user.uid) : null), [db, user?.uid]);
   const { data: profile } = useDoc(userRef);
 
   if (!isLoaded) return <LoadingScreen />;
@@ -97,70 +108,111 @@ export default function ContractsPage() {
   };
 
   const handleAction = async (action: string) => {
-    if (!profilePlayer) return;
-    switch (action) {
-      case 'recoverEuro':
-        if (credits >= 5000) {
-          const newEnergy = Math.min(100, profilePlayer.fatigue + 25);
-          updatePlayer(profilePlayer.id, { fatigue: newEnergy }, 5000, 0);
-          setProfilePlayer(prev => prev ? { ...prev, fatigue: newEnergy } : null);
-        } else toast({ title: t.insufficient, variant: "destructive" });
-        break;
-      case 'boostForm':
-        if (credits >= 10000) {
-          updatePlayer(profilePlayer.id, { form: Math.min(100 + managerSkills.medical, profilePlayer.form + 15) }, 10000, 0);
-          setProfilePlayer(prev => prev ? { ...prev, form: Math.min(100 + managerSkills.medical, prev.form + 15) } : null);
-        } else toast({ title: t.insufficient, variant: "destructive" });
-        break;
+    if (!profilePlayer || !user || isCareProcessing) return;
+    const mode = action === 'recoverEuro' ? 'energy' : action === 'boostForm' ? 'form' : null;
+    if (!mode) return;
+    const cost = mode === 'energy' ? 5_000 : 10_000;
+    if (credits < cost) {
+      toast({ title: t.insufficient, variant: 'destructive' });
+      return;
+    }
+
+    setIsCareProcessing(true);
+    try {
+      const operationId = crypto.randomUUID();
+      const result = await purchasePlayerCareAction(
+        await user.getIdToken(),
+        profilePlayer.id,
+        mode,
+        operationId,
+      );
+      if (!result.success) throw new Error(result.error || 'PLAYER_CARE_FAILED');
+      const value = Number(result.value);
+      setProfilePlayer((previous) => previous
+        ? { ...previous, [mode === 'energy' ? 'fatigue' : 'form']: value }
+        : null);
+      toast({
+        title: language === 'ru'
+          ? (mode === 'energy' ? 'Энергия восстановлена' : 'Форма улучшена')
+          : (mode === 'energy' ? 'Energy restored' : 'Form improved'),
+      });
+    } catch (error: any) {
+      const code = String(error?.message || 'PLAYER_CARE_FAILED');
+      toast({
+        title: language === 'ru' ? 'Не удалось выполнить операцию' : 'Operation failed',
+        description: code === 'INSUFFICIENT_FUNDS' ? t.insufficient : code,
+        variant: 'destructive',
+      });
+    } finally {
+      setIsCareProcessing(false);
     }
   };
 
   const handleTransferListing = async () => {
-    if (!profilePlayer || !user || !profile || isTransferring) return;
+    if (!profilePlayer || !user || isTransferring) return;
     setIsTransferring(true);
+
+    const isAuthTokenError = (value: any) => {
+      const message = String(value?.message || value || '').toLowerCase();
+      return message.includes('auth_token_revoked') ||
+        message.includes('id token has been revoked') ||
+        message.includes('token has been revoked') ||
+        message.includes('auth/id-token-revoked') ||
+        message.includes('auth/id-token-expired') ||
+        message.includes('auth_token_invalid');
+    };
+    const executeWithFreshToken = async () => listPlayerOnMarketAction(await user.getIdToken(true), profilePlayer.id);
+
     try {
-      const today = getMoscowDateString();
-      const mskNow = getMoscowTime();
-      const expiryTime = new Date(mskNow.getTime() + 12 * 60 * 60 * 1000); 
-      const startPrice = Math.floor((profilePlayer.overallRating * 15000) + 100000);
-      
-      const agentId = `p_${user.uid}_${Date.now()}`;
-      const agentData = {
-        id: agentId,
-        heroData: JSON.parse(JSON.stringify(profilePlayer)),
-        currentBid: startPrice,
-        startingPrice: startPrice,
-        highestBidderId: null,
-        highestBidderName: null,
-        bidders: [],
-        sellerId: user.uid,
-        sellerName: profile.displayName || "Manager",
-        expiresAt: expiryTime.toISOString(),
-        dropDate: today,
-        createdAt: serverTimestamp(),
-        isYouth: profilePlayer.isYouth || false,
-        isPro: profilePlayer.isPro || false,
-        currency: 'credits'
-      };
+      let result: Awaited<ReturnType<typeof listPlayerOnMarketAction>>;
+      try {
+        result = await executeWithFreshToken();
+      } catch (error: any) {
+        if (!isAuthTokenError(error)) throw error;
+        // A stale/revoked ID token should be refreshed and retried before forcing a login.
+        try {
+          result = await executeWithFreshToken();
+        } catch (retryError: any) {
+          if (isAuthTokenError(retryError)) {
+            if (auth) await signOut(auth);
+            window.location.href = '/auth/login';
+            return;
+          }
+          throw retryError;
+        }
+      }
 
-      await setDoc(doc(db, 'market_v7', agentId), agentData);
-      updatePlayer(profilePlayer.id, { 
-        onTransferUntil: expiryTime.toISOString(),
-        transferMarketId: agentId 
+      if (!result.success && 'error' in result && isAuthTokenError(result.error)) {
+        try {
+          result = await executeWithFreshToken();
+        } catch (retryError: any) {
+          if (isAuthTokenError(retryError)) {
+            if (auth) await signOut(auth);
+            window.location.href = '/auth/login';
+            return;
+          }
+          throw retryError;
+        }
+      }
+      if (!result.success) throw new Error(('error' in result ? String(result.error) : '') || 'LISTING_FAILED');
+
+      toast({
+        title: language === 'ru' ? "Игрок выставлен на аукцион!" : "Player listed on auction!",
+        description: language === 'ru'
+          ? `Старт: €${Number(('startingPrice' in result ? result.startingPrice : undefined) || profilePlayer.marketValue || 0).toLocaleString('ru-RU')} · максимум: €${Number(('maxBid' in result ? result.maxBid : undefined) || profilePlayer.marketValue || 0).toLocaleString('ru-RU')}`
+          : `Start: €${Number(('startingPrice' in result ? result.startingPrice : undefined) || profilePlayer.marketValue || 0).toLocaleString('en-US')} · max: €${Number(('maxBid' in result ? result.maxBid : undefined) || profilePlayer.marketValue || 0).toLocaleString('en-US')}`,
       });
-
-      toast({ title: language === 'ru' ? "Игрок выставлен на аукцион!" : "Player listed on auction!" });
       setProfilePlayer(null);
     } catch (e: any) {
       console.error(e);
-      toast({ variant: "destructive", title: "Action Failed", description: e.message });
+      toast({ variant: "destructive", title: "Action Failed", description: e?.message || 'LISTING_FAILED' });
     } finally {
       setIsTransferring(false);
     }
   };
 
   if (profilePlayer) {
-    const liveAge = calculateLiveAge(profilePlayer.baseAge, profilePlayer.hiredAt);
+    const liveAge = calculateLiveAge(profilePlayer.baseAge, profilePlayer.hiredAt, profilePlayer.birthDate);
     const talentsValues = Object.values(profilePlayer.proTalents || {}).map(v => normTalent(v));
     const maxTalentValue = Math.max(...talentsValues);
     const isOnMarket = profilePlayer.onTransferUntil && new Date(profilePlayer.onTransferUntil).getTime() > now;
@@ -235,8 +287,8 @@ export default function ContractsPage() {
               <section className="space-y-3">
                 <h3 className="text-[9px] font-black text-accent uppercase tracking-[0.2em] mb-4 flex items-center gap-2 opacity-80 px-1"><Scroll className="w-3.5 h-3.5" /> {language === 'ru' ? 'КОНТРАКТНЫЕ ДЕЙСТВИЯ' : 'CONTRACT ACTIONS'}</h3>
                 <div className="grid grid-cols-1 gap-2">
-                  <Button variant="outline" className="justify-start h-12 border-white/5 bg-secondary/20" onClick={() => handleAction('recoverEuro')}><Coins className="w-4 h-4 mr-3 text-yellow-500" /><div className="text-left"><p className="text-[9px] font-bold uppercase">{t.recoverEuro}</p><p className="text-[8px] text-muted-foreground">+25% Energy | 5,000 €</p></div></Button>
-                  <Button variant="outline" className="justify-start h-12 border-white/5 bg-secondary/20" onClick={() => handleAction('boostForm')}><ActivityIcon className="w-4 h-4 mr-3 text-primary" /><div className="text-left"><p className="text-[9px] font-bold uppercase">{t.boostForm}</p><p className="text-[8px] text-muted-foreground">+15% Form | 10,000 €</p></div></Button>
+                  <Button variant="outline" className="justify-start h-12 border-white/5 bg-secondary/20" disabled={isCareProcessing} onClick={() => handleAction('recoverEuro')}><Coins className="w-4 h-4 mr-3 text-yellow-500" /><div className="text-left"><p className="text-[9px] font-bold uppercase">{t.recoverEuro}</p><p className="text-[8px] text-muted-foreground">+25% Energy | 5,000 €</p></div></Button>
+                  <Button variant="outline" className="justify-start h-12 border-white/5 bg-secondary/20" disabled={isCareProcessing} onClick={() => handleAction('boostForm')}><ActivityIcon className="w-4 h-4 mr-3 text-primary" /><div className="text-left"><p className="text-[9px] font-bold uppercase">{t.boostForm}</p><p className="text-[8px] text-muted-foreground">+15% Form | 10,000 €</p></div></Button>
                 </div>
               </section>
 
@@ -310,7 +362,7 @@ export default function ContractsPage() {
                 <Button 
                   className="w-full h-14 hero-gradient font-black text-xs uppercase tracking-widest shadow-xl"
                   onClick={handleTransferListing}
-                  disabled={isTransferring || isOnMarket}
+                  disabled={Boolean(isTransferring || isOnMarket)}
                 >
                   {isTransferring ? <Loader2 className="animate-spin mr-2" /> : <ShoppingCart className="w-4 h-4 mr-2" />}
                   {isOnMarket ? (language === 'ru' ? 'УЖЕ НА РЫНКЕ' : 'ALREADY LISTED') : (language === 'ru' ? 'ВЫСТАВИТЬ НА ТРАНСФЕР' : 'LIST ON TRANSFER MARKET')}
@@ -346,7 +398,7 @@ export default function ContractsPage() {
                   </div>
                   <div className="flex items-center gap-2 mt-0.5">
                     {renderStars(maxTalent)}
-                    <p className="text-[7px] text-muted-foreground font-black uppercase tracking-widest">Age: {calculateLiveAge(player.baseAge, player.hiredAt).display} {t.yrs}</p>
+                    <p className="text-[7px] text-muted-foreground font-black uppercase tracking-widest">Age: {calculateLiveAge(player.baseAge, player.hiredAt, player.birthDate).display} {t.years}</p>
                   </div>
                 </div>
                 <div className="flex flex-col items-center justify-center min-w-[35px] border-l border-white/5 pl-2">

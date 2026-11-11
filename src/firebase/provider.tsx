@@ -4,7 +4,7 @@
 import React, { createContext, useContext, ReactNode, useMemo, useState, useEffect } from 'react';
 import { FirebaseApp } from 'firebase/app';
 import { Firestore } from 'firebase/firestore';
-import { Auth, onAuthStateChanged, User } from 'firebase/auth';
+import { Auth, onAuthStateChanged, User, signOut } from 'firebase/auth';
 
 /**
  * ПРОВАЙДЕР FIREBASE v3.1 (Passive Mode).
@@ -47,14 +47,36 @@ export const FirebaseProvider: React.FC<{ children: ReactNode; firebaseApp: Fire
       return;
     }
 
+    let authChangeSequence = 0;
     const unsubscribe = onAuthStateChanged(
       auth,
-      (user) => {
-        setUserAuthState({
-          user,
-          isUserLoading: false,
-          userError: null,
-        });
+      async (user) => {
+        const sequence = ++authChangeSequence;
+        if (!user) {
+          setUserAuthState({ user: null, isUserLoading: false, userError: null });
+          return;
+        }
+
+        try {
+          // Force Firebase to issue/refresh the ID token on each new auth session.
+          // Do not mark the app as ready until the refresh has completed.
+          await user.getIdToken(true);
+          if (sequence !== authChangeSequence || auth.currentUser?.uid !== user.uid) return;
+          setUserAuthState({ user, isUserLoading: false, userError: null });
+        } catch (error: any) {
+          if (sequence !== authChangeSequence) return;
+          const code = String(error?.code || '').toLowerCase();
+          const terminalAuthError = [
+            'auth/user-token-expired', 'auth/invalid-user-token', 'auth/user-disabled',
+            'auth/user-not-found', 'auth/invalid-credential'
+          ].includes(code);
+          if (terminalAuthError) {
+            try { await signOut(auth); } catch { /* Auth state listener will settle below. */ }
+            return;
+          }
+          // A transient network failure should not destroy a valid login.
+          setUserAuthState({ user, isUserLoading: false, userError: error instanceof Error ? error : new Error(String(error)) });
+        }
       },
       (error) => {
         setUserAuthState((prev) => ({

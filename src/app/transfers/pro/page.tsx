@@ -9,6 +9,8 @@
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useGameState } from '@/app/lib/store';
+import { ensureProMarketDailyDropAction, placeProMarketBidAction } from '@/app/actions/pro-market';
+import { runWithFreshIdToken } from '@/lib/client-auth-action';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { 
@@ -16,21 +18,19 @@ import {
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { LoadingScreen } from '@/components/game/LoadingScreen';
-import { useUser, useFirestore, useCollection, useMemoFirebase, useDoc } from '@/firebase';
+import { useUser, useAuth, useFirestore, useCollection, useMemoFirebase, useDoc } from '@/firebase';
 import { 
-  collection, query, doc, arrayUnion, serverTimestamp, 
-  setDoc, getDoc, getDocs, deleteDoc, where 
+  collection, query, doc, where 
 } from 'firebase/firestore';
-import { addDocumentNonBlocking } from '@/firebase/non-blocking-updates';
 import { useToast } from '@/hooks/use-toast';
-import { generateVtunePlayer } from '@/app/lib/moba-data';
-import { getMoscowTime, getMoscowDateString } from '@/app/lib/time-utils';
-import { TransferPlayerCard } from '../quick-search/page';
+import { getMoscowTime } from '@/app/lib/time-utils';
+import { TransferPlayerCard } from '@/components/game/TransferPlayerCard';
 import Link from 'next/link';
 
 export default function ProTransfersPage() {
-  const { language, isLoaded: isStoreLoaded, credits, crystals, addCredits, addCrystals } = useGameState();
+  const { language, isLoaded: isStoreLoaded } = useGameState();
   const { user, isUserLoading } = useUser();
+  const auth = useAuth();
   const db = useFirestore();
   const { toast } = useToast();
   
@@ -58,107 +58,40 @@ export default function ProTransfersPage() {
   useEffect(() => {
     if (!db || !user?.uid || !isStoreLoaded) return;
 
-    const checkAndDropLegends = async () => {
-      const today = getMoscowDateString();
-      const vtuneId = `sys_vtune_v900_final_standard_${today}`;
-      const vtuneRef = doc(db, 'market_v7', vtuneId);
-      
-      try {
-        const q = query(collection(db, 'market_v7'), where('isSystem', '==', true));
-        const allSystemSnap = await getDocs(q);
-        for (const d of allSystemSnap.docs) {
-          if (d.id !== vtuneId) {
-            await deleteDoc(d.ref);
-          }
-        }
-
-        const vtuneSnap = await getDoc(vtuneRef);
-        if (!vtuneSnap.exists()) {
-          const player = generateVtunePlayer(today);
-          const mskNow = getMoscowTime();
-          
-          const expiry = new Date(mskNow);
-          expiry.setDate(expiry.getDate() + 2);
-          expiry.setHours(23, 59, 59, 999);
-
-          await setDoc(vtuneRef, {
-            id: vtuneId,
-            heroData: JSON.parse(JSON.stringify(player)),
-            currentBid: 2000,
-            startingPrice: 2000,
-            highestBidderId: null,
-            highestBidderName: null,
-            bidders: [],
-            expiresAt: expiry.toISOString(),
-            dropDate: today,
-            createdAt: serverTimestamp(),
-            isSystem: true,
-            isPro: true,
-            currency: 'crystals',
-            sellerId: 'system',
-            sellerName: 'System'
-          });
-        }
-      } catch (e) {
-        console.error("System legend management failed", e);
-      }
-    };
-
-    if (!initTriggeredRef.current) {
+    if (!initTriggeredRef.current && user) {
       initTriggeredRef.current = true;
-      checkAndDropLegends();
+      void runWithFreshIdToken(auth, user, ensureProMarketDailyDropAction).catch((error) => {
+        console.error('System legend management failed', error);
+        initTriggeredRef.current = false;
+      });
     }
-  }, [user?.uid, isStoreLoaded, db]);
+  }, [auth, user, user?.uid, isStoreLoaded, db]);
 
   const handleGlobalBid = useCallback(async (agent: any, amount: number) => {
-    if (!db || !user || !profile) return;
-    
-    const currency = agent.currency || 'crystals';
-    const balance = currency === 'crystals' ? crystals : credits;
-
-    if (balance < amount) { 
-      toast({ title: language === 'ru' ? "Недостаточно ресурсов" : "Insufficient resources", variant: "destructive" }); 
-      return; 
-    }
+    if (!db || !user) return;
 
     try {
-      const prevBidder = agent.highestBidderId;
-      const heroName = agent.heroData?.name || "Player";
-      
-      const mskNow = getMoscowTime().getTime();
-      const expiryTime = new Date(agent.expiresAt).getTime();
-      const timeLeft = expiryTime - mskNow;
-      let finalExpiresAt = agent.expiresAt;
-      
-      if (timeLeft < 600000) { 
-        finalExpiresAt = new Date(mskNow + 600000).toISOString(); 
+      const result = await runWithFreshIdToken(auth, user, (idToken) =>
+        placeProMarketBidAction(idToken, String(agent.id), amount)
+      );
+      if ('error' in result) {
+        throw new Error(result.error || 'BID_FAILED');
       }
 
-      await setDoc(doc(db, 'market_v7', agent.id), { 
-        currentBid: amount, highestBidderId: user.uid, highestBidderName: profile.displayName || "Unknown Manager", 
-        bidders: arrayUnion(user.uid), updatedAt: serverTimestamp(),
-        expiresAt: finalExpiresAt
-      }, { merge: true });
-
-      if (currency === 'crystals') {
-        addCrystals(-amount);
-      } else {
-        addCredits(-amount);
-      }
-
-      if (prevBidder && prevBidder !== user.uid) {
-        addDocumentNonBlocking(collection(db, 'notifications_v7'), {
-          userId: prevBidder, title: language === 'ru' ? "Ставка перебита!" : "Outbid!",
-          description: language === 'ru' ? `Ставка на PRO-игрока "${heroName}" перебита!` : `Bid on PRO unit "${heroName}" outbid!`,
-          type: 'market', read: false, createdAt: new Date().toISOString()
-        });
-      }
-      
-      toast({ title: language === 'ru' ? "Ставка принята!" : "Elite Bid Confirmed!" });
-    } catch (e) {
-      toast({ title: "Error placing bid", variant: "destructive" });
+      toast({
+        title: language === 'ru' ? 'Ставка принята!' : 'Elite Bid Confirmed!',
+        description: 'expiresAt' in result && new Date(result.expiresAt).getTime() > new Date(agent.expiresAt).getTime()
+          ? (language === 'ru' ? 'Аукцион продлён на 10 минут!' : 'Auction extended by 10 minutes!')
+          : undefined,
+      });
+    } catch (error: any) {
+      const message = String(error?.message || 'BID_FAILED');
+      const localized = language === 'ru'
+        ? message === 'INSUFFICIENT_CRYSTALS' ? 'Недостаточно кристаллов' : message === 'BID_TOO_LOW' ? 'Ставка должна быть выше текущей' : 'Не удалось разместить ставку'
+        : message === 'INSUFFICIENT_CRYSTALS' ? 'Insufficient crystals' : message === 'BID_TOO_LOW' ? 'Bid must exceed the current bid' : 'Could not place bid';
+      toast({ title: localized, variant: 'destructive' });
     }
-  }, [user, profile, credits, crystals, language, toast, db, addCredits, addCrystals]);
+  }, [auth, user, language, toast, db]);
 
   const t = {
     title: language === 'ru' ? 'ЭЛИТНЫЕ ПРОФИ' : 'PRO MARKET',

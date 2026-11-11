@@ -1,383 +1,41 @@
 'use server';
+
 /**
- * @fileOverview Ядро симуляции матчей Lines of Enmity v5.7 (Physical Integrity).
- * 
- * Особенности:
- * 1. Учет Формы и Усталости (энергии) как множителей силы игрока.
- * 2. Детерминированный расчет обоснования победы на основе сравнения кумулятивных навыков.
- * 3. Поддержка ничьих в Bo2 сериях.
+ * Compatibility adapter. All callers still use simulateMobaMatch(), but the
+ * actual result now comes from the single Forge-Rivals Match Core v5.
  */
+import { z } from 'zod';
+import { runMatchEngine } from '@/app/lib/match-engine';
+import { PLAYER_SKILL_KEYS, type PlayerSkillKey } from '@/game/player-skills';
 
-import {ai} from '@/ai/genkit';
-import {z} from 'genkit';
-
-const ProStatsSchema = z.object({
-  lastHitting: z.number(),
-  mapAwareness: z.number(),
-  positioning: z.number(),
-  reflexes: z.number(),
-  manaManagement: z.number(),
-  objectiveControl: z.number(),
-  communication: z.number(),
-  tiltResistance: z.number(),
-  versatility: z.number(),
-  ganking: z.number(),
-});
-
-const PlayerStatsSchema = z.object({
-  id: z.string().optional(),
-  name: z.string(),
-  role: z.string(),
-  overallRating: z.number(),
-  image: z.string().optional(),
-  isPro: z.boolean().optional(),
-  proStats: ProStatsSchema,
-  isSub: z.boolean().optional(),
-  form: z.number().optional().default(100),
-  fatigue: z.number().optional().default(100), // Трактуется как Энергия/Стамина
-});
-
-const TeamSchema = z.object({
-  name: z.string(),
-  heroes: z.array(PlayerStatsSchema), 
-  strategy: z.string().describe('Aggressive, Balanced, Defensive, Fast_Push, Counter-attack'),
-  infraBonus: z.number().optional().describe('Bonus from Bootcamp/Tactics Hall'),
-  staffBonus: z.number().optional().describe('Bonus from Coach skills'),
-  analystBonus: z.number().optional().describe('Bonus from Analyst skills'),
-  synergy: z.number().optional().describe('Team cohesion level (0-100)'),
-});
-
-const SimulateMobaMatchInputSchema = z.object({
-  teamA: TeamSchema,
-  teamB: TeamSchema,
-  isBo2: z.boolean().default(true),
-  isBo3: z.boolean().default(false),
-  scoreA: z.number().optional(),
-  scoreB: z.number().optional(),
-});
-export type SimulateMobaMatchInput = z.infer<typeof SimulateMobaMatchInputSchema>;
-
-const GameStatsSchema = z.object({
-  scoreA: z.number(),
-  scoreB: z.number(),
-  duration: z.string(),
-  mvp: z.string(),
-  matchSummary: z.string(),
-  towersA: z.number(),
-  towersB: z.number(),
-  objectivesA: z.number(),
-  objectivesB: z.number(),
-  teamAOvr: z.number().optional(),
-  teamBOvr: z.number().optional(),
-  isTechnical: z.boolean().optional(),
-  timeline: z.array(z.object({
-    time: z.string(),
-    event: z.string(),
-    type: z.string(), // kill, save, objective, tower, injury, tilt
-    score: z.string().optional(),
-  })),
-  scoreboard: z.array(z.object({
-    id: z.string().optional(),
-    name: z.string(),
-    team: z.string(),
-    role: z.string().optional(),
-    image: z.string().optional(),
-    kills: z.number(),
-    deaths: z.number(),
-    assists: z.number(),
-    cs: z.number(),
-    matchRating: z.number(),
-    kdaRatio: z.string(),
-    isPro: z.boolean().optional(),
-  })),
-  teamComparison: z.object({
-    farm: z.array(z.number()),
-    tactics: z.array(z.number()),
-    teamwork: z.array(z.number()),
-    reflexes: z.array(z.number()),
-  }),
-});
-
-const SimulateMobaMatchOutputSchema = z.object({
-  winner: z.string(),
-  seriesScore: z.string(),
-  isTbdWin: z.boolean().optional(),
-  games: z.array(GameStatsSchema),
-});
-export type SimulateMobaMatchOutput = z.infer<typeof SimulateMobaMatchOutputSchema>;
-
-const ROLE_WEIGHTS: Record<string, Record<keyof z.infer<typeof ProStatsSchema>, number>> = {
-  'Carry': { lastHitting: 3.5, positioning: 2.2, reflexes: 1.8, tiltResistance: 1.5, manaManagement: 1.0, mapAwareness: 0.5, objectiveControl: 0.8, communication: 0.5, versatility: 0.7, ganking: 0.3 },
-  'Midlaner': { reflexes: 2.8, ganking: 2.5, lastHitting: 1.8, manaManagement: 1.5, versatility: 1.5, mapAwareness: 1.2, positioning: 1.2, objectiveControl: 1.0, communication: 0.8, tiltResistance: 1.2 },
-  'Tank': { positioning: 2.5, objectiveControl: 2.5, mapAwareness: 2.0, tiltResistance: 2.0, reflexes: 1.0, communication: 1.5, ganking: 1.2, versatility: 1.0, lastHitting: 0.5, manaManagement: 0.8 },
-  'Jungler': { ganking: 3.0, mapAwareness: 2.2, objectiveControl: 2.0, reflexes: 1.8, positioning: 1.0, communication: 1.3, versatility: 1.2, lastHitting: 0.8, manaManagement: 1.0, tiltResistance: 1.0 },
-  'Support': { communication: 3.0, mapAwareness: 2.5, positioning: 2.0, reflexes: 1.5, manaManagement: 1.5, objectiveControl: 1.5, versatility: 1.5, tiltResistance: 1.5, lastHitting: 0.2, ganking: 1.0 },
-};
-
-function calculateTeamPotential(team: z.infer<typeof TeamSchema>) {
-  const activeHeroes = (team.heroes || []).filter(h => !h.isSub).slice(0, 5);
-  let power = 0;
-  const stats = { farm: 0, tactics: 0, teamwork: 0, reflexes: 0 };
-
-  if (activeHeroes.length === 0) return { power: 1, stats, teamOvr: 0 };
-
-  let totalOvr = 0;
-  activeHeroes.forEach(hero => {
-    totalOvr += (hero.overallRating || 10);
-    const weights = ROLE_WEIGHTS[hero.role] || ROLE_WEIGHTS['Midlaner'];
-    
-    // Использование nullish coalescing для корректной обработки 0
-    const formMult = 0.8 + (Number(hero.form ?? 100) / 500); // 0.8 - 1.0
-    const fatigueMult = 0.7 + (Number(hero.fatigue ?? 100) / 333); // 0.7 - 1.0
-    const physicalModifier = formMult * fatigueMult;
-
-    let heroContribution = Number(hero.overallRating || 0) * 1.5;
-
-    if (hero.proStats) {
-      stats.farm += ((hero.proStats.lastHitting || 0) + (hero.proStats.manaManagement || 0)) * physicalModifier;
-      stats.tactics += ((hero.proStats.mapAwareness || 0) + (hero.proStats.objectiveControl || 0)) * physicalModifier;
-      stats.teamwork += ((hero.proStats.communication || 0) + (hero.proStats.versatility || 0) + (hero.proStats.tiltResistance || 0)) * physicalModifier;
-      stats.reflexes += ((hero.proStats.reflexes || 0) + (hero.proStats.ganking || 0) + (hero.proStats.positioning || 0)) * physicalModifier;
-
-      Object.entries(hero.proStats).forEach(([key, val]) => {
-        const weight = weights[key as keyof typeof weights] || 1.0;
-        heroContribution += (Number(val || 0) * weight) * physicalModifier;
-      });
-    }
-
-    if (hero.isPro) heroContribution *= 1.35;
-    power += heroContribution;
-  });
-
-  const count = activeHeroes.length;
-  const coachBonus = Number(team.staffBonus || 0);
-  const analystBonus = Number(team.analystBonus || 0);
-  const infraBonus = Number(team.infraBonus || 0);
-  
-  stats.teamwork += Math.round(coachBonus * 3);
-  stats.tactics += Math.round(analystBonus * 3);
-  stats.farm += Math.round(infraBonus * 5);
-
-  const synergyMultiplier = 1 + (Number(team.synergy || 0) * 0.005);
-  power *= synergyMultiplier;
-  power += (coachBonus * 15) + (analystBonus * 15) + (infraBonus * 12);
-
-  const strat = (team.strategy || "").toLowerCase();
-  if (strat.includes('aggressive')) power *= 1.15; 
-  if (strat.includes('defensive')) power *= 1.08;
-  if (strat.includes('push')) power *= 1.10;
-
-  return { power, stats, teamOvr: Math.round(totalOvr / count) };
-}
-
-function runSingleGame(input: SimulateMobaMatchInput, forcedWinner?: 'A' | 'B'): z.infer<typeof GameStatsSchema> {
-  const isTBDAway = input.teamB.name === 'TBD' || input.teamB.name === 'BYE';
-  
-  const potA = calculateTeamPotential(input.teamA);
-  const potB = calculateTeamPotential(input.teamB);
-
-  if (isTBDAway) {
-    return {
-      scoreA: 1, scoreB: 0, duration: "00:00", mvp: input.teamA.heroes[0]?.name || "None",
-      matchSummary: "Техническая победа (TBD).",
-      towersA: 11, towersB: 0, objectivesA: 5, objectivesB: 0,
-      teamAOvr: potA.teamOvr,
-      teamBOvr: 0,
-      isTechnical: true,
-      timeline: [], scoreboard: [], 
-      teamComparison: { farm: [potA.stats.farm, 0], tactics: [potA.stats.tactics, 0], teamwork: [potA.stats.teamwork, 0], reflexes: [potA.stats.reflexes, 0] }
-    };
-  }
-
-  const winProbA = potA.power / (potA.power + potB.power);
-  let finalWinner: 'A' | 'B';
-
-  if (forcedWinner === 'A') finalWinner = 'A';
-  else if (forcedWinner === 'B') finalWinner = 'B';
-  else {
-    finalWinner = Math.random() < winProbA ? 'A' : 'B';
-  }
-
-  const duration = 28 + Math.floor(Math.random() * 16);
-  const timeline: any[] = [];
-  const scoreboardMap = new Map<string, any>();
-
-  const heroesA = (input.teamA.heroes || []).filter(h => !h.isSub).map(h => ({ ...h, team: input.teamA.name }));
-  const heroesB = (input.teamB.heroes || []).filter(h => !h.isSub).map(h => ({ ...h, team: input.teamB.name }));
-  const allPlayers = [...heroesA, ...heroesB];
-
-  allPlayers.forEach(p => {
-    scoreboardMap.set(p.name, { 
-      id: p.id, name: p.name, team: p.team, role: p.role, image: p.image, 
-      kills: 0, deaths: 0, assists: 0, cs: 0, isPro: p.isPro,
-      matchRating: 6.0
-    });
-  });
-
-  let killsA = 0, killsB = 0;
-  let towersA = finalWinner === 'A' ? 9 + Math.floor(Math.random()*3) : Math.floor(Math.random()*7);
-  let towersB = finalWinner === 'B' ? 9 + Math.floor(Math.random()*3) : Math.floor(Math.random()*7);
-  let objectivesA = 0, objectivesB = 0;
-
-  for (let m = 1; m <= duration; m++) {
-    const isEarly = m < 12;
-    const isLate = m > 25;
-    
-    const activeTeam = Math.random() < winProbA ? input.teamA : input.teamB;
-    const opponentTeam = activeTeam.name === input.teamA.name ? input.teamB : input.teamA;
-    const isAActive = activeTeam.name === input.teamA.name;
-    
-    const heroes = (activeTeam.heroes || []).filter(h => !h.isSub);
-    const targets = (opponentTeam.heroes || []).filter(h => !h.isSub);
-
-    if (heroes.length === 0 || targets.length === 0) continue;
-
-    const actor = heroes[Math.floor(Math.random() * heroes.length)];
-    const target = targets[Math.floor(Math.random() * targets.length)];
-    const roll = Math.random();
-
-    if (isEarly && roll < 0.60 && actor.proStats) {
-      const s = scoreboardMap.get(actor.name);
-      if (s) {
-        const gain = Math.floor((actor.proStats.lastHitting / 10) + 8);
-        s.cs += gain;
-        s.matchRating += 0.04;
-      }
-    } else if (roll > 0.93) {
-      const type = Math.random() > 0.4 ? 'tower' : 'objective';
-      if (type === 'tower') {
-        if (isAActive) towersA++; else towersB++;
-        timeline.push({ time: `${m}:00`, type: 'tower', event: `${activeTeam.name} проводит успешную осаду и уничтожает башню!`, score: `${killsA}:${killsB}` });
-      } else {
-        if (isAActive) objectivesA++; else objectivesB++;
-        timeline.push({ time: `${m}:00`, type: 'objective', event: `${activeTeam.name} забирает ключевой объект. Преимущество по ресурсам растет.`, score: `${killsA}:${killsB}` });
-      }
-      const s = scoreboardMap.get(actor.name);
-      if (s) s.matchRating += 0.5;
-    } else if (roll > 0.75 && actor.proStats && target.proStats) {
-      const actorFormMult = 0.9 + (Number(actor.form || 100) / 1000);
-      const targetFormMult = 0.9 + (Number(target.form || 100) / 1000);
-
-      const atkPower = (actor.proStats.reflexes + actor.proStats.ganking + (actor.overallRating / 5)) * actorFormMult;
-      const defPower = (target.proStats.positioning + target.proStats.mapAwareness + (target.overallRating / 5)) * targetFormMult;
-      const diff = atkPower - defPower;
-      const successChance = 0.40 + (diff / 200);
-
-      if (Math.random() < successChance) {
-        const support = heroes.find(h => h.role === 'Support' || h.role === 'Jungler');
-        if (support && support.proStats && Math.random() < (support.proStats.communication / 250)) {
-           timeline.push({ time: `${m}:00`, type: 'save', event: `Блестящая реакция! ${support.name} спасает ${actor.name} от верной гибели.`, score: `${killsA}:${killsB}` });
-           const ss = scoreboardMap.get(support.name);
-           if (ss) ss.matchRating += 0.7;
-        } else {
-          const s = scoreboardMap.get(actor.name);
-          const st = scoreboardMap.get(target.name);
-          if (s && st) {
-            s.kills++; st.deaths++;
-            s.matchRating += 0.9;
-            st.matchRating -= 0.7;
-            if (isAActive) killsA++; else killsB++;
-            timeline.push({ time: `${m}:00`, type: 'kill', event: `${actor.name} исполняет мастерский маневр и ликвидирует ${target.name}!`, score: `${killsA}:${killsB}` });
-            heroes.filter(h => h.name !== actor.name).slice(0, 2).forEach(ah => {
-              const sa = scoreboardMap.get(ah.name);
-              if (sa) { sa.assists++; sa.matchRating += 0.45; }
-            });
-          }
-        }
-      }
-    }
-
-    if (isLate && roll > 0.95 && actor.proStats && actor.proStats.tiltResistance < 55) {
-      timeline.push({ time: `${m}:00`, type: 'tilt', event: `Нервы на пределе! ${actor.name} допускает позиционную ошибку из-за усталости.`, score: `${killsA}:${killsB}` });
-      const s = scoreboardMap.get(actor.name);
-      if (s) s.matchRating -= 0.6;
-    }
-  }
-
-  const scoreboard = Array.from(scoreboardMap.values()).map(s => ({
-    ...s,
-    matchRating: Math.min(10, Math.max(1, s.matchRating + (s.cs / 300))),
-    kdaRatio: ((s.kills + s.assists) / Math.max(1, s.deaths)).toFixed(2)
-  }));
-
-  const mvp = [...scoreboard].sort((a, b) => b.matchRating - a.matchRating)[0]?.name || "None";
-  const winnerName = finalWinner === 'A' ? input.teamA.name : input.teamB.name;
-  const loserName = finalWinner === 'A' ? input.teamB.name : input.teamA.name;
-  const potW = finalWinner === 'A' ? potA : potB;
-  const potL = finalWinner === 'A' ? potB : potA;
-
-  let reason = 'общем классе исполнителей';
-  if (potW.stats.farm > potL.stats.farm * 1.3) reason = 'контроле ресурсов и колоссальном темпе фарма';
-  else if (potW.stats.tactics > potL.stats.tactics * 1.3) reason = 'безупречной тактической подготовке и контролю карты';
-  else if (potW.stats.teamwork > potL.stats.teamwork * 1.3) reason = 'высочайшей командной синергии и поддержке профессионального персонала';
-  else if (potW.stats.reflexes > potL.stats.reflexes * 1.3) reason = 'индивидуальной реакции героев в критических замесах';
-  else if (potW.teamOvr > potL.teamOvr + 10) reason = 'подавляющем превосходстве в общем уровне подготовки';
-
-  return {
-    scoreA: finalWinner === 'A' ? 1 : 0,
-    scoreB: finalWinner === 'B' ? 1 : 0,
-    duration: `${duration}:00`, mvp,
-    matchSummary: `Победа ${winnerName} (OVR ${potW.teamOvr}) над ${loserName} за счет превосходства в ${reason}.`,
-    towersA, towersB, objectivesA, objectivesB,
-    teamAOvr: potA.teamOvr,
-    teamBOvr: potB.teamOvr,
-    timeline: timeline.slice(0, 45),
-    scoreboard,
-    teamComparison: {
-      farm: [Math.round(potA.stats.farm), Math.round(potB.stats.farm)],
-      tactics: [Math.round(potA.stats.tactics), Math.round(potB.stats.tactics)],
-      teamwork: [Math.round(potA.stats.teamwork), Math.round(potB.stats.teamwork)],
-      reflexes: [Math.round(potA.stats.reflexes), Math.round(potB.stats.reflexes)],
-    }
-  };
-}
-
-export async function simulateMobaMatch(input: SimulateMobaMatchInput): Promise<SimulateMobaMatchOutput> {
-  const games: any[] = [];
-  const numGames = input.isBo3 ? 3 : (input.isBo2 ? 2 : 1);
-  
-  const isTBDAway = input.teamB.name === 'TBD' || input.teamB.name === 'BYE';
-  if (isTBDAway) {
-    const tbdGame = runSingleGame(input);
-    return {
-      winner: input.teamA.name,
-      seriesScore: "2-0",
-      isTbdWin: true,
-      games: [tbdGame, tbdGame]
-    };
-  }
-
-  let winsA = 0, winsB = 0;
-  for (let i = 0; i < numGames; i++) {
-    let forced: 'A' | 'B' | undefined = undefined;
-    if (input.scoreA !== undefined && input.scoreB !== undefined) {
-      if (input.scoreA === 2) forced = 'A';
-      else if (input.scoreB === 2) forced = 'B';
-      else if (input.scoreA === 1 && input.scoreB === 1) forced = i === 0 ? 'A' : 'B';
-    }
-    const g = runSingleGame(input, forced);
-    
-    // Переопределяем резюме для ничьих
-    if (input.isBo2 && i === 1 && ((winsA === 1 && g.scoreB === 1) || (winsB === 1 && g.scoreA === 1))) {
-      g.matchSummary = `Ничья в серии между ${input.teamA.name} и ${input.teamB.name} вследствие равного тактического противостояния.`;
-    }
-    
-    games.push(g);
-    winsA += g.scoreA;
-    winsB += g.scoreB;
-    if (input.isBo3 && (winsA === 2 || winsB === 2)) break;
-  }
-
-  const seriesWinner = winsA > winsB ? input.teamA.name : (winsB > winsA ? input.teamB.name : "Ничья");
-
-  return {
-    winner: seriesWinner,
-    seriesScore: `${winsA}-${winsB}`,
-    games
-  };
-}
-
-const simulateMobaMatchFlow = ai.defineFlow(
-  { name: 'simulateMobaMatchFlow', inputSchema: SimulateMobaMatchInputSchema, outputSchema: SimulateMobaMatchOutputSchema },
-  async input => simulateMobaMatch(input)
+const ProStatsSchema = z.object(
+  Object.fromEntries(PLAYER_SKILL_KEYS.map((skill) => [skill, z.number()])) as Record<PlayerSkillKey, z.ZodNumber>
 );
+const PlayerSchema = z.object({
+  id:z.string().optional(), name:z.string(), role:z.string(), overallRating:z.number(), image:z.string().optional(),
+  isPro:z.boolean().optional(), proStats:ProStatsSchema, isSub:z.boolean().optional(), form:z.number().optional(),
+  fatigue:z.number().optional(), currentRole:z.string().optional(), tilt:z.number().optional(), chemistryMatches:z.number().optional()
+});
+const TeamSchema = z.object({
+  name:z.string(), heroes:z.array(PlayerSchema), strategy:z.string().optional().default('Balanced Play'),
+  infraBonus:z.number().optional(), staffBonus:z.number().optional(), analystBonus:z.number().optional(), synergy:z.number().optional(),
+  tactics:z.any().optional()
+});
+export const SimulateMobaMatchInputSchema = z.object({
+  teamA:TeamSchema, teamB:TeamSchema, isBo2:z.boolean().default(true), isBo3:z.boolean().default(false),
+  scoreA:z.number().optional(), scoreB:z.number().optional(), matchId:z.string().optional()
+});
+export type SimulateMobaMatchInput=z.infer<typeof SimulateMobaMatchInputSchema>;
+
+export async function simulateMobaMatch(input:SimulateMobaMatchInput){
+  const bestOf=input.isBo3?3:(input.isBo2?2:1) as 1|2|3;
+  const result=runMatchEngine({
+    mode: 'friendly',
+    matchId:input.matchId||`compat:${input.teamA.name}:${input.teamB.name}`,
+    teamA:{name:input.teamA.name,players:input.teamA.heroes,strategy:input.teamA.strategy,tactics:input.teamA.tactics,staffBonus:input.teamA.staffBonus,analystBonus:input.teamA.analystBonus,infraBonus:input.teamA.infraBonus,synergy:input.teamA.synergy},
+    teamB:{name:input.teamB.name,players:input.teamB.heroes,strategy:input.teamB.strategy,tactics:input.teamB.tactics,staffBonus:input.teamB.staffBonus,analystBonus:input.teamB.analystBonus,infraBonus:input.teamB.infraBonus,synergy:input.teamB.synergy},
+    bestOf,
+    existingScore:input.scoreA!==undefined&&input.scoreB!==undefined?{a:input.scoreA,b:input.scoreB}:undefined
+  });
+  return {winner:result.winner||'Ничья',seriesScore:result.seriesScore,games:result.games.map(g=>({scoreA:g.homeScore,scoreB:g.awayScore,duration:g.duration,mvp:g.mvp,matchSummary:g.matchSummary,towersA:g.towersA,towersB:g.towersB,objectivesA:g.objectivesA,objectivesB:g.objectivesB,teamAOvr:result.homeOverall,teamBOvr:result.awayOverall,timeline:g.timeline.map(e=>({time:e.minute,event:e.text,type:e.type||'swing',score:e.score})),scoreboard:g.scoreboard,teamComparison:{farm:g.teamComparison.farm,tactics:g.teamComparison.tactics,teamwork:g.teamComparison.teamwork,reflexes:g.teamComparison.reflexes}}))};
+}

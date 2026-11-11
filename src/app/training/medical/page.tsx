@@ -112,18 +112,18 @@ export default function MedicalPage() {
     return Math.min(Math.max((elapsed / total) * 100, 0), 100);
   }, [medical.constructionStarts, medical.constructionFinishes]);
 
-  const handleFacilityUpgrade = () => {
+  const handleFacilityUpgrade = async () => {
     if (!selectedFacility) return;
     const cost = 30000 * (((medical as any)[selectedFacility] || 0) + 1);
-    if (startMedicalConstruction(selectedFacility as any, cost)) {
+    if (await startMedicalConstruction(selectedFacility as any, cost)) {
       toast({ title: language === 'ru' ? "Модернизация начата" : "Upgrade Initiated" });
       setSelectedFacility(null);
     }
   };
 
-  const handleAccelerate = (multiplier: number, price: number) => {
+  const handleAccelerate = async (multiplier: number) => {
     if (!acceleratingFacility) return;
-    if (accelerateConstruction('medical', acceleratingFacility, multiplier, price)) {
+    if (await accelerateConstruction('medical', acceleratingFacility, multiplier, ACCEL_CREWS.find(c => c.multiplier === multiplier)?.price || 0)) {
       toast({ title: language === 'ru' ? "Медицина ускорена!" : "Medical Rushed!" });
       setAcceleratingFacility(null);
     } else {
@@ -256,7 +256,7 @@ export default function MedicalPage() {
             </div>
             <div className="p-4 space-y-2">
               {ACCEL_CREWS.map((crew) => (
-                <Card key={crew.id} className="glass-card border-white/5 hover:border-orange-500/30 cursor-pointer transition-all" onClick={() => handleAccelerate(crew.multiplier, crew.price)}>
+                <Card key={crew.id} className="glass-card border-white/5 hover:border-orange-500/30 cursor-pointer transition-all" onClick={() => handleAccelerate(crew.multiplier)}>
                   <CardContent className="p-4 flex items-center justify-between">
                     <div>
                       <h4 className="text-xs font-bold uppercase text-white">{language === 'ru' ? crew.labelRu : crew.labelEn}</h4>

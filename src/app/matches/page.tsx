@@ -6,7 +6,7 @@ import { useRouter } from 'next/navigation';
 import { useGameState } from '../lib/store';
 import { 
   ChevronLeft, CalendarClock, History, Swords, 
-  ChevronRight, clock as Clock, Target, LayoutList, ListChecks,
+  ChevronRight, Clock, Target, LayoutList, ListChecks,
   Shield, Timer, RefreshCw
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -28,7 +28,7 @@ export default function MatchesPage() {
   const { 
     isLoaded, language,
     selectedLeagueId, leagueLevel, groupId,
-    clubLogo: myClubLogo, seasonNumber
+    clubLogo: myClubLogo, seasonNumber, matchHistory, rank
   } = useGameState();
   
   const [view, setView] = useState<MatchView>('menu');
@@ -58,12 +58,46 @@ export default function MatchesPage() {
       where('leagueId', '==', selectedLeagueId),
       where('level', '==', leagueLevel),
       where('groupId', '==', groupId),
-      where('season', '==', seasonNumber),
-      where('version', '==', 140)
+      where('season', '==', seasonNumber)
     );
   }, [db, selectedLeagueId, leagueLevel, groupId, seasonNumber]);
 
   const { data: fixedMatches, isLoading: isMatchesLoading } = useCollection(groupMatchesQuery);
+
+  // Все завершённые матчи конкретного менеджера, включая товарищеские.
+  // Friendly-отчёты не имеют leagueId/level/groupId, поэтому они не попадают
+  // в официальный groupMatchesQuery и должны загружаться отдельно.
+  const myHomeMatchesQuery = useMemoFirebase(() => {
+    if (!db || !user?.uid) return null;
+    return query(collection(db, 'matches_v2'), where('homeId', '==', user.uid), where('isFinished', '==', true));
+  }, [db, user?.uid]);
+  const myAwayMatchesQuery = useMemoFirebase(() => {
+    if (!db || !user?.uid) return null;
+    return query(collection(db, 'matches_v2'), where('awayId', '==', user.uid), where('isFinished', '==', true));
+  }, [db, user?.uid]);
+  const { data: myHomeMatches, isLoading: isHomeHistoryLoading } = useCollection(myHomeMatchesQuery);
+  const { data: myAwayMatches, isLoading: isAwayHistoryLoading } = useCollection(myAwayMatchesQuery);
+
+  const friendlyHostQuery = useMemoFirebase(() => user?.uid && db ? query(collection(db, 'friendly_matches_v1'), where('hostId', '==', user.uid)) : null, [db, user?.uid]);
+  const friendlyAwayQuery = useMemoFirebase(() => user?.uid && db ? query(collection(db, 'friendly_matches_v1'), where('challengerId', '==', user.uid)) : null, [db, user?.uid]);
+  const cupHomeQuery = useMemoFirebase(() => user?.uid && db ? query(collection(db, 'cup_matches'), where('homeId', '==', user.uid)) : null, [db, user?.uid]);
+  const cupAwayQuery = useMemoFirebase(() => user?.uid && db ? query(collection(db, 'cup_matches'), where('awayId', '==', user.uid)) : null, [db, user?.uid]);
+  const tournamentHomeQuery = useMemoFirebase(() => user?.uid && db ? query(collection(db, 'tournament_matches_v1'), where('homeId', '==', user.uid)) : null, [db, user?.uid]);
+  const tournamentAwayQuery = useMemoFirebase(() => user?.uid && db ? query(collection(db, 'tournament_matches_v1'), where('awayId', '==', user.uid)) : null, [db, user?.uid]);
+  const trainingHomeQuery = useMemoFirebase(() => user?.uid && db ? query(collection(db, 'training_matches_v1'), where('homeId', '==', user.uid)) : null, [db, user?.uid]);
+  const trainingAwayQuery = useMemoFirebase(() => user?.uid && db ? query(collection(db, 'training_matches_v1'), where('awayId', '==', user.uid)) : null, [db, user?.uid]);
+  const associationHostQuery = useMemoFirebase(() => user?.uid && db ? query(collection(db, 'association_matches_v1'), where('hostId', '==', user.uid)) : null, [db, user?.uid]);
+  const associationChallengerQuery = useMemoFirebase(() => user?.uid && db ? query(collection(db, 'association_matches_v1'), where('challengerId', '==', user.uid)) : null, [db, user?.uid]);
+  const { data: friendlyHostMatches } = useCollection(friendlyHostQuery);
+  const { data: friendlyAwayMatches } = useCollection(friendlyAwayQuery);
+  const { data: cupHomeMatches } = useCollection(cupHomeQuery);
+  const { data: cupAwayMatches } = useCollection(cupAwayQuery);
+  const { data: tournamentHomeMatches } = useCollection(tournamentHomeQuery);
+  const { data: tournamentAwayMatches } = useCollection(tournamentAwayQuery);
+  const { data: trainingHomeMatches } = useCollection(trainingHomeQuery);
+  const { data: trainingAwayMatches } = useCollection(trainingAwayQuery);
+  const { data: associationHostMatches } = useCollection(associationHostQuery);
+  const { data: associationChallengerMatches } = useCollection(associationChallengerQuery);
 
   const t = {
     ru: {
@@ -120,8 +154,8 @@ export default function MatchesPage() {
     const isLive = isMatchLive(m.startTime);
     const isFinished = m.isFinished;
     const myRank = players?.find(p => p.id === user?.uid)?.rank || 0;
-    const isMeHome = Number(m.homeRank) === Number(myRank);
-    const isMeAway = Number(m.awayRank) === Number(myRank);
+    const isMeHome = Number(m.homeRank) === Number(myRank) || m.homeId === user?.uid;
+    const isMeAway = Number(m.awayRank) === Number(myRank) || m.awayId === user?.uid;
 
     return (
       <Card key={m.id || idx} className={cn(
@@ -132,10 +166,10 @@ export default function MatchesPage() {
         <CardContent className="p-3">
           <div className="flex justify-between items-center mb-3">
              <Badge variant="outline" className="text-[7px] font-black h-4 px-1.5 uppercase border-white/10 opacity-70">
-                {t.tour} {m.tour}
+                {m.tour ? `${t.tour} ${m.tour}` : ((m.type || 'MATCH').toUpperCase())}
              </Badge>
              <span className="text-[8px] font-mono font-bold text-muted-foreground">
-               {new Date(m.startTime).toLocaleString([], { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+               {new Date(m.startTime || m.playedAt || m.resolvedAt || Date.now()).toLocaleString([], { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
              </span>
           </div>
           <div className="grid grid-cols-[1fr_40px_1fr] items-center gap-2">
@@ -176,7 +210,7 @@ export default function MatchesPage() {
   };
 
   const renderContent = () => {
-    if (isMatchesLoading) {
+    if (isMatchesLoading || isHomeHistoryLoading || isAwayHistoryLoading) {
       return (
         <div className="py-20 flex flex-col items-center justify-center space-y-4 opacity-50">
           <RefreshCw className="w-8 h-8 animate-spin text-primary" />
@@ -213,11 +247,16 @@ export default function MatchesPage() {
           </div>
         );
       case 'my_history':
-        const myHistory = allMatches.filter(m => (Number(m.homeRank) === Number(myRank) || Number(m.awayRank) === Number(myRank)) && m.isFinished).reverse();
+        const leagueHistory = allMatches.filter(m => (Number(m.homeRank) === Number(myRank) || Number(m.awayRank) === Number(myRank) || m.homeId === user?.uid || m.awayId === user?.uid) && m.isFinished);
+        const personalHistory = [...(myHomeMatches || []), ...(myAwayMatches || []), ...(friendlyHostMatches || []), ...(friendlyAwayMatches || []), ...(cupHomeMatches || []), ...(cupAwayMatches || []), ...(tournamentHomeMatches || []), ...(tournamentAwayMatches || []), ...(trainingHomeMatches || []), ...(trainingAwayMatches || []), ...(associationHostMatches || []), ...(associationChallengerMatches || [])].filter((m: any) => m?.isFinished === true);
+        const extraHistory = (matchHistory || []).filter((m: any) => m?.isFinished !== false && (m.homeId === user?.uid || m.awayId === user?.uid || m.source === 'history'));
+        const historyMap = new Map<string, any>();
+        [...leagueHistory, ...personalHistory, ...extraHistory].forEach((m: any) => { if (m?.id) historyMap.set(m.id, m); });
+        const myHistory = [...historyMap.values()].sort((a, b) => new Date(b.playedAt || b.resolvedAt || b.startTime || 0).getTime() - new Date(a.playedAt || a.resolvedAt || a.startTime || 0).getTime());
         return (
           <div className="animate-in fade-in">
             <Button variant="ghost" size="sm" onClick={() => setView('menu')} className="mb-4 h-8 text-[10px] font-bold uppercase text-primary"><ChevronLeft className="w-4 h-4 mr-1" /> {t.backToMenu}</Button>
-            {myHistory.map((m, i) => renderMatchCard(m, i))}
+            {myHistory.length ? myHistory.map((m, i) => renderMatchCard(m, i)) : <div className="py-20 text-center opacity-30 uppercase font-black text-[10px]">НЕТ ЗАВЕРШЕННЫХ МАТЧЕЙ</div>}
           </div>
         );
       case 'league_history':

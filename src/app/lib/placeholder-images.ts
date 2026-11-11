@@ -1,11 +1,7 @@
 import data from './placeholder-images.json';
+import type { ImagePlaceholder } from '@/lib/placeholder-image-types';
 
-export type ImagePlaceholder = {
-  id: string;
-  description: string;
-  imageUrl: string;
-  imageHint: string;
-};
+export type { ImagePlaceholder } from '@/lib/placeholder-image-types';
 
 /**
  * Exported placeholder images array.

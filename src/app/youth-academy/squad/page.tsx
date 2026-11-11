@@ -2,6 +2,8 @@
 
 import { useState, useEffect } from 'react';
 import { useGameState } from '../../lib/store';
+import { listYouthPlayerOnMarketAction } from '@/app/actions/pro-market';
+import { runWithFreshIdToken } from '@/lib/client-auth-action';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
@@ -15,12 +17,12 @@ import {
 import { cn } from '@/lib/utils';
 import { Player } from '../../lib/moba-data';
 import Link from 'next/link';
-import { calculateLiveAge, getMoscowDateString, getMoscowTime } from '@/app/lib/time-utils';
+import { calculateLiveAge } from '@/app/lib/time-utils';
 import { useToast } from '@/hooks/use-toast';
-import { useUser, useFirestore, useDoc, useMemoFirebase } from '@/firebase';
-import { doc, setDoc } from 'firebase/firestore';
+import { useUser, useAuth, useFirestore, useDoc, useMemoFirebase } from '@/firebase';
+import { doc } from 'firebase/firestore';
 import { LoadingScreen } from '@/components/game/LoadingScreen';
-import { renderStars, STAT_KEYS } from '@/app/transfers/quick-search/page';
+import { renderStars, STAT_KEYS } from '@/components/game/transfer-stats';
 
 const normTalent = (val: any) => {
   const n = Number(val);
@@ -29,8 +31,9 @@ const normTalent = (val: any) => {
 };
 
 export default function YouthSquadPage() {
-  const { youthAcademyPlayers, language, isLoaded, promoteYouthPlayer, updatePlayer, displayName } = useGameState();
+  const { youthAcademyPlayers, language, isLoaded, promoteYouthPlayer, displayName } = useGameState();
   const { user, isUserLoading } = useUser();
+  const auth = useAuth();
   const db = useFirestore();
   const { toast } = useToast();
   
@@ -43,8 +46,8 @@ export default function YouthSquadPage() {
     return () => clearInterval(timer);
   }, []);
 
-  // Use players_v13 for active profile
-  const userRef = useMemoFirebase(() => (user?.uid ? doc(db, 'players_v13', user.uid) : null), [db, user?.uid]);
+  // Use the canonical players_v14 profile for the active manager
+  const userRef = useMemoFirebase(() => (user?.uid && db ? doc(db, 'players_v14', user.uid) : null), [db, user?.uid]);
   const { data: profile } = useDoc(userRef);
 
   const rolesRu: Record<string, string> = {
@@ -99,14 +102,11 @@ export default function YouthSquadPage() {
     if (!selectedPlayer || !user || !profile || isTransferring) return;
     setIsTransferring(true);
     try {
-      const today = getMoscowDateString();
-      const mskNow = getMoscowTime();
-      const expiryTime = new Date(mskNow.getTime() + 12 * 60 * 60 * 1000); 
-      const startPrice = Math.floor((selectedPlayer.overallRating * 5000) + 25000);
-      const agentId = `youth_${user.uid}_${Date.now()}`;
-      const agentData = { id: agentId, heroData: JSON.parse(JSON.stringify(selectedPlayer)), currentBid: startPrice, startingPrice: startPrice, highestBidderId: null, highestBidderName: null, bidders: [], sellerId: user.uid, sellerName: profile.displayName || "Manager", expiresAt: expiryTime.toISOString(), dropDate: today, dropTime: mskNow.toISOString(), isYouth: true };
-      await setDoc(doc(db, 'market_v7', agentId), agentData);
-      updatePlayer(selectedPlayer.id, { onTransferUntil: expiryTime.toISOString(), transferMarketId: agentId });
+      if (!db) throw new Error('DATABASE_NOT_READY');
+      const result = await runWithFreshIdToken(auth, user, (idToken) =>
+        listYouthPlayerOnMarketAction(idToken, selectedPlayer.id)
+      );
+      if (!result.success) throw new Error(result.error || 'YOUTH_MARKET_LIST_FAILED');
       toast({ title: language === 'ru' ? "Выставлен на рынок" : "Listed on Market" });
       setSelectedPlayer(null);
     } catch (e: any) {
@@ -254,7 +254,7 @@ export default function YouthSquadPage() {
 
               <div className="pt-4 pb-12 flex flex-col gap-2">
                 <div className="grid grid-cols-2 gap-2">
-                  <Button variant="outline" className="h-14 border-primary/20 bg-primary/10 text-primary font-bold uppercase text-[10px]" onClick={handleTransfer} disabled={isTransferring || (selectedPlayer.onTransferUntil && new Date(selectedPlayer.onTransferUntil) > now)}>{isTransferring ? <Loader2 className="animate-spin mr-2" /> : <ShoppingCart className="w-4 h-4 mr-2" />} {language === 'ru' ? 'РЫНОК' : 'MARKET'}</Button>
+                  <Button variant="outline" className="h-14 border-primary/20 bg-primary/10 text-primary font-bold uppercase text-[10px]" onClick={handleTransfer} disabled={isTransferring || (Boolean(selectedPlayer.onTransferUntil && new Date(selectedPlayer.onTransferUntil).getTime() > now))}>{isTransferring ? <Loader2 className="animate-spin mr-2" /> : <ShoppingCart className="w-4 h-4 mr-2" />} {language === 'ru' ? 'РЫНОК' : 'MARKET'}</Button>
                   <Button className="h-14 hero-gradient font-black uppercase text-[10px] shadow-xl" onClick={() => handlePromote(selectedPlayer.id)} disabled={liveAge.numeric < 18}>
                     <ArrowUpCircle className="w-4 h-4 mr-2" /> {liveAge.numeric < 18 ? t.notReady : (language === 'ru' ? 'В ОСНОВУ' : 'PROMOTE')}
                   </Button>
@@ -275,7 +275,7 @@ export default function YouthSquadPage() {
       </header>
       <div className="space-y-1.5">
         {youthAcademyPlayers.length > 0 ? youthAcademyPlayers.map((player) => {
-          const liveAge = calculateLiveAge(player.baseAge, player.hiredAt);
+          const liveAge = calculateLiveAge(player.baseAge, player.hiredAt, player.birthDate);
           const onAuction = player.onTransferUntil && new Date(player.onTransferUntil).getTime() > now;
           const talentsValues = Object.values(player.proTalents || {}).map(v => normTalent(v));
           const maxTalent = Math.max(...talentsValues);
@@ -293,7 +293,7 @@ export default function YouthSquadPage() {
                   </div>
                   <div className="flex items-center gap-2 mt-0.5">
                     {renderStars(maxTalent)}
-                    <p className="text-[7px] text-muted-foreground font-black uppercase tracking-widest">{language === 'ru' ? 'Возраст' : 'Age'}: {calculateLiveAge(player.baseAge, player.hiredAt).display} {t.years}</p>
+                    <p className="text-[7px] text-muted-foreground font-black uppercase tracking-widest">{language === 'ru' ? 'Возраст' : 'Age'}: {calculateLiveAge(player.baseAge, player.hiredAt, player.birthDate).display} {t.years}</p>
                   </div>
                 </div>
                 <div className="text-right border-l border-white/5 pl-2 min-w-[35px]">

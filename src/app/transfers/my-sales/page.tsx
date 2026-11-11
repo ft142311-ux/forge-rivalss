@@ -9,7 +9,7 @@ import Link from 'next/link';
 import { useUser, useFirestore, useCollection, useMemoFirebase, useDoc } from '@/firebase';
 import { collection, query, where, doc } from 'firebase/firestore';
 import { LoadingScreen } from '@/components/game/LoadingScreen';
-import { TransferPlayerCard } from '../quick-search/page';
+import { TransferPlayerCard } from '@/components/game/TransferPlayerCard';
 import { getMoscowTime } from '@/app/lib/time-utils';
 
 export default function MySalesPage() {

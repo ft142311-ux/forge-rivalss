@@ -1,11 +1,12 @@
-'use server';
+import 'server-only';
+
 
 /**
  * Скрипт Абсолютного Сброса v141 (Admin SDK Transition).
  */
 
 import { FieldValue } from 'firebase-admin/firestore';
-import { adminDb } from '@/lib/firebase-admin';
+import { getAdminDb } from '@/lib/firebase-admin';
 import { initializeLeagueWorld } from './world-engine';
 import { getActiveSeasonNumber } from './season-cycle';
 
@@ -13,7 +14,7 @@ const DELETE_BATCH_SIZE = 500;
 const WIPE_LOOPS_PER_CALL = 3;
 
 export async function runGlobalEmergencyRepair() {
-  const db = adminDb;
+  const db = getAdminDb();
   const seasonNum = await getActiveSeasonNumber(db);
   const leagueId = "ALPHA";
 
@@ -21,14 +22,20 @@ export async function runGlobalEmergencyRepair() {
   const repairSnap = await repairStatusRef.get();
   const repairData = repairSnap.exists ? repairSnap.data()! : { phase: 'TOTAL_PURGE_V2' };
 
+  // Backward compatibility for an emulator repair state created by an older patch.
+  // Legacy player collections are no longer part of the repair pipeline.
+  if (repairData.phase === 'TOTAL_PURGE_PLAYERS') {
+    await repairStatusRef.set({ phase: 'WIPE_SOCIAL' }, { merge: true });
+    repairData.phase = 'WIPE_SOCIAL';
+  }
+
   if (repairData.phase === 'COMPLETED') {
     return { status: 'ALL_READY', msg: 'System stable.', progress: '100%' };
   }
 
   const WIPE_PHASES = [
     { phase: 'TOTAL_PURGE_V2', colls: ['league_tables_v2', 'matches_v2'], next: 'TOTAL_PURGE_V1' },
-    { phase: 'TOTAL_PURGE_V1', colls: ['league_tables_v1', 'matches_v1'], next: 'TOTAL_PURGE_PLAYERS' },
-    { phase: 'TOTAL_PURGE_PLAYERS', colls: ['players_v13', 'players_v12', 'players_v11'], next: 'WIPE_SOCIAL' },
+    { phase: 'TOTAL_PURGE_V1', colls: ['league_tables_v1', 'matches_v1'], next: 'WIPE_SOCIAL' },
     { phase: 'WIPE_SOCIAL', colls: ['global_chat_v2', 'friend_requests_v4', 'market_v7'], next: 'INIT_WORLD_V140' }
   ];
 
@@ -75,7 +82,7 @@ export async function runGlobalEmergencyRepair() {
         finishedAt: FieldValue.serverTimestamp() 
       }, { merge: true });
     }
-    return { status: 'BUILDING_WORLD', progress: worldRes.progress };
+    return { status: 'BUILDING_WORLD', progress: 'progress' in worldRes ? worldRes.progress : worldRes.error || 'Building season world' };
   }
 
   return { status: 'UNKNOWN' };

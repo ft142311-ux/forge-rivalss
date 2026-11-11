@@ -24,94 +24,41 @@ export default function SynergyPage() {
   const { matchHistory, language, isLoaded, lineup, ownedPlayers } = useGameState();
 
   // Strictly use players_v14
-  const userRef = useMemoFirebase(() => user ? doc(db, 'players_v14', user.uid) : null, [db, user]);
+  const userRef = useMemoFirebase(() => user ? db && user ? doc(db, 'players_v14', user.uid) : null : null, [db, user]);
   const { data: profile } = useDoc(userRef);
 
-  // Расчет общей статистики матчей для сыгранности
+  // Сыгранность считается только по официальным клубным матчам.
+  // Товарищеские матчи и турниры не увеличивают этот счётчик.
+  const corePlayers = useMemo(() => {
+    const coreIds = (['carry', 'mid', 'offlane', 'support', 'full_support'] as LineupSlot[]).map(slot => lineup[slot]).filter(Boolean);
+    return coreIds.map(id => ownedPlayers.find(p => p.id === id)).filter(Boolean) as any[];
+  }, [lineup, ownedPlayers]);
+
   const matchStats = useMemo(() => {
-    if (!profile) return { official: 0, unofficial: 0, total: 0 };
-    
-    const regDate = profile.createdAt ? new Date(profile.createdAt).getTime() : 0;
+    const officialByPlayer = corePlayers.map(p => Math.max(0, Number(p.chemistryMatches || 0)));
+    const official = officialByPlayer.length ? Math.round(officialByPlayer.reduce((a, b) => a + b, 0) / officialByPlayer.length) : 0;
+    return { official, unofficial: 0, total: official };
+  }, [corePlayers]);
 
-    let official = 0;
-    let unofficial = 0;
+  const synergyValue = useMemo(() => Math.min(100, (matchStats.official / 20) * 100), [matchStats.official]);
+  const synergyDisplay = synergyValue.toFixed(0);
 
-    matchHistory.forEach(m => {
-      const playedDate = m.playedAt ? new Date(m.playedAt).getTime() : 0;
-      if (playedDate < regDate) return;
-      
-      const isRealMatch = m.opponentName !== 'SEEDED' && m.opponentName !== 'WAITING';
-      if (!isRealMatch) return;
-
-      if (m.type === 'league' || m.type === 'tournament') {
-        official++;
-      } else if (m.type === 'friendly' || m.type === 'basket' || m.type === 'trial') {
-        unofficial++;
-      }
-    });
-
-    return { official, unofficial, total: official + unofficial };
-  }, [matchHistory, profile]);
-
-  // Список ВСЕХ игроков состава с их статистикой
   const squadPlayers = useMemo(() => {
-    if (!profile) return [];
-    const regDate = profile.createdAt ? new Date(profile.createdAt).getTime() : 0;
-    
-    // Все возможные слоты состава
-    const allSlots: LineupSlot[] = [
-      'carry', 'mid', 'offlane', 'support', 'full_support',
-      'sub_carry', 'sub_mid', 'sub_offlane', 'sub_support', 'sub_full_support',
-      'res1', 'res2', 'res3', 'res4', 'res5', 'res6', 'res7', 'res8'
-    ];
-
+    const allSlots: LineupSlot[] = ['carry','mid','offlane','support','full_support','sub_carry','sub_mid','sub_offlane','sub_support','sub_full_support','res1','res2','res3','res4','res5','res6','res7','res8'];
     return allSlots.map(slot => {
       const pId = lineup[slot];
       const player = ownedPlayers.find(p => p.id === pId);
       if (!player) return null;
-
-      let pOfficial = 0;
-      let pTraining = 0;
-
-      matchHistory.forEach(match => {
-        const playedDate = match.playedAt ? new Date(match.playedAt).getTime() : 0;
-        if (playedDate < regDate) return;
-        
-        // Проверяем участие игрока в конкретном матче через scoreboard
-        const performance = match.simulation?.games?.[0]?.scoreboard?.find((p: any) => p.name === player.name);
-        if (performance) {
-          if (match.type === 'league' || match.type === 'tournament') {
-            pOfficial++;
-          } else {
-            pTraining++;
-          }
-        }
-      });
-
-      return { 
-        ...player, 
-        clubMatches: pOfficial + pTraining, 
-        officialMatches: pOfficial,
-        trainingMatches: pTraining,
-        slotLabel: slot,
-        isCore: ['carry', 'mid', 'offlane', 'support', 'full_support'].includes(slot)
-      };
+      const officialMatches = Math.max(0, Number((player as any).chemistryMatches || 0));
+      return { ...player, clubMatches: officialMatches, officialMatches, trainingMatches: 0, slotLabel: slot, isCore: ['carry','mid','offlane','support','full_support'].includes(slot), playerSynergy: Math.min(100, officialMatches / 20 * 100) };
     }).filter(Boolean);
-  }, [lineup, ownedPlayers, matchHistory, profile]);
-
-  // Точный расчет сыгранности: 2% за оф. матч, 0.01% за тренировку
-  const synergyValue = useMemo(() => {
-    const raw = (matchStats.official * 2) + (matchStats.unofficial * 0.01);
-    return Math.min(100, raw);
-  }, [matchStats]);
-
-  const synergyDisplay = synergyValue.toFixed(2).replace('.', ',');
+  }, [lineup, ownedPlayers]);
 
   const t = {
     title: language === 'ru' ? "СЫГРАННОСТЬ" : "TEAM SYNERGY",
     subtitle: language === 'ru' ? "Протокол командного взаимодействия" : "Tactical cohesion protocol",
     mainCard: language === 'ru' ? "УРОВЕНЬ СВЯЗИ ОСНОВЫ" : "CORE COHESION LEVEL",
-    officialOnly: language === 'ru' ? "Учитываются все игры Core 5 после регистрации" : "All Core 5 games post-registration considered",
+    officialOnly: language === 'ru' ? "Учитываются только официальные клубные матчи" : "20 official club matches = 100%",
     league: language === 'ru' ? "Оф. Матчи" : "Official",
     cup: language === 'ru' ? "Тренировки" : "Practice",
     total: language === 'ru' ? "Всего игр" : "Total",
@@ -120,8 +67,8 @@ export default function SynergyPage() {
     offShort: language === 'ru' ? "ОФ" : "OFF",
     trnShort: language === 'ru' ? "ТРН" : "TRN",
     desc: language === 'ru' 
-      ? "Сыгранность рассчитывается на основе совместных выступлений основной пятерки. Официальные игры (Лига/Кубок) дают 2%, тренировочные (КВ/Тов/Пробные) дают 1% за каждые 100 матчей."
-      : "Synergy is calculated based on core five appearances. Official games (League/Cup) grant 2% each, while practice (CW/Friendly/Trial) grant 1% per 100 matches.",
+      ? "Сыгранность рассчитывается на основе совместных выступлений основной пятерки. До 20 официальных матчей сыгранность растёт до 100%. Товарищеские матчи и турниры её не увеличивают."
+      : "Synergy is calculated based on core five appearances. Up to 20 official club matches raise synergy to 100%. Friendlies and tournaments do not increase it.",
     levels: [
       { min: 0, label: language === 'ru' ? "Начальный" : "Initial", color: "text-muted-foreground" },
       { min: 10, label: language === 'ru' ? "Низкий" : "Low", color: "text-red-400" },

@@ -3,10 +3,10 @@
  */
 
 export const firebaseConfig = {
-  projectId: "studio-2788872209-f7092",
-  appId: "1:680539014052:web:3fafccf090ba18376d7731",
+  projectId: "demo-forge-rivals",
+  appId: "1:000000000000:web:forgerivalslocal",
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY!,
-  authDomain: "studio-2788872209-f7092.firebaseapp.com",
+  authDomain: "demo-forge-rivals.firebaseapp.com",
   measurementId: "",
-  messagingSenderId: "680539014052"
+  messagingSenderId: "000000000000"
 };

@@ -11,8 +11,6 @@ environmentVariables:
   - variable: SYSTEM_ACCOUNT_PASSWORD
     secret: SYSTEM_ACCOUNT_PASSWORD
   - variable: CRON_SECRET
-    value: lote_secure_cron_token_2026
+    secret: CRON_SECRET
   - variable: NEXT_PUBLIC_FIREBASE_API_KEY
     value: AIzaSyDk-5jCdodI_Any76Jq2jiS3F_0DJBMnuo
-  - variable: NEXT_PUBLIC_TELEGRAM_SALT
-    value: lote_secure_salt_2026_v1

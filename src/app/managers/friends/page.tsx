@@ -257,7 +257,7 @@ export default function FriendsListPage() {
         )}
       </div>
 
-      <Dialog open={!!selectedFriend && !showGiftModal} onOpenChange={setSelectedFriend}>
+      <Dialog open={!!selectedFriend && !showGiftModal} onOpenChange={(open) => { if (!open) setSelectedFriend(null); }}>
         <DialogContent className="max-w-md bg-background border-white/10 p-0 overflow-hidden shadow-2xl">
           <div className="p-6 bg-gradient-to-br from-primary/10 to-transparent border-b border-white/5">
             <div className="flex items-center gap-4">

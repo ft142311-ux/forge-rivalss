@@ -20,8 +20,12 @@ import { LoadingScreen } from '@/components/game/LoadingScreen';
 import { Badge } from '@/components/ui/badge';
 import { useToast } from '@/hooks/use-toast';
 import { useUser, useFirestore, useCollection, useMemoFirebase, useDoc } from '@/firebase';
-import { updateDocumentNonBlocking, setDocumentNonBlocking } from '@/firebase/non-blocking-updates';
-import { collection, query, doc, serverTimestamp, arrayUnion, arrayRemove, writeBatch } from 'firebase/firestore';
+import { collection, query, doc } from 'firebase/firestore';
+import {
+  createAssociationAction, requestAssociationMembershipAction, cancelAssociationRequestAction,
+  processAssociationRequestAction, leaveAssociationAction, kickAssociationMemberAction,
+  setAssociationDeputyAction, disbandAssociationAction,
+} from '@/app/actions/associations';
 import {
   Dialog,
   DialogContent,
@@ -47,8 +51,23 @@ interface AssocNews {
   timestamp: string;
 }
 
+/** Normalize legacy association request fields before using array operations.
+ * Firestore data can contain either the expected array or an older object map.
+ */
+function getAssocRequests(assoc: any): any[] {
+  const requests = assoc?.requests;
+  if (Array.isArray(requests)) return requests.filter((request: any) => request && typeof request === 'object');
+  if (!requests || typeof requests !== 'object') return [];
+
+  return Object.entries(requests).flatMap(([key, value]) => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
+    const request = value as Record<string, any>;
+    return [{ ...request, uid: typeof request.uid === 'string' && request.uid ? request.uid : key }];
+  });
+}
+
 export default function AssociationPage() {
-  const { language, isLoaded, crystals, addCrystals, activeLicenseTier, isPremium } = useGameState();
+  const { language, isLoaded, crystals, activeLicenseTier, isPremium } = useGameState();
   const { user, isUserLoading } = useUser();
   const db = useFirestore();
   const router = useRouter();
@@ -96,7 +115,7 @@ export default function AssociationPage() {
 
   const userPendingAssoc = useMemo(() => {
     if (!user || !allAssocs) return null;
-    return allAssocs.find(a => a.requests?.some((r: any) => r.uid === user.uid)) || null;
+    return allAssocs.find(a => getAssocRequests(a).some((r: any) => r.uid === user.uid)) || null;
   }, [allAssocs, user]);
 
   const browsedAssoc = useMemo(() => {
@@ -212,212 +231,110 @@ export default function AssociationPage() {
     );
   }
 
-  const handleCreateAssoc = async () => {
-    if (!canCreate) return;
-    if (!user || !profile || isProcessing) return;
-    if (currentAssocId || userPendingAssoc) return;
-    if (crystals < 500) return;
-    if (assocName.trim().length < 3) return;
-
+  const withAssociationAction = async (action: () => Promise<{ success: boolean; error?: string }>, successTitle: string) => {
+    if (isProcessing) return false;
     setIsProcessing(true);
     try {
-      const assocId = `assoc_${Date.now()}`;
-      const assocRef = doc(db, 'associations_v4', assocId);
-      const nowIso = new Date().toISOString();
-      
-      const assocData = {
-        id: assocId,
-        name: assocName.trim(),
-        description: assocDesc.trim(),
-        ownerId: user.uid,
-        ownerName: profile.displayName || "Manager",
-        deputyId: null,
-        members: [user.uid],
-        memberNames: [profile.displayName || "Manager"],
-        membersData: [{ uid: user.uid, name: profile.displayName || "Manager", joinedAt: nowIso, role: 'owner' }],
-        requests: [],
-        news: [{ type: 'join', userName: profile.displayName || "Manager", timestamp: nowIso }],
-        level: 1,
-        createdAt: serverTimestamp()
+      const result = await action();
+      if (!result.success) throw new Error(result.error || 'ASSOCIATION_ACTION_FAILED');
+      toast({ title: successTitle });
+      return true;
+    } catch (error: any) {
+      const code = String(error?.message || 'ASSOCIATION_ACTION_FAILED');
+      const localized: Record<string, string> = {
+        INSUFFICIENT_CRYSTALS: language === 'ru' ? 'Недостаточно кристаллов' : 'Insufficient crystals',
+        INSUFFICIENT_FUNDS: language === 'ru' ? 'Недостаточно средств' : 'Insufficient funds',
+        ASSOCIATION_JOIN_COOLDOWN: language === 'ru' ? 'Действует ограничение на вступление' : 'Join cooldown is active',
+        ASSOCIATION_LEAVE_COOLDOWN: language === 'ru' ? 'Пока нельзя покинуть ассоциацию' : 'Leave cooldown is active',
+        CREATE_LICENSE_REQUIRED: language === 'ru' ? 'Требуется лицензия S или Premium' : 'S-tier license or Premium required',
+        JOIN_LICENSE_REQUIRED: language === 'ru' ? 'Требуется лицензия B или Premium' : 'B-tier license or Premium required',
       };
-
-      setDocumentNonBlocking(assocRef, assocData);
-      updateDocumentNonBlocking(userRef!, { 
-        associationId: assocId,
-        lastJoinedAssocAt: nowIso 
-      });
-      addCrystals(-500);
-
-      toast({ title: language === 'ru' ? "Ассоциация создана!" : "Association Established!" });
-      setActiveTab('my_assoc');
+      toast({ title: language === 'ru' ? 'Операция не выполнена' : 'Action failed', description: localized[code] || code, variant: 'destructive' });
+      return false;
     } finally {
       setIsProcessing(false);
     }
+  };
+
+  const handleCreateAssoc = async () => {
+    if (!canCreate || !user || !profile || currentAssocId || userPendingAssoc || !canJoinNew || assocName.trim().length < 3) return;
+    const ok = await withAssociationAction(
+      async () => createAssociationAction(await user.getIdToken(), assocName, assocDesc),
+      language === 'ru' ? 'Ассоциация создана!' : 'Association Established!',
+    );
+    if (ok) setActiveTab('my_assoc');
   };
 
   const handleJoinRequest = async (assoc: any) => {
-    if (!canJoin) return;
-    if (!user || !profile || isProcessing) return;
-    if (currentAssocId || userPendingAssoc) return;
-    if (!canJoinNew) return;
-
-    setIsProcessing(true);
-    try {
-      updateDocumentNonBlocking(doc(db, 'associations_v4', assoc.id), {
-        requests: arrayUnion({ uid: user.uid, name: profile.displayName || "Manager" })
-      });
-      toast({ title: language === 'ru' ? "Заявка отправлена" : "Request Sent" });
-    } finally {
-      setIsProcessing(false);
-    }
+    if (!canJoin || !user || !profile || currentAssocId || userPendingAssoc || !canJoinNew) return;
+    await withAssociationAction(
+      async () => requestAssociationMembershipAction(await user.getIdToken(), assoc.id, profile.displayName || 'Manager'),
+      language === 'ru' ? 'Заявка отправлена' : 'Request Sent',
+    );
   };
 
   const handleCancelRequest = async (assoc: any) => {
-    if (!user || isProcessing) return;
-    setIsProcessing(true);
-    try {
-      const applicant = assoc.requests?.find((r: any) => r.uid === user.uid);
-      if (!applicant) return;
-      updateDocumentNonBlocking(doc(db, 'associations_v4', assoc.id), {
-        requests: arrayRemove(applicant)
-      });
-      toast({ title: language === 'ru' ? "Заявка отменена" : "Request Cancelled" });
-    } finally {
-      setIsProcessing(false);
-    }
+    if (!user) return;
+    await withAssociationAction(
+      async () => cancelAssociationRequestAction(await user.getIdToken(), assoc.id),
+      language === 'ru' ? 'Заявка отменена' : 'Request Cancelled',
+    );
   };
 
   const handleProcessRequest = async (applicant: any, accept: boolean) => {
-    if (!myAssoc || !canManage || !db || isProcessing) return;
-    setIsProcessing(true);
-    try {
-      const assocRef = doc(db, 'associations_v4', myAssoc.id);
-      const nowIso = new Date().toISOString();
-      if (accept) {
-        const newMember = { uid: applicant.uid, name: applicant.name, joinedAt: nowIso, role: 'member' };
-        updateDocumentNonBlocking(assocRef, {
-          members: arrayUnion(applicant.uid),
-          memberNames: arrayUnion(applicant.name),
-          membersData: arrayUnion(newMember),
-          requests: arrayRemove(applicant),
-          news: arrayUnion({ type: 'join', userName: applicant.name, timestamp: nowIso })
-        });
-        updateDocumentNonBlocking(doc(db, 'players_v14', applicant.uid), { 
-          associationId: myAssoc.id,
-          lastJoinedAssocAt: nowIso
-        });
-        toast({ title: `${applicant.name} accepted` });
-      } else {
-        updateDocumentNonBlocking(assocRef, { requests: arrayRemove(applicant) });
-        toast({ title: `${applicant.name} rejected` });
-      }
-    } finally {
-      setIsProcessing(false);
-    }
+    if (!myAssoc || !canManage || !user) return;
+    const ok = await withAssociationAction(
+      async () => processAssociationRequestAction(await user.getIdToken(), myAssoc.id, applicant.uid, accept),
+      accept ? `${applicant.name} accepted` : `${applicant.name} rejected`,
+    );
+    if (ok && selectedPlayer?.id === applicant.uid) setSelectedUser(null);
   };
 
   const handleLeave = async () => {
-    if (!myAssoc || !myMemberInfo || !canLeave || !db || isProcessing) return;
-    setIsProcessing(true);
-    try {
-      const assocRef = doc(db, 'associations_v4', myAssoc.id);
-      const nowIso = new Date().toISOString();
-      updateDocumentNonBlocking(assocRef, {
-        members: arrayRemove(user!.uid),
-        memberNames: arrayRemove(profile!.displayName || "Manager"),
-        membersData: arrayRemove(myMemberInfo),
-        news: arrayUnion({ type: 'leave', userName: profile!.displayName || "Manager", timestamp: nowIso }),
-        ...(isDeputy ? { deputyId: null } : {})
-      });
-      updateDocumentNonBlocking(userRef!, { associationId: null });
-      toast({ title: language === 'ru' ? "Вы покидали ассоциацию" : "Left Association" });
-      setActiveTab('menu');
-    } finally {
-      setIsProcessing(false);
-    }
+    if (!myAssoc || !myMemberInfo || !canLeave || !user) return;
+    const ok = await withAssociationAction(
+      async () => leaveAssociationAction(await user.getIdToken(), myAssoc.id),
+      language === 'ru' ? 'Вы покинули ассоциацию' : 'Left Association',
+    );
+    if (ok) setActiveTab('menu');
   };
 
   const handleKick = async () => {
-    if (!myAssoc || !canManage || !selectedPlayer || !db || isProcessing) return;
-    setIsProcessing(true);
-    try {
-      const assocRef = doc(db, 'associations_v4', myAssoc.id);
-      const nowIso = new Date().toISOString();
-      const targetMember = getDisplayMembers(myAssoc).find(m => m.uid === selectedPlayer.id);
-      if (!targetMember) return;
-      updateDocumentNonBlocking(assocRef, {
-        members: arrayRemove(selectedPlayer.id),
-        memberNames: arrayRemove(selectedPlayer.name),
-        membersData: arrayRemove(targetMember),
-        news: arrayUnion({ type: 'kick', userName: selectedPlayer.name, timestamp: nowIso }),
-        ...(myAssoc.deputyId === selectedPlayer.id ? { deputyId: null } : {})
-      });
-      updateDocumentNonBlocking(doc(db, 'players_v14', selectedPlayer.id), { associationId: null });
-      toast({ title: language === 'ru' ? "Игрок исключен" : "Player Kicked" });
-      setSelectedUser(null);
-    } finally {
-      setIsProcessing(false);
-    }
+    if (!myAssoc || !canManage || !selectedPlayer || !user) return;
+    const ok = await withAssociationAction(
+      async () => kickAssociationMemberAction(await user.getIdToken(), myAssoc.id, selectedPlayer.id),
+      language === 'ru' ? 'Игрок исключён' : 'Player Kicked',
+    );
+    if (ok) setSelectedUser(null);
   };
 
   const handleAppointDeputy = async () => {
-    if (!myAssoc || !isOwner || !selectedPlayer || !db || isProcessing) return;
-    setIsProcessing(true);
-    try {
-      const assocRef = doc(db, 'associations_v4', myAssoc.id);
-      const nowIso = new Date().toISOString();
-      const updatedMembersData = getDisplayMembers(myAssoc).map(m => 
-        m.uid === selectedPlayer.id ? { ...m, role: 'deputy' } : m
-      );
-      updateDocumentNonBlocking(assocRef, {
-        deputyId: selectedPlayer.id,
-        membersData: updatedMembersData,
-        news: arrayUnion({ type: 'appoint_deputy', userName: selectedPlayer.name, timestamp: nowIso })
-      });
-      toast({ title: language === 'ru' ? "Заместитель назначен" : "Deputy Appointed" });
-      setSelectedUser(null);
-    } finally {
-      setIsProcessing(false);
-    }
+    if (!myAssoc || !isOwner || !selectedPlayer || !user) return;
+    const ok = await withAssociationAction(
+      async () => setAssociationDeputyAction(await user.getIdToken(), myAssoc.id, selectedPlayer.id),
+      language === 'ru' ? 'Заместитель назначен' : 'Deputy Appointed',
+    );
+    if (ok) setSelectedUser(null);
   };
 
   const handleRemoveDeputy = async () => {
-    if (!myAssoc || !isOwner || !selectedPlayer || !db || isProcessing) return;
-    setIsProcessing(true);
-    try {
-      const assocRef = doc(db, 'associations_v4', myAssoc.id);
-      const nowIso = new Date().toISOString();
-      const updatedMembersData = getDisplayMembers(myAssoc).map(m => 
-        m.uid === selectedPlayer.id ? { ...m, role: 'member' } : m
-      );
-      updateDocumentNonBlocking(assocRef, {
-        deputyId: null,
-        membersData: updatedMembersData,
-        news: arrayUnion({ type: 'remove_deputy', userName: selectedPlayer.name, timestamp: nowIso })
-      });
-      toast({ title: language === 'ru' ? "Заместитель снят с должности" : "Deputy Removed" });
-      setSelectedUser(null);
-    } finally {
-      setIsProcessing(false);
-    }
+    if (!myAssoc || !isOwner || !selectedPlayer || !user) return;
+    const ok = await withAssociationAction(
+      async () => setAssociationDeputyAction(await user.getIdToken(), myAssoc.id, null),
+      language === 'ru' ? 'Заместитель снят с должности' : 'Deputy Removed',
+    );
+    if (ok) setSelectedUser(null);
   };
 
   const handleDisbandAssoc = async () => {
-    if (!myAssoc || !isOwner || !db || isProcessing) return;
-    setIsProcessing(true);
-    try {
-      const batch = writeBatch(db);
-      const members = myAssoc.members || [];
-      members.forEach((uid: string) => {
-        batch.update(doc(db, 'players_v14', uid), { associationId: null });
-      });
-      batch.delete(doc(db, 'associations_v4', myAssoc.id));
-      await batch.commit();
-      toast({ title: language === 'ru' ? "Ассоциация распущена" : "Association Disbanded" });
+    if (!myAssoc || !isOwner || !user) return;
+    const ok = await withAssociationAction(
+      async () => disbandAssociationAction(await user.getIdToken(), myAssoc.id),
+      language === 'ru' ? 'Ассоциация распущена' : 'Association Disbanded',
+    );
+    if (ok) {
       setShowDisbandDialog(false);
       setActiveTab('menu');
-    } finally {
-      setIsProcessing(false);
     }
   };
 
@@ -426,7 +343,7 @@ export default function AssociationPage() {
   const renderAssocDetails = (assoc: any, isCurrentMyAssoc: boolean) => {
     if (!assoc && currentAssocId) return <div className="py-20 text-center"><Loader2 className="w-8 h-8 animate-spin mx-auto text-primary" /><p className="text-[10px] uppercase font-bold text-muted-foreground mt-4">Synchronizing Alliance...</p></div>;
     
-    const isPending = assoc?.requests?.some((r: any) => r.uid === user?.uid);
+    const isPending = getAssocRequests(assoc).some((r: any) => r.uid === user?.uid);
     const displayMembers = getDisplayMembers(assoc);
     const userAlreadyInAssoc = !!currentAssocId;
     const hasAnyPending = !!userPendingAssoc;
@@ -518,7 +435,7 @@ export default function AssociationPage() {
           <div className="space-y-4 animate-in fade-in slide-in-from-bottom-2 pb-6">
             {allAssocs && allAssocs.length > 0 ? allAssocs.map(assoc => {
               const isMember = assoc.members?.includes(user?.uid);
-              const isPending = assoc.requests?.some((r: any) => r.uid === user?.uid);
+              const isPending = getAssocRequests(assoc).some((r: any) => r.uid === user?.uid);
               return (
                 <Card key={assoc.id} className="glass-card border-white/5 bg-secondary/10 overflow-hidden cursor-pointer hover:bg-white/5 transition-all" onClick={() => setViewingAssocId(assoc.id)}>
                   <CardContent className="p-4 flex items-center justify-between">
@@ -579,7 +496,7 @@ export default function AssociationPage() {
         if (!canManage || !myAssoc) return null;
         return (
           <div className="space-y-4 animate-in fade-in slide-in-from-bottom-2 pb-6">
-            {myAssoc.requests && myAssoc.requests.length > 0 ? myAssoc.requests.map((req: any) => (
+            {getAssocRequests(myAssoc).length > 0 ? getAssocRequests(myAssoc).map((req: any) => (
               <Card key={req.uid} className="glass-card border-orange-500/20 bg-orange-500/5">
                 <CardContent className="p-4 flex items-center justify-between">
                    <div className="flex items-center gap-3"><div className="w-10 h-10 rounded-full bg-background flex items-center justify-center border border-orange-500/30"><UserPlus className="w-5 h-5 text-orange-400" /></div><span className="text-sm font-bold uppercase">{req.name}</span></div>
@@ -631,7 +548,7 @@ export default function AssociationPage() {
         { id: 'news', ...t.tabs.news }
       ] : [{ id: 'create', ...t.tabs.create }]),
       { id: 'all', ...t.tabs.all },
-      ...(canManage ? [{ id: 'requests', ...t.tabs.requests, badge: myAssoc?.requests?.length || 0 }] : []),
+      ...(canManage ? [{ id: 'requests', ...t.tabs.requests, badge: getAssocRequests(myAssoc).length }] : []),
       { id: 'history', ...t.tabs.history },
       ...(isOwner ? [{ id: 'disband', label: t.disband, desc: t.disbandDesc, icon: ShieldX, color: "text-red-500" }] : [])
     ];
@@ -652,7 +569,7 @@ export default function AssociationPage() {
                   <div>
                     <div className="flex items-center gap-2">
                       <h3 className="text-sm font-bold uppercase group-hover:text-white transition-colors">{item.label}</h3>
-                      {item.badge > 0 && <div className="w-4 h-4 rounded-full bg-primary flex items-center justify-center animate-pulse"><span className="text-[8px] font-black text-primary-foreground">{item.badge}</span></div>}
+                      {'badge' in item && Number(item.badge ?? 0) > 0 && <div className="w-4 h-4 rounded-full bg-primary flex items-center justify-center animate-pulse"><span className="text-[8px] font-black text-primary-foreground">{Number(item.badge ?? 0)}</span></div>}
                     </div>
                     <p className="text-[10px] text-muted-foreground leading-tight">{item.desc}</p>
                   </div>

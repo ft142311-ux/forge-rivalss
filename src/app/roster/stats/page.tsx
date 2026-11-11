@@ -16,6 +16,7 @@ import { LoadingScreen } from '@/components/game/LoadingScreen';
 import { Badge } from '@/components/ui/badge';
 import { useUser, useFirestore, useDoc, useMemoFirebase } from '@/firebase';
 import { doc } from 'firebase/firestore';
+import { aggregatePlayerCombatStats } from '../../lib/player-combat-stats';
 
 export default function PlayerStatsPage() {
   const { user, isUserLoading } = useUser();
@@ -23,7 +24,7 @@ export default function PlayerStatsPage() {
   const { ownedPlayers, matchHistory, language, isLoaded } = useGameState();
 
   // Use players_v14 for active profile
-  const userRef = useMemoFirebase(() => user ? doc(db, 'players_v14', user.uid) : null, [db, user]);
+  const userRef = useMemoFirebase(() => user && db ? doc(db, 'players_v14', user.uid) : null, [db, user]);
   const { data: profile } = useDoc(userRef);
 
   const playerStats = useMemo(() => {
@@ -45,9 +46,12 @@ export default function PlayerStatsPage() {
           const performance = match.simulation?.games?.[0]?.scoreboard?.find((p: any) => p.name === player.name);
           if (performance) {
             matches++;
-            kills += (performance.kills || 0);
-            deaths += (performance.deaths || 0);
-            assists += (performance.assists || 0);
+            const combatStats = aggregatePlayerCombatStats([performance], {
+              initial: { kills, deaths, assists },
+            });
+            kills = combatStats.kills;
+            deaths = combatStats.deaths;
+            assists = combatStats.assists;
           }
         }
       });
@@ -58,6 +62,7 @@ export default function PlayerStatsPage() {
         ...player,
         stats: {
           matches,
+          wins: Number((player as any).seasonStats?.wins || 0),
           kills,
           deaths,
           assists,

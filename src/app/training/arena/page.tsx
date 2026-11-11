@@ -156,19 +156,19 @@ export default function ArenaPage() {
     return Math.min(Math.max((elapsed / total) * 100, 0), 100);
   }, [arena]);
 
-  const handleFacilityUpgrade = () => {
+  const handleFacilityUpgrade = async () => {
     if (!selectedFacility) return;
     const currentLevel = (arena as any)[selectedFacility];
     const cost = 15000 * (currentLevel + 1);
-    if (startArenaConstruction(selectedFacility as any, cost)) {
+    if (await startArenaConstruction(selectedFacility as any, cost)) {
       toast({ title: t.inProgress });
       setSelectedFacility(null);
     }
   };
 
-  const handleAccelerate = (multiplier: number, price: number) => {
+  const handleAccelerate = async (multiplier: number) => {
     if (!acceleratingFacility) return;
-    if (accelerateConstruction('arena', acceleratingFacility, multiplier, price)) {
+    if (await accelerateConstruction('arena', acceleratingFacility, multiplier, ACCEL_CREWS.find(c => c.multiplier === multiplier)?.price || 0)) {
       toast({ title: language === 'ru' ? "Проект ускорен!" : "Project Accelerated!" });
       setAcceleratingFacility(null);
     } else {
@@ -258,7 +258,7 @@ export default function ArenaPage() {
           const isConstructing = !!finishTime;
           const isAccelerated = arena.isAccelerated?.[item.id];
           const progress = isConstructing ? calculateProgress(item.id) : 0;
-          const isLevelLocked = (activeLicenseTier === 4 && !isPremium && level >= 10);
+          const isLevelLocked = false;
           
           return (
             <Card key={item.id} className={cn(
@@ -348,7 +348,7 @@ export default function ArenaPage() {
             </div>
             <div className="p-4 space-y-2">
               {ACCEL_CREWS.map((crew) => (
-                <Card key={crew.id} className="glass-card border-white/5 hover:border-orange-500/30 cursor-pointer transition-all" onClick={() => handleAccelerate(crew.multiplier, crew.price)}>
+                <Card key={crew.id} className="glass-card border-white/5 hover:border-orange-500/30 cursor-pointer transition-all" onClick={() => handleAccelerate(crew.multiplier)}>
                   <CardContent className="p-4 flex items-center justify-between">
                     <div>
                       <h4 className="text-xs font-bold uppercase text-white">{language === 'ru' ? crew.labelRu : crew.labelEn}</h4>

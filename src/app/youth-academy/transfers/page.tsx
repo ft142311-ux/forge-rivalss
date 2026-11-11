@@ -2,6 +2,8 @@
 
 import { useState, useEffect, useRef, memo, useMemo, useCallback } from 'react';
 import { useGameState } from '@/app/lib/store';
+import { placeYouthMarketBidAction } from '@/app/actions/pro-market';
+import { runWithFreshIdToken } from '@/lib/client-auth-action';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -16,14 +18,13 @@ import { Badge } from '@/components/ui/badge';
 import { LoadingScreen } from '@/components/game/LoadingScreen';
 import { Slider } from '@/components/ui/slider';
 import { Progress } from '@/components/ui/progress';
-import { useUser, useFirestore, useCollection, useMemoFirebase, useDoc } from '@/firebase';
-import { collection, query, doc, arrayUnion, serverTimestamp, updateDoc, where } from 'firebase/firestore';
-import { addDocumentNonBlocking } from '@/firebase/non-blocking-updates';
+import { useUser, useAuth, useFirestore, useCollection, useMemoFirebase, useDoc } from '@/firebase';
+import { collection, query, doc, where } from 'firebase/firestore';
 import { useToast } from '@/hooks/use-toast';
 import { cn } from '@/lib/utils';
 import { useRouter } from 'next/navigation';
 import { calculateLiveAge, getMoscowTime } from '@/app/lib/time-utils';
-import { renderStars, STAT_KEYS } from '@/app/transfers/quick-search/page';
+import { renderStars, STAT_KEYS } from '@/components/game/transfer-stats';
 import {
   Dialog,
   DialogContent,
@@ -406,8 +407,9 @@ const YouthTransferCard = memo(({
 YouthTransferCard.displayName = 'YouthTransferCard';
 
 export default function YouthTransfersPage() {
-  const { language, isLoaded: isStoreLoaded, credits, addCredits } = useGameState();
+  const { language, isLoaded: isStoreLoaded } = useGameState();
   const { user, isUserLoading } = useUser();
+  const auth = useAuth();
   const db = useFirestore();
   const router = useRouter();
   const { toast } = useToast();
@@ -428,7 +430,7 @@ export default function YouthTransfersPage() {
   const { data: allAgents, isLoading: isMarketLoading } = useCollection(marketQuery);
   const userDocRef = useMemoFirebase(() => {
     if (!db || !user?.uid) return null;
-    return doc(db, 'players_v12', user.uid);
+    return doc(db, 'players_v14', user.uid);
   }, [db, user?.uid]);
   
   const { data: profile } = useDoc(userDocRef);
@@ -472,47 +474,26 @@ export default function YouthTransfersPage() {
   const totalPages = Math.ceil(youthAgents.length / ITEMS_PER_PAGE);
 
   const handleGlobalBid = useCallback(async (agent: any, amount: number) => {
-    if (!db || !user || !profile) return;
-    if (credits < amount) { 
-      toast({ title: language === 'ru' ? "Недостаточно средств" : "Insufficient funds", variant: "destructive" }); 
-      return; 
-    }
+    if (!db || !user) return;
     try {
-      const prevBidder = agent.highestBidderId;
-      const heroName = agent.heroData?.name || "Player";
-      
-      const mskNow = getMoscowTime().getTime();
-      const expiryTime = new Date(agent.expiresAt).getTime();
-      const timeLeft = expiryTime - mskNow;
-      let finalExpiresAt = agent.expiresAt;
-      
-      if (timeLeft < 600000) { 
-        finalExpiresAt = new Date(mskNow + 600000).toISOString(); 
-      }
-
-      await updateDoc(doc(db, 'market_v7', agent.id), { 
-        currentBid: amount, highestBidderId: user.uid, highestBidderName: profile.displayName || "Unknown Manager", 
-        bidders: arrayUnion(user.uid), updatedAt: serverTimestamp(),
-        expiresAt: finalExpiresAt
+      const result = await runWithFreshIdToken(auth, user, (idToken) =>
+        placeYouthMarketBidAction(idToken, String(agent.id), amount)
+      );
+      if ('error' in result) throw new Error(result.error || 'BID_FAILED');
+      toast({
+        title: language === 'ru' ? 'Ставка принята!' : 'Bid Placed!',
+        description: 'expiresAt' in result && new Date(result.expiresAt).getTime() > new Date(agent.expiresAt).getTime()
+          ? (language === 'ru' ? 'Аукцион продлён на 10 минут!' : 'Auction extended by 10 minutes!')
+          : undefined,
       });
-
-      addCredits(-amount);
-      if (prevBidder && prevBidder !== user.uid) {
-        addDocumentNonBlocking(collection(db, 'notifications_v7'), {
-          userId: prevBidder, title: language === 'ru' ? "Ставка перебита!" : "Outbid!",
-          description: language === 'ru' ? `Ставка на "${heroName}" перебита ${new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}` : `Bid on "${heroName}" outbid ${new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}`,
-          type: 'market', read: false, createdAt: new Date().toISOString()
-        });
-      }
-      
-      toast({ 
-        title: language === 'ru' ? "Ставка принята!" : "Bid Placed!",
-        description: timeLeft < 600000 ? (language === 'ru' ? "Аукцион продлен на 10 минут!" : "Auction extended by 10 minutes!") : undefined
-      });
-    } catch (e) {
-      toast({ title: "Error placing bid", variant: "destructive" });
+    } catch (error: any) {
+      const message = String(error?.message || 'BID_FAILED');
+      const localized = language === 'ru'
+        ? message === 'INSUFFICIENT_FUNDS' ? 'Недостаточно средств' : message === 'BID_TOO_LOW' ? 'Ставка должна быть выше текущей' : 'Не удалось разместить ставку'
+        : message === 'INSUFFICIENT_FUNDS' ? 'Insufficient funds' : message === 'BID_TOO_LOW' ? 'Bid must exceed the current bid' : 'Could not place bid';
+      toast({ title: localized, variant: 'destructive' });
     }
-  }, [user, profile, credits, language, toast, db, addCredits]);
+  }, [auth, user, language, toast, db]);
 
   return (
     <div className="max-w-md mx-auto px-4 pt-8 pb-32">
