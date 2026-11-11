@@ -43,11 +43,12 @@ Local emulator mode remains isolated: when `NEXT_PUBLIC_USE_FIREBASE_EMULATORS=t
 ## Remaining blockers before deployment
 
 1. The new Firebase Web App values have not yet been entered as deployment environment variables.
-2. `src/lib/firebase-admin.ts` uses Application Default Credentials outside emulator mode. A generic third-party host does not automatically provide Firebase App Hosting's service identity. A supported server credential mechanism must be deliberately configured as an encrypted deployment secret; never commit service-account JSON.
-3. Firestore rules must be reviewed against the staging initialization/bootstrap workflow before any game data is written.
-4. Existing cron routes have `maxDuration = 300`. Confirm host execution limits before invoking write-capable jobs.
-5. The season orchestrator and match resolver write game state. They must not be called automatically until staging is initialized, isolated, and verified.
-6. Hosting provider selection remains open until the project's commercial/non-commercial use is clarified.
+2. `src/lib/firebase-admin.ts` supports explicit hosted credentials, but the staging service account has not been created and no secret has been configured.
+3. **Registration currently depends on the callable Firebase Cloud Function `initializeClub` in `functions/index.js`. Firebase Cloud Functions deployment requires the Blaze plan, so this callable cannot be deployed to the new Spark project.** Do not attempt deployment or upgrade billing. The registration operation must be moved behind an authenticated Next.js server endpoint (or another Spark-compatible server runtime) before hosted registration can work. Preserve its transaction and league-slot invariants during that migration.
+4. Firestore rules must be reviewed against the staging initialization/bootstrap workflow before any game data is written.
+5. Existing cron routes have `maxDuration = 300`. Confirm host execution limits before invoking write-capable jobs.
+6. The season orchestrator and match resolver write game state. They must not be called automatically until staging is initialized, isolated, and verified.
+7. Hosting provider selection remains open until the project's commercial/non-commercial use is clarified.
 
 ## Branch validation workflow
 
@@ -112,6 +113,10 @@ Before scheduling either endpoint, verify:
 - The scheduler calls only the dedicated staging URL and uses a protected token.
 
 Until those checks pass, the GitHub Actions workflow remains manual and read-only.
+
+## Spark-plan compatibility finding
+
+Firebase's official pricing documentation states that Cloud Functions cannot be newly deployed while a project remains on Spark; deploying Firebase Cloud Functions requires Blaze. The current setup screen calls `initializeClub` through `firebase/functions`, so a web-only configuration change is not sufficient for a working hosted registration flow. Keep the Spark plan and migrate this callable to a protected Next.js server endpoint before testing real registrations. See the official [Firebase pricing plan documentation](https://firebase.google.com/docs/projects/billing/firebase-pricing-plans) and [Cloud Functions FAQ](https://firebase.google.com/docs/functions/faq-and-troubleshooting).
 
 ## Current safe milestone
 
