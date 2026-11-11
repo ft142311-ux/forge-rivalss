@@ -53,3 +53,43 @@ Do not add or enable a write-capable schedule yet. First complete the staging de
 - Do not run reset, cleanup, season rollover, or match simulation as part of a health check.
 - Keep local Firebase Emulator configuration and regression tests intact.
 - Do not merge this branch into `main` until the staging setup is reviewed and the user approves the next step.
+
+
+## Additional architecture audit findings
+
+### Firebase Admin credentials
+
+The current `src/lib/firebase-admin.ts` initializes with Application Default Credentials when emulator mode is disabled and no `FIREBASE_ADMIN_SDK` value is present. This is suitable only where the runtime supplies a correctly scoped Google service identity (for example, a configured Google Cloud runtime). A third-party host must not be assumed to provide ADC.
+
+Before using Vercel or another external host:
+- Create a dedicated staging service account in the staging Google Cloud project.
+- Grant only the minimum Firestore and Firebase Auth permissions required by the app.
+- Store credentials only in the host's encrypted environment/secrets facility.
+- Prefer workload identity federation if the host supports it; otherwise use a dedicated service-account secret with rotation.
+- Never use a production service account or commit credentials.
+
+The Firebase client config is separate from Admin credentials. Client app identifiers are not a substitute for server authorization.
+
+### Cron execution safety
+
+The current `GET /api/cron/resolve-matches` endpoint performs calendar preparation and then runs league match resolution, friendly match resolution, and tournament processing concurrently. It is a write-capable endpoint, not a harmless health check.
+
+The current `GET /api/cron/season-orchestrator` endpoint can settle overdue matches, publish a prepared season, and update season phase state. It is also write-capable.
+
+Before scheduling either endpoint, verify:
+- A Firestore-backed lease/lock prevents concurrent invocations across different workflow runs.
+- A stable idempotency key prevents duplicate settlement of the same fixture.
+- Lock expiry and recovery behavior are safe after timeout or process termination.
+- The two cron endpoints cannot race each other over the same season/match records.
+- The chosen host's maximum execution duration is sufficient for worst-case workload.
+- The scheduler calls only the dedicated staging URL and uses a protected token.
+
+Until those checks pass, the GitHub Actions workflow remains manual and read-only.
+
+### Current safe milestone
+
+The staging branch contains only:
+- A manual HTTPS health-check workflow calling `GET /api/health`.
+- Documentation describing deployment and safety requirements.
+
+No Firebase project configuration, service credentials, database rules, scheduled write operations, or game data have been changed by this deployment preparation.
