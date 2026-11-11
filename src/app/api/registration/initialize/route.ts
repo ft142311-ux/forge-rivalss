@@ -35,7 +35,7 @@ function safeClubName(value: unknown, uid: string): string {
   if (typeof value !== 'string') return `Commander_${uid.slice(0, 4)}`;
   const normalized = value
     .normalize('NFKC')
-    .replace(/[\\u0000-\\u001F\\u007F]/g, '')
+    .replace(/[\u0000-\u001F\u007F]/g, '')
     .trim()
     .slice(0, 25);
   return normalized || `Commander_${uid.slice(0, 4)}`;
@@ -60,7 +60,8 @@ function mapRegistrationError(error: unknown): { status: number; code: string } 
 }
 
 export async function POST(request: NextRequest) {
-  if (!request.headers.get('content-type')?.toLowerCase().includes('application/json')) {
+  const contentType = request.headers.get('content-type')?.split(';', 1)[0].trim().toLowerCase();
+  if (contentType !== 'application/json') {
     return json(415, { success: false, error: 'UNSUPPORTED_MEDIA_TYPE' });
   }
 
@@ -70,7 +71,7 @@ export async function POST(request: NextRequest) {
   }
 
   const authorization = request.headers.get('authorization') || '';
-  const tokenMatch = authorization.match(/^Bearer ([^\\s]+)$/);
+  const tokenMatch = authorization.match(/^Bearer ([^\s]+)$/);
   if (!tokenMatch) {
     return json(401, { success: false, error: 'AUTHENTICATION_REQUIRED' });
   }
