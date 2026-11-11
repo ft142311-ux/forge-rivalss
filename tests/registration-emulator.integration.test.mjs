@@ -16,7 +16,7 @@ test('registration transaction integration tests require the isolated Firestore 
   const app = initializeApp({ projectId }, `registration-test-${randomUUID()}`);
   const db = getFirestore(app);
   const runId = randomUUID();
-  const testCollection = db.collection('__registration_integration_tests__');
+  const testCollection = db.collection('registrationIntegrationTests');
   const ownedRefs = [];
 
   const track = (ref) => {
