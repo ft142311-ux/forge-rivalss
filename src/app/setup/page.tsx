@@ -10,7 +10,6 @@ import { useToast } from '@/hooks/use-toast';
 import { useGameState } from '@/app/lib/store';
 import { LoadingScreen } from '@/components/game/LoadingScreen';
 import { useUser, useFirebase } from '@/firebase';
-import { getFunctions, httpsCallable, connectFunctionsEmulator } from 'firebase/functions';
 
 /**
  * СТРАНИЦА ИНИЦИАЛИЗАЦИИ v166.
@@ -60,40 +59,41 @@ export default function SetupPage() {
     setError(null);
     
     try {
-      // Явно указываем регион us-central1
-      const functions = getFunctions(firebaseApp, 'us-central1');
-      if (process.env.NEXT_PUBLIC_USE_FIREBASE_EMULATORS === 'true') {
-        try {
-          connectFunctionsEmulator(functions, '127.0.0.1', 5001);
-        } catch {
-          // Functions emulator may already be connected.
-        }
-      }
-      const initializeClubFn = httpsCallable(functions, 'initializeClub');
-      
-      const clubName = localStorage.getItem('pending_club_name') || "";
-      // Keep the original forced-refresh requirement for the registration flow,
-      // but make the local emulator branch resilient to the auth/network-request-failed
-      // token refresh symptom that can occur during the emulator token exchange.
+      // Hosted and local registration now use the same authenticated
+      // Next.js endpoint. The legacy callable remains available only to the
+      // local emulator during the migration window.
+      let idToken: string;
       try {
-        await user.getIdToken(true);
+        idToken = await user.getIdToken(true);
       } catch (refreshError: any) {
         const useLocalEmulators = process.env.NEXT_PUBLIC_USE_FIREBASE_EMULATORS === 'true';
         if (useLocalEmulators) {
           console.warn('[SETUP] Forced token refresh failed in emulator mode; retrying with cached token:', refreshError);
-          await user.getIdToken();
+          idToken = await user.getIdToken();
         } else {
           throw refreshError;
         }
       }
-      
-      const response = await initializeClubFn({ clubName });
-      const result = response.data as any;
 
+      const clubName = localStorage.getItem('pending_club_name') || '';
+      const response = await fetch('/api/registration/initialize', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${idToken}`,
+        },
+        cache: 'no-store',
+        body: JSON.stringify({ clubName }),
+      });
+
+      const result = await response.json();
+      if (!response.ok || !result?.success) {
+        throw new Error(typeof result?.error === 'string' ? result.error : 'CLUB_INITIALIZATION_FAILED');
+      }
       console.log("[SETUP] Server response:", result);
 
       // Проверка версии функции
-      if (result.version !== 'v169') {
+      if (result.version !== 'v170') {
         console.error("[SETUP] Outdated function version detected:", result.version);
         throw new Error("REGISTRATION_FUNCTION_OUTDATED");
       }
@@ -132,6 +132,10 @@ export default function SetupPage() {
       // Анализ диагностических сообщений от HttpsError
       if (msg.includes('SEASON_CONFIG_MISSING')) errorMsg = "SEASON_CONFIG_MISSING";
       else if (msg.includes('WORLD_INITIALIZING')) errorMsg = "WORLD_INITIALIZING";
+      else if (msg.includes('WORLD_NOT_READY')) errorMsg = "WORLD_NOT_READY";
+      else if (msg.includes('AUTH_TOKEN_REVOKED')) errorMsg = "AUTH_TOKEN_REVOKED";
+      else if (msg.includes('AUTH_TOKEN_INVALID')) errorMsg = "AUTH_TOKEN_INVALID";
+      else if (msg.includes('APP_CHECK_REQUIRED') || msg.includes('APP_CHECK_INVALID')) errorMsg = msg;
       else if (msg.includes('SEASON_TRANSITION_IN_PROGRESS')) errorMsg = "SEASON_TRANSITION_IN_PROGRESS";
       else if (msg.includes('LEAGUE_TABLE_MISSING')) errorMsg = "LEAGUE_TABLE_MISSING";
       else if (msg.includes('LEAGUE_TABLE_MISMATCH')) errorMsg = "LEAGUE_TABLE_MISMATCH";
