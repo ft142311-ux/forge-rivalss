@@ -1,4 +1,4 @@
-'use server';
+import 'server-only';
 
 /**
  * Скрипт "Ядерной очистки" v145 (Admin SDK Transition).
@@ -10,6 +10,17 @@ const DELETE_BATCH_SIZE = 500;
 const BATCHES_PER_CALL = 3; 
 
 export async function totalNuclearResetV131() {
+  // Destructive world maintenance is supported only against the local emulator.
+  // Never allow an authenticated admin action to wipe a deployed Firestore project.
+  if (process.env.NEXT_PUBLIC_USE_FIREBASE_EMULATORS !== 'true') {
+    return { success: false, error: 'LOCAL_EMULATOR_REQUIRED', deletedCount: 0 };
+  }
+
+  const emulatorHost = process.env.FIRESTORE_EMULATOR_HOST || '127.0.0.1:8080';
+  if (!/^(127\.0\.0\.1|localhost):\d+$/.test(emulatorHost)) {
+    return { success: false, error: 'LOCAL_FIRESTORE_EMULATOR_REQUIRED', deletedCount: 0 };
+  }
+
   const db = adminDb;
 
   const systemDocs = [
