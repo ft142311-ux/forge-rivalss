@@ -9,19 +9,45 @@ The default branch and production deployment are not changed by this preparation
 
 ## Proposed hosting target
 
-Vercel Hobby is the simplest low-friction option for a temporary Next.js staging deployment. It is free, supports Next.js server rendering and route handlers, and currently documents a maximum Hobby function duration of 300 seconds when Fluid Compute is enabled.
+Vercel Hobby is a possible temporary Next.js staging target only for personal, non-commercial use. Do not use it for a commercial game/service or monetized deployment. The project's commercial status has not yet been confirmed, so hosting selection remains blocked pending that decision.
 
-**Important plan restriction:** Vercel Hobby is for personal, non-commercial use only. Do not use it for a commercial game/service or monetized production deployment. Confirm that the intended staging use is personal/non-commercial before connecting the repository. If the project is commercial, choose a host whose free tier permits that use.
+The repository uses Next.js App Router route handlers and Server Actions. Do not enable static export. The existing `firebase.json` static Hosting target is not the deployment path for this Next.js server application.
 
-The repository already uses standard Next.js App Router route handlers and Server Actions. No static export should be enabled. The existing `firebase.json` static Hosting target is not the deployment path for this Next.js server application.
+## Firebase staging project status
 
-## Current blockers before deployment
+The user created a separate Firebase project:
+- Project ID: `forge-rivalstest`
+- Plan: Spark
+- Firebase Web App: registered as `Forge-Rivals Web`
+- Authentication: Email/Password provider enabled
+- Cloud Firestore: Standard edition, `(default)` database, `europe-west3` (Frankfurt), production mode
+- Firestore is currently empty.
 
-1. `src/firebase/config.ts` still hardcodes the local emulator project ID and placeholder app identifiers.
-2. `src/lib/firebase-admin.ts` uses Application Default Credentials outside emulator mode. A generic Vercel runtime does not automatically provide Firebase App Hosting's service identity. A supported server credential mechanism must be deliberately configured as a deployment secret; never commit service-account JSON.
-3. The new Firebase project `forge-rivalstest` currently has no registered Firebase Web App and no confirmed Auth/Firestore setup.
-4. The existing cron routes have `maxDuration = 300`. Confirm the host's function duration setting and workload limits before invoking write-capable jobs.
-5. The season orchestrator and match resolver write game state. They must not be called automatically until the staging database is initialized, isolated, and verified.
+Do not create collections manually or copy live game data at this stage. Do not enable Cloud Functions, App Hosting, scheduled backups, or write-capable cron jobs; the user needs to remain on the free Spark plan.
+
+## Firebase Web configuration
+
+`src/firebase/config.ts` now reads the Firebase Web App configuration from:
+- `NEXT_PUBLIC_FIREBASE_API_KEY`
+- `NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN`
+- `NEXT_PUBLIC_FIREBASE_PROJECT_ID`
+- `NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET`
+- `NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID`
+- `NEXT_PUBLIC_FIREBASE_APP_ID`
+- `NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID` (optional)
+
+Local emulator mode remains isolated: when `NEXT_PUBLIC_USE_FIREBASE_EMULATORS=true`, the client uses the local `demo-forge-rivals` configuration and emulator endpoints. Non-production development without hosted variables also retains local defaults. A production build without the required hosted Web App values fails explicitly rather than silently targeting the local demo project.
+
+`.env.example` documents the local emulator variables and the hosted Web App variable names. It contains no credentials.
+
+## Remaining blockers before deployment
+
+1. The new Firebase Web App values have not yet been entered as deployment environment variables.
+2. `src/lib/firebase-admin.ts` uses Application Default Credentials outside emulator mode. A generic third-party host does not automatically provide Firebase App Hosting's service identity. A supported server credential mechanism must be deliberately configured as an encrypted deployment secret; never commit service-account JSON.
+3. Firestore rules must be reviewed against the staging initialization/bootstrap workflow before any game data is written.
+4. Existing cron routes have `maxDuration = 300`. Confirm host execution limits before invoking write-capable jobs.
+5. The season orchestrator and match resolver write game state. They must not be called automatically until staging is initialized, isolated, and verified.
+6. Hosting provider selection remains open until the project's commercial/non-commercial use is clarified.
 
 ## Read-only smoke check
 
@@ -54,14 +80,11 @@ Do not add or enable a write-capable schedule yet. First complete the staging de
 - Keep local Firebase Emulator configuration and regression tests intact.
 - Do not merge this branch into `main` until the staging setup is reviewed and the user approves the next step.
 
+## Firebase Admin credentials
 
-## Additional architecture audit findings
+The current `src/lib/firebase-admin.ts` initializes with Application Default Credentials when emulator mode is disabled and no `FIREBASE_ADMIN_SDK` value is present. This is suitable only where the runtime supplies a correctly scoped Google service identity.
 
-### Firebase Admin credentials
-
-The current `src/lib/firebase-admin.ts` initializes with Application Default Credentials when emulator mode is disabled and no `FIREBASE_ADMIN_SDK` value is present. This is suitable only where the runtime supplies a correctly scoped Google service identity (for example, a configured Google Cloud runtime). A third-party host must not be assumed to provide ADC.
-
-Before using Vercel or another external host:
+Before using an external host:
 - Create a dedicated staging service account in the staging Google Cloud project.
 - Grant only the minimum Firestore and Firebase Auth permissions required by the app.
 - Store credentials only in the host's encrypted environment/secrets facility.
@@ -70,7 +93,7 @@ Before using Vercel or another external host:
 
 The Firebase client config is separate from Admin credentials. Client app identifiers are not a substitute for server authorization.
 
-### Cron execution safety
+## Cron execution safety
 
 The current `GET /api/cron/resolve-matches` endpoint performs calendar preparation and then runs league match resolution, friendly match resolution, and tournament processing concurrently. It is a write-capable endpoint, not a harmless health check.
 
@@ -86,10 +109,12 @@ Before scheduling either endpoint, verify:
 
 Until those checks pass, the GitHub Actions workflow remains manual and read-only.
 
-### Current safe milestone
+## Current safe milestone
 
-The staging branch contains only:
+The staging branch contains:
 - A manual HTTPS health-check workflow calling `GET /api/health`.
+- Environment-driven Firebase Web configuration with explicit production validation.
+- An updated `.env.example` documenting local emulator and hosted client variables.
 - Documentation describing deployment and safety requirements.
 
-No Firebase project configuration, service credentials, database rules, scheduled write operations, or game data have been changed by this deployment preparation.
+No service credentials, Firestore rules, scheduled write operations, game data, local files, or production deployment have been changed by this milestone.
