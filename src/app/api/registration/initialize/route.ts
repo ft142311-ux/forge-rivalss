@@ -124,6 +124,7 @@ export async function POST(request: NextRequest) {
     const playerRef = db.collection('players_v14').doc(userId);
     const configRef = db.collection('system_v1').doc('season_config');
     const statsRef = db.collection('system_v1').doc('global_stats');
+    const auditRef = db.collection('security_audit_v1').doc();
 
     const result = await db.runTransaction(async (transaction) => {
       // Idempotency: a repeated request for an already-created account returns
@@ -303,6 +304,17 @@ export async function POST(request: NextRequest) {
       };
 
       transaction.set(playerRef, initialState);
+      transaction.create(auditRef, {
+        event: 'CLUB_REGISTRATION_COMPLETED',
+        actorUid: userId,
+        season: seasonNum,
+        leagueId: LEAGUE_ID,
+        division: slot.division,
+        group: slot.group,
+        rank: slot.rank,
+        registrationVersion: REGISTRATION_VERSION,
+        createdAt: new Date(),
+      });
 
       return {
         success: true,
