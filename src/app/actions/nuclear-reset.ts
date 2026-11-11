@@ -4,7 +4,7 @@ import 'server-only';
  * Скрипт "Ядерной очистки" v145 (Admin SDK Transition).
  */
 
-import { adminDb } from '@/lib/firebase-admin';
+import { getAdminDb } from '@/lib/firebase-admin';
 
 const DELETE_BATCH_SIZE = 500;
 const BATCHES_PER_CALL = 3; 
@@ -21,7 +21,7 @@ export async function totalNuclearResetV131() {
     return { success: false, error: 'LOCAL_FIRESTORE_EMULATOR_REQUIRED', deletedCount: 0 };
   }
 
-  const db = adminDb;
+  const db = getAdminDb();
 
   const systemDocs = [
     'repair_v131_S1_LALPHA', 'init_v131_S1_LALPHA',
