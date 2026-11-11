@@ -257,14 +257,11 @@ test('registration HTTP API enforces its boundary and safely initializes a club'
     assert.equal(responseBody.success, true);
     assert.equal(responseBody.alreadyInitialized, false);
     assert.equal(responseBody.clubName, winnerClubName);
-    assert.equal(responseBody.success, true);
-    assert.equal(responseBody.alreadyInitialized, false);
-    assert.equal(responseBody.clubName, 'Forge Test Club');
     assert.equal(responseBody.tier, division);
     assert.equal(responseBody.group, group);
     assert.equal(responseBody.rank, 8);
 
-    const [player, botPlayer, table, slotQuery, matches, stats, audit] = await Promise.all([
+    const [player, loserPlayer, botPlayer, table, slotQuery, matches, stats, audit] = await Promise.all([
       winnerPlayerRef.get(),
       loserPlayerRef.get(),
       botPlayerRef.get(),
@@ -323,7 +320,7 @@ test('registration HTTP API enforces its boundary and safely initializes a club'
     assert.equal(retryBody.alreadyInitialized, true);
     assert.equal(retryBody.numericId, responseBody.numericId);
 
-    const [afterRetryStats, afterRetryAudit, afterRetrySlots] = await Promise.all([
+    const [afterRetryStats, afterRetryAudit, afterRetrySlots, afterRetryMatches, afterRetryLoserPlayer] = await Promise.all([
       statsRef.get(),
       winnerAuditQuery.get(),
       db.collection('league_slots_v1').where('season', '==', season).get(),
