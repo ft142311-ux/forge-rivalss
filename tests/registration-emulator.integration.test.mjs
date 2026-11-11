@@ -10,7 +10,7 @@ const projectId = process.env.GCLOUD_PROJECT || 'demo-forge-rivals';
 test('registration transaction integration tests require the isolated Firestore emulator', {
   skip: !emulatorHost,
 }, async (t) => {
-  assert.match(emulatorHost, /^(127\\.0\\.0\\.1|localhost):\\d+$/);
+  assert.match(emulatorHost, /^(127[.]0[.]0[.]1|localhost):[0-9]+$/);
   assert.match(projectId, /^demo-forge-rivals$/);
 
   const app = initializeApp({ projectId }, `registration-test-${randomUUID()}`);
