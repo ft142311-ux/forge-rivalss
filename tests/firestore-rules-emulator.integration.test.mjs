@@ -83,7 +83,7 @@ test('Firestore rules enforce client access against the Auth and Firestore emula
   });
 
   await t.test('public market data remains readable', async () => {
-    assert.equal((await documentRequest(refs[6].path.replace(/\\//g, '/'))).status, 200);
+    assert.equal((await documentRequest(refs[6].path)).status, 200);
   });
 
   await t.test('client writes are denied for server-authoritative game collections', async () => {
