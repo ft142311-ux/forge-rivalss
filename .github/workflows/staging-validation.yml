@@ -1,0 +1,52 @@
+name: Staging branch validation
+
+on:
+  push:
+    branches:
+      - hosting/vercel-free-staging
+  pull_request:
+    branches:
+      - hosting/vercel-free-staging
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: staging-validation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Typecheck, tests and production build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      NEXT_PUBLIC_USE_FIREBASE_EMULATORS: 'true'
+      GCLOUD_PROJECT: demo-forge-rivals
+      FIRESTORE_EMULATOR_HOST: 127.0.0.1:8080
+      FIREBASE_AUTH_EMULATOR_HOST: 127.0.0.1:9099
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: TypeScript check
+        run: npm run typecheck
+
+      - name: Core regression tests
+        run: npm run test:core
+
+      - name: Test suite
+        run: npm test
+
+      - name: Production build
+        run: npm run build
