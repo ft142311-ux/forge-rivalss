@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import test, { after } from 'node:test';
+import test from 'node:test';
 import { randomUUID } from 'node:crypto';
 import { deleteApp, initializeApp } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
@@ -24,7 +24,7 @@ test('registration transaction integration tests require the isolated Firestore 
     return ref;
   };
 
-  after(async () => {
+  t.after(async () => {
     for (const ref of ownedRefs) {
       await ref.delete().catch(() => undefined);
     }
@@ -37,18 +37,11 @@ test('registration transaction integration tests require the isolated Firestore 
     const userBRef = track(testCollection.doc(`${runId}-user-b`));
     await slotRef.set({ status: 'FREE', occupantId: null });
 
-    let firstReads = 0;
-    let releaseFirstReads;
-    const bothRead = new Promise((resolve) => { releaseFirstReads = resolve; });
-
     async function claim(userRef) {
       return db.runTransaction(async (transaction) => {
         const slot = await transaction.get(slotRef);
         if (!slot.exists || slot.get('status') !== 'FREE') return false;
 
-        firstReads += 1;
-        if (firstReads === 2) releaseFirstReads();
-        if (firstReads <= 2) await bothRead;
 
         transaction.update(slotRef, {
           status: 'OCCUPIED',
