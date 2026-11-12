@@ -10,7 +10,7 @@ import { inspectGroupReconciliation } from './season-rollover-standings';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { advanceAtMostOneSeasonBoundary, deriveRecoverySeasonWindow, deriveSeasonDatePlan, resolveCanonicalSeasonDateWindow, resolveNextSeasonTarget, resolveSeasonActivationWindow, resolveSeasonLifecycleWindow } from './season-boundary';
 import { FIRST_SEASON_NEXT_START_ISO } from '@/app/lib/time-utils';
-import { isCompletedSeasonArchive, isRecoveredSeasonArchive, resolveArchivePrunePlan, validateSeasonArchiveSnapshot } from './season-archive';
+import { buildRecoveredSeasonArchiveSnapshot, isCompletedSeasonArchive, isRecoveredSeasonArchive, resolveArchivePrunePlan, validateSeasonArchiveSnapshot } from './season-archive';
 import { buildBotClub } from './bot-roster';
 import {
   MAX_LEVELS,
@@ -381,11 +381,49 @@ async function prepareRecoveryCarryForwardPlan(
     if (canonical.length > TOTAL_GROUPS * 56 || invalidFinished > 0 || [...groupCounts.values()].some(count => count > 56)) {
       return { status: 'integrity_conflict' as const, reason: invalidFinished ? 'INVALID_FINISHED_RESULT' : 'TOO_MANY_CANONICAL_FIXTURES' };
     }
-    if (canonical.length === 0) return { status: 'no_canonical_results' as const, reason: 'NO_CANONICAL_RESULTS' };
+    const finishedMatches = canonical.length - unfinished;
+    if (canonical.length === 0) return { status: 'no_canonical_results' as const, reason: 'NO_CANONICAL_RESULTS', finishedMatches: 0, canonicalMatches: 0 };
     if (canonical.length === TOTAL_GROUPS * 56 && unfinished === 0 && groupCounts.size === TOTAL_GROUPS && [...groupCounts.values()].every(count => count === 56)) {
-      return { status: 'completed' as const, archiveValid: false, archiveReason: 'COMPLETED_ARCHIVE_REQUIRED' };
+      return { status: 'completed' as const, archiveValid: false, archiveReason: 'COMPLETED_ARCHIVE_REQUIRED', finishedMatches, canonicalMatches: canonical.length };
     }
-    return { status: 'incomplete' as const, reason: 'SEASON_INCOMPLETE' };
+    return { status: 'incomplete' as const, reason: 'SEASON_INCOMPLETE', finishedMatches, canonicalMatches: canonical.length };
+  };
+
+  const persistRecoveredArchive = async (seasonNumber: number, liveState: any) => {
+    const slotsSnap = await db.collection('league_slots_v1')
+      .where('season', '==', seasonNumber)
+      .where('leagueId', '==', LEAGUE_ID)
+      .get();
+    const sourceGroups: Record<string, any[]> = {};
+    for (const slotDoc of slotsSnap.docs) {
+      const slot = slotDoc.data() || {};
+      const level = Number(slot.division || slot.level || 0);
+      const group = Number(slot.group || 0);
+      const rank = Number(slot.rank || 0);
+      if (level < 1 || level > MAX_LEVELS || group < 1 || group > Math.pow(2, level - 1) ||
+          rank < 1 || rank > TEAMS_PER_GROUP) {
+        return { ready: false, reason: 'RECOVERED_ARCHIVE_SLOT_COORDINATES_INVALID', slotId: slotDoc.id };
+      }
+      const key = `D${level}-G${group}`;
+      const status = String(slot.status || '').toUpperCase();
+      const occupantId = String(slot.occupantId || '');
+      const id = occupantId || (status === 'FREE' ? getBotId(LEAGUE_ID, level, group, rank) : '');
+      if (!id || (status !== 'FREE' && status !== 'OCCUPIED')) {
+        return { ready: false, reason: 'RECOVERED_ARCHIVE_SLOT_IDENTITY_UNTRUSTED', slotId: slotDoc.id, status };
+      }
+      if (!sourceGroups[key]) sourceGroups[key] = [];
+      sourceGroups[key].push({ id, name: String(slot.occupantName || id), rank });
+    }
+    const snapshot = buildRecoveredSeasonArchiveSnapshot({
+      sourceSeason: seasonNumber,
+      startingParticipants: sourceGroups,
+      finishedMatches: Number(liveState.finishedMatches || 0),
+      reason: String(liveState.reason || 'SEASON_INCOMPLETE'),
+    });
+    if (!snapshot.ready) return snapshot;
+    const archiveRef = db.collection('league_season_archives_v1').doc(`S${seasonNumber}`);
+    await archiveRef.set(snapshot.archive);
+    return { ready: true, archive: snapshot.archive };
   };
 
   for (let season = activeSeason; season < targetSeason; season++) {
@@ -416,25 +454,37 @@ async function prepareRecoveryCarryForwardPlan(
       }
       if (archive.status === 'preparing') {
         const resumed = await prepareSeasonRollover(db, season, season + 1);
-        if (!resumed.ready) {
-          return { ready: false, reason: 'PREPARING_SEASON_ARCHIVE_RECOVERY_FAILED', details: { seasonNumber: season, rollover: resumed } };
+        if (resumed.ready) {
+          const resumedArchiveSnap = await archiveRef.get();
+          const resumedArchive = resumedArchiveSnap.exists ? resumedArchiveSnap.data() || {} : null;
+          const resumedMatchesSnap = resumedArchiveSnap.exists ? await archiveRef.collection('matches').get() : null;
+          const resumedMatches = resumedMatchesSnap
+            ? resumedMatchesSnap.docs.map((doc: any) => ({ ...doc.data(), matchId: doc.id }))
+            : [];
+          const resumedValidation = resumedArchive
+            ? validateSeasonArchiveSnapshot(resumedArchive, resumedMatches)
+            : { valid: false, reasons: ['ARCHIVE_MISSING_AFTER_RESUME'] };
+          if (!resumedArchive || !isCompletedSeasonArchive(resumedArchive) || !resumedValidation.valid) {
+            return { ready: false, reason: 'PREPARING_SEASON_ARCHIVE_RESUME_VALIDATION_FAILED', details: { seasonNumber: season, reasons: resumedValidation.reasons } };
+          }
+          states[season] = { status: 'completed', archiveValid: true };
+          if (!latestCompletedArchive || season > latestCompletedArchive.season) {
+            latestCompletedArchive = { season, standings: resumedArchive.standings || {} };
+          }
+          continue;
         }
-        const resumedArchiveSnap = await archiveRef.get();
-        const resumedArchive = resumedArchiveSnap.exists ? resumedArchiveSnap.data() || {} : null;
-        const resumedMatchesSnap = resumedArchiveSnap.exists ? await archiveRef.collection('matches').get() : null;
-        const resumedMatches = resumedMatchesSnap
-          ? resumedMatchesSnap.docs.map((doc: any) => ({ ...doc.data(), matchId: doc.id }))
-          : [];
-        const resumedValidation = resumedArchive
-          ? validateSeasonArchiveSnapshot(resumedArchive, resumedMatches)
-          : { valid: false, reasons: ['ARCHIVE_MISSING_AFTER_RESUME'] };
-        if (!resumedArchive || !isCompletedSeasonArchive(resumedArchive) || !resumedValidation.valid) {
-          return { ready: false, reason: 'PREPARING_SEASON_ARCHIVE_RESUME_VALIDATION_FAILED', details: { seasonNumber: season, reasons: resumedValidation.reasons } };
+        const liveState = await inspectCanonicalResults(season);
+        const canSkip = resumed.writesStarted !== true &&
+          ['incomplete', 'no_canonical_results'].includes(String(liveState.status || ''));
+        if (!canSkip) {
+          return { ready: false, reason: 'PREPARING_SEASON_ARCHIVE_RECOVERY_FAILED', details: { seasonNumber: season, rollover: resumed, liveState } };
         }
-        states[season] = { status: 'completed', archiveValid: true };
-        if (!latestCompletedArchive || season > latestCompletedArchive.season) {
-          latestCompletedArchive = { season, standings: resumedArchive.standings || {} };
+        const recovered = await persistRecoveredArchive(season, liveState);
+        if (!recovered.ready) {
+          return { ready: false, reason: 'INCOMPLETE_SEASON_RECOVERY_SNAPSHOT_FAILED', details: { seasonNumber: season, recovery: recovered } };
         }
+        states[season] = { status: 'incomplete', reason: liveState.reason || 'SEASON_INCOMPLETE' };
+        latestRecoveredParticipants = { season, groups: recovered.archive.startingParticipants };
         continue;
       }
       states[season] = { status: 'integrity_conflict', reason: 'EXISTING_ARCHIVE_NOT_VERIFIABLE' };
@@ -463,6 +513,15 @@ async function prepareRecoveryCarryForwardPlan(
       states[season] = { status: 'completed', archiveValid: true };
       if (!latestCompletedArchive || season > latestCompletedArchive.season) {
         latestCompletedArchive = { season, standings: completedArchive.standings || {} };
+      }
+    } else if (liveState.status === 'incomplete' || liveState.status === 'no_canonical_results') {
+      const recovered = await persistRecoveredArchive(season, liveState);
+      if (!recovered.ready) {
+        return { ready: false, reason: 'INCOMPLETE_SEASON_RECOVERY_SNAPSHOT_FAILED', details: { seasonNumber: season, recovery: recovered } };
+      }
+      states[season] = { status: 'incomplete', reason: liveState.reason || 'SEASON_INCOMPLETE' };
+      if (!latestRecoveredParticipants || season > latestRecoveredParticipants.season) {
+        latestRecoveredParticipants = { season, groups: recovered.archive.startingParticipants };
       }
     } else {
       states[season] = liveState;

@@ -166,3 +166,36 @@ test('archive pruning resumes interrupted subcollection deletion only with a mat
   assert.equal(result.ready, true);
   assert.deepEqual(result.pruneIds, ['S1']);
 });
+
+
+test('recovered season archive snapshot records only starting placements and truthful unfinished counts', async () => {
+  const { buildRecoveredSeasonArchiveSnapshot, isRecoveredSeasonArchive } = await import('../src/app/actions/season-archive.ts');
+  const startingParticipants = Object.fromEntries(expectedRolloverGroups().map(group => [group,
+    Array.from({ length: 8 }, (_, i) => ({ id: `${group}-TEAM-${i + 1}`, rank: i + 1, name: `${group} team ${i + 1}` }))]));
+  const result = buildRecoveredSeasonArchiveSnapshot({
+    sourceSeason: 2,
+    startingParticipants,
+    finishedMatches: 137,
+    reason: 'SEASON_INCOMPLETE',
+    recoveredAt: '2026-10-23T15:00:00.000Z',
+  });
+  assert.equal(result.ready, true);
+  assert.equal(isRecoveredSeasonArchive(result.archive), true);
+  assert.equal(result.archive.finishedMatches, 137);
+  assert.equal(result.archive.unresolvedMatches, 703);
+  assert.deepEqual(result.archive.standings, {});
+  assert.equal(Object.values(result.archive.startingParticipants).flat().length, 120);
+  assert.equal(Object.values(result.archive.startingParticipants).flat().every(row => row.matchesPlayed === 0), true);
+});
+
+test('recovered season archive refuses incomplete or duplicate starting participant placements', async () => {
+  const { buildRecoveredSeasonArchiveSnapshot } = await import('../src/app/actions/season-archive.ts');
+  const startingParticipants = Object.fromEntries(expectedRolloverGroups().map(group => [group,
+    Array.from({ length: 8 }, (_, i) => ({ id: `${group}-TEAM-${i + 1}`, rank: i + 1 }))]));
+  startingParticipants['D1-G1'][0].id = startingParticipants['D1-G1'][1].id;
+  const result = buildRecoveredSeasonArchiveSnapshot({
+    sourceSeason: 2, startingParticipants, finishedMatches: 0, reason: 'NO_CANONICAL_RESULTS',
+  });
+  assert.equal(result.ready, false);
+  assert.equal(result.reason, 'CARRY_FORWARD_TEAM_OR_RANK_CONFLICT');
+});

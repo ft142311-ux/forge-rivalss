@@ -1,5 +1,5 @@
 import { calculateGroupStandings, hasCompleteCanonicalFixtureSet } from './season-rollover-standings';
-import { expectedRolloverGroups, validateRolloverPlan } from './season-rollover-plan';
+import { buildCarryForwardGroups, expectedRolloverGroups, validateRolloverPlan } from './season-rollover-plan';
 
 const MATCHES_PER_SEASON = 840;
 
@@ -267,4 +267,56 @@ export function resolveArchivePrunePlan(
     return { ready: false as const, reason: 'LATEST_COMPLETED_ARCHIVE_RETENTION_CONFLICT', latestCompleted, retainedArchiveSeason, pruneIds: [] as string[] };
   }
   return { ready: true as const, reason: null, pruneIds, retainedArchiveSeason };
+}
+
+
+/**
+ * Persist a truthful record for a season that could not be completed.
+ * This snapshot contains only its starting team placements; it deliberately
+ * has no final standings, match scores, rewards, or promotion decisions.
+ */
+export function buildRecoveredSeasonArchiveSnapshot(input: {
+  sourceSeason: number;
+  startingParticipants: Record<string, any[]>;
+  finishedMatches: number;
+  reason: string;
+  recoveredAt?: string;
+}) {
+  const sourceSeason = Number(input?.sourceSeason);
+  const finishedMatches = Number(input?.finishedMatches);
+  if (!Number.isSafeInteger(sourceSeason) || sourceSeason < 1 ||
+      !Number.isInteger(finishedMatches) || finishedMatches < 0 || finishedMatches > MATCHES_PER_SEASON ||
+      !String(input?.reason || '').trim()) {
+    return { ready: false as const, reason: 'RECOVERED_ARCHIVE_METADATA_INVALID' };
+  }
+  const participants = buildCarryForwardGroups(input.startingParticipants || {});
+  if (!participants.ready) {
+    return { ready: false as const, reason: participants.reason, group: participants.group };
+  }
+  const recoveredAt = input.recoveredAt || new Date().toISOString();
+  if (!Number.isFinite(Date.parse(recoveredAt))) {
+    return { ready: false as const, reason: 'RECOVERED_ARCHIVE_TIMESTAMP_INVALID' };
+  }
+  return {
+    ready: true as const,
+    archive: {
+      sourceSeason,
+      leagueId: 'ALPHA',
+      archiveVersion: 1,
+      status: 'recovered',
+      recoveredAt,
+      expectedMatches: MATCHES_PER_SEASON,
+      finishedMatches,
+      unresolvedMatches: MATCHES_PER_SEASON - finishedMatches,
+      groups: 15,
+      teamCount: 120,
+      standings: {},
+      startingParticipants: participants.groups,
+      recovery: {
+        status: 'incomplete',
+        finalStandingsAvailable: false,
+        reason: String(input.reason),
+      },
+    },
+  };
 }
