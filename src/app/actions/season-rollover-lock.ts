@@ -19,6 +19,8 @@ type PublicationExpectation = {
   phase: string;
   planRef?: any;
   validatePlan?: (plan: any) => boolean;
+  publicationDeadlineMs: number;
+  activationAtMs: number;
 };
 
 export function isSeasonRolloverLockStale(lock: any, nowMs: number) {
@@ -192,6 +194,9 @@ export async function commitSeasonCalendarPublication(
         Number(config.preparedCalendarRevision || 0) !== expected.calendarRevision ||
         String(config.phase || '') !== expected.phase) {
       throw new Error('SEASON_CALENDAR_PUBLICATION_STATE_CHANGED');
+    }
+    if (Date.now() > expected.publicationDeadlineMs || Date.now() >= expected.activationAtMs) {
+      throw new Error('SEASON_CALENDAR_PUBLICATION_WINDOW_CLOSED');
     }
     if (expected.planRef && (!planSnap?.exists || !expected.validatePlan?.(planSnap.data() || {}))) {
       throw new Error('SEASON_CALENDAR_PUBLICATION_PLAN_CHANGED');
