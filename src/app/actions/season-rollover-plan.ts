@@ -99,3 +99,62 @@ export function buildPromotionRelegationGroups(
 
   return { ready: true, groups: placements };
 }
+
+/**
+ * Build a no-promotion carry-forward plan for recovery across genuinely
+ * incomplete seasons. The caller supplies the last trustworthy team placement
+ * snapshot (not partial match standings). Every group must contain exactly
+ * ranks 1..8, and every team ID must be globally unique.
+ */
+export function buildCarryForwardGroups(
+  sourceGroups: Record<string, any[]>,
+): { ready: true; groups: Record<string, any[]> } | {
+  ready: false;
+  reason: string;
+  group?: string;
+  id?: string;
+} {
+  const groups: Record<string, any[]> = {};
+  const expected = expectedRolloverGroups();
+  const seen = new Set<string>();
+
+  for (const key of expected) {
+    const rows = sourceGroups?.[key];
+    if (!Array.isArray(rows) || rows.length !== TEAMS_PER_GROUP) {
+      return { ready: false, reason: 'CARRY_FORWARD_GROUP_INCOMPLETE', group: key };
+    }
+    const byRank = new Map<number, any>();
+    for (const row of rows) {
+      const id = String(row?.id || '');
+      const rank = Number(row?.rank);
+      if (!id || !Number.isInteger(rank) || rank < 1 || rank > TEAMS_PER_GROUP ||
+          byRank.has(rank) || seen.has(id)) {
+        return { ready: false, reason: 'CARRY_FORWARD_TEAM_OR_RANK_CONFLICT', group: key, id };
+      }
+      byRank.set(rank, row);
+      seen.add(id);
+    }
+    if (byRank.size !== TEAMS_PER_GROUP) {
+      return { ready: false, reason: 'CARRY_FORWARD_RANKS_INCOMPLETE', group: key };
+    }
+    groups[key] = Array.from({ length: TEAMS_PER_GROUP }, (_, index) => {
+      const row = byRank.get(index + 1)!;
+      return {
+        ...row,
+        id: String(row.id),
+        rank: index + 1,
+        matchesPlayed: 0,
+        wins: 0,
+        draws: 0,
+        losses: 0,
+        points: 0,
+        diff: 0,
+      };
+    });
+  }
+
+  if (Object.keys(sourceGroups || {}).some(key => !expected.includes(key))) {
+    return { ready: false, reason: 'CARRY_FORWARD_UNEXPECTED_GROUP' };
+  }
+  return { ready: true, groups };
+}
