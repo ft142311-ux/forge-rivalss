@@ -688,8 +688,13 @@ export async function publishPreparedSeason() {
   } catch {
     return { success: false, action: 'WORLD_BUILDING', reason: 'SEASON_LIFECYCLE_WINDOW_INVALID', sourceSeason, targetSeason, writesStarted: false };
   }
+  const preparedNextStartMs = new Date(initial.preparedNextSeasonStart).getTime();
+  const expectedPreparedNextStartMs = lifecycle.activationAt.getTime() + TOTAL_CYCLE_DAYS * 24 * 60 * 60 * 1000;
   if (new Date(initial.preparedSeasonStart).getTime() !== lifecycle.activationAt.getTime()) {
     return { success: false, action: 'WORLD_BUILDING', reason: 'PREPARED_ACTIVATION_DATE_MISMATCH', sourceSeason, targetSeason, writesStarted: false };
+  }
+  if (!Number.isFinite(preparedNextStartMs) || preparedNextStartMs !== expectedPreparedNextStartMs) {
+    return { success: false, action: 'WORLD_BUILDING', reason: 'PREPARED_NEXT_BOUNDARY_MISMATCH', sourceSeason, targetSeason, writesStarted: false };
   }
   if (lifecycle.publicationDeadlinePassed || lifecycle.activationDue) {
     return {
@@ -793,7 +798,8 @@ export async function activatePublishedSeason() {
 
   const activationAtMs = new Date(initial.preparedSeasonStart || '').getTime();
   const preparedNextStartMs = new Date(initial.preparedNextSeasonStart || '').getTime();
-  if (!Number.isFinite(activationAtMs) || !Number.isFinite(preparedNextStartMs) || preparedNextStartMs <= activationAtMs) {
+  const expectedNextStartMs = activationAtMs + TOTAL_CYCLE_DAYS * 24 * 60 * 60 * 1000;
+  if (!Number.isFinite(activationAtMs) || !Number.isFinite(preparedNextStartMs) || preparedNextStartMs !== expectedNextStartMs) {
     return { success: false, action: 'WORLD_NOT_READY', reason: 'PREPARED_SEASON_DATES_INVALID', sourceSeason, targetSeason, writesStarted: false };
   }
   if (Date.now() < activationAtMs) {
