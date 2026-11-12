@@ -15,3 +15,9 @@ export function isSeasonAwardAlreadyApplied(
     : {};
   return transactionExists === true || Boolean(awards[`S${season}`]);
 }
+
+
+/** Persist the trophy array whenever either independent competition grants a trophy. */
+export function shouldPersistSeasonTrophies(shouldAddLeagueCup: boolean, shouldAddPyramidCup: boolean): boolean {
+  return shouldAddLeagueCup || shouldAddPyramidCup;
+}
