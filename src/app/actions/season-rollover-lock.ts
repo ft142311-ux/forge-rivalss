@@ -186,8 +186,10 @@ export async function commitSeasonCalendarPublication(
         Number(config.activeSeasonNumber || 1) !== expected.sourceSeason ||
         Number(config.nextSeasonNumber || 0) !== expected.targetSeason ||
         Number(config.preparationTargetSeason || 0) !== expected.targetSeason ||
-        config.worldReady !== false ||
-        Number(config.calendarRevision || 0) !== expected.calendarRevision ||
+        config.worldReady !== true ||
+        config.preparedWorldReady !== true ||
+        Number(config.preparedSeasonNumber || 0) !== expected.targetSeason ||
+        Number(config.preparedCalendarRevision || 0) !== expected.calendarRevision ||
         String(config.phase || '') !== expected.phase) {
       throw new Error('SEASON_CALENDAR_PUBLICATION_STATE_CHANGED');
     }
