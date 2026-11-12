@@ -88,7 +88,7 @@ export async function GET(request: Request) {
       // A previous completed archive may be older than the immediately
       // preceding season when one or more later seasons were skipped.
       for (const olderDoc of allArchivesSnap.docs) {
-        const match = /^S(\\d+)$/.exec(olderDoc.id);
+        const match = /^S(\d+)$/.exec(olderDoc.id);
         const seasonNumber = match ? Number(match[1]) : NaN;
         if (!Number.isSafeInteger(seasonNumber) || seasonNumber < 1 || seasonNumber >= latestPreviousSeason) continue;
         const older = olderDoc.data() || {};
