@@ -7,7 +7,7 @@ import { validateRolloverPlan } from './season-rollover-plan';
 import { evaluateCanonicalDocuments } from './season-canonical';
 import { inspectGroupReconciliation } from './season-rollover-standings';
 import { getAdminDb } from '@/lib/firebase-admin';
-import { advanceAtMostOneSeasonBoundary, canPrepareImmediateCatchUpTarget, deriveSeasonDatePlan, evaluateExpiredSeasonArchives, resolveCanonicalSeasonDateWindow, resolveNextSeasonTarget } from './season-boundary';
+import { advanceAtMostOneSeasonBoundary, canPrepareImmediateCatchUpTarget, deriveSeasonDatePlan, evaluateExpiredSeasonArchives, resolveCanonicalSeasonDateWindow, resolveNextSeasonTarget, resolveSeasonLifecycleWindow } from './season-boundary';
 import { FIRST_SEASON_NEXT_START_ISO } from '@/app/lib/time-utils';
 import { isCompletedSeasonArchive, isRecoveredSeasonArchive, validateSeasonArchiveSnapshot } from './season-archive';
 import { buildBotClub } from './bot-roster';
@@ -412,14 +412,23 @@ async function buildSeasonCalendar(lease: BuildLease, pristineFirstWorld = false
     await lease.commit([{ ref: configRef, data: {
       // Keep the old season published while the target calendar is building.
       // The final readiness write below is the only publication point for S2.
-      activeSeasonNumber: seasonNumber > activeSeasonBefore ? activeSeasonBefore : seasonNumber,
-      phase: seasonNumber > activeSeasonBefore
-        ? 'GENERATING_NEXT'
-        : String(current.phase || 'REGULAR_SEASON'),
-      worldReady: false,
-      seasonStart: seasonStart.toISOString(),
-      nextSeasonStart: nextSeasonStart.toISOString(),
-      calendarRevision: CALENDAR_REVISION,
+      ...(seasonNumber > activeSeasonBefore ? {
+        activeSeasonNumber: activeSeasonBefore,
+        phase: 'GENERATING_NEXT',
+        preparedSeasonNumber: seasonNumber,
+        preparedSeasonStart: seasonStart.toISOString(),
+        preparedNextSeasonStart: nextSeasonStart.toISOString(),
+        preparedCalendarRevision: CALENDAR_REVISION,
+        preparedWorldReady: current.preparedWorldReady === true && Number(current.preparedSeasonNumber) === seasonNumber,
+        preparedPublished: current.preparedPublished === true && Number(current.preparedSeasonNumber) === seasonNumber,
+      } : {
+        activeSeasonNumber: seasonNumber,
+        phase: String(current.phase || 'REGULAR_SEASON'),
+        worldReady: false,
+        seasonStart: seasonStart.toISOString(),
+        nextSeasonStart: nextSeasonStart.toISOString(),
+        calendarRevision: CALENDAR_REVISION,
+      }),
       rebuildStatus: 'STAGE_3A8_COMPLETE',
       rebuildError: FieldValue.delete(),
       updatedAt: FieldValue.serverTimestamp(),
@@ -576,8 +585,11 @@ async function buildSeasonCalendar(lease: BuildLease, pristineFirstWorld = false
   // matches here; this check only decides whether worldReady may be true.
   const readiness = await inspectCanonicalSeason(db, seasonNumber);
   const canonicalReady = readiness.ready;
+  const buildingNextSeason = seasonNumber > activeSeasonBefore;
   if (!canonicalReady) {
-    await lease.commit([{ ref: configRef, data: { worldReady: false, phase: 'WORLD_BUILDING', updatedAt: FieldValue.serverTimestamp() }, options: { merge: true } }]);
+    await lease.commit([{ ref: configRef, data: buildingNextSeason
+      ? { preparedWorldReady: false, preparedPublished: false, phase: 'WORLD_BUILDING', updatedAt: FieldValue.serverTimestamp() }
+      : { worldReady: false, phase: 'WORLD_BUILDING', updatedAt: FieldValue.serverTimestamp() }, options: { merge: true } }]);
     return { success: true, seasonNumber, seasonStart: seasonStart.toISOString(), nextSeasonStart: nextSeasonStart.toISOString(), createdMatches, repairedMatches, repairedSourceTables, totalExpectedMatches: TOTAL_GROUPS * 56, observedCanonicalMatches: readiness.observedCanonicalMatches,
       totalExpectedSlots: TOTAL_GROUPS * TEAMS_PER_GROUP, observedCanonicalSlots: readiness.observedCanonicalSlots,
       observedCanonicalTables: readiness.observedCanonicalTables, worldReady: false, prepared: false };
@@ -586,8 +598,17 @@ async function buildSeasonCalendar(lease: BuildLease, pristineFirstWorld = false
   // A next-season build is deliberately not a publication. S1 remains active
   // until publishPreparedSeason() takes the same fenced lock and commits the
   // final activeSeasonNumber/worldReady barrier.
-  const buildingNextSeason = seasonNumber > activeSeasonBefore;
-  if (!buildingNextSeason) {
+  if (buildingNextSeason) {
+    await lease.commit([{ ref: configRef, data: {
+      preparedSeasonNumber: seasonNumber,
+      preparedSeasonStart: seasonStart.toISOString(),
+      preparedNextSeasonStart: nextSeasonStart.toISOString(),
+      preparedCalendarRevision: CALENDAR_REVISION,
+      preparedWorldReady: true,
+      phase: current.preparedPublished === true && Number(current.preparedSeasonNumber) === seasonNumber ? 'PUBLISHED' : 'GENERATING_NEXT',
+      updatedAt: FieldValue.serverTimestamp(),
+    }, options: { merge: true } }]);
+  } else {
     await lease.commit([{ ref: configRef, data: {
       activeSeasonNumber: seasonNumber,
       phase: current.phase === 'ACTIVE' ? 'ACTIVE' : 'REGULAR_SEASON',
@@ -611,7 +632,7 @@ async function buildSeasonCalendar(lease: BuildLease, pristineFirstWorld = false
     repairedSourceTables,
     totalExpectedMatches: TOTAL_GROUPS * (TEAMS_PER_GROUP * (TEAMS_PER_GROUP - 1)),
     totalExpectedSlots: TOTAL_GROUPS * TEAMS_PER_GROUP,
-    worldReady: !buildingNextSeason,
+    worldReady: buildingNextSeason ? current.worldReady === true : true,
     prepared: buildingNextSeason,
   };
 }
@@ -745,7 +766,7 @@ export async function ensureSeasonCalendar(requestedTargetSeason?: number) {
   const configuredNextTarget = configuredNextCandidates.length ? Math.max(...configuredNextCandidates) : 0;
   const nextStartMs = config.nextSeasonStart ? new Date(config.nextSeasonStart).getTime() : NaN;
   const scheduledBoundaryPassed = Number.isFinite(nextStartMs) && Date.now() >= nextStartMs;
-  const phaseRequestsPreparation = ['FINALIZING', 'GENERATING_NEXT', 'PREPARING_NEXT_SEASON', 'PREPARATION'].includes(phase);
+  const phaseRequestsPreparation = ['FINALIZING', 'GENERATING_NEXT', 'PREPARING_NEXT_SEASON', 'PREPARATION', 'PUBLISHED'].includes(phase);
   const inferredTarget = configuredNextTarget || (phaseRequestsPreparation || scheduledBoundaryPassed ? sourceSeason + 1 : sourceSeason);
   const requestedTarget = Number(requestedTargetSeason || 0);
   let targetSeason = requestedTarget > sourceSeason ? requestedTarget : inferredTarget;
@@ -890,10 +911,11 @@ export async function ensureSeasonCalendar(requestedTargetSeason?: number) {
     }
     if (targetSeason > sourceSeason) {
       await lease.commit([{ ref: db.collection('system_v1').doc('season_config'), data: {
-        phase: 'GENERATING_NEXT',
+        phase: config.preparedPublished === true && Number(config.preparedSeasonNumber) === targetSeason ? 'PUBLISHED' : 'GENERATING_NEXT',
         nextSeasonNumber: targetSeason,
         preparationTargetSeason: targetSeason,
-        worldReady: false,
+        preparedSeasonNumber: targetSeason,
+        preparedWorldReady: config.preparedWorldReady === true && Number(config.preparedSeasonNumber) === targetSeason,
         updatedAt: FieldValue.serverTimestamp(),
       }, options: { merge: true } }]);
     }
