@@ -721,29 +721,38 @@ export async function publishPreparedSeason() {
     return { success: false, action: 'WORLD_BUILDING', worldReady: true, sourceSeason, targetSeason, reason: 'SEASON_CALENDAR_BUILD_LOCKED', lockExpiresAtMs: lock.expiresAtMs };
   }
   try {
-    await commitSeasonCalendarPublication(
-      db,
-      lock.ownerId,
-      lock.token,
-      {
-        sourceSeason,
-        targetSeason,
-        calendarRevision: Number(initial.preparedCalendarRevision || 0),
-        phase: String(initial.phase || ''),
-        planRef,
-        validatePlan: (candidate: any) => validateRolloverPlan(candidate, sourceSeason, targetSeason).valid,
-      },
-      {
-        ref: configRef,
-        data: {
-          preparedPublished: true,
-          preparedPublishedAt: FieldValue.serverTimestamp(),
-          phase: 'PUBLISHED',
-          updatedAt: FieldValue.serverTimestamp(),
+    try {
+      await commitSeasonCalendarPublication(
+        db,
+        lock.ownerId,
+        lock.token,
+        {
+          sourceSeason,
+          targetSeason,
+          calendarRevision: Number(initial.preparedCalendarRevision || 0),
+          phase: String(initial.phase || ''),
+          planRef,
+          validatePlan: (candidate: any) => validateRolloverPlan(candidate, sourceSeason, targetSeason).valid,
+          publicationDeadlineMs: lifecycle.publicationDeadlineAt.getTime(),
+          activationAtMs: lifecycle.activationAt.getTime(),
         },
-        options: { merge: true },
-      },
-    );
+        {
+          ref: configRef,
+          data: {
+            preparedPublished: true,
+            preparedPublishedAt: FieldValue.serverTimestamp(),
+            phase: 'PUBLISHED',
+            updatedAt: FieldValue.serverTimestamp(),
+          },
+          options: { merge: true },
+        },
+      );
+    } catch (error: any) {
+      if (String(error?.message || '').includes('PUBLICATION_WINDOW_CLOSED')) {
+        return { success: false, action: 'WORLD_BUILDING', reason: 'PUBLICATION_WINDOW_CLOSED', sourceSeason, targetSeason, writesStarted: false };
+      }
+      throw error;
+    }
     return {
       success: true,
       action: 'SEASON_PUBLISHED',
