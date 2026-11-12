@@ -95,6 +95,15 @@ export async function runSeasonOrchestrator() {
         return { action: 'ACTIVATION_BLOCKED' as const, worldReady: true, season: Number(config.activeSeasonNumber || world.seasonNumber), activation, calendar: world, catchUp };
       }
       world = { ...world, success: true, action: 'SEASON_ACTIVATED', worldReady: true, prepared: false, seasonNumber: activation.targetSeason || world.seasonNumber, activation };
+      // End this scheduler tick at the atomic boundary. Do not immediately run
+      // catch-up settlement or another lifecycle transition against the new world.
+      return {
+        action: 'SEASON_ACTIVATED' as const,
+        worldReady: true,
+        season: world.seasonNumber,
+        activation,
+        calendar: world,
+      };
     }
 
     if (!world?.waitingForSeasonResults && world?.worldReady === true) {
