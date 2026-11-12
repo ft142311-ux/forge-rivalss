@@ -120,11 +120,11 @@ export async function GET(request: Request) {
         const match = doc.data() || {};
         return `${Number(match.level || match.division)}:${Number(match.groupId || match.group)}:${Number(match.homeRank)}:${Number(match.awayRank)}`;
       }));
-      const groupCounts = new Map<string, number>();
+      const groupCounts: Record<string, number> = {};
       const resultState = canonical.map((doc: any) => {
         const match = doc.data() || {};
         const groupKey = `${Number(match.level || match.division)}:${Number(match.groupId || match.group)}`;
-        groupCounts.set(groupKey, (groupCounts.get(groupKey) || 0) + 1);
+        groupCounts[groupKey] = (groupCounts[groupKey] || 0) + 1;
         const home = Number(match.seriesScore?.home ?? match.scoreA);
         const away = Number(match.seriesScore?.away ?? match.scoreB);
         const validScore = Number.isInteger(home) && Number.isInteger(away) &&
@@ -141,9 +141,9 @@ export async function GET(request: Request) {
       const unfinished = resultState.filter((item: any) => item.unfinished).length;
       const invalidFinished = resultState.filter((item: any) => item.invalidFinished).length;
       const hasIntegrityConflict = uniqueFixtures.size !== canonical.length || canonical.length > 840 ||
-        invalidFinished > 0 || [...groupCounts.values()].some(count => count > 56);
+        invalidFinished > 0 || Object.values(groupCounts).some(count => count > 56);
       const completeResultSet = canonical.length === 840 && finished === 840 &&
-        groupCounts.size === 15 && [...groupCounts.values()].every(count => count === 56);
+        Object.keys(groupCounts).length === 15 && Object.values(groupCounts).every(count => count === 56);
       const actuallyIncomplete = canonical.length < 840 || unfinished > 0;
 
       if (completedArchive) {
