@@ -407,12 +407,14 @@ async function prepareRecoveryCarryForwardPlan(
       const key = `D${level}-G${group}`;
       const status = String(slot.status || '').toUpperCase();
       const occupantId = String(slot.occupantId || '');
-      const id = occupantId || (status === 'FREE' ? getBotId(LEAGUE_ID, level, group, rank) : '');
+      const id = status === 'FREE'
+        ? getBotId(LEAGUE_ID, level, group, rank)
+        : status === 'OCCUPIED' ? occupantId : '';
       if (!id || (status !== 'FREE' && status !== 'OCCUPIED')) {
         return { ready: false, reason: 'RECOVERED_ARCHIVE_SLOT_IDENTITY_UNTRUSTED', slotId: slotDoc.id, status };
       }
       if (!sourceGroups[key]) sourceGroups[key] = [];
-      sourceGroups[key].push({ id, name: String(slot.occupantName || id), rank });
+      sourceGroups[key].push({ id, name: status === 'FREE' ? getBotName(level, group, rank) : String(slot.occupantName || id), rank });
     }
     const snapshot = buildRecoveredSeasonArchiveSnapshot({
       sourceSeason: seasonNumber,
@@ -582,12 +584,14 @@ async function prepareRecoveryCarryForwardPlan(
       const key = `D${level}-G${group}`;
       const status = String(slot.status || '').toUpperCase();
       const occupantId = String(slot.occupantId || '');
-      const id = occupantId || (status === 'FREE' ? getBotId(LEAGUE_ID, level, group, rank) : '');
+      const id = status === 'FREE'
+        ? getBotId(LEAGUE_ID, level, group, rank)
+        : status === 'OCCUPIED' ? occupantId : '';
       if (!id || (status !== 'FREE' && status !== 'OCCUPIED')) {
         return { ready: false, reason: 'ACTIVE_SEASON_SLOT_IDENTITY_UNTRUSTED', details: { slotId: doc.id, status } };
       }
       if (!sourceGroups[key]) sourceGroups[key] = [];
-      sourceGroups[key].push({ id, name: String(slot.occupantName || id), rank });
+      sourceGroups[key].push({ id, name: status === 'FREE' ? getBotName(level, group, rank) : String(slot.occupantName || id), rank });
     }
     const carried = buildCarryForwardGroups(sourceGroups);
     if (!carried.ready) return { ready: false, reason: carried.reason, details: { group: carried.group } };
