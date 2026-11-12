@@ -75,7 +75,7 @@ export async function GET(request: Request) {
         archiveReasons: archiveValidation.reasons,
         rolloverPlanExists: rolloverSnap.exists,
         rolloverPlanValid: rolloverValidation.valid,
-        rolloverReasons: rolloverValidation.reasons || [],
+        rolloverReasons: 'reason' in rolloverValidation ? [rolloverValidation.reason] : [],
       });
     }
 
