@@ -154,6 +154,9 @@ test('promotion and relegation move the correct teams through all four divisions
     'D3-G1-R2', 'D3-G1-R3', 'D3-G1-R4', 'D3-G1-R5', 'D3-G1-R6',
     'D2-G1-R7', 'D4-G1-R1', 'D4-G2-R1',
   ]);
+  assert.equal(ids('D2-G2').includes('D1-G1-R8'), true);
+  assert.equal(ids('D3-G2').includes('D2-G1-R8'), true);
+  assert.equal(ids('D4-G2').includes('D3-G1-R8'), true);
   assert.deepEqual(ids('D4-G1'), [
     'D4-G1-R2', 'D4-G1-R3', 'D4-G1-R4', 'D4-G1-R5', 'D4-G1-R6', 'D4-G1-R7', 'D4-G1-R8',
     'D3-G1-R7',
