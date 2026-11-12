@@ -67,6 +67,23 @@ test('S1 keeps the historical Oct 8 activation while publication is due at 16:00
   assert.equal(activation.leagueMatchesPaused, true);
 });
 
+test('finalization begins after the scheduled 14th-round kickoff and before offseason freeze', () => {
+  const start = new Date('2026-09-21T15:00:00.000Z');
+  const next = new Date('2026-10-08T15:00:00.000Z');
+  const window = resolveSeasonLifecycleWindow({
+    seasonStart: start,
+    nextSeasonStart: next,
+    now: new Date('2026-10-05T13:00:00.000Z'),
+  });
+
+  assert.equal(window.lastRoundStartAt.toISOString(), '2026-10-04T15:00:00.000Z');
+  assert.equal(window.finalizationAt.toISOString(), '2026-10-05T13:00:00.000Z');
+  assert.equal(window.offseasonStartAt.toISOString(), '2026-10-05T15:00:00.000Z');
+  assert.equal(window.finalizationAt.getTime() - window.lastRoundStartAt.getTime(), 22 * 60 * 60 * 1000);
+  assert.equal(window.offseasonStartAt.getTime() - window.finalizationAt.getTime(), 2 * 60 * 60 * 1000);
+  assert.equal(window.leagueMatchesPaused, false);
+});
+
 test('S2 onward uses the same Day 15 and 16:00 MSK publication deadline on a 15-day cycle', () => {
   const start = new Date('2026-10-08T15:00:00.000Z');
   const next = new Date('2026-10-23T15:00:00.000Z');
