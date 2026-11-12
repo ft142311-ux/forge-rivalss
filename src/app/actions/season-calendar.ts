@@ -590,29 +590,29 @@ async function buildSeasonCalendar(lease: BuildLease, pristineFirstWorld = false
     ? 0
     : await repairCanonicalSeasonTables(db, sourceSeasonNumber, lease);
   let seasonNumber = Number(current.activeSeasonNumber || 1);
-  let seasonStart = current.seasonStart
-    ? new Date(current.seasonStart)
-    : pristineFirstWorld
-      ? now
-      : new Date(FIRST_SEASON_START_ISO);
 
-  if (Number.isNaN(seasonStart.getTime())) {
-    seasonStart = new Date(FIRST_SEASON_START_ISO);
-  }
-
-  // The persisted nextSeasonStart is the canonical boundary for the transition
-  // currently being recovered. S1 -> S2 was explicitly scheduled for Oct 8,
-  // while later seasons follow TOTAL_CYCLE_DAYS. Do not recalculate that first
-  // boundary as Oct 6 merely because the normal cadence is 15 days.
-  const configuredNextStart = current.nextSeasonStart ? new Date(current.nextSeasonStart) : null;
-  const validConfiguredNextStart = configuredNextStart && Number.isFinite(configuredNextStart.getTime()) && configuredNextStart.getTime() > seasonStart.getTime();
-  let nextBoundary = validConfiguredNextStart
-    ? configuredNextStart!
-    : pristineFirstWorld
-      ? addDays(seasonStart, TOTAL_CYCLE_DAYS)
-      : seasonNumber === 1
-        ? new Date(FIRST_SEASON_NEXT_START_ISO)
-        : addDays(seasonStart, TOTAL_CYCLE_DAYS);
+  // Resolve the source season with the same canonical-date policy used by the
+  // read-only catch-up gate. A stale persisted boundary must not override the
+  // canonical production timeline during recovery; CLEAN_S1_V1 may retain its
+  // own validated 17-day first-season window.
+  const canonicalSourceStart = sourceSeasonNumber === 1
+    ? new Date(FIRST_SEASON_START_ISO)
+    : addDays(new Date(FIRST_SEASON_NEXT_START_ISO), (sourceSeasonNumber - 2) * TOTAL_CYCLE_DAYS);
+  const canonicalSourceNext = sourceSeasonNumber === 1
+    ? new Date(FIRST_SEASON_NEXT_START_ISO)
+    : addDays(canonicalSourceStart, TOTAL_CYCLE_DAYS);
+  const resolvedSourceWindow = resolveCanonicalSeasonDateWindow({
+    worldGeneration: current.worldGeneration,
+    activeSeasonNumber: sourceSeasonNumber,
+    persistedSeasonStart: current.seasonStart ? new Date(current.seasonStart) : null,
+    persistedNextSeasonStart: current.nextSeasonStart ? new Date(current.nextSeasonStart) : null,
+    canonicalSeasonStart: canonicalSourceStart,
+    canonicalNextSeasonStart: canonicalSourceNext,
+  });
+  let seasonStart = pristineFirstWorld ? now : resolvedSourceWindow.seasonStart;
+  let nextBoundary = pristineFirstWorld
+    ? addDays(seasonStart, TOTAL_CYCLE_DAYS)
+    : resolvedSourceWindow.nextSeasonStart;
 
   // Preserve the source world's actual next boundary before the one-step
   // scheduler advances its local cursor. Multi-season recovery must derive from
