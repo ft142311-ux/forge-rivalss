@@ -193,7 +193,9 @@ export function resolveSeasonLifecycleWindow(input: {
   const nextMs = nextSeasonStart.getTime();
   const nowMs = now.getTime();
   const dayMs = 24 * 60 * 60 * 1000;
-  if (!Number.isFinite(startMs) || !Number.isFinite(nextMs) || !Number.isFinite(nowMs) || nextMs <= startMs) {
+  const durationDays = (nextMs - startMs) / dayMs;
+  if (!Number.isFinite(startMs) || !Number.isFinite(nextMs) || !Number.isFinite(nowMs) ||
+      ![15, 17].includes(durationDays)) {
     throw new Error('INVALID_SEASON_LIFECYCLE_WINDOW');
   }
   const offseasonStartAt = new Date(startMs + 14 * dayMs);
