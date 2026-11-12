@@ -4,7 +4,7 @@ import { FieldValue } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { getGlobalSeasonInfo } from '@/app/lib/time-utils';
 import { logger } from '@/app/lib/logger';
-import { ensureSeasonCalendar, publishPreparedSeason } from './season-calendar';
+import { activatePublishedSeason, ensureSeasonCalendar, publishPreparedSeason } from './season-calendar';
 import { runTournamentCycle } from './tournament-system';
 import { resolveDailyMatches } from './autonomous-cycle';
 import { prepareSeasonRollover } from './season-rollover';
@@ -60,22 +60,42 @@ export async function runSeasonOrchestrator() {
         return { action: 'WORLD_BUILDING' as const, worldReady: false, season: world.seasonNumber, rollover: (world as any).rollover, catchUp };
       }
     }
-    // If the scheduled start has passed and the canonical next-season world is
-    // fully prepared, publish it from the regular orchestrator. This makes a
-    // missed activation cron recoverable without bypassing the publication
-    // transaction, rollover plan, canonical readiness gate, or write fence.
-    if (world?.prepared === true && world?.worldReady !== true) {
-      const activationAtMs = world.seasonStart ? new Date(world.seasonStart).getTime() : NaN;
-      if (Number.isFinite(activationAtMs) && Date.now() >= activationAtMs) {
+    // A prepared calendar is not the active season. Publish it by the
+    // offseason deadline, then wait for the exact configured activation boundary.
+    if (world?.prepared === true) {
+      const configSnap = await db.collection('system_v1').doc('season_config').get();
+      const config = configSnap.exists ? configSnap.data() || {} : {};
+      if (config.preparedWorldReady !== true || Number(config.preparedSeasonNumber) !== Number(world.seasonNumber)) {
+        return { action: 'WORLD_BUILDING' as const, worldReady: config.worldReady === true, season: config.activeSeasonNumber, reason: 'PREPARED_WORLD_NOT_READY', calendar: world, catchUp };
+      }
+
+      if (config.preparedPublished !== true) {
         const publication: any = await publishPreparedSeason();
         if (publication?.success !== true) {
           logger.warn('Prepared season is waiting for safe publication', publication);
-          return { action: 'WORLD_BUILDING' as const, worldReady: false, season: world.seasonNumber, publication, calendar: world, catchUp };
+          return { action: 'PUBLICATION_BLOCKED' as const, worldReady: config.worldReady === true, season: config.activeSeasonNumber, publication, calendar: world, catchUp };
         }
-        world = { ...world, success: true, action: 'SEASON_PUBLISHED', worldReady: true, prepared: false, seasonNumber: publication.targetSeason || world.seasonNumber, publication };
-      } else {
-        return { action: 'WORLD_BUILDING' as const, worldReady: false, season: world.seasonNumber, reason: 'ACTIVATION_NOT_DUE', calendar: world, catchUp };
       }
+
+      const activationAtMs = new Date(config.preparedSeasonStart || world.seasonStart || '').getTime();
+      if (!Number.isFinite(activationAtMs) || Date.now() < activationAtMs) {
+        return {
+          action: 'SEASON_PUBLISHED_WAITING_ACTIVATION' as const,
+          worldReady: true,
+          season: Number(config.activeSeasonNumber || world.seasonNumber),
+          targetSeason: Number(config.preparedSeasonNumber),
+          activationAt: Number.isFinite(activationAtMs) ? new Date(activationAtMs).toISOString() : null,
+          calendar: world,
+          catchUp,
+        };
+      }
+
+      const activation: any = await activatePublishedSeason();
+      if (activation?.success !== true) {
+        logger.warn('Published season is waiting for safe activation', activation);
+        return { action: 'ACTIVATION_BLOCKED' as const, worldReady: true, season: Number(config.activeSeasonNumber || world.seasonNumber), activation, calendar: world, catchUp };
+      }
+      world = { ...world, success: true, action: 'SEASON_ACTIVATED', worldReady: true, prepared: false, seasonNumber: activation.targetSeason || world.seasonNumber, activation };
     }
 
     if (!world?.waitingForSeasonResults && world?.worldReady === true) {
@@ -230,29 +250,24 @@ export async function buildNextSeasonWorld() {
  */
 export const generateNextSeasonWorld = buildNextSeasonWorld;
 
-/** Prepare the next season through the canonical calendar path, then verify activation gates. */
+/**
+ * Build and publish the next season ahead of time; activate only when its
+ * scheduled boundary has arrived.
+ */
 export async function activateNextSeason() {
   const db = getAdminDb();
   const configRef = db.collection('system_v1').doc('season_config');
-  return runSeasonActivationFlow({
-    readConfig: async () => {
-      const snap = await configRef.get();
-      return snap.exists ? snap.data() || {} : null;
-    },
-    prepareNextSeason: async (sourceSeason, targetSeason) => {
-      const build: any = await buildNextSeasonWorld();
-      if (Number(build.sourceSeason) !== sourceSeason || Number(build.targetSeason) !== targetSeason) {
-        return { ...build, success: false, action: build.action || 'WORLD_NOT_READY', reason: 'PREPARATION_TARGET_MISMATCH' };
-      }
-      if (build.success !== true || build.world?.prepared !== true) return build;
-      return publishPreparedSeason();
-    },
-    readRollover: async (targetSeason) => {
-      const snap = await db.collection('league_season_rollovers_v1').doc(`S${targetSeason}`).get();
-      const rollover = snap.exists ? snap.data() || {} : null;
-      return validateRolloverPlan(rollover, targetSeason - 1, targetSeason).valid ? rollover : null;
-    },
-  });
+  const snap = await configRef.get();
+  if (!snap.exists) return { success: false, action: 'WORLD_NOT_READY', reason: 'SEASON_CONFIG_MISSING' };
+  const config = snap.data() || {};
+
+  if (config.preparedPublished === true) return activatePublishedSeason();
+
+  const build: any = await buildNextSeasonWorld();
+  if (build?.success !== true || build?.world?.prepared !== true) return build;
+  const publication: any = await publishPreparedSeason();
+  if (publication?.success !== true) return publication;
+  return activatePublishedSeason();
 }
 
 /**
