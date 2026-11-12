@@ -177,3 +177,17 @@ test('invalid or non-forward recovery targets fail closed', async () => {
   assert.throws(() => deriveRecoverySeasonWindow(3, new Date('2026-11-07T15:00:00.000Z'), 3, 15), /INVALID_RECOVERY_SEASON_WINDOW/);
   assert.throws(() => deriveRecoverySeasonWindow(3, new Date('invalid'), 4, 15), /INVALID_RECOVERY_SEASON_WINDOW/);
 });
+
+
+test('clean emulator S1 may use its persisted 17-day boundary without changing production dates', async () => {
+  const { isValidCleanSeasonOneBoundary } = await import('../src/app/actions/season-boundary.ts');
+  assert.equal(isValidCleanSeasonOneBoundary(
+    'CLEAN_S1_V1', 1, '2026-09-25T15:00:00.000Z', '2026-10-12T15:00:00.000Z',
+  ), true);
+  assert.equal(isValidCleanSeasonOneBoundary(
+    'CLEAN_S1_V1', 1, '2026-09-25T15:00:00.000Z', '2026-10-11T15:00:00.000Z',
+  ), false);
+  assert.equal(isValidCleanSeasonOneBoundary(
+    'PRODUCTION', 1, '2026-09-25T15:00:00.000Z', '2026-10-12T15:00:00.000Z',
+  ), false);
+});

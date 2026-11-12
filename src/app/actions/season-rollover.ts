@@ -5,6 +5,7 @@ import { acquireSeasonRolloverLock, releaseSeasonRolloverLock } from './season-r
 import { buildPromotionRelegationGroups, validateRolloverPlan } from './season-rollover-plan';
 import { isSeasonArchiveReadyToComplete, validateSeasonArchiveSnapshot } from './season-archive';
 import { runTwoPhaseSeasonOrchestration } from './season-orchestration';
+import { isValidCleanSeasonOneBoundary } from './season-boundary';
 
 const LEAGUE_ID = 'ALPHA';
 const EXPECTED_MATCHES = TOTAL_GROUPS * TEAMS_PER_GROUP * (TEAMS_PER_GROUP - 1);
@@ -22,7 +23,15 @@ async function checkSeason1To2Boundary(db: any, sourceSeason: number, targetSeas
   const config = configSnap.data() || {};
   const activeSeason = Number(config.activeSeasonNumber || 1);
   const scheduledStartMs = config.nextSeasonStart ? new Date(config.nextSeasonStart).getTime() : NaN;
-  const expectedStartMs = new Date(SEASON_2_SCHEDULED_START).getTime();
+  const cleanGeneratedBoundary = isValidCleanSeasonOneBoundary(
+    config.worldGeneration,
+    activeSeason,
+    config.seasonStart,
+    config.nextSeasonStart,
+  );
+  const expectedStartMs = cleanGeneratedBoundary
+    ? scheduledStartMs
+    : new Date(SEASON_2_SCHEDULED_START).getTime();
   const configuredNext = [config.nextSeasonNumber, config.preparationTargetSeason]
     .map((value: any) => Number(value))
     .filter((value: number) => Number.isSafeInteger(value) && value > 0);
