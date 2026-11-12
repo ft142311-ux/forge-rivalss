@@ -1,9 +1,9 @@
 import { NextResponse } from 'next/server';
-import { reconstructMissingSeasonTwoAndPrepareSeasonThree } from '@/app/actions/season-recovery';
 import { isCronAuthorized } from '../cron-auth';
 
 export const maxDuration = 300;
 
+/** Disabled: this legacy endpoint is outside the S1 → S2 recovery scope. */
 export async function POST(request: Request) {
   if (!isCronAuthorized(request)) {
     return new NextResponse('Unauthorized', { status: 401 });
