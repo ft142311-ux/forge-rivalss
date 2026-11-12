@@ -61,6 +61,7 @@ test('S1 keeps the historical Oct 8 activation while publication is due at 16:00
   assert.equal(atDeadline.publicationDeadlinePassed, false);
   const afterDeadline = resolveSeasonLifecycleWindow({ seasonStart: start, nextSeasonStart: next, now: new Date('2026-10-06T13:00:00.001Z') });
   assert.equal(afterDeadline.publicationDeadlinePassed, true);
+  assert.equal(afterDeadline.activationDue, false, 'missing the publication deadline must not activate the target season');
   const activation = resolveSeasonLifecycleWindow({ seasonStart: start, nextSeasonStart: next, now: next });
   assert.equal(activation.activationDue, true);
   assert.equal(activation.leagueMatchesPaused, true);
