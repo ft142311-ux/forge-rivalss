@@ -11,7 +11,7 @@ import {
   commitSeasonCalendarWrites,
   releaseSeasonCalendarBuildLock,
 } from '../src/app/actions/season-rollover-lock.ts';
-import { validateRolloverPlan, expectedRolloverGroups } from '../src/app/actions/season-rollover-plan.ts';
+import { buildPromotionRelegationGroups, validateRolloverPlan, expectedRolloverGroups } from '../src/app/actions/season-rollover-plan.ts';
 import { cronResultStatus } from '../src/app/api/cron/cron-result.ts';
 import { calendarBlockedResult, isCalendarReady } from '../src/app/actions/season-calendar-gate.ts';
 
@@ -114,6 +114,70 @@ test('incomplete and duplicate-slot plans are rejected; full plan is reusable', 
   duplicate.groups['D2-G1'][0].id = duplicate.groups['D1-G1'][0].id;
   assert.equal(validateRolloverPlan(duplicate, 1, 2).valid, false);
   assert.equal(validateRolloverPlan(plan, 1, 2).valid, true);
+});
+
+test('promotion and relegation move the correct teams through all four divisions', () => {
+  const standings = {};
+  for (const group of expectedRolloverGroups()) {
+    standings[group] = Array.from({ length: 8 }, (_, index) => ({
+      id: `${group}-R${index + 1}`,
+      rank: index + 1,
+      matchesPlayed: 14,
+      points: 42 - index,
+      wins: 14 - index,
+      draws: 0,
+      losses: index,
+      diff: 20 - index,
+    }));
+  }
+
+  const result = buildPromotionRelegationGroups(standings);
+  assert.equal(result.ready, true);
+  assert.equal(Object.keys(result.groups).length, 15);
+  assert.equal(validateRolloverPlan({
+    sourceSeason: 1,
+    targetSeason: 2,
+    ready: true,
+    groups: result.groups,
+  }, 1, 2).valid, true);
+
+  const ids = key => result.groups[key].map(team => team.id);
+  assert.deepEqual(ids('D1-G1'), [
+    'D1-G1-R1', 'D1-G1-R2', 'D1-G1-R3', 'D1-G1-R4', 'D1-G1-R5', 'D1-G1-R6',
+    'D2-G1-R1', 'D2-G2-R1',
+  ]);
+  assert.deepEqual(ids('D2-G1'), [
+    'D2-G1-R2', 'D2-G1-R3', 'D2-G1-R4', 'D2-G1-R5', 'D2-G1-R6',
+    'D1-G1-R1', 'D3-G1-R1', 'D3-G2-R1',
+  ]);
+  assert.deepEqual(ids('D3-G1'), [
+    'D3-G1-R2', 'D3-G1-R3', 'D3-G1-R4', 'D3-G1-R5', 'D3-G1-R6',
+    'D2-G1-R1', 'D4-G1-R1', 'D4-G2-R1',
+  ]);
+  assert.deepEqual(ids('D4-G1'), [
+    'D4-G1-R2', 'D4-G1-R3', 'D4-G1-R4', 'D4-G1-R5', 'D4-G1-R6', 'D4-G1-R7', 'D4-G1-R8',
+    'D3-G1-R1',
+  ]);
+
+  for (const teams of Object.values(result.groups)) {
+    assert.deepEqual(teams.map(team => team.rank), [1, 2, 3, 4, 5, 6, 7, 8]);
+    assert.ok(teams.every(team => team.matchesPlayed === 0 && team.points === 0));
+  }
+  const allIds = Object.values(result.groups).flat().map(team => team.id);
+  assert.equal(allIds.length, 120);
+  assert.equal(new Set(allIds).size, 120);
+});
+
+test('promotion/relegation mapping blocks a missing parent or child champion', () => {
+  const standings = Object.fromEntries(expectedRolloverGroups().map(group => [
+    group,
+    Array.from({ length: 8 }, (_, index) => ({ id: `${group}-R${index + 1}`, rank: index + 1 })),
+  ]));
+  standings['D2-G1'] = standings['D2-G1'].slice(0, 7);
+  const result = buildPromotionRelegationGroups(standings);
+  assert.equal(result.ready, false);
+  assert.equal(result.reason, 'ROLLOVER_GROUP_SIZE_INVALID');
+  assert.equal(result.group, 'D1-G1');
 });
 
 test('cron controlled failures use a non-success HTTP status', () => {
