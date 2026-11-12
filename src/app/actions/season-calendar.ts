@@ -405,13 +405,13 @@ async function buildSeasonCalendar(lease: BuildLease, pristineFirstWorld = false
     }
   }
 
-  // Registration is allowed only after the complete world is provisioned.
-  // A new/changed season therefore starts in worldReady=false and is flipped
-  // to true only after all 15 groups, 120 slots and 840 matches are present.
+  // The active world remains registration-ready while the next world is built.
+  // Prepared readiness is tracked separately and becomes true only after all
+  // 15 groups, 120 slots and 840 matches pass the canonical gate.
   if (seasonChanged || needsRepair || !configSnap.exists) {
     await lease.commit([{ ref: configRef, data: {
-      // Keep the old season published while the target calendar is building.
-      // The final readiness write below is the only publication point for S2.
+      // Preserve all active-season fields. These prepared fields describe only
+      // the target calendar and must not disable registration in the active world.
       ...(seasonNumber > activeSeasonBefore ? {
         activeSeasonNumber: activeSeasonBefore,
         phase: 'GENERATING_NEXT',
@@ -595,9 +595,9 @@ async function buildSeasonCalendar(lease: BuildLease, pristineFirstWorld = false
       observedCanonicalTables: readiness.observedCanonicalTables, worldReady: false, prepared: false };
   }
 
-  // A next-season build is deliberately not a publication. S1 remains active
-  // until publishPreparedSeason() takes the same fenced lock and commits the
-  // final activeSeasonNumber/worldReady barrier.
+  // A next-season build is neither publication nor activation. The active
+  // season remains available; publication marks the prepared world separately,
+  // and activation switches the active-season fields at the scheduled boundary.
   if (buildingNextSeason) {
     await lease.commit([{ ref: configRef, data: {
       preparedSeasonNumber: seasonNumber,
