@@ -669,7 +669,42 @@ export async function publishPreparedSeason() {
     return { success: false, action: 'WORLD_NOT_READY', reason: 'INVALID_PUBLICATION_TARGET', sourceSeason, targetSeason };
   }
   if (initial.preparedPublished === true && Number(initial.preparedSeasonNumber) === targetSeason) {
-    return { success: true, action: 'SEASON_ALREADY_PUBLISHED', sourceSeason, targetSeason, published: true, activated: false };
+    const planRef = db.collection('league_season_rollovers_v1').doc(`S${targetSeason}`);
+    const [planSnap, readiness] = await Promise.all([
+      planRef.get(),
+      inspectCanonicalSeason(db, targetSeason),
+    ]);
+    const plan = planSnap.exists ? planSnap.data() || {} : null;
+    const preparedStartMs = new Date(initial.preparedSeasonStart || '').getTime();
+    const preparedNextStartMs = new Date(initial.preparedNextSeasonStart || '').getTime();
+    const validPublishedState = initial.worldReady === true &&
+      initial.preparedWorldReady === true &&
+      preparedStartMs === new Date(initial.nextSeasonStart || '').getTime() &&
+      preparedNextStartMs === preparedStartMs + TOTAL_CYCLE_DAYS * 24 * 60 * 60 * 1000 &&
+      validateRolloverPlan(plan, sourceSeason, targetSeason).valid &&
+      readiness.ready;
+    if (!validPublishedState) {
+      return {
+        success: false,
+        action: 'WORLD_BUILDING',
+        reason: 'PUBLISHED_SEASON_INTEGRITY_FAILED',
+        sourceSeason,
+        targetSeason,
+        writesStarted: false,
+        ...readiness,
+      };
+    }
+    return {
+      success: true,
+      action: 'SEASON_ALREADY_PUBLISHED',
+      sourceSeason,
+      targetSeason,
+      worldReady: true,
+      preparedWorldReady: true,
+      published: true,
+      activated: false,
+      ...readiness,
+    };
   }
   if (initial.worldReady !== true || initial.preparedWorldReady !== true ||
       Number(initial.preparedSeasonNumber) !== targetSeason ||
