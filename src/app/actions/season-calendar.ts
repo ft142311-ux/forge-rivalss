@@ -293,7 +293,7 @@ async function prepareRecoveryCarryForwardPlan(
   if (activeSeason > 1) {
     const priorArchivesSnap = await db.collection('league_season_archives_v1').get();
     for (const archiveDoc of priorArchivesSnap.docs) {
-      const match = /^S(\\d+)$/.exec(archiveDoc.id);
+      const match = /^S(\d+)$/.exec(archiveDoc.id);
       const seasonNumber = match ? Number(match[1]) : NaN;
       if (!Number.isSafeInteger(seasonNumber) || seasonNumber < 1 || seasonNumber >= activeSeason) continue;
       const archive = archiveDoc.data() || {};
