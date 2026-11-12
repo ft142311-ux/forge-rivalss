@@ -441,7 +441,7 @@ async function prepareRecoveryCarryForwardPlan(
     createdAt: FieldValue.serverTimestamp(),
   };
   const planRef = db.collection('league_season_rollovers_v1').doc(`S${targetSeason}`);
-  await planRef.set(plan, { merge: true });
+  await planRef.set(plan);
 
   const historyBatch = db.batch();
   for (const skipped of policy.skippedSeasons) {
@@ -860,6 +860,12 @@ async function pruneSeasonHistoryAfterActivation(
   targetSeason: number,
   retainedArchiveSeason: number | null,
 ) {
+  const activePlanRef = db.collection('league_season_rollovers_v1').doc(`S${targetSeason}`);
+  const activePlanSnap = await activePlanRef.get();
+  const activePlan = activePlanSnap.exists ? activePlanSnap.data() || {} : null;
+  if (!validateRolloverPlan(activePlan, targetSeason - 1, targetSeason).valid) {
+    throw new Error('ACTIVATED_SEASON_ROLLOVER_PLAN_MISSING_OR_INVALID');
+  }
   if (retainedArchiveSeason !== null) {
     const retainedRef = db.collection('league_season_archives_v1').doc(`S${retainedArchiveSeason}`);
     const retainedSnap = await retainedRef.get();
