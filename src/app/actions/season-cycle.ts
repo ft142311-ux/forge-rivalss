@@ -135,9 +135,9 @@ export async function runSeasonOrchestrator() {
 
     const configRef = db.collection('system_v1').doc('season_config');
 
-    // Finalize results during the offseason itself, not only when the next
-    // calendar date rolls over. The archive/placement plan is the barrier for
-    // advancing to GENERATING_NEXT.
+    // Finalize the 14th-round results as soon as the final fixtures are due,
+    // before Day 15 freezes league simulation. The archive/placement plan is
+    // the barrier for advancing to GENERATING_NEXT.
     const beforeFinalizeSnap = await configRef.get();
     if (beforeFinalizeSnap.exists && (beforeFinalizeSnap.data() || {}).phase === 'FINALIZING') {
       const activeSeason = Number((beforeFinalizeSnap.data() || {}).activeSeasonNumber || world.seasonNumber || 1);
@@ -176,7 +176,7 @@ export async function runSeasonOrchestrator() {
             phase: 'FINALIZING',
             finalizationStartedAt: FieldValue.serverTimestamp(),
             offseasonScheduledAt: lifecycle.offseasonStartAt.toISOString(),
-            offseasonStartedAt: FieldValue.serverTimestamp(),
+            offseasonStartedAt: lifecycle.offseasonStartAt,
             preparationStartedAt: FieldValue.serverTimestamp(),
             preparationTargetSeason: Number(config.activeSeasonNumber || world.seasonNumber || 1) + 1,
             updatedAt: FieldValue.serverTimestamp(),
