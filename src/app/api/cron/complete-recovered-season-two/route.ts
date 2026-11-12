@@ -9,11 +9,10 @@ export async function POST(request: Request) {
   if (!isCronAuthorized(request)) {
     return new NextResponse('Unauthorized', { status: 401 });
   }
-  try {
-    const result = await completeRecoveredSeasonTwo();
-    return NextResponse.json(result, { status: result.success ? 200 : 409 });
-  } catch (error: any) {
-    console.error('[SEASON 2 RECOVERY COMPLETION]:', error?.message || 'UNKNOWN_ERROR');
-    return NextResponse.json({ success: false, reason: 'SEASON_2_RECOVERY_COMPLETION_FAILED' }, { status: 500 });
-  }
+  return NextResponse.json({
+    success: false,
+    action: 'LEGACY_SEASON_RECOVERY_DISABLED',
+    reason: 'SEASON_1_TO_2_ONLY_RECOVERY_SCOPE',
+    writesStarted: false,
+  }, { status: 410 });
 }
