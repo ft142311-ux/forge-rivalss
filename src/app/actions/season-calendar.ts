@@ -1014,7 +1014,7 @@ async function pruneSeasonHistoryAfterActivation(
     db.collection('league_season_history_v1').get(),
     db.collection('league_season_rollovers_v1').get(),
   ]);
-  const historyById = new Map(historySnap.docs.map((doc: any) => [doc.id, doc.data() || {}]));
+  const historyById = new Map<string, any>(historySnap.docs.map((doc: any): [string, any] => [doc.id, doc.data() || {}]));
   const archiveItems = [];
   for (const archiveDoc of archivesSnap.docs) {
     const archive = archiveDoc.data() || {};
