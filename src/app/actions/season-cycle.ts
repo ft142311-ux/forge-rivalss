@@ -175,7 +175,8 @@ export async function runSeasonOrchestrator() {
           t.update(configRef, {
             phase: 'FINALIZING',
             finalizationStartedAt: FieldValue.serverTimestamp(),
-            offseasonStartedAt: lifecycle.offseasonStartAt.toISOString(),
+            offseasonScheduledAt: lifecycle.offseasonStartAt.toISOString(),
+            offseasonStartedAt: FieldValue.serverTimestamp(),
             preparationStartedAt: FieldValue.serverTimestamp(),
             preparationTargetSeason: Number(config.activeSeasonNumber || world.seasonNumber || 1) + 1,
             updatedAt: FieldValue.serverTimestamp(),
