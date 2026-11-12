@@ -101,7 +101,7 @@ export async function GET(request: Request) {
         else invalidOlderArchives.push(seasonNumber);
       }
       if (olderArchiveSeasons.length) retainedArchiveSeason = Math.max(...olderArchiveSeasons);
-      if (invalidOlderArchives.some(season => season > (retainedArchiveSeason ?? 0))) historyReady = false;
+      if (invalidOlderArchives.length > 0) historyReady = false;
 
       const invalidExplicitLeagueMatch = sourceMatchesSnap.docs.some((doc: any) => {
         const match = doc.data() || {};

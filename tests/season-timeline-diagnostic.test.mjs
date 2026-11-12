@@ -84,3 +84,11 @@ test('recovery builder uses the canonical source date window before deriving a m
   assert.match(source, /sourceNextBoundary = new Date\(nextBoundary\.getTime\(\)\)/);
   assert.match(source, /deriveRecoverySeasonWindow\(/);
 });
+
+
+test('invalid older archives block recovery and are never treated as harmless cleanup candidates', () => {
+  const calendar = readFileSync(resolve(root, 'src/app/actions/season-calendar.ts'), 'utf8');
+  const diagnostic = readFileSync(routePath, 'utf8');
+  assert.match(calendar, /if \(invalidPreviousArchiveSeasons\.length > 0\)/);
+  assert.match(diagnostic, /if \(invalidOlderArchives\.length > 0\)/);
+});

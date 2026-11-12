@@ -478,7 +478,7 @@ async function prepareRecoveryCarryForwardPlan(
     Number(policy.retainedArchiveSeason || 0),
     Number(previousRetainedArchiveSeason || 0),
   ) || null;
-  if (invalidPreviousArchiveSeasons.some(season => season > (retainedArchiveSeason || 0))) {
+  if (invalidPreviousArchiveSeasons.length > 0) {
     return {
       ready: false,
       reason: 'PREVIOUS_RETAINED_ARCHIVE_REQUIRES_RECONCILIATION',
