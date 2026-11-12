@@ -100,3 +100,15 @@ test('history cleanup requires the target season to be the active ready world', 
   assert.match(source, /Number\(activeConfig\.activeSeasonNumber\) !== targetSeason/);
   assert.match(source, /activeConfig\.worldReady !== true/);
 });
+
+
+test('incomplete and preparing seasons persist truthful participant snapshots instead of fabricating final standings', () => {
+  const source = readFileSync(resolve(root, 'src/app/actions/season-calendar.ts'), 'utf8');
+  const archive = readFileSync(resolve(root, 'src/app/actions/season-archive.ts'), 'utf8');
+  assert.match(source, /persistRecoveredArchive/);
+  assert.match(source, /PREPARING_SEASON_ARCHIVE_RECOVERY_FAILED/);
+  assert.match(source, /liveState\.status === 'incomplete' \|\| liveState\.status === 'no_canonical_results'/);
+  assert.match(source, /buildRecoveredSeasonArchiveSnapshot/);
+  assert.match(archive, /finalStandingsAvailable: false/);
+  assert.match(archive, /unresolvedMatches: MATCHES_PER_SEASON - finishedMatches/);
+});
