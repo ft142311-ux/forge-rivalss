@@ -93,16 +93,25 @@ export async function GET(request: Request) {
         const match = doc.data() || {};
         return `${Number(match.level || match.division)}:${Number(match.groupId || match.group)}:${Number(match.tour || match.day || 0)}:${Number(match.homeRank)}:${Number(match.awayRank)}`;
       }));
-      const finished = canonical.filter((doc: any) => {
+      const resultState = canonical.map((doc: any) => {
         const match = doc.data() || {};
         const home = Number(match.seriesScore?.home ?? match.scoreA);
         const away = Number(match.seriesScore?.away ?? match.scoreB);
-        return match.isFinished === true && String(match.status || '').toLowerCase() === 'finished' &&
-          Number.isInteger(home) && Number.isInteger(away) && home >= 0 && away >= 0 &&
-          home <= 2 && away <= 2 && (home > 0 || away > 0);
-      }).length;
-      const hasIntegrityConflict = uniqueFixtures.size !== canonical.length || canonical.length > 840;
-      const actuallyIncomplete = canonical.length < 840 || finished < canonical.length;
+        const validScore = Number.isInteger(home) && Number.isInteger(away) &&
+          home >= 0 && away >= 0 && home <= 2 && away <= 2 && (home > 0 || away > 0);
+        return {
+          unfinished: match.isFinished !== true,
+          validFinished: match.isFinished === true &&
+            String(match.status || '').toLowerCase() === 'finished' && validScore,
+          invalidFinished: match.isFinished === true &&
+            (String(match.status || '').toLowerCase() !== 'finished' || !validScore),
+        };
+      });
+      const finished = resultState.filter((item: any) => item.validFinished).length;
+      const unfinished = resultState.filter((item: any) => item.unfinished).length;
+      const invalidFinished = resultState.filter((item: any) => item.invalidFinished).length;
+      const hasIntegrityConflict = uniqueFixtures.size !== canonical.length || canonical.length > 840 || invalidFinished > 0;
+      const actuallyIncomplete = canonical.length < 840 || unfinished > 0;
 
       if (completedArchive) {
         retainedArchiveSeason = latestPreviousSeason;
@@ -131,6 +140,8 @@ export async function GET(request: Request) {
           canonicalMatches: canonical.length,
           uniqueCanonicalFixtures: uniqueFixtures.size,
           finishedMatches: finished,
+          unfinishedMatches: unfinished,
+          invalidFinishedResults: invalidFinished,
           rolloverPlanExists: rolloverSnap.exists,
           rolloverPlanValid: rolloverValidation.valid,
         });
@@ -147,6 +158,7 @@ export async function GET(request: Request) {
           archiveExists: archiveSnap.exists,
           canonicalMatches: canonical.length,
           finishedMatches: finished,
+          unfinishedMatches: unfinished,
           reason: skippedSeason.reason,
         });
       } else {
