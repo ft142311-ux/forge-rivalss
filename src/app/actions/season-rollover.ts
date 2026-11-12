@@ -6,6 +6,7 @@ import { buildPromotionRelegationGroups, validateRolloverPlan } from './season-r
 import { isSeasonArchiveReadyToComplete, validateSeasonArchiveSnapshot } from './season-archive';
 import { runTwoPhaseSeasonOrchestration } from './season-orchestration';
 import { isValidCleanSeasonOneBoundary } from './season-boundary';
+import { isSeasonAwardAlreadyApplied } from './season-awards-policy';
 
 const LEAGUE_ID = 'ALPHA';
 const EXPECTED_MATCHES = TOTAL_GROUPS * TEAMS_PER_GROUP * (TEAMS_PER_GROUP - 1);
@@ -199,12 +200,12 @@ async function applySeasonAwards(db: any, sourceSeason: number, standings: Recor
       const isChampion = champion && String(champion.id) === uid;
 
       const result = await db.runTransaction(async (t: any) => {
-        const playerSnap = await t.get(playerRef);
+        const [playerSnap, transactionSnap] = await Promise.all([t.get(playerRef), t.get(txRef)]);
         if (!playerSnap.exists) return { paid: false, trophy: false };
         const player = playerSnap.data() || {};
         const awardKey = `S${sourceSeason}`;
         const awards = player.seasonAwards && typeof player.seasonAwards === 'object' ? player.seasonAwards : {};
-        if (awards[awardKey]) return { paid: false, trophy: false };
+        if (isSeasonAwardAlreadyApplied(player, transactionSnap.exists, sourceSeason)) return { paid: false, trophy: false };
 
         const before = Math.max(0, Math.floor(Number(player.credits) || 0));
         const after = before + prize;

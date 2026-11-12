@@ -57,3 +57,13 @@ test('a skipped season never becomes an archive or rollover source', () => {
   assert.equal(result.retainedArchiveSeason, 1);
   assert.deepEqual(result.archivesToPruneAfterActivation, []);
 });
+
+
+test('season award retries are blocked by either the player marker or the economy ledger', async () => {
+  const { isSeasonAwardAlreadyApplied } = await import('../src/app/actions/season-awards-policy.ts');
+  assert.equal(isSeasonAwardAlreadyApplied({ seasonAwards: { S4: { prize: 100 } } }, false, 4), true);
+  assert.equal(isSeasonAwardAlreadyApplied({}, true, 4), true);
+  assert.equal(isSeasonAwardAlreadyApplied({ seasonAwards: { S3: { prize: 100 } } }, false, 4), false);
+  assert.equal(isSeasonAwardAlreadyApplied({}, false, 4), false);
+  assert.equal(isSeasonAwardAlreadyApplied({}, false, 0), true);
+});
