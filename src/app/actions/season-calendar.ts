@@ -1204,54 +1204,12 @@ export async function ensureSeasonCalendar(requestedTargetSeason?: number) {
       return { success: false, worldReady: false, action: 'WORLD_BUILDING', reason: 'SEASON_DATE_CONFIG_INVALID', writesStarted: false };
     }
 
-    const explicitRecoveryTarget = Number(config.recoveryTargetSeason || 0);
-    const directRecoveryTarget = explicitRecoveryTarget === datePlan.expectedSeasonNumber && requestedTarget === explicitRecoveryTarget;
     if (datePlan.expectedSeasonNumber > sourceSeason + 1) {
-      const archiveStates: Record<number, { valid: boolean; reason?: string }> = {};
-      for (const missedSeason of datePlan.completedSeasons.filter(season => season > sourceSeason)) {
-        const archiveRef = db.collection('league_season_archives_v1').doc(`S${missedSeason}`);
-        const archiveSnap = await archiveRef.get();
-        if (!archiveSnap.exists) {
-          archiveStates[missedSeason] = { valid: false, reason: 'ARCHIVE_MISSING' };
-          continue;
-        }
-        const archiveData = archiveSnap.data() || {};
-        if (!isCompletedSeasonArchive(archiveData) && !(missedSeason === 2 && isRecoveredSeasonArchive(archiveData))) {
-          archiveStates[missedSeason] = { valid: false, reason: 'ARCHIVE_INVALID' };
-          continue;
-        }
-        const archivedMatchesSnap = await archiveRef.collection('matches').get();
-        const archivedMatches = archivedMatchesSnap.docs.map((doc: any) => ({ ...doc.data(), matchId: doc.id }));
-        const validation = isRecoveredSeasonArchive(archiveData)
-          ? { valid: true, reasons: [] as string[] }
-          : validateSeasonArchiveSnapshot(archiveData, archivedMatches);
-        archiveStates[missedSeason] = validation.valid ? { valid: true } : { valid: false, reason: 'ARCHIVE_INVALID' };
-      }
-    const archiveGate = evaluateExpiredSeasonArchives(datePlan, archiveStates);
-      if (!archiveGate.ready) {
-        return {
-          success: false, worldReady: false, action: 'WORLD_BUILDING',
-          reason: archiveGate.reason,
-          expectedSeasonNumber: datePlan.expectedSeasonNumber,
-          expectedSeasonStart: datePlan.expectedSeasonStart.toISOString(),
-          missedSeasons: archiveGate.missedSeasons,
-          invalidSeasons: archiveGate.invalidSeasons,
-          writesStarted: false,
-        };
-      }
-      if (directRecoveryTarget && archiveGate.ready) targetSeason = explicitRecoveryTarget;
-      else if (!canPrepareImmediateCatchUpTarget(sourceSeason, targetSeason, archiveGate.ready)) return {
-        success: false, worldReady: false, action: 'WORLD_BUILDING',
-        reason: 'SEQUENTIAL_SEASON_CATCH_UP_REQUIRED',
-        expectedSeasonNumber: datePlan.expectedSeasonNumber,
-        expectedSeasonStart: datePlan.expectedSeasonStart.toISOString(),
-        missedSeasons: archiveGate.missedSeasons,
-        writesStarted: false,
-      };
+      targetSeason = datePlan.expectedSeasonNumber;
     }
   }
 
-  const directRecoveryBuild = targetSeason === Number(config.recoveryTargetSeason || 0) && targetSeason > sourceSeason + 1;
+  const directRecoveryBuild = targetSeason > sourceSeason + 1;
   const beforeLockPreflight = pristineFirstWorld || directRecoveryBuild
     ? { ready: true, diagnostics: [] as any[] }
     : await inspectCalendarRepairPreflight(db, sourceSeason);
@@ -1332,6 +1290,7 @@ export async function ensureSeasonCalendar(requestedTargetSeason?: number) {
         nextSeasonNumber: targetSeason,
         preparationTargetSeason: targetSeason,
         preparedSeasonNumber: targetSeason,
+        ...(directRecoveryBuild ? { recoveryTargetSeason: targetSeason } : {}),
         preparedWorldReady: config.preparedWorldReady === true && Number(config.preparedSeasonNumber) === targetSeason,
         updatedAt: FieldValue.serverTimestamp(),
       }, options: { merge: true } }]);
