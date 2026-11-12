@@ -215,7 +215,7 @@ export async function buildNextSeasonWorld() {
     return { success: false, action: 'WORLD_NOT_READY', sourceSeason, targetSeason, reason: 'INVALID_TARGET_SEASON' };
   }
   const phase = String(config.phase || '').toUpperCase();
-  const nextSeasonPreparationPhases = ['FINALIZING', 'GENERATING_NEXT', 'WORLD_BUILDING', 'PREPARING_NEXT_SEASON', 'PREPARATION'];
+  const nextSeasonPreparationPhases = ['FINALIZING', 'GENERATING_NEXT', 'WORLD_BUILDING', 'PREPARING_NEXT_SEASON', 'PREPARATION', 'PUBLISHED'];
   if (targetSeason === sourceSeason + 1 && !nextSeasonPreparationPhases.includes(phase)) {
     return {
       success: false,
