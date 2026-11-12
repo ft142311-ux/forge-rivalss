@@ -652,7 +652,11 @@ async function inspectCanonicalSeason(db: any, seasonNumber: number) {
   });
 }
 
-/** Publish a previously built next-season calendar under a fresh fenced lease. */
+/**
+ * Publish a fully validated next-season calendar without activating it.
+ * Publication must complete by 16:00 MSK on the offseason day; activation is
+ * a separate transaction at the configured next-season boundary (18:00 MSK).
+ */
 export async function publishPreparedSeason() {
   const db = getAdminDb();
   const configRef = db.collection('system_v1').doc('season_config');
@@ -660,62 +664,62 @@ export async function publishPreparedSeason() {
   if (!initialSnap.exists) return { success: false, action: 'WORLD_NOT_READY', reason: 'SEASON_CONFIG_MISSING' };
   const initial = initialSnap.data() || {};
   const sourceSeason = Number(initial.activeSeasonNumber || 1);
-  const targetSeason = Number(initial.nextSeasonNumber || initial.preparationTargetSeason || sourceSeason + 1);
-  const scheduledStartMs = initial.seasonStart ? new Date(initial.seasonStart).getTime() : NaN;
-  if (Number.isFinite(scheduledStartMs) && Date.now() < scheduledStartMs) {
-    return { success: false, action: 'WORLD_NOT_READY', reason: 'ACTIVATION_NOT_DUE', sourceSeason, targetSeason, scheduledStart: new Date(scheduledStartMs).toISOString(), writesStarted: false };
-  }
-  const directRecoveryPublication = targetSeason === sourceSeason + 2 && Number(initial.recoveryTargetSeason || 0) === targetSeason;
-  const planSourceSeason = directRecoveryPublication ? targetSeason - 1 : sourceSeason;
-  if (!Number.isSafeInteger(targetSeason) || (targetSeason !== sourceSeason + 1 && !directRecoveryPublication)) {
+  const targetSeason = Number(initial.nextSeasonNumber || initial.preparationTargetSeason || 0);
+  if (!Number.isSafeInteger(targetSeason) || targetSeason !== sourceSeason + 1) {
     return { success: false, action: 'WORLD_NOT_READY', reason: 'INVALID_PUBLICATION_TARGET', sourceSeason, targetSeason };
   }
+  if (initial.preparedPublished === true && Number(initial.preparedSeasonNumber) === targetSeason) {
+    return { success: true, action: 'SEASON_ALREADY_PUBLISHED', sourceSeason, targetSeason, published: true, activated: false };
+  }
+  if (initial.worldReady !== true || initial.preparedWorldReady !== true ||
+      Number(initial.preparedSeasonNumber) !== targetSeason ||
+      !initial.preparedSeasonStart || !initial.preparedNextSeasonStart) {
+    return { success: false, action: 'WORLD_BUILDING', reason: 'PREPARED_WORLD_NOT_READY', sourceSeason, targetSeason, writesStarted: false };
+  }
 
-  const planSnap = await db.collection('league_season_rollovers_v1').doc(`S${targetSeason}`).get();
+  let lifecycle: ReturnType<typeof resolveSeasonLifecycleWindow>;
+  try {
+    lifecycle = resolveSeasonLifecycleWindow({
+      seasonStart: initial.seasonStart,
+      nextSeasonStart: initial.nextSeasonStart,
+      now: new Date(),
+    });
+  } catch {
+    return { success: false, action: 'WORLD_BUILDING', reason: 'SEASON_LIFECYCLE_WINDOW_INVALID', sourceSeason, targetSeason, writesStarted: false };
+  }
+  if (new Date(initial.preparedSeasonStart).getTime() !== lifecycle.activationAt.getTime()) {
+    return { success: false, action: 'WORLD_BUILDING', reason: 'PREPARED_ACTIVATION_DATE_MISMATCH', sourceSeason, targetSeason, writesStarted: false };
+  }
+  if (lifecycle.publicationDeadlinePassed || lifecycle.activationDue) {
+    return {
+      success: false,
+      action: 'WORLD_BUILDING',
+      reason: lifecycle.activationDue ? 'PUBLICATION_WINDOW_CLOSED' : 'PUBLICATION_DEADLINE_MISSED',
+      sourceSeason,
+      targetSeason,
+      publicationDeadline: lifecycle.publicationDeadlineAt.toISOString(),
+      activationAt: lifecycle.activationAt.toISOString(),
+      writesStarted: false,
+    };
+  }
+
+  const planRef = db.collection('league_season_rollovers_v1').doc(`S${targetSeason}`);
+  const planSnap = await planRef.get();
   const plan = planSnap.exists ? planSnap.data() || {} : null;
-  if (!plan || !validateRolloverPlan(plan, planSourceSeason, targetSeason).valid || (directRecoveryPublication && plan.mode !== 'recovery_carry_forward')) {
+  if (!plan || !validateRolloverPlan(plan, sourceSeason, targetSeason).valid) {
     return { success: false, action: 'ROLLOVER_NOT_READY', sourceSeason, targetSeason, reason: 'ARCHIVE_OR_PLACEMENT_PLAN_NOT_READY' };
+  }
+
+  const readiness = await inspectCanonicalSeason(db, targetSeason);
+  if (!readiness.ready) {
+    return { success: false, action: 'WORLD_BUILDING', sourceSeason, targetSeason, reason: 'CANONICAL_CALENDAR_INCOMPLETE', ...readiness };
   }
 
   const lock = await acquireSeasonCalendarBuildLock(db, sourceSeason, targetSeason);
   if (!lock.acquired) {
-    return { success: false, action: 'WORLD_BUILDING', worldReady: false, sourceSeason, targetSeason, reason: 'SEASON_CALENDAR_BUILD_LOCKED', lockExpiresAtMs: lock.expiresAtMs };
+    return { success: false, action: 'WORLD_BUILDING', worldReady: true, sourceSeason, targetSeason, reason: 'SEASON_CALENDAR_BUILD_LOCKED', lockExpiresAtMs: lock.expiresAtMs };
   }
-  const lease: BuildLease = {
-    assert: async () => { await assertSeasonCalendarBuildLock(db, lock.ownerId, lock.token); },
-    commit: writes => commitSeasonCalendarWrites(db, lock.ownerId, lock.token, writes),
-  };
   try {
-    await lease.assert();
-    const currentSnap = await configRef.get();
-    const current = currentSnap.exists ? currentSnap.data() || {} : {};
-    const currentSource = Number(current.activeSeasonNumber || 1);
-    const currentTarget = Number(current.nextSeasonNumber || current.preparationTargetSeason || currentSource + 1);
-    if (currentSource !== sourceSeason || currentTarget !== targetSeason || current.worldReady === true) {
-      return { success: false, action: 'WORLD_NOT_READY', reason: 'PUBLICATION_STATE_CHANGED', sourceSeason: currentSource, targetSeason: currentTarget, worldReady: current.worldReady === true };
-    }
-    const currentScheduledStartMs = current.seasonStart ? new Date(current.seasonStart).getTime() : NaN;
-    if (Number.isFinite(currentScheduledStartMs) && Date.now() < currentScheduledStartMs) {
-      return { success: false, action: 'WORLD_NOT_READY', reason: 'ACTIVATION_NOT_DUE', sourceSeason: currentSource, targetSeason: currentTarget, scheduledStart: new Date(currentScheduledStartMs).toISOString(), writesStarted: false };
-    }
-    if (!['GENERATING_NEXT', 'WORLD_BUILDING'].includes(String(current.phase || '')) ||
-        Number(current.calendarRevision || 0) !== CALENDAR_REVISION ||
-        Number(current.nextSeasonNumber || 0) !== targetSeason ||
-        Number(current.preparationTargetSeason || 0) !== targetSeason) {
-      return { success: false, action: 'WORLD_NOT_READY', reason: 'PUBLICATION_STATE_CHANGED', sourceSeason: currentSource, targetSeason: currentTarget, worldReady: current.worldReady === true };
-    }
-
-    const latestPlanSnap = await db.collection('league_season_rollovers_v1').doc(`S${targetSeason}`).get();
-    const latestPlan = latestPlanSnap.exists ? latestPlanSnap.data() || {} : null;
-    if (!latestPlan || !validateRolloverPlan(latestPlan, planSourceSeason, targetSeason).valid || (directRecoveryPublication && latestPlan.mode !== 'recovery_carry_forward')) {
-      return { success: false, action: 'ROLLOVER_NOT_READY', sourceSeason, targetSeason, reason: 'ARCHIVE_OR_PLACEMENT_PLAN_NOT_READY' };
-    }
-
-    const readiness = await inspectCanonicalSeason(db, targetSeason);
-    if (!readiness.ready) {
-      return { success: false, action: 'WORLD_BUILDING', sourceSeason, targetSeason, worldReady: false, reason: 'CANONICAL_CALENDAR_INCOMPLETE', ...readiness };
-    }
-
     await commitSeasonCalendarPublication(
       db,
       lock.ownerId,
@@ -723,30 +727,119 @@ export async function publishPreparedSeason() {
       {
         sourceSeason,
         targetSeason,
-        calendarRevision: CALENDAR_REVISION,
-        phase: String(current.phase || ''),
-        planRef: db.collection('league_season_rollovers_v1').doc(`S${targetSeason}`),
-        validatePlan: (candidate: any) => validateRolloverPlan(candidate, planSourceSeason, targetSeason).valid && (!directRecoveryPublication || candidate.mode === 'recovery_carry_forward'),
+        calendarRevision: Number(initial.preparedCalendarRevision || 0),
+        phase: String(initial.phase || ''),
+        planRef,
+        validatePlan: (candidate: any) => validateRolloverPlan(candidate, sourceSeason, targetSeason).valid,
       },
       {
         ref: configRef,
         data: {
-          activeSeasonNumber: targetSeason,
-          phase: current.phase === 'ACTIVE' ? 'ACTIVE' : 'REGULAR_SEASON',
-          worldReady: true,
-          seasonStart: current.seasonStart,
-          nextSeasonStart: current.nextSeasonStart,
-          calendarRevision: CALENDAR_REVISION,
-          recoveryTargetSeason: FieldValue.delete(),
+          preparedPublished: true,
+          preparedPublishedAt: FieldValue.serverTimestamp(),
+          phase: 'PUBLISHED',
           updatedAt: FieldValue.serverTimestamp(),
         },
         options: { merge: true },
       },
     );
-    return { success: true, action: 'SEASON_PUBLISHED', sourceSeason, targetSeason, worldReady: true, ...readiness };
+    return {
+      success: true,
+      action: 'SEASON_PUBLISHED',
+      sourceSeason,
+      targetSeason,
+      worldReady: true,
+      preparedWorldReady: true,
+      published: true,
+      activated: false,
+      publicationDeadline: lifecycle.publicationDeadlineAt.toISOString(),
+      activationAt: lifecycle.activationAt.toISOString(),
+      ...readiness,
+    };
   } finally {
     await releaseSeasonCalendarBuildLock(db, lock.ownerId, lock.token);
   }
+}
+
+/**
+ * Atomically activate a previously published season at/after its scheduled
+ * 18:00 MSK boundary. This never builds or publishes a world.
+ */
+export async function activatePublishedSeason() {
+  const db = getAdminDb();
+  const configRef = db.collection('system_v1').doc('season_config');
+  const initialSnap = await configRef.get();
+  if (!initialSnap.exists) return { success: false, action: 'WORLD_NOT_READY', reason: 'SEASON_CONFIG_MISSING' };
+  const initial = initialSnap.data() || {};
+  const sourceSeason = Number(initial.activeSeasonNumber || 1);
+  const targetSeason = Number(initial.preparedSeasonNumber || initial.nextSeasonNumber || 0);
+  if (!Number.isSafeInteger(targetSeason) || targetSeason !== sourceSeason + 1) {
+    return { success: false, action: 'WORLD_NOT_READY', reason: 'INVALID_ACTIVATION_TARGET', sourceSeason, targetSeason };
+  }
+  if (initial.preparedPublished !== true || initial.preparedWorldReady !== true ||
+      Number(initial.preparedSeasonNumber) !== targetSeason || initial.worldReady !== true) {
+    return { success: false, action: 'WORLD_NOT_READY', reason: 'SEASON_NOT_PUBLISHED', sourceSeason, targetSeason, writesStarted: false };
+  }
+
+  const activationAtMs = new Date(initial.preparedSeasonStart || '').getTime();
+  const preparedNextStartMs = new Date(initial.preparedNextSeasonStart || '').getTime();
+  if (!Number.isFinite(activationAtMs) || !Number.isFinite(preparedNextStartMs) || preparedNextStartMs <= activationAtMs) {
+    return { success: false, action: 'WORLD_NOT_READY', reason: 'PREPARED_SEASON_DATES_INVALID', sourceSeason, targetSeason, writesStarted: false };
+  }
+  if (Date.now() < activationAtMs) {
+    return { success: false, action: 'WORLD_NOT_READY', reason: 'ACTIVATION_NOT_DUE', sourceSeason, targetSeason, activationAt: new Date(activationAtMs).toISOString(), writesStarted: false };
+  }
+
+  const planRef = db.collection('league_season_rollovers_v1').doc(`S${targetSeason}`);
+  const readiness = await inspectCanonicalSeason(db, targetSeason);
+  if (!readiness.ready) {
+    return { success: false, action: 'WORLD_NOT_READY', reason: 'CANONICAL_CALENDAR_INCOMPLETE', sourceSeason, targetSeason, ...readiness };
+  }
+
+  const result = await db.runTransaction(async (tx: any) => {
+    const [configSnap, planSnap] = await Promise.all([tx.get(configRef), tx.get(planRef)]);
+    if (!configSnap.exists) return { success: false, reason: 'SEASON_CONFIG_MISSING' };
+    const current = configSnap.data() || {};
+    const plan = planSnap.exists ? planSnap.data() || {} : null;
+    if (Number(current.activeSeasonNumber || 1) !== sourceSeason ||
+        Number(current.preparedSeasonNumber || 0) !== targetSeason ||
+        Number(current.nextSeasonNumber || 0) !== targetSeason ||
+        Number(current.preparationTargetSeason || 0) !== targetSeason ||
+        current.worldReady !== true || current.preparedWorldReady !== true ||
+        current.preparedPublished !== true ||
+        new Date(current.preparedSeasonStart || '').getTime() !== activationAtMs ||
+        Date.now() < activationAtMs) {
+      return { success: false, reason: 'ACTIVATION_STATE_CHANGED' };
+    }
+    if (!validateRolloverPlan(plan, sourceSeason, targetSeason).valid) {
+      return { success: false, reason: 'ROLLOVER_PLAN_INVALID' };
+    }
+    tx.update(configRef, {
+      activeSeasonNumber: targetSeason,
+      phase: 'REGULAR_SEASON',
+      worldReady: true,
+      seasonStart: current.preparedSeasonStart,
+      nextSeasonStart: current.preparedNextSeasonStart,
+      calendarRevision: Number(current.preparedCalendarRevision || CALENDAR_REVISION),
+      nextSeasonNumber: FieldValue.delete(),
+      preparationTargetSeason: FieldValue.delete(),
+      preparedSeasonNumber: FieldValue.delete(),
+      preparedSeasonStart: FieldValue.delete(),
+      preparedNextSeasonStart: FieldValue.delete(),
+      preparedCalendarRevision: FieldValue.delete(),
+      preparedWorldReady: FieldValue.delete(),
+      preparedPublished: FieldValue.delete(),
+      preparedPublishedAt: FieldValue.delete(),
+      activatedAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+    return { success: true };
+  });
+
+  if (result.success !== true) {
+    return { success: false, action: 'WORLD_NOT_READY', reason: result.reason || 'ACTIVATION_BLOCKED', sourceSeason, targetSeason, writesStarted: false };
+  }
+  return { success: true, action: 'SEASON_ACTIVATED', sourceSeason, targetSeason, worldReady: true, activationAt: new Date(activationAtMs).toISOString(), ...readiness };
 }
 
 /**
