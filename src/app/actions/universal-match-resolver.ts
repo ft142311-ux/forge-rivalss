@@ -128,7 +128,7 @@ export async function resolveUniversalMatchDocument(
     const awayData: any = awaySnap.data() || {};
     const homeName = normalizeName(homeData.clubName || homeData.displayName || match.homeName || match.hostName, 'Home');
     const awayName = normalizeName(awayData.clubName || awayData.displayName || match.awayName || match.challengerName, 'Away');
-    const matchType = String(match.matchType || match.type || 'league').toLowerCase();
+
 
     const simulation = runMatchEngine({
       mode: matchType,
