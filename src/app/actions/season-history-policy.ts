@@ -79,3 +79,22 @@ export function resolveSeasonCatchUpPolicy(
     archivesToPruneAfterActivation,
   };
 }
+
+/**
+ * Detect the committed-but-not-finalized activation window.
+ * Activation itself is atomic; cleanup is deliberately post-commit and may
+ * need to be resumed by a later cron invocation after a process interruption.
+ */
+export function resolvePostActivationRetry(config: any) {
+  const activeSeason = Number(config?.activeSeasonNumber || 0);
+  const targetSeason = Number(config?.historyCleanupTargetSeason || 0);
+  if (config?.historyCleanupPending !== true) {
+    return { ready: false as const, reason: 'NO_PENDING_ACTIVATION_CLEANUP' };
+  }
+  if (!Number.isSafeInteger(activeSeason) || activeSeason < 2 ||
+      !Number.isSafeInteger(targetSeason) || targetSeason !== activeSeason ||
+      config?.worldReady !== true) {
+    return { ready: false as const, reason: 'ACTIVATION_CLEANUP_STATE_INVALID' };
+  }
+  return { ready: true as const, sourceSeason: activeSeason - 1, targetSeason };
+}
