@@ -3,11 +3,12 @@ import 'server-only';
 import { FieldValue } from 'firebase-admin/firestore';
 import { prepareSeasonRollover } from './season-rollover';
 import { acquireSeasonCalendarBuildLock, assertSeasonCalendarBuildLock, commitSeasonCalendarPublication, commitSeasonCalendarWrites, releaseSeasonCalendarBuildLock } from './season-rollover-lock';
-import { validateRolloverPlan } from './season-rollover-plan';
+import { buildCarryForwardGroups, buildPromotionRelegationGroups, validateRolloverPlan } from './season-rollover-plan';
+import { resolveSeasonCatchUpPolicy, type SeasonHistoryState } from './season-history-policy';
 import { evaluateCanonicalDocuments } from './season-canonical';
 import { inspectGroupReconciliation } from './season-rollover-standings';
 import { getAdminDb } from '@/lib/firebase-admin';
-import { advanceAtMostOneSeasonBoundary, canPrepareImmediateCatchUpTarget, deriveSeasonDatePlan, evaluateExpiredSeasonArchives, resolveCanonicalSeasonDateWindow, resolveNextSeasonTarget, resolveSeasonActivationWindow, resolveSeasonLifecycleWindow } from './season-boundary';
+import { advanceAtMostOneSeasonBoundary, deriveSeasonDatePlan, resolveCanonicalSeasonDateWindow, resolveNextSeasonTarget, resolveSeasonActivationWindow, resolveSeasonLifecycleWindow } from './season-boundary';
 import { FIRST_SEASON_NEXT_START_ISO } from '@/app/lib/time-utils';
 import { isCompletedSeasonArchive, isRecoveredSeasonArchive, validateSeasonArchiveSnapshot } from './season-archive';
 import { buildBotClub } from './bot-roster';
@@ -266,6 +267,195 @@ async function ensureBotClubs(db: any, teams: any[], state: { count: number; set
  * It repairs missing matches and prepares the next season without deleting
  * existing clubs or table data.
  */
+
+type RecoveryPlanResult =
+  | { ready: true; plan: Record<string, any>; skippedSeasons: Array<{ seasonNumber: number; reason: string }>; retainedArchiveSeason: number | null }
+  | { ready: false; reason: string; details?: any };
+
+/**
+ * Inspect every elapsed season without simulating anything. Fully completed
+ * seasons require a verified archive; genuinely incomplete seasons are marked
+ * as skipped. The target plan is derived from the latest verified final table,
+ * or from the active season's original slot placements when no completed
+ * archive exists.
+ */
+async function prepareRecoveryCarryForwardPlan(
+  db: any,
+  activeSeason: number,
+  targetSeason: number,
+): Promise<RecoveryPlanResult> {
+  const states: Record<number, SeasonHistoryState> = {};
+  let latestCompletedArchive: { season: number; standings: Record<string, any[]> } | null = null;
+  let latestRecoveredParticipants: { season: number; groups: Record<string, any[]> } | null = null;
+
+  const inspectCanonicalResults = async (seasonNumber: number) => {
+    const snap = await db.collection('matches_v2')
+      .where('season', '==', seasonNumber)
+      .where('version', '==', 140)
+      .get();
+    const canonical = snap.docs.filter((doc: any) => {
+      const m = doc.data() || {};
+      const type = String(m.matchType || m.type || m.competitionType || '').toLowerCase();
+      if (/(cup|tournament|friendly|scrim|pyramid)/.test(type) || m.isCup === true ||
+          m.isFriendly === true || m.tournamentId || m.cupId) return false;
+      const level = Number(m.level || m.division || 0);
+      const group = Number(m.groupId || m.group || 0);
+      const homeRank = Number(m.homeRank || 0);
+      const awayRank = Number(m.awayRank || 0);
+      return level >= 1 && level <= MAX_LEVELS && group >= 1 && group <= Math.pow(2, level - 1) &&
+        homeRank >= 1 && homeRank <= TEAMS_PER_GROUP && awayRank >= 1 && awayRank <= TEAMS_PER_GROUP &&
+        homeRank !== awayRank && (!m.leagueId || String(m.leagueId) === LEAGUE_ID);
+    });
+    const fixtures = new Set<string>();
+    let unfinished = 0;
+    let invalidFinished = 0;
+    for (const doc of canonical) {
+      const m = doc.data() || {};
+      const key = `${Number(m.level || m.division)}:${Number(m.groupId || m.group)}:${Number(m.homeRank)}:${Number(m.awayRank)}`;
+      if (fixtures.has(key)) return { status: 'integrity_conflict' as const, reason: 'DUPLICATE_CANONICAL_FIXTURE' };
+      fixtures.add(key);
+      if (m.isFinished !== true) {
+        unfinished++;
+        continue;
+      }
+      const home = Number(m.seriesScore?.home ?? m.scoreA);
+      const away = Number(m.seriesScore?.away ?? m.scoreB);
+      if (String(m.status || '').toLowerCase() !== 'finished' ||
+          !Number.isInteger(home) || !Number.isInteger(away) ||
+          home < 0 || away < 0 || home > 2 || away > 2 || (home === 0 && away === 0)) {
+        invalidFinished++;
+      }
+    }
+    if (canonical.length > TOTAL_GROUPS * 56 || invalidFinished > 0) {
+      return { status: 'integrity_conflict' as const, reason: invalidFinished ? 'INVALID_FINISHED_RESULT' : 'TOO_MANY_CANONICAL_FIXTURES' };
+    }
+    if (canonical.length === 0) return { status: 'no_canonical_results' as const, reason: 'NO_CANONICAL_RESULTS' };
+    if (canonical.length === TOTAL_GROUPS * 56 && unfinished === 0) {
+      return { status: 'completed' as const, archiveValid: false, archiveReason: 'COMPLETED_ARCHIVE_REQUIRED' };
+    }
+    return { status: 'incomplete' as const, reason: 'SEASON_INCOMPLETE' };
+  };
+
+  for (let season = activeSeason; season < targetSeason; season++) {
+    const archiveRef = db.collection('league_season_archives_v1').doc(`S${season}`);
+    const archiveSnap = await archiveRef.get();
+    if (archiveSnap.exists) {
+      const archive = archiveSnap.data() || {};
+      if (isCompletedSeasonArchive(archive)) {
+        const matchesSnap = await archiveRef.collection('matches').get();
+        const matches = matchesSnap.docs.map((doc: any) => ({ ...doc.data(), matchId: doc.id }));
+        const validation = validateSeasonArchiveSnapshot(archive, matches);
+        if (!validation.valid) {
+          states[season] = { status: 'integrity_conflict', reason: validation.reasons.join(',') || 'ARCHIVE_INVALID' };
+          continue;
+        }
+        states[season] = { status: 'completed', archiveValid: true };
+        if (!latestCompletedArchive || season > latestCompletedArchive.season) {
+          latestCompletedArchive = { season, standings: archive.standings || {} };
+        }
+        continue;
+      }
+      if (isRecoveredSeasonArchive(archive)) {
+        states[season] = { status: 'incomplete', reason: 'RECOVERED_INCOMPLETE_SEASON' };
+        if (!latestRecoveredParticipants || season > latestRecoveredParticipants.season) {
+          latestRecoveredParticipants = { season, groups: archive.startingParticipants || {} };
+        }
+        continue;
+      }
+      states[season] = { status: 'integrity_conflict', reason: 'EXISTING_ARCHIVE_NOT_VERIFIABLE' };
+      continue;
+    }
+    states[season] = await inspectCanonicalResults(season);
+  }
+
+  const missed = Array.from({ length: Math.max(0, targetSeason - activeSeason) }, (_, index) => activeSeason + index);
+  const policy = resolveSeasonCatchUpPolicy(missed, states);
+  if (!policy.ready) {
+    return { ready: false, reason: policy.reason || 'SEASON_HISTORY_REQUIRES_RECONCILIATION', details: { states, skippedSeasons: policy.skippedSeasons } };
+  }
+
+  let groups: Record<string, any[]>;
+  let placementSource: string;
+  let lastTrustedSeason: number;
+  if (latestCompletedArchive) {
+    const promoted = buildPromotionRelegationGroups(latestCompletedArchive.standings);
+    if (!promoted.ready) return { ready: false, reason: promoted.reason, details: { group: promoted.group, count: promoted.count } };
+    groups = promoted.groups;
+    placementSource = 'latest_verified_completed_archive';
+    lastTrustedSeason = latestCompletedArchive.season;
+  } else if (latestRecoveredParticipants) {
+    const carried = buildCarryForwardGroups(latestRecoveredParticipants.groups);
+    if (!carried.ready) return { ready: false, reason: carried.reason, details: { group: carried.group } };
+    groups = carried.groups;
+    placementSource = 'recovered_starting_participants';
+    lastTrustedSeason = latestRecoveredParticipants.season;
+  } else {
+    const slotsSnap = await db.collection('league_slots_v1')
+      .where('season', '==', activeSeason)
+      .where('leagueId', '==', LEAGUE_ID)
+      .get();
+    const sourceGroups: Record<string, any[]> = {};
+    for (const doc of slotsSnap.docs) {
+      const slot = doc.data() || {};
+      const level = Number(slot.division || slot.level || 0);
+      const group = Number(slot.group || 0);
+      const rank = Number(slot.rank || 0);
+      if (level < 1 || level > MAX_LEVELS || group < 1 || group > Math.pow(2, level - 1) ||
+          rank < 1 || rank > TEAMS_PER_GROUP) {
+        return { ready: false, reason: 'ACTIVE_SEASON_SLOT_COORDINATES_INVALID', details: { slotId: doc.id } };
+      }
+      const key = `D${level}-G${group}`;
+      const status = String(slot.status || '').toUpperCase();
+      const occupantId = String(slot.occupantId || '');
+      const id = occupantId || (status === 'FREE' ? getBotId(LEAGUE_ID, level, group, rank) : '');
+      if (!id || (status !== 'FREE' && status !== 'OCCUPIED')) {
+        return { ready: false, reason: 'ACTIVE_SEASON_SLOT_IDENTITY_UNTRUSTED', details: { slotId: doc.id, status } };
+      }
+      if (!sourceGroups[key]) sourceGroups[key] = [];
+      sourceGroups[key].push({ id, name: String(slot.occupantName || id), rank });
+    }
+    const carried = buildCarryForwardGroups(sourceGroups);
+    if (!carried.ready) return { ready: false, reason: carried.reason, details: { group: carried.group } };
+    groups = carried.groups;
+    placementSource = 'active_season_slot_baseline';
+    lastTrustedSeason = activeSeason;
+  }
+
+  const plan = {
+    sourceSeason: targetSeason - 1,
+    targetSeason,
+    leagueId: LEAGUE_ID,
+    ready: true,
+    mode: 'recovery_carry_forward',
+    skippedSeasons: policy.skippedSeasons,
+    lastTrustedSeason,
+    placementSource,
+    retainedArchiveSeason: policy.retainedArchiveSeason,
+    promotionRule: latestCompletedArchive ? 'apply_latest_verified_completed_season_once' : 'carry_forward_without_promotion_or_relegation',
+    groups,
+    createdAt: FieldValue.serverTimestamp(),
+  };
+  const planRef = db.collection('league_season_rollovers_v1').doc(`S${targetSeason}`);
+  await planRef.set(plan, { merge: true });
+
+  const historyBatch = db.batch();
+  for (const skipped of policy.skippedSeasons) {
+    historyBatch.set(db.collection('league_season_history_v1').doc(`S${skipped.seasonNumber}`), {
+      seasonNumber: skipped.seasonNumber,
+      status: 'SKIPPED_PENDING_ACTIVATION',
+      reason: skipped.reason,
+      targetSeason,
+      noResultsFabricated: true,
+      awardsApplied: false,
+      promotionRelegationApplied: false,
+      updatedAt: FieldValue.serverTimestamp(),
+    }, { merge: true });
+  }
+  if (policy.skippedSeasons.length) await historyBatch.commit();
+
+  return { ready: true, plan, skippedSeasons: policy.skippedSeasons, retainedArchiveSeason: policy.retainedArchiveSeason };
+}
+
 async function buildSeasonCalendar(lease: BuildLease, pristineFirstWorld = false) {
   const db = getAdminDb();
   const configRef = db.collection('system_v1').doc('season_config');
@@ -276,7 +466,8 @@ async function buildSeasonCalendar(lease: BuildLease, pristineFirstWorld = false
   // This preserves scores and the existing eight canonical ranks.
   const sourceSeasonNumber = Number(current.activeSeasonNumber || 1);
   const recoveryTarget = Number(current.recoveryTargetSeason || 0);
-  const directRecovery = recoveryTarget === sourceSeasonNumber + 2;
+  const requestedRecoveryTarget = Number(current.nextSeasonNumber || current.preparationTargetSeason || current.preparedSeasonNumber || 0);
+  const directRecovery = recoveryTarget > sourceSeasonNumber + 1 || requestedRecoveryTarget > sourceSeasonNumber + 1;
   const repairedSourceTables = directRecovery ? 0 : await repairCanonicalSeasonTables(db, sourceSeasonNumber, lease);
 
   const now = new Date();
@@ -329,7 +520,7 @@ async function buildSeasonCalendar(lease: BuildLease, pristineFirstWorld = false
   const phase = String(current.phase || '').toUpperCase();
   const requestedTarget = Number(current.nextSeasonNumber || current.preparationTargetSeason || 0);
   const transitionRequested = ['FINALIZING', 'GENERATING_NEXT', 'PREPARING_NEXT_SEASON', 'PREPARATION', 'PUBLISHED'].includes(phase) || (phase === 'WORLD_BUILDING' && requestedTarget > Number(current.activeSeasonNumber || 1));
-  if (transitionRequested) {
+  if (transitionRequested && !directRecovery) {
     // A stale/corrupt target must never jump over an intermediate season.
     // Each season requires its own archive, standings, calendar and publication gates.
     const forcedTarget = resolveNextSeasonTarget(Number(current.activeSeasonNumber || 1), requestedTarget);
@@ -363,10 +554,24 @@ async function buildSeasonCalendar(lease: BuildLease, pristineFirstWorld = false
     const planSourceSeason = directRecovery ? seasonNumber - 1 : activeSeasonBefore;
     const planSnap = await db.collection('league_season_rollovers_v1').doc(`S${seasonNumber}`).get();
     const savedPlan = planSnap.exists ? planSnap.data() || {} : null;
-    if (savedPlan && validateRolloverPlan(savedPlan, planSourceSeason, seasonNumber).valid && (!directRecovery || savedPlan.mode === 'recovery_carry_forward')) {
+    if (savedPlan && validateRolloverPlan(savedPlan, planSourceSeason, seasonNumber).valid &&
+        (!directRecovery || savedPlan.mode === 'recovery_carry_forward')) {
       rolloverPlan = savedPlan;
+    } else if (directRecovery) {
+      const recovery = await prepareRecoveryCarryForwardPlan(db, activeSeasonBefore, seasonNumber);
+      if (!recovery.ready) {
+        return {
+          success: false,
+          seasonNumber: activeSeasonBefore,
+          targetSeasonNumber: seasonNumber,
+          worldReady: false,
+          waitingForSeasonResults: true,
+          rollover: { ready: false, reason: recovery.reason, details: recovery.details },
+          writesStarted: false,
+        };
+      }
+      rolloverPlan = recovery.plan;
     } else {
-      if (directRecovery) return { success: false, seasonNumber: activeSeasonBefore, targetSeasonNumber: seasonNumber, worldReady: false, waitingForSeasonResults: true, rollover: { ready: false, reason: 'RECOVERY_CARRY_FORWARD_PLAN_INVALID' }, writesStarted: false };
       const rollover = await prepareSeasonRollover(db, activeSeasonBefore, seasonNumber);
       if (!rollover.ready) {
         return {
@@ -421,6 +626,7 @@ async function buildSeasonCalendar(lease: BuildLease, pristineFirstWorld = false
         preparedCalendarRevision: CALENDAR_REVISION,
         preparedWorldReady: current.preparedWorldReady === true && Number(current.preparedSeasonNumber) === seasonNumber,
         preparedPublished: current.preparedPublished === true && Number(current.preparedSeasonNumber) === seasonNumber,
+        preparedRecoveryMode: directRecovery,
       } : {
         activeSeasonNumber: seasonNumber,
         phase: String(current.phase || 'REGULAR_SEASON'),
@@ -604,6 +810,7 @@ async function buildSeasonCalendar(lease: BuildLease, pristineFirstWorld = false
       preparedSeasonStart: seasonStart.toISOString(),
       preparedNextSeasonStart: nextSeasonStart.toISOString(),
       preparedCalendarRevision: CALENDAR_REVISION,
+      preparedRecoveryMode: directRecovery,
       preparedWorldReady: true,
       phase: current.preparedPublished === true && Number(current.preparedSeasonNumber) === seasonNumber ? 'PUBLISHED' : 'GENERATING_NEXT',
       updatedAt: FieldValue.serverTimestamp(),
