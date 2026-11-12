@@ -2,7 +2,7 @@ import { FieldValue } from 'firebase-admin/firestore';
 import { getTableId, MAX_LEVELS, TEAMS_PER_GROUP, TOTAL_GROUPS } from '@/app/lib/leagues-data';
 import { buildCanonicalSlotRepairs, calculateGroupStandings, evaluateRolloverPreflight, hasCanonicalFixtureStructure, hasCompleteCanonicalFixtureSet, inspectGroupReconciliation } from './season-rollover-standings';
 import { acquireSeasonRolloverLock, releaseSeasonRolloverLock } from './season-rollover-lock';
-import { validateRolloverPlan } from './season-rollover-plan';
+import { buildPromotionRelegationGroups, validateRolloverPlan } from './season-rollover-plan';
 import { isSeasonArchiveReadyToComplete, validateSeasonArchiveSnapshot } from './season-archive';
 import { runTwoPhaseSeasonOrchestration } from './season-orchestration';
 
@@ -673,34 +673,13 @@ export async function prepareSeasonRollover(db: any, sourceSeason: number, targe
   // Pay clubs and award the D1 champion before the rollover plan is marked ready.
   const awards = await applySeasonAwards(db, sourceSeason, standings);
 
-  // Pyramid rollover: each group sends its champion one level up (except D1);
-  // the bottom two descend to its two child groups (except D4).
-  const placements: Record<string, TeamRow[]> = {};
-  const get = (level: number, group: number) => standings[groupKey(level, group)] || [];
-  for (let level = 1; level <= MAX_LEVELS; level++) {
-    for (let group = 1; group <= Math.pow(2, level - 1); group++) {
-      const own = get(level, group);
-      let incoming: TeamRow[] = [];
-      if (level > 1) {
-        const parentGroup = Math.ceil(group / 2);
-        const parent = get(level - 1, parentGroup);
-        incoming.push(parent[group % 2 === 1 ? 6 : 7]); // parent ranks 7 and 8
-      }
-      if (level < MAX_LEVELS) {
-        incoming.push(get(level + 1, group * 2 - 1)[0], get(level + 1, group * 2)[0]);
-      }
-      let retained: TeamRow[];
-      if (level === 1) retained = own.slice(0, 6);
-      else if (level === MAX_LEVELS) retained = own.slice(1, 8);
-      else retained = own.slice(1, 6);
-      const teams = [...retained, ...incoming].filter(Boolean);
-      const unique = new Map<string, TeamRow>();
-      for (const team of teams) if (team?.id) unique.set(String(team.id), team);
-      const normalized = [...unique.values()].slice(0, TEAMS_PER_GROUP).map((team, i) => ({ ...team, id: String(team.id), rank: i + 1, matchesPlayed: 0, wins: 0, draws: 0, losses: 0, points: 0, diff: 0 }));
-      if (normalized.length !== TEAMS_PER_GROUP) return { ready: false, reason: 'ROLLOVER_GROUP_SIZE_INVALID', group: groupKey(level, group), count: normalized.length };
-      placements[groupKey(level, group)] = normalized;
-    }
+  // Apply the canonical pyramid movement using the pure, regression-tested
+  // placement function. A malformed group blocks the plan before it is persisted.
+  const placementResult = buildPromotionRelegationGroups(standings);
+  if (!placementResult.ready) {
+    return { ready: false, reason: placementResult.reason, group: placementResult.group, count: placementResult.count };
   }
+  const placements = placementResult.groups as Record<string, TeamRow[]>;
   await planRef.set({ sourceSeason, targetSeason, leagueId: LEAGUE_ID, ready: true, createdAt: FieldValue.serverTimestamp(), promotionRule: 'group_champion_up; bottom_two_down_to_child_groups; division_1_and_4_boundaries_preserved', groups: placements, awards }, { merge: true });
   const [finalArchiveSnap, finalMatchesSnap, finalPlanSnap] = await Promise.all([
     archiveRef.get(), archiveRef.collection('matches').get(), planRef.get(),
