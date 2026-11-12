@@ -307,11 +307,16 @@ async function prepareRecoveryCarryForwardPlan(
         homeRank !== awayRank && (!m.leagueId || String(m.leagueId) === LEAGUE_ID);
     });
     const fixtures = new Set<string>();
+    const groupCounts = new Map<string, number>();
     let unfinished = 0;
     let invalidFinished = 0;
     for (const doc of canonical) {
       const m = doc.data() || {};
-      const key = `${Number(m.level || m.division)}:${Number(m.groupId || m.group)}:${Number(m.homeRank)}:${Number(m.awayRank)}`;
+      const level = Number(m.level || m.division);
+      const group = Number(m.groupId || m.group);
+      const key = `${level}:${group}:${Number(m.homeRank)}:${Number(m.awayRank)}`;
+      const groupKey = `${level}:${group}`;
+      groupCounts.set(groupKey, (groupCounts.get(groupKey) || 0) + 1);
       if (fixtures.has(key)) return { status: 'integrity_conflict' as const, reason: 'DUPLICATE_CANONICAL_FIXTURE' };
       fixtures.add(key);
       if (m.isFinished !== true) {
@@ -326,11 +331,11 @@ async function prepareRecoveryCarryForwardPlan(
         invalidFinished++;
       }
     }
-    if (canonical.length > TOTAL_GROUPS * 56 || invalidFinished > 0) {
+    if (canonical.length > TOTAL_GROUPS * 56 || invalidFinished > 0 || [...groupCounts.values()].some(count => count > 56)) {
       return { status: 'integrity_conflict' as const, reason: invalidFinished ? 'INVALID_FINISHED_RESULT' : 'TOO_MANY_CANONICAL_FIXTURES' };
     }
     if (canonical.length === 0) return { status: 'no_canonical_results' as const, reason: 'NO_CANONICAL_RESULTS' };
-    if (canonical.length === TOTAL_GROUPS * 56 && unfinished === 0) {
+    if (canonical.length === TOTAL_GROUPS * 56 && unfinished === 0 && groupCounts.size === TOTAL_GROUPS && [...groupCounts.values()].every(count => count === 56)) {
       return { status: 'completed' as const, archiveValid: false, archiveReason: 'COMPLETED_ARCHIVE_REQUIRED' };
     }
     return { status: 'incomplete' as const, reason: 'SEASON_INCOMPLETE' };
@@ -1211,7 +1216,7 @@ export async function activatePublishedSeason() {
     }
   }
   const retainedArchiveSeason = recoveryMode
-    ? (Number.isSafeInteger(Number(activatedPlan.retainedArchiveSeason)) ? Number(activatedPlan.retainedArchiveSeason) : null)
+    ? (activatedPlan.retainedArchiveSeason !== null && activatedPlan.retainedArchiveSeason !== undefined && Number.isSafeInteger(Number(activatedPlan.retainedArchiveSeason)) ? Number(activatedPlan.retainedArchiveSeason) : null)
     : sourceSeason;
   let cleanup: any = null;
   try {
@@ -1235,7 +1240,7 @@ export async function ensureSeasonCalendar(requestedTargetSeason?: number) {
   if (config.historyCleanupPending === true) {
     try {
       await pruneSeasonHistoryAfterActivation(db, Number(config.historyCleanupTargetSeason || config.activeSeasonNumber || 1),
-        Number.isSafeInteger(Number(config.retainedArchiveSeason)) ? Number(config.retainedArchiveSeason) : null);
+        config.retainedArchiveSeason !== null && config.retainedArchiveSeason !== undefined && Number.isSafeInteger(Number(config.retainedArchiveSeason)) ? Number(config.retainedArchiveSeason) : null);
       await db.collection('system_v1').doc('season_config').set({ historyCleanupPending: false, historyCleanupCompletedAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp() }, { merge: true });
       config = { ...config, historyCleanupPending: false };
     } catch (error: any) {
