@@ -171,7 +171,7 @@ export function resolveRolloverPlanPruneIds(
   let targetFound = false;
   const pruneIds: string[] = [];
   for (const item of plans) {
-    const match = /^S([1-9]\\d*)$/.exec(String(item.id || ''));
+    const match = /^S([1-9]\d*)$/.exec(String(item.id || ''));
     const season = match ? Number(match[1]) : NaN;
     if (!Number.isSafeInteger(season) || season > targetSeason ||
         !validateRolloverPlan(item.plan, season - 1, season).valid) {

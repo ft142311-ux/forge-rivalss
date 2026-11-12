@@ -103,32 +103,66 @@ test('recovered archive is visible but never treated as a completed season or fi
 });
 
 
-test('archive pruning preserves the newest completed archive and rejects unknown or incomplete documents', async () => {
+
+test('archive pruning retains the newest completed archive and only prunes fully verified older archives', async () => {
   const { resolveArchivePrunePlan } = await import('../src/app/actions/season-archive.ts');
+  const first = makeSeasonArchive(1);
+  first.archive.status = 'completed';
+  first.archive.completedAt = '2026-10-08T15:00:00.000Z';
+  const second = makeSeasonArchive(2);
+  second.archive.status = 'completed';
+  second.archive.completedAt = '2026-10-23T15:00:00.000Z';
   const result = resolveArchivePrunePlan([
-    { id: 'S1', archive: { sourceSeason: 1, status: 'completed' }, matches: [] },
-  ], 3, 1);
-  assert.equal(result.ready, false);
-  assert.equal(result.reason, 'UNKNOWN_OR_INCOMPLETE_ARCHIVE_CANNOT_BE_PRUNED');
-  const unknown = resolveArchivePrunePlan([
-    { id: 'legacy', archive: {}, matches: [] },
-  ], 3, null);
-  assert.equal(unknown.ready, false);
-  assert.equal(unknown.reason, 'ARCHIVE_PRUNE_IDENTITY_CONFLICT');
+    { id: 'S1', archive: first.archive, matches: first.matches },
+    { id: 'S2', archive: second.archive, matches: second.matches },
+  ], 4, 2);
+  assert.equal(result.ready, true);
+  assert.deepEqual(result.pruneIds, ['S1']);
+  assert.equal(result.retainedArchiveSeason, 2);
 });
 
-test('archive pruning resumes an interrupted child deletion only with its matching intent marker', async () => {
+test('archive pruning fails closed for malformed, partial, and unmarked recovered archives', async () => {
   const { resolveArchivePrunePlan } = await import('../src/app/actions/season-archive.ts');
+  assert.equal(resolveArchivePrunePlan([
+    { id: 'legacy', archive: {}, matches: [] },
+  ], 3, null).reason, 'ARCHIVE_PRUNE_IDENTITY_CONFLICT');
+
+  const incomplete = makeSeasonArchive(1);
+  incomplete.archive.status = 'completed';
+  incomplete.archive.completedAt = 'x';
+  assert.equal(resolveArchivePrunePlan([
+    { id: 'S1', archive: incomplete.archive, matches: incomplete.matches.slice(0, 10) },
+  ], 3, null).reason, 'OBSOLETE_COMPLETED_ARCHIVE_INVALID');
+
+  const startingParticipants = Object.fromEntries(expectedRolloverGroups().map(group => [group,
+    Array.from({ length: 8 }, (_, i) => ({ id: `${group}-S2-${i + 1}`, rank: i + 1 }))]));
+  const recovered = {
+    sourceSeason: 2, leagueId: 'ALPHA', archiveVersion: 1, status: 'recovered',
+    recoveredAt: '2026-10-27T00:00:00.000Z', expectedMatches: 840, finishedMatches: 0,
+    unresolvedMatches: 840, standings: {}, startingParticipants,
+    recovery: { status: 'incomplete', finalStandingsAvailable: false },
+  };
+  assert.equal(resolveArchivePrunePlan([
+    { id: 'S2', archive: recovered, matches: [], historyStatus: null },
+  ], 4, null).reason, 'RECOVERED_ARCHIVE_SKIP_MARKER_MISSING');
+});
+
+test('archive pruning resumes interrupted subcollection deletion only with a matching intent marker', async () => {
+  const { resolveArchivePrunePlan } = await import('../src/app/actions/season-archive.ts');
+  const first = makeSeasonArchive(1);
+  first.archive.status = 'completed';
+  first.archive.completedAt = '2026-10-08T15:00:00.000Z';
+  first.archive.pruneStatus = 'PRUNING';
+  first.archive.pruneTargetSeason = 4;
+  first.archive.pruneRetainedArchiveSeason = 2;
+  first.archive.prunePolicyVersion = 1;
+  const second = makeSeasonArchive(2);
+  second.archive.status = 'completed';
+  second.archive.completedAt = '2026-10-23T15:00:00.000Z';
   const result = resolveArchivePrunePlan([
-    { id: 'S1', archive: {
-      sourceSeason: 1, status: 'completed', archiveVersion: 1, leagueId: 'ALPHA',
-      expectedMatches: 840, finishedMatches: 840, groups: 15, teamCount: 120,
-      integrity: { complete: true, unfinishedMatches: 0, invalidResults: 0, canonicalMatches: 840, duplicateCanonicalFixtures: 0 },
-      finalizedAt: 'x', completedAt: 'x',
-      standings: Object.fromEntries(Array.from({length:15},(_,i)=>[`D${Math.floor(i/8)+1}-G${(i%8)+1}`,[]])),
-      pruneStatus: 'PRUNING', pruneTargetSeason: 3, pruneRetainedArchiveSeason: 0, prunePolicyVersion: 1,
-    }, matches: [] },
-  ], 3, null);
-  assert.equal(result.ready, false);
-  assert.equal(result.reason, 'LATEST_COMPLETED_ARCHIVE_RETENTION_CONFLICT');
+    { id: 'S1', archive: first.archive, matches: [] },
+    { id: 'S2', archive: second.archive, matches: second.matches },
+  ], 4, 2);
+  assert.equal(result.ready, true);
+  assert.deepEqual(result.pruneIds, ['S1']);
 });

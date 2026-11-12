@@ -56,8 +56,19 @@ test('carry-forward rejects unexpected groups', () => {
 });
 
 
-test('obsolete rollover plan pruning rejects malformed IDs and mismatched plan identities', async () => {
+
+test('obsolete rollover plan pruning validates document identity and retains only the target plan', async () => {
   const { resolveRolloverPlanPruneIds } = await import('../src/app/actions/season-rollover-plan.ts');
   assert.equal(resolveRolloverPlanPruneIds([{ id: 'legacy', plan: {} }], 3).ready, false);
   assert.equal(resolveRolloverPlanPruneIds([{ id: 'S2', plan: { sourceSeason: 1, targetSeason: 3, ready: true } }], 3).ready, false);
+
+  const groups = sourceGroups();
+  const oldPlan = { sourceSeason: 1, targetSeason: 2, ready: true, groups };
+  const targetPlan = { sourceSeason: 2, targetSeason: 3, ready: true, groups };
+  const result = resolveRolloverPlanPruneIds([
+    { id: 'S2', plan: oldPlan },
+    { id: 'S3', plan: targetPlan },
+  ], 3);
+  assert.equal(result.ready, true);
+  assert.deepEqual(result.pruneIds, ['S2']);
 });
