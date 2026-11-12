@@ -38,3 +38,56 @@ export function validateRolloverPlan(plan: any, sourceSeason: number, targetSeas
   }
   return { valid: true };
 }
+
+/**
+ * Deterministically apply the league pyramid's promotion/relegation rules.
+ * Input standings must already be final, sorted by rank, and keyed by Dn-Gn.
+ * This helper is pure so the complete 15-group movement can be regression-tested.
+ */
+export function buildPromotionRelegationGroups(standings: Record<string, any[]>) {
+  const placements: Record<string, any[]> = {};
+  const get = (level: number, group: number) => standings[`D${level}-G${group}`] || [];
+
+  for (let level = 1; level <= MAX_LEVELS; level++) {
+    for (let group = 1; group <= Math.pow(2, level - 1); group++) {
+      const own = get(level, group);
+      const incoming: any[] = [];
+      if (level > 1) {
+        const parentGroup = Math.ceil(group / 2);
+        const parent = get(level - 1, parentGroup);
+        incoming.push(parent[group % 2 === 1 ? 6 : 7]);
+      }
+      if (level < MAX_LEVELS) {
+        incoming.push(get(level + 1, group * 2 - 1)[0], get(level + 1, group * 2)[0]);
+      }
+
+      let retained: any[];
+      if (level === 1) retained = own.slice(0, 6);
+      else if (level === MAX_LEVELS) retained = own.slice(1, 8);
+      else retained = own.slice(1, 6);
+
+      const unique = new Map<string, any>();
+      for (const team of [...retained, ...incoming]) {
+        if (team?.id) unique.set(String(team.id), team);
+      }
+      const normalized = [...unique.values()].slice(0, TEAMS_PER_GROUP).map((team, index) => ({
+        ...team,
+        id: String(team.id),
+        rank: index + 1,
+        matchesPlayed: 0,
+        wins: 0,
+        draws: 0,
+        losses: 0,
+        points: 0,
+        diff: 0,
+      }));
+      const key = `D${level}-G${group}`;
+      if (normalized.length !== TEAMS_PER_GROUP) {
+        return { ready: false, reason: 'ROLLOVER_GROUP_SIZE_INVALID', group: key, count: normalized.length, groups: placements };
+      }
+      placements[key] = normalized;
+    }
+  }
+
+  return { ready: true, groups: placements };
+}
