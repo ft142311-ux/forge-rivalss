@@ -480,7 +480,7 @@ async function prepareRecoveryCarryForwardPlan(
           return { ready: false, reason: 'PREPARING_SEASON_ARCHIVE_RECOVERY_FAILED', details: { seasonNumber: season, rollover: resumed, liveState } };
         }
         const recovered = await persistRecoveredArchive(season, liveState);
-        if (!recovered.ready) {
+        if (!recovered.ready || !('archive' in recovered)) {
           return { ready: false, reason: 'INCOMPLETE_SEASON_RECOVERY_SNAPSHOT_FAILED', details: { seasonNumber: season, recovery: recovered } };
         }
         states[season] = { status: 'incomplete', reason: liveState.reason || 'SEASON_INCOMPLETE' };
@@ -516,7 +516,7 @@ async function prepareRecoveryCarryForwardPlan(
       }
     } else if (liveState.status === 'incomplete' || liveState.status === 'no_canonical_results') {
       const recovered = await persistRecoveredArchive(season, liveState);
-      if (!recovered.ready) {
+      if (!recovered.ready || !('archive' in recovered)) {
         return { ready: false, reason: 'INCOMPLETE_SEASON_RECOVERY_SNAPSHOT_FAILED', details: { seasonNumber: season, recovery: recovered } };
       }
       states[season] = { status: 'incomplete', reason: liveState.reason || 'SEASON_INCOMPLETE' };
