@@ -56,7 +56,8 @@ test('calendar recovery archives completed seasons, skips incomplete seasons and
   assert.match(source, /prepareSeasonRollover\(db, season, season \+ 1\)/);
   assert.match(source, /SKIPPED_PENDING_ACTIVATION/);
   assert.match(source, /pruneSeasonHistoryAfterActivation/);
-  assert.match(source, /RETAINED_SEASON_ARCHIVE_VALIDATION_FAILED/);
+  assert.match(source, /ARCHIVE_PRUNE_PREFLIGHT_FAILED/);
+  assert.match(source, /SEASON_HISTORY_CLEANUP_TARGET_NOT_ACTIVE/);
   assert.doesNotMatch(source, /runMatchEngine|resolveUniversalMatchDocument/);
 });
 
@@ -91,4 +92,11 @@ test('invalid older archives block recovery and are never treated as harmless cl
   const diagnostic = readFileSync(routePath, 'utf8');
   assert.match(calendar, /if \(invalidPreviousArchiveSeasons\.length > 0\)/);
   assert.match(diagnostic, /if \(invalidOlderArchives\.length > 0\)/);
+});
+
+
+test('history cleanup requires the target season to be the active ready world', () => {
+  const source = readFileSync(resolve(root, 'src/app/actions/season-calendar.ts'), 'utf8');
+  assert.match(source, /Number\(activeConfig\.activeSeasonNumber\) !== targetSeason/);
+  assert.match(source, /activeConfig\.worldReady !== true/);
 });

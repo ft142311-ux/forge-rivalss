@@ -1002,6 +1002,12 @@ async function pruneSeasonHistoryAfterActivation(
   targetSeason: number,
   retainedArchiveSeason: number | null,
 ) {
+  const configSnap = await db.collection('system_v1').doc('season_config').get();
+  const activeConfig = configSnap.exists ? configSnap.data() || {} : null;
+  if (!activeConfig || Number(activeConfig.activeSeasonNumber) !== targetSeason || activeConfig.worldReady !== true) {
+    throw new Error('SEASON_HISTORY_CLEANUP_TARGET_NOT_ACTIVE');
+  }
+
   const activePlanRef = db.collection('league_season_rollovers_v1').doc(`S${targetSeason}`);
   const activePlanSnap = await activePlanRef.get();
   const activePlan = activePlanSnap.exists ? activePlanSnap.data() || {} : null;
