@@ -44,7 +44,15 @@ export function validateRolloverPlan(plan: any, sourceSeason: number, targetSeas
  * Input standings must already be final, sorted by rank, and keyed by Dn-Gn.
  * This helper is pure so the complete 15-group movement can be regression-tested.
  */
-export function buildPromotionRelegationGroups(standings: Record<string, any[]>) {
+export function buildPromotionRelegationGroups(
+  standings: Record<string, any[]>,
+): { ready: true; groups: Record<string, any[]> } | {
+  ready: false;
+  reason: string;
+  group: string;
+  count: number;
+  groups: Record<string, any[]>;
+} {
   const placements: Record<string, any[]> = {};
   const get = (level: number, group: number) => standings[`D${level}-G${group}`] || [];
 
