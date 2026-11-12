@@ -146,3 +146,34 @@ test('invalid or reversed activation dates fail closed', () => {
     now: new Date('2026-10-12T15:00:00.000Z'),
   }), /INVALID_SEASON_ACTIVATION_WINDOW/);
 });
+
+
+test('multi-season recovery preserves the persisted S1-to-S2 boundary before applying the regular cadence', async () => {
+  const { deriveRecoverySeasonWindow } = await import('../src/app/actions/season-boundary.ts');
+  const result = deriveRecoverySeasonWindow(
+    1,
+    new Date('2026-10-08T15:00:00.000Z'),
+    4,
+    15,
+  );
+  assert.equal(result.seasonStart.toISOString(), '2026-11-07T15:00:00.000Z');
+  assert.equal(result.nextSeasonStart.toISOString(), '2026-11-22T15:00:00.000Z');
+});
+
+test('multi-season recovery preserves a clean world's custom first boundary', async () => {
+  const { deriveRecoverySeasonWindow } = await import('../src/app/actions/season-boundary.ts');
+  const result = deriveRecoverySeasonWindow(
+    1,
+    new Date('2026-10-10T15:00:00.000Z'),
+    4,
+    15,
+  );
+  assert.equal(result.seasonStart.toISOString(), '2026-11-09T15:00:00.000Z');
+  assert.equal(result.nextSeasonStart.toISOString(), '2026-11-24T15:00:00.000Z');
+});
+
+test('invalid or non-forward recovery targets fail closed', async () => {
+  const { deriveRecoverySeasonWindow } = await import('../src/app/actions/season-boundary.ts');
+  assert.throws(() => deriveRecoverySeasonWindow(3, new Date('2026-11-07T15:00:00.000Z'), 3, 15), /INVALID_RECOVERY_SEASON_WINDOW/);
+  assert.throws(() => deriveRecoverySeasonWindow(3, new Date('invalid'), 4, 15), /INVALID_RECOVERY_SEASON_WINDOW/);
+});

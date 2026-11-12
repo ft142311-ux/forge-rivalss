@@ -82,6 +82,32 @@ export function resolveCanonicalSeasonDateWindow(input: {
     : { seasonStart: new Date(input.canonicalSeasonStart.getTime()), nextSeasonStart: new Date(input.canonicalNextSeasonStart.getTime()), source: 'CANONICAL' as const };
 }
 
+/**
+ * Derive a multi-season recovery window from the persisted next boundary of
+ * the currently active source season. The first interval may be nonstandard
+ * (for example S1's 17-day span); only subsequent seasons use the cadence.
+ */
+export function deriveRecoverySeasonWindow(
+  sourceSeasonNumber: number,
+  sourceNextBoundary: Date,
+  targetSeasonNumber: number,
+  cadenceDays: number,
+) {
+  const sourceValid = Number.isSafeInteger(sourceSeasonNumber) && sourceSeasonNumber >= 1;
+  const targetValid = Number.isSafeInteger(targetSeasonNumber) && targetSeasonNumber > sourceSeasonNumber;
+  const boundaryMs = sourceNextBoundary instanceof Date ? sourceNextBoundary.getTime() : NaN;
+  const cadenceMs = Number(cadenceDays) * 24 * 60 * 60 * 1000;
+  if (!sourceValid || !targetValid || !Number.isFinite(boundaryMs) ||
+      !Number.isFinite(cadenceMs) || cadenceMs <= 0) {
+    throw new Error('INVALID_RECOVERY_SEASON_WINDOW');
+  }
+  const seasonStartMs = boundaryMs + (targetSeasonNumber - sourceSeasonNumber - 1) * cadenceMs;
+  return {
+    seasonStart: new Date(seasonStartMs),
+    nextSeasonStart: new Date(seasonStartMs + cadenceMs),
+  };
+}
+
 export type SeasonWindow = {
   seasonNumber: number;
   seasonStart: Date;

@@ -8,7 +8,7 @@ import { resolveSeasonCatchUpPolicy, type SeasonHistoryState } from './season-hi
 import { evaluateCanonicalDocuments } from './season-canonical';
 import { inspectGroupReconciliation } from './season-rollover-standings';
 import { getAdminDb } from '@/lib/firebase-admin';
-import { advanceAtMostOneSeasonBoundary, deriveSeasonDatePlan, resolveCanonicalSeasonDateWindow, resolveNextSeasonTarget, resolveSeasonActivationWindow, resolveSeasonLifecycleWindow } from './season-boundary';
+import { advanceAtMostOneSeasonBoundary, deriveRecoverySeasonWindow, deriveSeasonDatePlan, resolveCanonicalSeasonDateWindow, resolveNextSeasonTarget, resolveSeasonActivationWindow, resolveSeasonLifecycleWindow } from './season-boundary';
 import { FIRST_SEASON_NEXT_START_ISO } from '@/app/lib/time-utils';
 import { isCompletedSeasonArchive, isRecoveredSeasonArchive, validateSeasonArchiveSnapshot } from './season-archive';
 import { buildBotClub } from './bot-roster';
@@ -614,6 +614,11 @@ async function buildSeasonCalendar(lease: BuildLease, pristineFirstWorld = false
         ? new Date(FIRST_SEASON_NEXT_START_ISO)
         : addDays(seasonStart, TOTAL_CYCLE_DAYS);
 
+  // Preserve the source world's actual next boundary before the one-step
+  // scheduler advances its local cursor. Multi-season recovery must derive from
+  // this persisted boundary, including CLEAN_S1_V1's custom first-season span.
+  const sourceNextBoundary = new Date(nextBoundary.getTime());
+
   // Normal progression advances one boundary per invocation. A date-derived
   // recovery target may override this below only after every elapsed season is
   // classified as completed (and archived) or genuinely incomplete (skipped).
@@ -625,13 +630,19 @@ async function buildSeasonCalendar(lease: BuildLease, pristineFirstWorld = false
   }
 
   if (directRecovery) {
-    // Recovery is allowed to bypass an unavailable intermediate season only
-    // after its explicit recovered archive and carry-forward plan were written.
-    let sourceTargetStart = new Date(FIRST_SEASON_NEXT_START_ISO);
-    for (let season = 2; season < recoveryTarget; season++) sourceTargetStart = addDays(sourceTargetStart, TOTAL_CYCLE_DAYS);
+    // Recovery is allowed to bypass unavailable intermediate seasons only
+    // after their persisted results have been classified and a verified
+    // carry-forward/placement plan has been prepared. Derive dates from the
+    // source world's real next boundary rather than a hard-coded S1 timestamp.
+    const recoveryWindow = deriveRecoverySeasonWindow(
+      sourceSeasonNumber,
+      sourceNextBoundary,
+      recoveryTarget,
+      TOTAL_CYCLE_DAYS,
+    );
     seasonNumber = recoveryTarget;
-    seasonStart = sourceTargetStart;
-    nextBoundary = addDays(seasonStart, TOTAL_CYCLE_DAYS);
+    seasonStart = recoveryWindow.seasonStart;
+    nextBoundary = recoveryWindow.nextSeasonStart;
   }
 
   const phase = String(current.phase || '').toUpperCase();
