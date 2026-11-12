@@ -14,7 +14,6 @@ test('authoritative match handlers route simulations through Match Engine', () =
     'src/app/actions/tournament-system.ts',
     'src/app/actions/trial-match-resolver.ts',
     'src/app/actions/season-recovery.ts',
-    'src/app/actions/season-sequential-recovery.ts',
   ];
   for (const file of files) {
     const source = read(file);
@@ -22,6 +21,13 @@ test('authoritative match handlers route simulations through Match Engine', () =
     assert.doesNotMatch(source, /simulateMatchCore\(/, `${file} must not call the low-level simulator directly`);
     assert.doesNotMatch(source, /import\s*\{[^}]*simulateMatchCore[^}]*\}/, `${file} must not import the low-level simulator`);
   }
+});
+
+test('legacy sequential recovery is disabled without database access', () => {
+  const source = read('src/app/actions/season-sequential-recovery.ts');
+  assert.match(source, /LEGACY_RECOVERY_DISABLED_USE_SEASON_ORCHESTRATOR/);
+  assert.match(source, /writesStarted:\s*false/);
+  assert.doesNotMatch(source, /getAdminDb|runMatchEngine|commitSeasonRolloverWrites|commitSeasonCalendarPublication/);
 });
 
 test('match modes have distinct Firestore collections', () => {
