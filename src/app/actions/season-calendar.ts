@@ -367,6 +367,29 @@ async function prepareRecoveryCarryForwardPlan(
         }
         continue;
       }
+      if (archive.status === 'preparing') {
+        const resumed = await prepareSeasonRollover(db, season, season + 1);
+        if (!resumed.ready) {
+          return { ready: false, reason: 'PREPARING_SEASON_ARCHIVE_RECOVERY_FAILED', details: { seasonNumber: season, rollover: resumed } };
+        }
+        const resumedArchiveSnap = await archiveRef.get();
+        const resumedArchive = resumedArchiveSnap.exists ? resumedArchiveSnap.data() || {} : null;
+        const resumedMatchesSnap = resumedArchiveSnap.exists ? await archiveRef.collection('matches').get() : null;
+        const resumedMatches = resumedMatchesSnap
+          ? resumedMatchesSnap.docs.map((doc: any) => ({ ...doc.data(), matchId: doc.id }))
+          : [];
+        const resumedValidation = resumedArchive
+          ? validateSeasonArchiveSnapshot(resumedArchive, resumedMatches)
+          : { valid: false, reasons: ['ARCHIVE_MISSING_AFTER_RESUME'] };
+        if (!resumedArchive || !isCompletedSeasonArchive(resumedArchive) || !resumedValidation.valid) {
+          return { ready: false, reason: 'PREPARING_SEASON_ARCHIVE_RESUME_VALIDATION_FAILED', details: { seasonNumber: season, reasons: resumedValidation.reasons } };
+        }
+        states[season] = { status: 'completed', archiveValid: true };
+        if (!latestCompletedArchive || season > latestCompletedArchive.season) {
+          latestCompletedArchive = { season, standings: resumedArchive.standings || {} };
+        }
+        continue;
+      }
       states[season] = { status: 'integrity_conflict', reason: 'EXISTING_ARCHIVE_NOT_VERIFIABLE' };
       continue;
     }
@@ -527,10 +550,9 @@ async function buildSeasonCalendar(lease: BuildLease, pristineFirstWorld = false
         ? new Date(FIRST_SEASON_NEXT_START_ISO)
         : addDays(seasonStart, TOTAL_CYCLE_DAYS);
 
-  // Advance at most one season boundary per invocation. A delayed cron must
-  // never jump S1 -> S3 (or farther) and bypass the S1 -> S2 archive, standings,
-  // and publication gates. Subsequent orchestrator runs can catch up one season
-  // at a time after each target season is fully published.
+  // Normal progression advances one boundary per invocation. A date-derived
+  // recovery target may override this below only after every elapsed season is
+  // classified as completed (and archived) or genuinely incomplete (skipped).
   if (!pristineFirstWorld) {
     const boundaryStep = advanceAtMostOneSeasonBoundary(seasonNumber, seasonStart, nextBoundary, now, TOTAL_CYCLE_DAYS);
     seasonNumber = boundaryStep.seasonNumber;
@@ -576,9 +598,9 @@ async function buildSeasonCalendar(lease: BuildLease, pristineFirstWorld = false
     String(current.seasonStart || '') !== seasonStart.toISOString();
   const needsRepair = Number(current.calendarRevision || 0) !== CALENDAR_REVISION;
 
-  // Never switch active seasons until the previous season is complete, archived,
-  // and its promotion/relegation plan has been written. This protects standings
-  // and prevents the next season from silently reverting to the initial bot table.
+  // Never build a target world without a verified placement plan. Normal
+  // transitions require a completed archive; recovery plans explicitly mark
+  // incomplete seasons as skipped and carry forward only trusted team identities.
   let rolloverPlan: any = null;
   const activeSeasonBefore = Number(current.activeSeasonNumber || 1);
   if (configSnap.exists && seasonChanged && seasonNumber > activeSeasonBefore) {
@@ -1315,11 +1337,9 @@ export async function ensureSeasonCalendar(requestedTargetSeason?: number) {
     }
   }
 
-  // A delayed cron may find more than one elapsed boundary. Never provision
-  // the first missed season and publish it retroactively. Every elapsed
-  // intermediate season must already have a verified immutable archive before
-  // a direct catch-up can be considered. The current calendar builder only
-  // publishes one adjacent season, so a multi-season gap remains read-only.
+  // A delayed cron may find several elapsed boundaries. Completed seasons are
+  // archived; genuinely incomplete seasons may be skipped. The final target is
+  // always the season currently active according to the canonical date plan.
   if (!pristineFirstWorld && configSnap.exists) {
     const hardcodedSeasonStart = sourceSeason === 1
       ? new Date(FIRST_SEASON_START_ISO)

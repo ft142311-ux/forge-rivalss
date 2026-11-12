@@ -3,7 +3,7 @@ import { getAdminDb } from '@/lib/firebase-admin';
 import { isCronAuthorized } from '../cron-auth';
 import { deriveSeasonDatePlan } from '@/app/actions/season-boundary';
 import { diagnoseSeasonRolloverPreflight } from '@/app/actions/season-rollover';
-import { isCompletedSeasonArchive, validateSeasonArchiveSnapshot } from '@/app/actions/season-archive';
+import { isCompletedSeasonArchive, isRecoveredSeasonArchive, validateSeasonArchiveSnapshot } from '@/app/actions/season-archive';
 import { validateRolloverPlan } from '@/app/actions/season-rollover-plan';
 import { TOTAL_CYCLE_DAYS } from '@/app/lib/leagues-data';
 
@@ -44,25 +44,31 @@ export async function GET(request: Request) {
       TOTAL_CYCLE_DAYS,
     );
 
-    // Rolling retention keeps only the immediately preceding completed
-    // season. Older archives are intentionally not required for catch-up.
+    // Rolling retention allows older seasons to be absent. Inspect the
+    // immediately preceding season for completion/skip status, and inspect
+    // older retained archives only to identify the newest valid archive.
     const currentSeasonNumber = plan.expectedSeasonNumber;
     const latestPreviousSeason = currentSeasonNumber - 1;
     const archiveChecks: any[] = [];
     let historyReady = true;
     let retainedArchiveSeason: number | null = null;
     let skippedSeason: { seasonNumber: number; reason: string; observedMatches: number; finishedMatches: number } | null = null;
+    let skippedSeasons: Array<{ seasonNumber: number; reason: string }> = [];
+    const olderArchiveSeasons: number[] = [];
+    const invalidOlderArchives: number[] = [];
 
     if (latestPreviousSeason >= 1) {
       const archiveRef = db.collection('league_season_archives_v1').doc(`S${latestPreviousSeason}`);
       const rolloverRef = db.collection('league_season_rollovers_v1').doc(`S${currentSeasonNumber}`);
-      const [archiveSnap, rolloverSnap, sourceMatchesSnap] = await Promise.all([
+      const [archiveSnap, rolloverSnap, sourceMatchesSnap, allArchivesSnap, historyMarkersSnap] = await Promise.all([
         archiveRef.get(),
         rolloverRef.get(),
         db.collection('matches_v2')
           .where('season', '==', latestPreviousSeason)
           .where('version', '==', 140)
           .get(),
+        db.collection('league_season_archives_v1').get(),
+        db.collection('league_season_history_v1').get(),
       ]);
       const archive = archiveSnap.exists ? archiveSnap.data() || {} : null;
       const archivedMatchesSnap = archiveSnap.exists ? await archiveRef.collection('matches').get() : null;
@@ -73,8 +79,26 @@ export async function GET(request: Request) {
         ? validateSeasonArchiveSnapshot(archive, archivedMatches)
         : { valid: false, reasons: ['ARCHIVE_MISSING'] };
       const completedArchive = Boolean(archive && isCompletedSeasonArchive(archive) && archiveValidation.valid);
+      const recoveredIncompleteArchive = Boolean(archive && isRecoveredSeasonArchive(archive));
       const rollover = rolloverSnap.exists ? rolloverSnap.data() || {} : null;
       const rolloverValidation = validateRolloverPlan(rollover, latestPreviousSeason, currentSeasonNumber);
+      if (!rolloverValidation.valid) historyReady = false;
+
+      // A previous completed archive may be older than the immediately
+      // preceding season when one or more later seasons were skipped.
+      for (const olderDoc of allArchivesSnap.docs) {
+        const match = /^S(\\d+)$/.exec(olderDoc.id);
+        const seasonNumber = match ? Number(match[1]) : NaN;
+        if (!Number.isSafeInteger(seasonNumber) || seasonNumber < 1 || seasonNumber >= latestPreviousSeason) continue;
+        const older = olderDoc.data() || {};
+        if (!isCompletedSeasonArchive(older)) continue;
+        const olderMatchesSnap = await olderDoc.ref.collection('matches').get();
+        const olderMatches = olderMatchesSnap.docs.map((doc: any) => ({ ...doc.data(), matchId: doc.id }));
+        const validation = validateSeasonArchiveSnapshot(older, olderMatches);
+        if (validation.valid) olderArchiveSeasons.push(seasonNumber);
+        else invalidOlderArchives.push(seasonNumber);
+      }
+      if (olderArchiveSeasons.length) retainedArchiveSeason = Math.max(...olderArchiveSeasons);
 
       const canonical = sourceMatchesSnap.docs.filter((doc: any) => {
         const match = doc.data() || {};
@@ -91,10 +115,13 @@ export async function GET(request: Request) {
       });
       const uniqueFixtures = new Set(canonical.map((doc: any) => {
         const match = doc.data() || {};
-        return `${Number(match.level || match.division)}:${Number(match.groupId || match.group)}:${Number(match.tour || match.day || 0)}:${Number(match.homeRank)}:${Number(match.awayRank)}`;
+        return `${Number(match.level || match.division)}:${Number(match.groupId || match.group)}:${Number(match.homeRank)}:${Number(match.awayRank)}`;
       }));
+      const groupCounts = new Map<string, number>();
       const resultState = canonical.map((doc: any) => {
         const match = doc.data() || {};
+        const groupKey = `${Number(match.level || match.division)}:${Number(match.groupId || match.group)}`;
+        groupCounts.set(groupKey, (groupCounts.get(groupKey) || 0) + 1);
         const home = Number(match.seriesScore?.home ?? match.scoreA);
         const away = Number(match.seriesScore?.away ?? match.scoreB);
         const validScore = Number.isInteger(home) && Number.isInteger(away) &&
@@ -110,12 +137,14 @@ export async function GET(request: Request) {
       const finished = resultState.filter((item: any) => item.validFinished).length;
       const unfinished = resultState.filter((item: any) => item.unfinished).length;
       const invalidFinished = resultState.filter((item: any) => item.invalidFinished).length;
-      const hasIntegrityConflict = uniqueFixtures.size !== canonical.length || canonical.length > 840 || invalidFinished > 0;
+      const hasIntegrityConflict = uniqueFixtures.size !== canonical.length || canonical.length > 840 ||
+        invalidFinished > 0 || [...groupCounts.values()].some(count => count > 56);
+      const completeResultSet = canonical.length === 840 && finished === 840 &&
+        groupCounts.size === 15 && [...groupCounts.values()].every(count => count === 56);
       const actuallyIncomplete = canonical.length < 840 || unfinished > 0;
 
       if (completedArchive) {
         retainedArchiveSeason = latestPreviousSeason;
-        if (!rolloverValidation.valid) historyReady = false;
         archiveChecks.push({
           seasonNumber: latestPreviousSeason,
           status: rolloverValidation.valid ? 'verified_completed' : 'blocked_rollover_plan',
@@ -126,6 +155,21 @@ export async function GET(request: Request) {
           rolloverPlanExists: rolloverSnap.exists,
           rolloverPlanValid: rolloverValidation.valid,
           rolloverReasons: 'reason' in rolloverValidation ? [rolloverValidation.reason] : [],
+        });
+      } else if (recoveredIncompleteArchive) {
+        skippedSeason = {
+          seasonNumber: latestPreviousSeason,
+          reason: 'RECOVERED_INCOMPLETE_SEASON',
+          observedMatches: canonical.length,
+          finishedMatches: finished,
+        };
+        archiveChecks.push({
+          seasonNumber: latestPreviousSeason,
+          status: 'skipped_incomplete',
+          archiveExists: true,
+          archiveStatus: archive?.status || null,
+          reason: skippedSeason.reason,
+          rolloverPlanValid: rolloverValidation.valid,
         });
       } else if (hasIntegrityConflict || (archiveSnap.exists && !archiveValidation.valid)) {
         historyReady = false;
@@ -142,7 +186,6 @@ export async function GET(request: Request) {
           finishedMatches: finished,
           unfinishedMatches: unfinished,
           invalidFinishedResults: invalidFinished,
-          rolloverPlanExists: rolloverSnap.exists,
           rolloverPlanValid: rolloverValidation.valid,
         });
       } else if (actuallyIncomplete) {
@@ -160,10 +203,9 @@ export async function GET(request: Request) {
           finishedMatches: finished,
           unfinishedMatches: unfinished,
           reason: skippedSeason.reason,
+          rolloverPlanValid: rolloverValidation.valid,
         });
-      } else {
-        // A complete set of results without a verified archive is not a
-        // skippable season. It must be archived/reconciled before transition.
+      } else if (completeResultSet) {
         historyReady = false;
         archiveChecks.push({
           seasonNumber: latestPreviousSeason,
@@ -173,12 +215,30 @@ export async function GET(request: Request) {
           archiveReasons: archiveValidation.reasons,
           canonicalMatches: canonical.length,
           finishedMatches: finished,
-          rolloverPlanExists: rolloverSnap.exists,
+          rolloverPlanValid: rolloverValidation.valid,
+        });
+      } else {
+        historyReady = false;
+        archiveChecks.push({
+          seasonNumber: latestPreviousSeason,
+          status: 'blocked_inconsistent_result_set',
+          canonicalMatches: canonical.length,
+          finishedMatches: finished,
           rolloverPlanValid: rolloverValidation.valid,
         });
       }
-    }
 
+      const markerSkippedSeasons = historyMarkersSnap.docs
+        .map((doc: any) => ({ ...(doc.data() || {}), seasonNumber: Number((doc.data() || {}).seasonNumber || doc.id.replace(/^S/, '')) }))
+        .filter((item: any) => item.seasonNumber >= 1 && item.seasonNumber < currentSeasonNumber &&
+          ['SKIPPED', 'SKIPPED_PENDING_ACTIVATION'].includes(String(item.status || '')))
+        .map((item: any) => ({ seasonNumber: item.seasonNumber, reason: String(item.reason || 'SEASON_INCOMPLETE') }));
+      skippedSeasons = [...new Map([
+        ...markerSkippedSeasons,
+        ...(skippedSeason ? [{ seasonNumber: skippedSeason.seasonNumber, reason: skippedSeason.reason }] : []),
+      ].map((item: any) => [item.seasonNumber, item])).values()].sort((a: any, b: any) => a.seasonNumber - b.seasonNumber);
+
+    }
     const [currentMatchesSnap, currentPreflight] = await Promise.all([
       db.collection('matches_v2')
         .where('season', '==', currentSeasonNumber)
@@ -220,9 +280,11 @@ export async function GET(request: Request) {
       },
       history: {
         ready: historyReady,
-        retentionPolicy: { maxCompletedArchives: 1, retainedArchiveSeason },
+        retentionPolicy: { maxCompletedArchives: 1, retainedArchiveSeason, obsoleteArchiveSeasons: olderArchiveSeasons.filter(season => season !== retainedArchiveSeason) },
         latestPreviousSeason: latestPreviousSeason >= 1 ? latestPreviousSeason : null,
-        skippedSeasons: skippedSeason ? [skippedSeason] : [],
+        skippedSeasons: skippedSeasons || (skippedSeason ? [skippedSeason] : []),
+        olderValidArchiveSeasons: olderArchiveSeasons,
+        invalidOlderArchives,
         archives: archiveChecks,
       },
       currentSeason: {

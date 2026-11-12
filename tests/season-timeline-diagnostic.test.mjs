@@ -41,3 +41,21 @@ test('timeline diagnostic follows one-archive retention and recognizes incomplet
   assert.match(source, /blocked_completed_archive_required/);
   assert.doesNotMatch(source, /for\s*\(const seasonNumber of elapsedSeasons\)/);
 });
+
+test('diagnostic validates the target rollover plan even when the prior season is skipped', () => {
+  const source = readFileSync(routePath, 'utf8');
+  assert.match(source, /rolloverValidation = validateRolloverPlan/);
+  assert.match(source, /recoveredIncompleteArchive/);
+  assert.match(source, /NO_CANONICAL_RESULTS/);
+  assert.match(source, /olderValidArchiveSeasons/);
+});
+
+test('calendar recovery archives completed seasons, skips incomplete seasons and prunes only after activation', () => {
+  const source = readFileSync(resolve(root, 'src/app/actions/season-calendar.ts'), 'utf8');
+  assert.match(source, /prepareRecoveryCarryForwardPlan/);
+  assert.match(source, /prepareSeasonRollover\(db, season, season \+ 1\)/);
+  assert.match(source, /SKIPPED_PENDING_ACTIVATION/);
+  assert.match(source, /pruneSeasonHistoryAfterActivation/);
+  assert.match(source, /RETAINED_SEASON_ARCHIVE_VALIDATION_FAILED/);
+  assert.doesNotMatch(source, /runMatchEngine|resolveUniversalMatchDocument/);
+});
