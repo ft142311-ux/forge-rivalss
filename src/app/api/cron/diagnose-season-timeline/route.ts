@@ -80,6 +80,7 @@ export async function GET(request: Request) {
         : { valid: false, reasons: ['ARCHIVE_MISSING'] };
       const completedArchive = Boolean(archive && isCompletedSeasonArchive(archive) && archiveValidation.valid);
       const recoveredIncompleteArchive = Boolean(archive && isRecoveredSeasonArchive(archive));
+      const unverifiableExistingArchive = Boolean(archiveSnap.exists && !completedArchive && !recoveredIncompleteArchive);
       const rollover = rolloverSnap.exists ? rolloverSnap.data() || {} : null;
       const rolloverValidation = validateRolloverPlan(rollover, latestPreviousSeason, currentSeasonNumber);
       if (!rolloverValidation.valid) historyReady = false;
@@ -91,7 +92,8 @@ export async function GET(request: Request) {
         const seasonNumber = match ? Number(match[1]) : NaN;
         if (!Number.isSafeInteger(seasonNumber) || seasonNumber < 1 || seasonNumber >= latestPreviousSeason) continue;
         const older = olderDoc.data() || {};
-        if (!isCompletedSeasonArchive(older)) continue;
+        if (String(older.status || '') === 'recovered') continue;
+        if (!isCompletedSeasonArchive(older)) { invalidOlderArchives.push(seasonNumber); continue; }
         const olderMatchesSnap = await olderDoc.ref.collection('matches').get();
         const olderMatches = olderMatchesSnap.docs.map((doc: any) => ({ ...doc.data(), matchId: doc.id }));
         const validation = validateSeasonArchiveSnapshot(older, olderMatches);
@@ -99,6 +101,7 @@ export async function GET(request: Request) {
         else invalidOlderArchives.push(seasonNumber);
       }
       if (olderArchiveSeasons.length) retainedArchiveSeason = Math.max(...olderArchiveSeasons);
+      if (invalidOlderArchives.some(season => season > (retainedArchiveSeason ?? 0))) historyReady = false;
 
       const canonical = sourceMatchesSnap.docs.filter((doc: any) => {
         const match = doc.data() || {};
@@ -171,7 +174,7 @@ export async function GET(request: Request) {
           reason: skippedSeason.reason,
           rolloverPlanValid: rolloverValidation.valid,
         });
-      } else if (hasIntegrityConflict || (archiveSnap.exists && !archiveValidation.valid)) {
+      } else if (hasIntegrityConflict || unverifiableExistingArchive) {
         historyReady = false;
         archiveChecks.push({
           seasonNumber: latestPreviousSeason,
