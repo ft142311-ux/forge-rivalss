@@ -317,18 +317,39 @@ async function prepareRecoveryCarryForwardPlan(
       .where('season', '==', seasonNumber)
       .where('version', '==', 140)
       .get();
+    const isExcludedCompetition = (m: any) => {
+      const type = String(m.matchType || m.type || m.competitionType || '').toLowerCase();
+      return /(cup|tournament|friendly|scrim|pyramid)/.test(type) || m.isCup === true ||
+        m.isFriendly === true || m.tournamentId || m.cupId ||
+        (m.leagueId && String(m.leagueId) !== LEAGUE_ID);
+    };
+    const invalidLeagueCoordinates = snap.docs.some((doc: any) => {
+      const m = doc.data() || {};
+      if (isExcludedCompetition(m)) return false;
+      const hasLeagueCoordinates = ['level', 'division', 'groupId', 'group', 'homeRank', 'awayRank']
+        .some(field => m[field] !== undefined && m[field] !== null);
+      if (String(m.leagueId || '') !== LEAGUE_ID && !hasLeagueCoordinates) return false;
+      const level = Number(m.level || m.division || 0);
+      const group = Number(m.groupId || m.group || 0);
+      const homeRank = Number(m.homeRank || 0);
+      const awayRank = Number(m.awayRank || 0);
+      return !(level >= 1 && level <= MAX_LEVELS && group >= 1 && group <= Math.pow(2, level - 1) &&
+        homeRank >= 1 && homeRank <= TEAMS_PER_GROUP && awayRank >= 1 && awayRank <= TEAMS_PER_GROUP &&
+        homeRank !== awayRank);
+    });
+    if (invalidLeagueCoordinates) {
+      return { status: 'integrity_conflict' as const, reason: 'INVALID_CANONICAL_FIXTURE_COORDINATE' };
+    }
     const canonical = snap.docs.filter((doc: any) => {
       const m = doc.data() || {};
-      const type = String(m.matchType || m.type || m.competitionType || '').toLowerCase();
-      if (/(cup|tournament|friendly|scrim|pyramid)/.test(type) || m.isCup === true ||
-          m.isFriendly === true || m.tournamentId || m.cupId) return false;
+      if (isExcludedCompetition(m)) return false;
       const level = Number(m.level || m.division || 0);
       const group = Number(m.groupId || m.group || 0);
       const homeRank = Number(m.homeRank || 0);
       const awayRank = Number(m.awayRank || 0);
       return level >= 1 && level <= MAX_LEVELS && group >= 1 && group <= Math.pow(2, level - 1) &&
         homeRank >= 1 && homeRank <= TEAMS_PER_GROUP && awayRank >= 1 && awayRank <= TEAMS_PER_GROUP &&
-        homeRank !== awayRank && (!m.leagueId || String(m.leagueId) === LEAGUE_ID);
+        homeRank !== awayRank;
     });
     const fixtures = new Set<string>();
     const groupCounts = new Map<string, number>();
@@ -1304,7 +1325,7 @@ export async function activatePublishedSeason() {
       preparedPublishedAt: FieldValue.delete(),
       preparedRecoveryMode: FieldValue.delete(),
       recoveryTargetSeason: FieldValue.delete(),
-      retainedArchiveSeason: recoveryMode ? (Number.isSafeInteger(Number(plan.retainedArchiveSeason)) ? Number(plan.retainedArchiveSeason) : null) : sourceSeason,
+      retainedArchiveSeason: recoveryMode ? (plan.retainedArchiveSeason !== null && plan.retainedArchiveSeason !== undefined && Number.isSafeInteger(Number(plan.retainedArchiveSeason)) ? Number(plan.retainedArchiveSeason) : null) : sourceSeason,
       historyCleanupPending: true,
       historyCleanupTargetSeason: targetSeason,
       lastRecoverySkippedSeasons: recoveryMode ? (Array.isArray(plan.skippedSeasons) ? plan.skippedSeasons : []) : FieldValue.delete(),
