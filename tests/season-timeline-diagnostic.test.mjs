@@ -112,3 +112,9 @@ test('incomplete and preparing seasons persist truthful participant snapshots in
   assert.match(archive, /finalStandingsAvailable: false/);
   assert.match(archive, /unresolvedMatches: MATCHES_PER_SEASON - finishedMatches/);
 });
+
+
+test('recovery plan promotion metadata follows the actual selected placement baseline', () => {
+  const source = readFileSync(resolve(root, 'src/app/actions/season-calendar.ts'), 'utf8');
+  assert.match(source, /promotionRule: placementBaseline === 'completed_archive'/);
+});

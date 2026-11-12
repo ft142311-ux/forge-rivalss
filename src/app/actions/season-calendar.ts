@@ -612,7 +612,7 @@ async function prepareRecoveryCarryForwardPlan(
     lastTrustedSeason,
     placementSource,
     retainedArchiveSeason,
-    promotionRule: latestCompletedArchive ? 'apply_latest_verified_completed_season_once' : 'carry_forward_without_promotion_or_relegation',
+    promotionRule: placementBaseline === 'completed_archive' ? 'apply_latest_verified_completed_season_once' : 'carry_forward_without_promotion_or_relegation',
     groups,
     createdAt: FieldValue.serverTimestamp(),
   };
