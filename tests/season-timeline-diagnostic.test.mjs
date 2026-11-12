@@ -32,3 +32,12 @@ test('season timeline endpoint is authenticated and strictly read-only', () => {
   assert.doesNotMatch(source, /\.set\(|\.update\(|\.delete\(|runTransaction\(|batch\(/);
   assert.doesNotMatch(source, /runMatchEngine|resolveUniversalMatchDocument|ensureSeasonCalendar|publishPreparedSeason|activatePublishedSeason/);
 });
+
+test('timeline diagnostic follows one-archive retention and recognizes incomplete latest history', () => {
+  const source = readFileSync(routePath, 'utf8');
+  assert.match(source, /maxCompletedArchives:\s*1/);
+  assert.match(source, /retainedArchiveSeason/);
+  assert.match(source, /skipped_incomplete/);
+  assert.match(source, /blocked_completed_archive_required/);
+  assert.doesNotMatch(source, /for\s*\(const seasonNumber of elapsedSeasons\)/);
+});
