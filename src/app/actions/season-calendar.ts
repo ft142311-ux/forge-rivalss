@@ -482,11 +482,12 @@ async function prepareRecoveryCarryForwardPlan(
           return { ready: false, reason: 'PREPARING_SEASON_ARCHIVE_RECOVERY_FAILED', details: { seasonNumber: season, rollover: resumed, liveState } };
         }
         const recovered = await persistRecoveredArchive(season, liveState);
-        if (!recovered.ready || !('archive' in recovered)) {
+        const recoveredArchive = (recovered as any).archive;
+        if (!recovered.ready || !recoveredArchive) {
           return { ready: false, reason: 'INCOMPLETE_SEASON_RECOVERY_SNAPSHOT_FAILED', details: { seasonNumber: season, recovery: recovered } };
         }
         states[season] = { status: 'incomplete', reason: liveState.reason || 'SEASON_INCOMPLETE' };
-        latestRecoveredParticipants = { season, groups: recovered.archive.startingParticipants };
+        latestRecoveredParticipants = { season, groups: recoveredArchive.startingParticipants };
         continue;
       }
       states[season] = { status: 'integrity_conflict', reason: 'EXISTING_ARCHIVE_NOT_VERIFIABLE' };
@@ -518,12 +519,13 @@ async function prepareRecoveryCarryForwardPlan(
       }
     } else if (liveState.status === 'incomplete' || liveState.status === 'no_canonical_results') {
       const recovered = await persistRecoveredArchive(season, liveState);
-      if (!recovered.ready || !('archive' in recovered)) {
+      const recoveredArchive = (recovered as any).archive;
+      if (!recovered.ready || !recoveredArchive) {
         return { ready: false, reason: 'INCOMPLETE_SEASON_RECOVERY_SNAPSHOT_FAILED', details: { seasonNumber: season, recovery: recovered } };
       }
       states[season] = { status: 'incomplete', reason: liveState.reason || 'SEASON_INCOMPLETE' };
       if (!latestRecoveredParticipants || season > latestRecoveredParticipants.season) {
-        latestRecoveredParticipants = { season, groups: recovered.archive.startingParticipants };
+        latestRecoveredParticipants = { season, groups: recoveredArchive.startingParticipants };
       }
     } else {
       states[season] = liveState;
