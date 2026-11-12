@@ -21,6 +21,8 @@ type PublicationExpectation = {
   validatePlan?: (plan: any) => boolean;
   publicationDeadlineMs: number;
   activationAtMs: number;
+  allowOverdueRecovery?: boolean;
+  activationEndAtMs?: number;
 };
 
 export function isSeasonRolloverLockStale(lock: any, nowMs: number) {
@@ -195,7 +197,13 @@ export async function commitSeasonCalendarPublication(
         String(config.phase || '') !== expected.phase) {
       throw new Error('SEASON_CALENDAR_PUBLICATION_STATE_CHANGED');
     }
-    if (Date.now() > expected.publicationDeadlineMs || Date.now() >= expected.activationAtMs) {
+    const nowMs = Date.now();
+    if (expected.allowOverdueRecovery === true) {
+      if (nowMs < expected.activationAtMs || !Number.isFinite(Number(expected.activationEndAtMs)) ||
+          nowMs >= Number(expected.activationEndAtMs)) {
+        throw new Error('SEASON_CALENDAR_PUBLICATION_WINDOW_CLOSED');
+      }
+    } else if (nowMs > expected.publicationDeadlineMs || nowMs >= expected.activationAtMs) {
       throw new Error('SEASON_CALENDAR_PUBLICATION_WINDOW_CLOSED');
     }
     if (expected.planRef && (!planSnap?.exists || !expected.validatePlan?.(planSnap.data() || {}))) {
