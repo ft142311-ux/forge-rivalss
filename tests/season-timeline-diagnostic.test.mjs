@@ -76,3 +76,11 @@ test('explicit league matches without canonical coordinates are integrity confli
   assert.match(calendar, /INVALID_CANONICAL_FIXTURE_COORDINATE/);
   assert.match(diagnostic, /invalidExplicitLeagueMatch/);
 });
+
+
+test('recovery builder uses the canonical source date window before deriving a multi-season target', () => {
+  const source = readFileSync(resolve(root, 'src/app/actions/season-calendar.ts'), 'utf8');
+  assert.match(source, /resolvedSourceWindow = resolveCanonicalSeasonDateWindow/);
+  assert.match(source, /sourceNextBoundary = new Date\(nextBoundary\.getTime\(\)\)/);
+  assert.match(source, /deriveRecoverySeasonWindow\(/);
+});
