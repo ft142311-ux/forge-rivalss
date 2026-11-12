@@ -679,6 +679,7 @@ export async function publishPreparedSeason() {
     const preparedNextStartMs = new Date(initial.preparedNextSeasonStart || '').getTime();
     const validPublishedState = initial.worldReady === true &&
       initial.preparedWorldReady === true &&
+      String(initial.phase || '') === 'PUBLISHED' &&
       preparedStartMs === new Date(initial.nextSeasonStart || '').getTime() &&
       preparedNextStartMs === preparedStartMs + TOTAL_CYCLE_DAYS * 24 * 60 * 60 * 1000 &&
       validateRolloverPlan(plan, sourceSeason, targetSeason).valid &&
