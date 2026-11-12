@@ -103,6 +103,17 @@ export async function GET(request: Request) {
       if (olderArchiveSeasons.length) retainedArchiveSeason = Math.max(...olderArchiveSeasons);
       if (invalidOlderArchives.some(season => season > (retainedArchiveSeason ?? 0))) historyReady = false;
 
+      const invalidExplicitLeagueMatch = sourceMatchesSnap.docs.some((doc: any) => {
+        const match = doc.data() || {};
+        const type = String(match.type || match.matchType || match.competitionType || '').toLowerCase();
+        if (type !== 'league' && String(match.leagueId || '') !== 'ALPHA') return false;
+        const level = Number(match.level || match.division || 0);
+        const group = Number(match.groupId || match.group || 0);
+        const homeRank = Number(match.homeRank || 0);
+        const awayRank = Number(match.awayRank || 0);
+        return !(level >= 1 && level <= 4 && group >= 1 && group <= Math.pow(2, level - 1) &&
+          homeRank >= 1 && homeRank <= 8 && awayRank >= 1 && awayRank <= 8 && homeRank !== awayRank);
+      });
       const canonical = sourceMatchesSnap.docs.filter((doc: any) => {
         const match = doc.data() || {};
         const type = String(match.type || match.matchType || match.competitionType || '').toLowerCase();
@@ -140,7 +151,7 @@ export async function GET(request: Request) {
       const finished = resultState.filter((item: any) => item.validFinished).length;
       const unfinished = resultState.filter((item: any) => item.unfinished).length;
       const invalidFinished = resultState.filter((item: any) => item.invalidFinished).length;
-      const hasIntegrityConflict = uniqueFixtures.size !== canonical.length || canonical.length > 840 ||
+      const hasIntegrityConflict = invalidExplicitLeagueMatch || uniqueFixtures.size !== canonical.length || canonical.length > 840 ||
         invalidFinished > 0 || Object.values(groupCounts).some(count => count > 56);
       const completeResultSet = canonical.length === 840 && finished === 840 &&
         Object.keys(groupCounts).length === 15 && Object.values(groupCounts).every(count => count === 56);

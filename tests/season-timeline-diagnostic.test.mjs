@@ -68,3 +68,11 @@ test('adjacent incomplete seasons can use the same carry-forward recovery path',
   assert.match(source, /preparedRecoveryMode: directRecovery \|\| rolloverPlan\?\.mode === 'recovery_carry_forward'/);
   assert.match(source, /overdueRecoveryMode = recoveryMode/);
 });
+
+test('explicit league matches without canonical coordinates are integrity conflicts, not skippable emptiness', () => {
+  const calendar = readFileSync(resolve(root, 'src/app/actions/season-calendar.ts'), 'utf8');
+  const diagnostic = readFileSync(routePath, 'utf8');
+  assert.match(calendar, /explicitlyLeague = matchType === 'league'/);
+  assert.match(calendar, /INVALID_CANONICAL_FIXTURE_COORDINATE/);
+  assert.match(diagnostic, /invalidExplicitLeagueMatch/);
+});

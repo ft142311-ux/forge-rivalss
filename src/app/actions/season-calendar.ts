@@ -328,7 +328,9 @@ async function prepareRecoveryCarryForwardPlan(
       if (isExcludedCompetition(m)) return false;
       const hasLeagueCoordinates = ['level', 'division', 'groupId', 'group', 'homeRank', 'awayRank']
         .some(field => m[field] !== undefined && m[field] !== null);
-      if (String(m.leagueId || '') !== LEAGUE_ID && !hasLeagueCoordinates) return false;
+      const matchType = String(m.matchType || m.type || m.competitionType || '').toLowerCase();
+      const explicitlyLeague = matchType === 'league' || String(m.leagueId || '') === LEAGUE_ID;
+      if (!explicitlyLeague && !hasLeagueCoordinates) return false;
       const level = Number(m.level || m.division || 0);
       const group = Number(m.groupId || m.group || 0);
       const homeRank = Number(m.homeRank || 0);
