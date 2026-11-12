@@ -6,7 +6,7 @@ import { buildPromotionRelegationGroups, validateRolloverPlan } from './season-r
 import { isSeasonArchiveReadyToComplete, validateSeasonArchiveSnapshot } from './season-archive';
 import { runTwoPhaseSeasonOrchestration } from './season-orchestration';
 import { isValidCleanSeasonOneBoundary } from './season-boundary';
-import { isSeasonAwardAlreadyApplied } from './season-awards-policy';
+import { isSeasonAwardAlreadyApplied, shouldPersistSeasonTrophies } from './season-awards-policy';
 
 const LEAGUE_ID = 'ALPHA';
 const EXPECTED_MATCHES = TOTAL_GROUPS * TEAMS_PER_GROUP * (TEAMS_PER_GROUP - 1);
@@ -238,7 +238,7 @@ async function applySeasonAwards(db: any, sourceSeason: number, standings: Recor
         t.update(playerRef, {
           credits: after,
           seasonAwards: { ...awards, [awardKey]: { season: sourceSeason, division: level, group: Number(match[2]), rank: Number(row.rank), prize, awardedAt: FieldValue.serverTimestamp() } },
-          ...(shouldAddCup || shouldAddPyramidCup ? { trophies } : {}),
+          ...(shouldPersistSeasonTrophies(shouldAddCup, shouldAddPyramidCup) ? { trophies } : {}),
           updatedAt: FieldValue.serverTimestamp(),
         });
         t.set(txRef, {
