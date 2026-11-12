@@ -1,0 +1,34 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { deriveSeasonDatePlan } from '../src/app/actions/season-boundary.ts';
+
+const root = resolve(import.meta.dirname, '..');
+const routePath = resolve(root, 'src/app/api/cron/diagnose-season-timeline/route.ts');
+
+test('calendar dates identify S4 as active on November 12 after S1-S3 elapsed', () => {
+  const plan = deriveSeasonDatePlan(
+    1,
+    new Date('2026-09-21T15:00:00.000Z'),
+    new Date('2026-10-08T15:00:00.000Z'),
+    new Date('2026-11-12T12:00:00.000Z'),
+    15,
+  );
+  assert.deepEqual(plan.completedSeasons, [1, 2, 3]);
+  assert.equal(plan.expectedSeasonNumber, 4);
+  assert.equal(plan.expectedSeasonStart.toISOString(), '2026-11-07T15:00:00.000Z');
+  assert.equal(plan.expectedNextSeasonStart.toISOString(), '2026-11-22T15:00:00.000Z');
+});
+
+test('season timeline endpoint is authenticated and strictly read-only', () => {
+  const source = readFileSync(routePath, 'utf8');
+  assert.match(source, /isCronAuthorized/);
+  assert.match(source, /readOnly:\s*true/);
+  assert.match(source, /writesStarted:\s*false/);
+  assert.match(source, /diagnoseSeasonRolloverPreflight/);
+  assert.match(source, /validateSeasonArchiveSnapshot/);
+  assert.match(source, /validateRolloverPlan/);
+  assert.doesNotMatch(source, /\.set\(|\.update\(|\.delete\(|runTransaction\(|batch\(/);
+  assert.doesNotMatch(source, /runMatchEngine|resolveUniversalMatchDocument|ensureSeasonCalendar|publishPreparedSeason|activatePublishedSeason/);
+});
