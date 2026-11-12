@@ -370,7 +370,33 @@ async function prepareRecoveryCarryForwardPlan(
       states[season] = { status: 'integrity_conflict', reason: 'EXISTING_ARCHIVE_NOT_VERIFIABLE' };
       continue;
     }
-    states[season] = await inspectCanonicalResults(season);
+    const liveState = await inspectCanonicalResults(season);
+    if (liveState.status === 'completed' && liveState.archiveValid === false) {
+      // A genuinely completed season must be archived, not skipped. Reuse the
+      // idempotent canonical rollover path to snapshot results and award prizes.
+      const rollover = await prepareSeasonRollover(db, season, season + 1);
+      if (!rollover.ready) {
+        return { ready: false, reason: 'COMPLETED_SEASON_ARCHIVE_PREPARATION_FAILED', details: { seasonNumber: season, rollover } };
+      }
+      const completedArchiveSnap = await archiveRef.get();
+      const completedArchive = completedArchiveSnap.exists ? completedArchiveSnap.data() || {} : null;
+      const completedMatchesSnap = completedArchiveSnap.exists ? await archiveRef.collection('matches').get() : null;
+      const completedMatches = completedMatchesSnap
+        ? completedMatchesSnap.docs.map((doc: any) => ({ ...doc.data(), matchId: doc.id }))
+        : [];
+      const completedValidation = completedArchive
+        ? validateSeasonArchiveSnapshot(completedArchive, completedMatches)
+        : { valid: false, reasons: ['ARCHIVE_MISSING_AFTER_PREPARATION'] };
+      if (!completedArchive || !isCompletedSeasonArchive(completedArchive) || !completedValidation.valid) {
+        return { ready: false, reason: 'COMPLETED_SEASON_ARCHIVE_VALIDATION_FAILED', details: { seasonNumber: season, reasons: completedValidation.reasons } };
+      }
+      states[season] = { status: 'completed', archiveValid: true };
+      if (!latestCompletedArchive || season > latestCompletedArchive.season) {
+        latestCompletedArchive = { season, standings: completedArchive.standings || {} };
+      }
+    } else {
+      states[season] = liveState;
+    }
   }
 
   const missed = Array.from({ length: Math.max(0, targetSeason - activeSeason) }, (_, index) => activeSeason + index);
