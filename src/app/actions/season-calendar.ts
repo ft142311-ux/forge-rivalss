@@ -3,7 +3,7 @@ import 'server-only';
 import { FieldValue } from 'firebase-admin/firestore';
 import { prepareSeasonRollover } from './season-rollover';
 import { acquireSeasonCalendarBuildLock, assertSeasonCalendarBuildLock, commitSeasonCalendarPublication, commitSeasonCalendarWrites, releaseSeasonCalendarBuildLock } from './season-rollover-lock';
-import { buildCarryForwardGroups, buildPromotionRelegationGroups, resolveRolloverPlanPruneIds, validateRolloverPlan } from './season-rollover-plan';
+import { buildCarryForwardGroups, buildPromotionRelegationGroups, resolveRecoveryPlacementSource, resolveRolloverPlanPruneIds, validateRolloverPlan } from './season-rollover-plan';
 import { resolveSeasonCatchUpPolicy, type SeasonHistoryState } from './season-history-policy';
 import { evaluateCanonicalDocuments } from './season-canonical';
 import { inspectGroupReconciliation } from './season-rollover-standings';
@@ -489,18 +489,22 @@ async function prepareRecoveryCarryForwardPlan(
   let groups: Record<string, any[]>;
   let placementSource: string;
   let lastTrustedSeason: number;
-  if (latestCompletedArchive) {
-    const promoted = buildPromotionRelegationGroups(latestCompletedArchive.standings);
-    if (!promoted.ready) return { ready: false, reason: promoted.reason, details: { group: promoted.group, count: promoted.count } };
-    groups = promoted.groups;
-    placementSource = 'latest_verified_completed_archive';
-    lastTrustedSeason = latestCompletedArchive.season;
-  } else if (latestRecoveredParticipants) {
+  const placementBaseline = resolveRecoveryPlacementSource(
+    latestCompletedArchive?.season ?? null,
+    latestRecoveredParticipants?.season ?? null,
+  );
+  if (placementBaseline === 'recovered_participants' && latestRecoveredParticipants) {
     const carried = buildCarryForwardGroups(latestRecoveredParticipants.groups);
     if (!carried.ready) return { ready: false, reason: carried.reason, details: { group: carried.group } };
     groups = carried.groups;
     placementSource = 'recovered_starting_participants';
     lastTrustedSeason = latestRecoveredParticipants.season;
+  } else if (placementBaseline === 'completed_archive' && latestCompletedArchive) {
+    const promoted = buildPromotionRelegationGroups(latestCompletedArchive.standings);
+    if (!promoted.ready) return { ready: false, reason: promoted.reason, details: { group: promoted.group, count: promoted.count } };
+    groups = promoted.groups;
+    placementSource = 'latest_verified_completed_archive';
+    lastTrustedSeason = latestCompletedArchive.season;
   } else {
     const slotsSnap = await db.collection('league_slots_v1')
       .where('season', '==', activeSeason)

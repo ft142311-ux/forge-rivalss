@@ -72,3 +72,13 @@ test('obsolete rollover plan pruning validates document identity and retains onl
   assert.equal(result.ready, true);
   assert.deepEqual(result.pruneIds, ['S2']);
 });
+
+
+test('recovery placement uses the newest trusted baseline and never reapplies older promotion twice', async () => {
+  const { resolveRecoveryPlacementSource } = await import('../src/app/actions/season-rollover-plan.ts');
+  assert.equal(resolveRecoveryPlacementSource(1, 2), 'recovered_participants');
+  assert.equal(resolveRecoveryPlacementSource(3, 2), 'completed_archive');
+  assert.equal(resolveRecoveryPlacementSource(3, null), 'completed_archive');
+  assert.equal(resolveRecoveryPlacementSource(null, 2), 'recovered_participants');
+  assert.equal(resolveRecoveryPlacementSource(null, null), 'active_slots');
+});

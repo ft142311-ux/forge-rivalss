@@ -44,6 +44,25 @@ export function validateRolloverPlan(plan: any, sourceSeason: number, targetSeas
  * Input standings must already be final, sorted by rank, and keyed by Dn-Gn.
  * This helper is pure so the complete 15-group movement can be regression-tested.
  */
+/**
+ * Select the most recent trustworthy placement baseline during catch-up.
+ * A recovered season's starting participants already include movements from
+ * the preceding completed season, so applying that older promotion twice
+ * would corrupt the pyramid.
+ */
+export function resolveRecoveryPlacementSource(
+  latestCompletedSeason: number | null,
+  latestRecoveredSeason: number | null,
+): 'completed_archive' | 'recovered_participants' | 'active_slots' {
+  if (latestRecoveredSeason !== null &&
+      (latestCompletedSeason === null || latestRecoveredSeason > latestCompletedSeason)) {
+    return 'recovered_participants';
+  }
+  if (latestCompletedSeason !== null) return 'completed_archive';
+  if (latestRecoveredSeason !== null) return 'recovered_participants';
+  return 'active_slots';
+}
+
 export function buildPromotionRelegationGroups(
   standings: Record<string, any[]>,
 ): { ready: true; groups: Record<string, any[]> } | {
