@@ -1002,6 +1002,51 @@ export async function ensureSeasonCalendar(requestedTargetSeason?: number) {
     if (!lockedPreflight.ready) {
       return { success: false, worldReady: false, action: 'WORLD_BUILDING', reason: 'SEASON_CALENDAR_PREFLIGHT_FAILED', diagnostics: lockedPreflight.diagnostics, writesStarted: false };
     }
+
+    // A published calendar is immutable. Repeated cron runs may verify it,
+    // but must never repair or rewrite its fixtures after publication.
+    const latestConfigSnap = await db.collection('system_v1').doc('season_config').get();
+    const latestConfig = latestConfigSnap.exists ? latestConfigSnap.data() || {} : {};
+    if (latestConfig.preparedPublished === true && Number(latestConfig.preparedSeasonNumber) === targetSeason) {
+      const planRef = db.collection('league_season_rollovers_v1').doc(`S${targetSeason}`);
+      const [planSnap, readiness] = await Promise.all([
+        planRef.get(),
+        inspectCanonicalSeason(db, targetSeason),
+      ]);
+      const planSource = directRecoveryBuild ? targetSeason - 1 : sourceSeason;
+      const plan = planSnap.exists ? planSnap.data() || {} : null;
+      const publishedReady = latestConfig.preparedWorldReady === true &&
+        validateRolloverPlan(plan, planSource, targetSeason).valid &&
+        readiness.ready;
+      if (!publishedReady) {
+        return {
+          success: false,
+          action: 'WORLD_BUILDING',
+          worldReady: latestConfig.worldReady === true,
+          seasonNumber: sourceSeason,
+          targetSeasonNumber: targetSeason,
+          reason: 'PUBLISHED_SEASON_INTEGRITY_FAILED',
+          writesStarted: false,
+          ...readiness,
+        };
+      }
+      return {
+        success: true,
+        action: 'SEASON_ALREADY_PUBLISHED',
+        seasonNumber: targetSeason,
+        seasonStart: latestConfig.preparedSeasonStart,
+        nextSeasonStart: latestConfig.preparedNextSeasonStart,
+        worldReady: latestConfig.worldReady === true,
+        prepared: true,
+        published: true,
+        createdMatches: 0,
+        repairedMatches: 0,
+        totalExpectedMatches: TOTAL_GROUPS * 56,
+        totalExpectedSlots: TOTAL_GROUPS * TEAMS_PER_GROUP,
+        ...readiness,
+      };
+    }
+
     if (targetSeason > sourceSeason) {
       await lease.commit([{ ref: db.collection('system_v1').doc('season_config'), data: {
         phase: config.preparedPublished === true && Number(config.preparedSeasonNumber) === targetSeason ? 'PUBLISHED' : 'GENERATING_NEXT',
