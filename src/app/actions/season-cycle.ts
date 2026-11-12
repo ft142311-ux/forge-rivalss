@@ -3,6 +3,7 @@ import 'server-only';
 import { FieldValue } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { getGlobalSeasonInfo } from '@/app/lib/time-utils';
+import { resolveSeasonLifecycleWindow } from './season-boundary';
 import { logger } from '@/app/lib/logger';
 import { activatePublishedSeason, ensureSeasonCalendar, publishPreparedSeason } from './season-calendar';
 import { runTournamentCycle } from './tournament-system';
@@ -37,10 +38,30 @@ export async function runSeasonOrchestrator() {
       const sourceSeason = Number(configData.activeSeasonNumber || world.seasonNumber || 1);
       const targetSeason = Number(world.targetSeasonNumber || sourceSeason + 1);
 
-      // A missed scheduled start must not deadlock behind unfinished overdue
-      // fixtures. Settle the configured active season first, then re-run the
-      // rollover preflight. If settlement fails or fixtures remain incomplete,
-      // leave publication blocked and let the next cron retry safely.
+      // Once Day 15 begins, unfinished league fixtures are intentionally
+      // frozen. Never call a catch-up resolver in offseason: keep the rollover
+      // blocked and preserve every original result until an explicit safe
+      // recovery path is approved.
+      const retryInfo = getGlobalSeasonInfo();
+      const retryLifecycle = resolveSeasonLifecycleWindow({
+        seasonStart: configData.seasonStart || retryInfo.currentSeasonStart,
+        nextSeasonStart: configData.nextSeasonStart || retryInfo.nextSeasonStart,
+        now: new Date(),
+      });
+      if (retryLifecycle.leagueMatchesPaused) {
+        return {
+          action: 'WAITING_FOR_SEASON_RESULTS' as const,
+          worldReady: configData.worldReady === true,
+          season: sourceSeason,
+          targetSeason,
+          rollover: world.rollover || { ready: false, reason: 'INCOMPLETE_CANONICAL_FIXTURES' },
+          catchUp: { skipped: true, reason: 'OFFSEASON_LEAGUE_MATCHES_DISABLED', writesStarted: false },
+        };
+      }
+
+      // Before offseason, overdue fixtures may still be settled by the normal
+      // resolver. The rollover itself remains responsible for validating all
+      // 840 canonical results before it creates the promotion/relegation plan.
       catchUp = await resolveDailyMatches();
       if (catchUp?.success !== true) {
         logger.warn('Season rollover blocked because overdue-match settlement failed', catchUp);
@@ -141,15 +162,20 @@ export async function runSeasonOrchestrator() {
       }
 
       const info = getGlobalSeasonInfo();
-      const configuredSeasonStart = config.seasonStart ? new Date(config.seasonStart) : info.currentSeasonStart;
-      const preparationAtMs = configuredSeasonStart.getTime() + 14 * 24 * 60 * 60 * 1000 - 2 * 60 * 60 * 1000;
       const nowMs = Date.now();
+      const lifecycle = resolveSeasonLifecycleWindow({
+        seasonStart: config.seasonStart || info.currentSeasonStart,
+        nextSeasonStart: config.nextSeasonStart || info.nextSeasonStart,
+        now: new Date(nowMs),
+      });
+      const finalizationAtMs = lifecycle.finalizationAt.getTime();
 
       if (config.phase === 'REGULAR_SEASON' || config.phase === 'ACTIVE') {
-        if (Number.isFinite(preparationAtMs) && nowMs >= preparationAtMs) {
+        if (Number.isFinite(finalizationAtMs) && nowMs >= finalizationAtMs) {
           t.update(configRef, {
             phase: 'FINALIZING',
-            offseasonStartedAt: FieldValue.serverTimestamp(),
+            finalizationStartedAt: FieldValue.serverTimestamp(),
+            offseasonStartedAt: lifecycle.offseasonStartAt.toISOString(),
             preparationStartedAt: FieldValue.serverTimestamp(),
             preparationTargetSeason: Number(config.activeSeasonNumber || world.seasonNumber || 1) + 1,
             updatedAt: FieldValue.serverTimestamp(),
