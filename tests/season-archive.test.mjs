@@ -101,3 +101,34 @@ test('recovered archive is visible but never treated as a completed season or fi
   assert.equal(getVisibleSeasonArchives([{ ...recovered, finishedMatches: 1 }]).length, 0);
   assert.equal(getVisibleSeasonArchives([{ ...recovered, startingParticipants: {} }]).length, 0);
 });
+
+
+test('archive pruning preserves the newest completed archive and rejects unknown or incomplete documents', async () => {
+  const { resolveArchivePrunePlan } = await import('../src/app/actions/season-archive.ts');
+  const result = resolveArchivePrunePlan([
+    { id: 'S1', archive: { sourceSeason: 1, status: 'completed' }, matches: [] },
+  ], 3, 1);
+  assert.equal(result.ready, false);
+  assert.equal(result.reason, 'UNKNOWN_OR_INCOMPLETE_ARCHIVE_CANNOT_BE_PRUNED');
+  const unknown = resolveArchivePrunePlan([
+    { id: 'legacy', archive: {}, matches: [] },
+  ], 3, null);
+  assert.equal(unknown.ready, false);
+  assert.equal(unknown.reason, 'ARCHIVE_PRUNE_IDENTITY_CONFLICT');
+});
+
+test('archive pruning resumes an interrupted child deletion only with its matching intent marker', async () => {
+  const { resolveArchivePrunePlan } = await import('../src/app/actions/season-archive.ts');
+  const result = resolveArchivePrunePlan([
+    { id: 'S1', archive: {
+      sourceSeason: 1, status: 'completed', archiveVersion: 1, leagueId: 'ALPHA',
+      expectedMatches: 840, finishedMatches: 840, groups: 15, teamCount: 120,
+      integrity: { complete: true, unfinishedMatches: 0, invalidResults: 0, canonicalMatches: 840, duplicateCanonicalFixtures: 0 },
+      finalizedAt: 'x', completedAt: 'x',
+      standings: Object.fromEntries(Array.from({length:15},(_,i)=>[`D${Math.floor(i/8)+1}-G${(i%8)+1}`,[]])),
+      pruneStatus: 'PRUNING', pruneTargetSeason: 3, pruneRetainedArchiveSeason: 0, prunePolicyVersion: 1,
+    }, matches: [] },
+  ], 3, null);
+  assert.equal(result.ready, false);
+  assert.equal(result.reason, 'LATEST_COMPLETED_ARCHIVE_RETENTION_CONFLICT');
+});

@@ -54,3 +54,10 @@ test('carry-forward rejects unexpected groups', () => {
   assert.equal(result.ready, false);
   assert.equal(result.reason, 'CARRY_FORWARD_UNEXPECTED_GROUP');
 });
+
+
+test('obsolete rollover plan pruning rejects malformed IDs and mismatched plan identities', async () => {
+  const { resolveRolloverPlanPruneIds } = await import('../src/app/actions/season-rollover-plan.ts');
+  assert.equal(resolveRolloverPlanPruneIds([{ id: 'legacy', plan: {} }], 3).ready, false);
+  assert.equal(resolveRolloverPlanPruneIds([{ id: 'S2', plan: { sourceSeason: 1, targetSeason: 3, ready: true } }], 3).ready, false);
+});

@@ -3,14 +3,14 @@ import 'server-only';
 import { FieldValue } from 'firebase-admin/firestore';
 import { prepareSeasonRollover } from './season-rollover';
 import { acquireSeasonCalendarBuildLock, assertSeasonCalendarBuildLock, commitSeasonCalendarPublication, commitSeasonCalendarWrites, releaseSeasonCalendarBuildLock } from './season-rollover-lock';
-import { buildCarryForwardGroups, buildPromotionRelegationGroups, validateRolloverPlan } from './season-rollover-plan';
+import { buildCarryForwardGroups, buildPromotionRelegationGroups, resolveRolloverPlanPruneIds, validateRolloverPlan } from './season-rollover-plan';
 import { resolveSeasonCatchUpPolicy, type SeasonHistoryState } from './season-history-policy';
 import { evaluateCanonicalDocuments } from './season-canonical';
 import { inspectGroupReconciliation } from './season-rollover-standings';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { advanceAtMostOneSeasonBoundary, deriveRecoverySeasonWindow, deriveSeasonDatePlan, resolveCanonicalSeasonDateWindow, resolveNextSeasonTarget, resolveSeasonActivationWindow, resolveSeasonLifecycleWindow } from './season-boundary';
 import { FIRST_SEASON_NEXT_START_ISO } from '@/app/lib/time-utils';
-import { isCompletedSeasonArchive, isRecoveredSeasonArchive, validateSeasonArchiveSnapshot } from './season-archive';
+import { isCompletedSeasonArchive, isRecoveredSeasonArchive, resolveArchivePrunePlan, validateSeasonArchiveSnapshot } from './season-archive';
 import { buildBotClub } from './bot-roster';
 import {
   MAX_LEVELS,
@@ -1008,48 +1008,89 @@ async function pruneSeasonHistoryAfterActivation(
   if (!validateRolloverPlan(activePlan, targetSeason - 1, targetSeason).valid) {
     throw new Error('ACTIVATED_SEASON_ROLLOVER_PLAN_MISSING_OR_INVALID');
   }
-  if (retainedArchiveSeason !== null) {
-    const retainedRef = db.collection('league_season_archives_v1').doc(`S${retainedArchiveSeason}`);
-    const retainedSnap = await retainedRef.get();
-    if (!retainedSnap.exists || !isCompletedSeasonArchive(retainedSnap.data() || {})) {
-      throw new Error('RETAINED_SEASON_ARCHIVE_MISSING_OR_INVALID');
+
+  const [archivesSnap, historySnap, plansSnap] = await Promise.all([
+    db.collection('league_season_archives_v1').get(),
+    db.collection('league_season_history_v1').get(),
+    db.collection('league_season_rollovers_v1').get(),
+  ]);
+  const historyById = new Map(historySnap.docs.map((doc: any) => [doc.id, doc.data() || {}]));
+  const archiveItems = [];
+  for (const archiveDoc of archivesSnap.docs) {
+    const archive = archiveDoc.data() || {};
+    const pruningForThisTarget = archive.pruneStatus === 'PRUNING' &&
+      Number(archive.pruneTargetSeason) === targetSeason &&
+      Number(archive.pruneRetainedArchiveSeason || 0) === Number(retainedArchiveSeason || 0) &&
+      Number(archive.prunePolicyVersion) === 1;
+    const matchesSnap = pruningForThisTarget
+      ? null
+      : await archiveDoc.ref.collection('matches').get();
+    archiveItems.push({
+      id: archiveDoc.id,
+      ref: archiveDoc.ref,
+      archive,
+      matches: matchesSnap ? matchesSnap.docs.map((doc: any) => ({ ...doc.data(), matchId: doc.id })) : [],
+      historyStatus: String((historyById.get(archiveDoc.id) || {}).status || ''),
+    });
+  }
+  const archivePlan = resolveArchivePrunePlan(
+    archiveItems.map(({ id, archive, matches, historyStatus }) => ({ id, archive, matches, historyStatus })),
+    targetSeason,
+    retainedArchiveSeason,
+  );
+  if (!archivePlan.ready) throw new Error(archivePlan.reason || 'ARCHIVE_PRUNE_PREFLIGHT_FAILED');
+
+  const rolloverPlan = resolveRolloverPlanPruneIds(
+    plansSnap.docs.map((doc: any) => ({ id: doc.id, plan: doc.data() || {} })),
+    targetSeason,
+  );
+  if (!rolloverPlan.ready) throw new Error(rolloverPlan.reason || 'ROLLOVER_PLAN_PRUNE_PREFLIGHT_FAILED');
+
+  // Persist a deletion intent only after every archive and plan passed
+  // validation. A retry can resume child-document deletion after interruption.
+  for (const archiveId of archivePlan.pruneIds) {
+    const item = archiveItems.find(candidate => candidate.id === archiveId)!;
+    if (item.archive.pruneStatus !== 'PRUNING') {
+      await item.ref.set({
+        pruneStatus: 'PRUNING',
+        pruneTargetSeason: targetSeason,
+        pruneRetainedArchiveSeason: retainedArchiveSeason,
+        prunePolicyVersion: 1,
+        pruneStartedAt: FieldValue.serverTimestamp(),
+      }, { merge: true });
     }
-    const retainedMatchesSnap = await retainedRef.collection('matches').get();
-    const retainedMatches = retainedMatchesSnap.docs.map((doc: any) => ({ ...doc.data(), matchId: doc.id }));
-    const validation = validateSeasonArchiveSnapshot(retainedSnap.data() || {}, retainedMatches);
-    if (!validation.valid) throw new Error('RETAINED_SEASON_ARCHIVE_VALIDATION_FAILED');
   }
 
   let deletedArchives = 0;
   let deletedArchiveMatches = 0;
-  const archivesSnap = await db.collection('league_season_archives_v1').get();
-  for (const archiveDoc of archivesSnap.docs) {
-    if (archiveDoc.id === (retainedArchiveSeason === null ? '' : `S${retainedArchiveSeason}`)) continue;
-    const matchesSnap = await archiveDoc.ref.collection('matches').get();
+  for (const archiveId of archivePlan.pruneIds) {
+    const item = archiveItems.find(candidate => candidate.id === archiveId)!;
+    const matchesSnap = await item.ref.collection('matches').get();
     for (let offset = 0; offset < matchesSnap.docs.length; offset += 400) {
       const batch = db.batch();
-      for (const matchDoc of matchesSnap.docs.slice(offset, offset + 400)) batch.delete(matchDoc.ref);
+      const chunk = matchesSnap.docs.slice(offset, offset + 400);
+      for (const matchDoc of chunk) batch.delete(matchDoc.ref);
       await batch.commit();
-      deletedArchiveMatches += Math.min(400, matchesSnap.docs.length - offset);
+      deletedArchiveMatches += chunk.length;
     }
-    await archiveDoc.ref.delete();
+    await item.ref.delete();
     deletedArchives++;
   }
 
   let deletedRolloverPlans = 0;
-  const plansSnap = await db.collection('league_season_rollovers_v1').get();
-  for (let offset = 0; offset < plansSnap.docs.length; offset += 400) {
+  for (let offset = 0; offset < rolloverPlan.pruneIds.length; offset += 400) {
     const batch = db.batch();
-    let count = 0;
-    for (const planDoc of plansSnap.docs.slice(offset, offset + 400)) {
-      if (planDoc.id === `S${targetSeason}`) continue;
-      batch.delete(planDoc.ref);
-      count++;
-    }
-    if (count) await batch.commit();
-    deletedRolloverPlans += count;
+    const chunk = rolloverPlan.pruneIds.slice(offset, offset + 400);
+    for (const planId of chunk) batch.delete(db.collection('league_season_rollovers_v1').doc(planId));
+    if (chunk.length) await batch.commit();
+    deletedRolloverPlans += chunk.length;
   }
-  return { deletedArchives, deletedArchiveMatches, deletedRolloverPlans, retainedArchiveSeason };
+  return {
+    deletedArchives,
+    deletedArchiveMatches,
+    deletedRolloverPlans,
+    retainedArchiveSeason,
+  };
 }
 
 /** Read-only canonical gate shared by build and the final publication step. */

@@ -158,3 +158,30 @@ export function buildCarryForwardGroups(
   }
   return { ready: true, groups };
 }
+
+
+/** Validate plan document identities before pruning obsolete rollover plans. */
+export function resolveRolloverPlanPruneIds(
+  plans: Array<{ id: string; plan: any }>,
+  targetSeason: number,
+) {
+  if (!Number.isSafeInteger(targetSeason) || targetSeason < 2) {
+    return { ready: false as const, reason: 'ROLLOVER_PLAN_PRUNE_TARGET_INVALID', pruneIds: [] as string[] };
+  }
+  let targetFound = false;
+  const pruneIds: string[] = [];
+  for (const item of plans) {
+    const match = /^S([1-9]\\d*)$/.exec(String(item.id || ''));
+    const season = match ? Number(match[1]) : NaN;
+    if (!Number.isSafeInteger(season) || season > targetSeason ||
+        !validateRolloverPlan(item.plan, season - 1, season).valid) {
+      return { ready: false as const, reason: 'ROLLOVER_PLAN_PRUNE_IDENTITY_CONFLICT', planId: item.id, pruneIds: [] as string[] };
+    }
+    if (season === targetSeason) targetFound = true;
+    else pruneIds.push(item.id);
+  }
+  if (!targetFound) {
+    return { ready: false as const, reason: 'ACTIVE_ROLLOVER_PLAN_MISSING_FROM_PRUNE_SET', pruneIds: [] as string[] };
+  }
+  return { ready: true as const, reason: null, pruneIds };
+}

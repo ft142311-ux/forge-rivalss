@@ -183,3 +183,88 @@ export function getVisibleSeasonArchives(archives: any[]): any[] {
 export function getCompletedSeasonArchives(archives: any[]): any[] {
   return getUniqueSeasonArchives(archives, isCompletedSeasonArchive);
 }
+
+
+/**
+ * Validate the complete archive-retention set before deleting anything.
+ * A PRUNING marker is written only after this function has approved the set;
+ * it makes interrupted subcollection deletion safely resumable.
+ */
+export function resolveArchivePrunePlan(
+  archives: Array<{ id: string; archive: any; matches: any[]; historyStatus?: string | null }>,
+  targetSeason: number,
+  retainedArchiveSeason: number | null,
+) {
+  if (!Number.isSafeInteger(targetSeason) || targetSeason < 2 ||
+      (retainedArchiveSeason !== null && (!Number.isSafeInteger(retainedArchiveSeason) ||
+        retainedArchiveSeason < 1 || retainedArchiveSeason >= targetSeason))) {
+    return { ready: false as const, reason: 'ARCHIVE_PRUNE_TARGET_INVALID', pruneIds: [] as string[] };
+  }
+  const completedSeasons: number[] = [];
+  const pruneIds: string[] = [];
+  let retainedFound = retainedArchiveSeason === null;
+
+  for (const item of archives) {
+    const match = /^S([1-9]\\d*)$/.exec(String(item.id || ''));
+    const season = match ? Number(match[1]) : NaN;
+    const archive = item.archive || {};
+    if (!Number.isSafeInteger(season) || season >= targetSeason ||
+        Number(archive.sourceSeason) !== season) {
+      return { ready: false as const, reason: 'ARCHIVE_PRUNE_IDENTITY_CONFLICT', archiveId: item.id, pruneIds: [] as string[] };
+    }
+
+    if (isCompletedSeasonArchive(archive)) {
+      completedSeasons.push(season);
+      if (season === retainedArchiveSeason) {
+        retainedFound = true;
+        if (archive.pruneStatus === 'PRUNING') {
+          return { ready: false as const, reason: 'RETAINED_ARCHIVE_MARKED_FOR_PRUNING', archiveId: item.id, pruneIds: [] as string[] };
+        }
+        const validation = validateSeasonArchiveSnapshot(archive, item.matches || []);
+        if (!validation.valid) {
+          return { ready: false as const, reason: 'RETAINED_ARCHIVE_INVALID', archiveId: item.id, details: validation.reasons, pruneIds: [] as string[] };
+        }
+        continue;
+      }
+      if (archive.pruneStatus === 'PRUNING') {
+        if (Number(archive.pruneTargetSeason) !== targetSeason ||
+            Number(archive.pruneRetainedArchiveSeason || 0) !== Number(retainedArchiveSeason || 0) ||
+            Number(archive.prunePolicyVersion) !== 1) {
+          return { ready: false as const, reason: 'ARCHIVE_PRUNE_MARKER_CONFLICT', archiveId: item.id, pruneIds: [] as string[] };
+        }
+      } else {
+        const validation = validateSeasonArchiveSnapshot(archive, item.matches || []);
+        if (!validation.valid) {
+          return { ready: false as const, reason: 'OBSOLETE_COMPLETED_ARCHIVE_INVALID', archiveId: item.id, details: validation.reasons, pruneIds: [] as string[] };
+        }
+      }
+      pruneIds.push(item.id);
+      continue;
+    }
+
+    if (isRecoveredSeasonArchive(archive)) {
+      if (archive.pruneStatus === 'PRUNING') {
+        if (Number(archive.pruneTargetSeason) !== targetSeason ||
+            Number(archive.pruneRetainedArchiveSeason || 0) !== Number(retainedArchiveSeason || 0) ||
+            Number(archive.prunePolicyVersion) !== 1) {
+          return { ready: false as const, reason: 'ARCHIVE_PRUNE_MARKER_CONFLICT', archiveId: item.id, pruneIds: [] as string[] };
+        }
+      } else if (!['SKIPPED', 'SKIPPED_PENDING_ACTIVATION'].includes(String(item.historyStatus || ''))) {
+        return { ready: false as const, reason: 'RECOVERED_ARCHIVE_SKIP_MARKER_MISSING', archiveId: item.id, pruneIds: [] as string[] };
+      }
+      pruneIds.push(item.id);
+      continue;
+    }
+
+    return { ready: false as const, reason: 'UNKNOWN_OR_INCOMPLETE_ARCHIVE_CANNOT_BE_PRUNED', archiveId: item.id, pruneIds: [] as string[] };
+  }
+
+  if (retainedArchiveSeason !== null && !retainedFound) {
+    return { ready: false as const, reason: 'RETAINED_ARCHIVE_MISSING', pruneIds: [] as string[] };
+  }
+  const latestCompleted = completedSeasons.length ? Math.max(...completedSeasons) : null;
+  if (latestCompleted !== retainedArchiveSeason) {
+    return { ready: false as const, reason: 'LATEST_COMPLETED_ARCHIVE_RETENTION_CONFLICT', latestCompleted, retainedArchiveSeason, pruneIds: [] as string[] };
+  }
+  return { ready: true as const, reason: null, pruneIds, retainedArchiveSeason };
+}
