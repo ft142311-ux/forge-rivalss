@@ -238,7 +238,7 @@ async function applySeasonAwards(db: any, sourceSeason: number, standings: Recor
         t.update(playerRef, {
           credits: after,
           seasonAwards: { ...awards, [awardKey]: { season: sourceSeason, division: level, group: Number(match[2]), rank: Number(row.rank), prize, awardedAt: FieldValue.serverTimestamp() } },
-          ...(shouldAddCup ? { trophies } : {}),
+          ...(shouldAddCup || shouldAddPyramidCup ? { trophies } : {}),
           updatedAt: FieldValue.serverTimestamp(),
         });
         t.set(txRef, {
