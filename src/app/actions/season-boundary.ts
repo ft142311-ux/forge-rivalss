@@ -94,8 +94,8 @@ export function isValidCleanSeasonOneBoundary(
   nextSeasonStart: string | Date | null | undefined,
 ) {
   if (worldGeneration !== 'CLEAN_S1_V1' || activeSeasonNumber !== 1) return false;
-  const startMs = new Date(seasonStart || '').getTime();
-  const nextMs = new Date(nextSeasonStart || '').getTime();
+  const startMs = seasonStart instanceof Date ? seasonStart.getTime() : new Date(seasonStart || '').getTime();
+  const nextMs = nextSeasonStart instanceof Date ? nextSeasonStart.getTime() : new Date(nextSeasonStart || '').getTime();
   return Number.isFinite(startMs) && Number.isFinite(nextMs) &&
     nextMs - startMs === 17 * 24 * 60 * 60 * 1000;
 }
