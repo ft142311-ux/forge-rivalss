@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { advanceAtMostOneSeasonBoundary, resolveSeasonLifecycleWindow } from '../src/app/actions/season-boundary.ts';
+import { advanceAtMostOneSeasonBoundary, resolveSeasonActivationWindow, resolveSeasonLifecycleWindow } from '../src/app/actions/season-boundary.ts';
 
 test('a delayed scheduler advances only one season boundary per invocation', () => {
   const result = advanceAtMostOneSeasonBoundary(
@@ -108,4 +108,41 @@ test('invalid lifecycle dates fail closed', () => {
     nextSeasonStart: '2026-10-23T15:00:00.000Z',
     now: new Date('2026-10-20T15:00:00.000Z'),
   }), /INVALID_SEASON_LIFECYCLE_WINDOW/);
+});
+
+test('a published season can activate at its scheduled start but never after its next boundary', () => {
+  const activationAt = new Date('2026-10-08T15:00:00.000Z');
+  const nextSeasonStart = new Date('2026-10-23T15:00:00.000Z');
+  const before = resolveSeasonActivationWindow({
+    activationAt, nextSeasonStart, now: new Date('2026-10-08T14:59:59.999Z'),
+  });
+  assert.equal(before.ready, false);
+  assert.equal(before.reason, 'ACTIVATION_NOT_DUE');
+
+  const atStart = resolveSeasonActivationWindow({ activationAt, nextSeasonStart, now: activationAt });
+  assert.equal(atStart.ready, true);
+
+  const lastMoment = resolveSeasonActivationWindow({
+    activationAt, nextSeasonStart, now: new Date('2026-10-23T14:59:59.999Z'),
+  });
+  assert.equal(lastMoment.ready, true);
+
+  const expired = resolveSeasonActivationWindow({
+    activationAt, nextSeasonStart, now: nextSeasonStart,
+  });
+  assert.equal(expired.ready, false);
+  assert.equal(expired.reason, 'ACTIVATION_WINDOW_EXPIRED');
+});
+
+test('invalid or reversed activation dates fail closed', () => {
+  assert.throws(() => resolveSeasonActivationWindow({
+    activationAt: 'invalid',
+    nextSeasonStart: '2026-10-23T15:00:00.000Z',
+    now: new Date('2026-10-12T15:00:00.000Z'),
+  }), /INVALID_SEASON_ACTIVATION_WINDOW/);
+  assert.throws(() => resolveSeasonActivationWindow({
+    activationAt: '2026-10-23T15:00:00.000Z',
+    nextSeasonStart: '2026-10-08T15:00:00.000Z',
+    now: new Date('2026-10-12T15:00:00.000Z'),
+  }), /INVALID_SEASON_ACTIVATION_WINDOW/);
 });

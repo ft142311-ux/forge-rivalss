@@ -7,7 +7,7 @@ import { validateRolloverPlan } from './season-rollover-plan';
 import { evaluateCanonicalDocuments } from './season-canonical';
 import { inspectGroupReconciliation } from './season-rollover-standings';
 import { getAdminDb } from '@/lib/firebase-admin';
-import { advanceAtMostOneSeasonBoundary, canPrepareImmediateCatchUpTarget, deriveSeasonDatePlan, evaluateExpiredSeasonArchives, resolveCanonicalSeasonDateWindow, resolveNextSeasonTarget, resolveSeasonLifecycleWindow } from './season-boundary';
+import { advanceAtMostOneSeasonBoundary, canPrepareImmediateCatchUpTarget, deriveSeasonDatePlan, evaluateExpiredSeasonArchives, resolveCanonicalSeasonDateWindow, resolveNextSeasonTarget, resolveSeasonActivationWindow, resolveSeasonLifecycleWindow } from './season-boundary';
 import { FIRST_SEASON_NEXT_START_ISO } from '@/app/lib/time-utils';
 import { isCompletedSeasonArchive, isRecoveredSeasonArchive, validateSeasonArchiveSnapshot } from './season-archive';
 import { buildBotClub } from './bot-roster';
@@ -838,8 +838,22 @@ export async function activatePublishedSeason() {
   if (!Number.isFinite(activationAtMs) || !Number.isFinite(preparedNextStartMs) || preparedNextStartMs !== expectedNextStartMs) {
     return { success: false, action: 'WORLD_NOT_READY', reason: 'PREPARED_SEASON_DATES_INVALID', sourceSeason, targetSeason, writesStarted: false };
   }
-  if (Date.now() < activationAtMs) {
-    return { success: false, action: 'WORLD_NOT_READY', reason: 'ACTIVATION_NOT_DUE', sourceSeason, targetSeason, activationAt: new Date(activationAtMs).toISOString(), writesStarted: false };
+  const activationWindow = resolveSeasonActivationWindow({
+    activationAt: new Date(activationAtMs),
+    nextSeasonStart: new Date(preparedNextStartMs),
+    now: new Date(),
+  });
+  if (!activationWindow.ready) {
+    return {
+      success: false,
+      action: 'WORLD_NOT_READY',
+      reason: activationWindow.reason,
+      sourceSeason,
+      targetSeason,
+      activationAt: activationWindow.activationAt.toISOString(),
+      nextSeasonStart: activationWindow.nextSeasonStart.toISOString(),
+      writesStarted: false,
+    };
   }
 
   const planRef = db.collection('league_season_rollovers_v1').doc(`S${targetSeason}`);
@@ -863,10 +877,12 @@ export async function activatePublishedSeason() {
         Number(current.preparedCalendarRevision || 0) !== CALENDAR_REVISION ||
         new Date(current.preparedSeasonStart || '').getTime() !== activationAtMs ||
         new Date(current.preparedNextSeasonStart || '').getTime() !== preparedNextStartMs ||
-        new Date(current.nextSeasonStart || '').getTime() !== activationAtMs ||
-        Date.now() < activationAtMs) {
+        new Date(current.nextSeasonStart || '').getTime() !== activationAtMs) {
       return { success: false, reason: 'ACTIVATION_STATE_CHANGED' };
     }
+    const transactionNowMs = Date.now();
+    if (transactionNowMs < activationAtMs) return { success: false, reason: 'ACTIVATION_NOT_DUE' };
+    if (transactionNowMs >= preparedNextStartMs) return { success: false, reason: 'ACTIVATION_WINDOW_EXPIRED' };
     if (!validateRolloverPlan(plan, sourceSeason, targetSeason).valid) {
       return { success: false, reason: 'ROLLOVER_PLAN_INVALID' };
     }

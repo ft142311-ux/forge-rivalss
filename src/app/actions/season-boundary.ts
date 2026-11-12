@@ -217,3 +217,36 @@ export function resolveSeasonLifecycleWindow(input: {
     activationDue: nowMs >= nextMs,
   };
 }
+
+/**
+ * An overdue activation may be recovered only while the target season's
+ * scheduled interval is still open. Activating after its next boundary would
+ * make an already-expired season active and can cascade into unsafe catch-up.
+ */
+export function resolveSeasonActivationWindow(input: {
+  activationAt: Date | string | number;
+  nextSeasonStart: Date | string | number;
+  now: Date;
+}) {
+  const activationAt = input.activationAt instanceof Date
+    ? new Date(input.activationAt.getTime())
+    : new Date(input.activationAt);
+  const nextSeasonStart = input.nextSeasonStart instanceof Date
+    ? new Date(input.nextSeasonStart.getTime())
+    : new Date(input.nextSeasonStart);
+  const now = input.now instanceof Date ? new Date(input.now.getTime()) : new Date(NaN);
+  const activationMs = activationAt.getTime();
+  const nextStartMs = nextSeasonStart.getTime();
+  const nowMs = now.getTime();
+  if (!Number.isFinite(activationMs) || !Number.isFinite(nextStartMs) ||
+      !Number.isFinite(nowMs) || nextStartMs <= activationMs) {
+    throw new Error('INVALID_SEASON_ACTIVATION_WINDOW');
+  }
+  if (nowMs < activationMs) {
+    return { ready: false, reason: 'ACTIVATION_NOT_DUE' as const, activationAt, nextSeasonStart };
+  }
+  if (nowMs >= nextStartMs) {
+    return { ready: false, reason: 'ACTIVATION_WINDOW_EXPIRED' as const, activationAt, nextSeasonStart };
+  }
+  return { ready: true, reason: null, activationAt, nextSeasonStart };
+}
