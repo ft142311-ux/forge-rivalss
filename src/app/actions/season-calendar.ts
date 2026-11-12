@@ -826,6 +826,7 @@ export async function activatePublishedSeason() {
         String(current.phase || '') !== 'PUBLISHED' ||
         Number(current.preparedCalendarRevision || 0) !== CALENDAR_REVISION ||
         new Date(current.preparedSeasonStart || '').getTime() !== activationAtMs ||
+        new Date(current.preparedNextSeasonStart || '').getTime() !== preparedNextStartMs ||
         new Date(current.nextSeasonStart || '').getTime() !== activationAtMs ||
         Date.now() < activationAtMs) {
       return { success: false, reason: 'ACTIVATION_STATE_CHANGED' };
