@@ -104,17 +104,19 @@ export async function GET(request: Request) {
       const hasIntegrityConflict = uniqueFixtures.size !== canonical.length || canonical.length > 840;
       const actuallyIncomplete = canonical.length < 840 || finished < canonical.length;
 
-      if (completedArchive && rolloverValidation.valid) {
+      if (completedArchive) {
         retainedArchiveSeason = latestPreviousSeason;
+        if (!rolloverValidation.valid) historyReady = false;
         archiveChecks.push({
           seasonNumber: latestPreviousSeason,
-          status: 'verified_completed',
+          status: rolloverValidation.valid ? 'verified_completed' : 'blocked_rollover_plan',
           archiveExists: true,
           archiveStatus: archive?.status || null,
           archivedMatches: archivedMatches.length,
           archiveValid: true,
           rolloverPlanExists: rolloverSnap.exists,
-          rolloverPlanValid: true,
+          rolloverPlanValid: rolloverValidation.valid,
+          rolloverReasons: 'reason' in rolloverValidation ? [rolloverValidation.reason] : [],
         });
       } else if (hasIntegrityConflict || (archiveSnap.exists && !archiveValidation.valid)) {
         historyReady = false;
