@@ -165,3 +165,49 @@ export function evaluateExpiredSeasonArchives(
   }
   return { ready: true, reason: null, missedSeasons: missed, invalidSeasons: [], writesStarted: false };
 }
+
+/**
+ * Resolve the season transition window without changing the persisted calendar.
+ * Day 15 starts 14 days after the active season begins (18:00 MSK). The
+ * publication deadline is 22 hours later (16:00 MSK on that offseason day),
+ * while activation remains pinned to the separately persisted next-season
+ * boundary. This intentionally preserves the historical 17-day S1 -> S2 window.
+ */
+export function resolveSeasonLifecycleWindow(input: {
+  seasonStart: Date | string | number | { toDate?: () => Date };
+  nextSeasonStart: Date | string | number | { toDate?: () => Date };
+  now: Date;
+}) {
+  const asDate = (value: unknown): Date => {
+    if (value instanceof Date) return new Date(value.getTime());
+    if (value && typeof value === 'object' && 'toDate' in value && typeof (value as any).toDate === 'function') {
+      const converted = (value as any).toDate();
+      return converted instanceof Date ? new Date(converted.getTime()) : new Date(NaN);
+    }
+    return new Date(value as string | number);
+  };
+  const seasonStart = asDate(input.seasonStart);
+  const nextSeasonStart = asDate(input.nextSeasonStart);
+  const now = input.now instanceof Date ? new Date(input.now.getTime()) : new Date(NaN);
+  const startMs = seasonStart.getTime();
+  const nextMs = nextSeasonStart.getTime();
+  const nowMs = now.getTime();
+  const dayMs = 24 * 60 * 60 * 1000;
+  if (!Number.isFinite(startMs) || !Number.isFinite(nextMs) || !Number.isFinite(nowMs) || nextMs <= startMs) {
+    throw new Error('INVALID_SEASON_LIFECYCLE_WINDOW');
+  }
+  const offseasonStartAt = new Date(startMs + 14 * dayMs);
+  const offseasonDayEndsAt = new Date(offseasonStartAt.getTime() + dayMs);
+  const publicationDeadlineAt = new Date(offseasonStartAt.getTime() + 22 * 60 * 60 * 1000);
+  const activationAt = new Date(nextMs);
+  return {
+    offseasonStartAt,
+    offseasonDayEndsAt,
+    publicationDeadlineAt,
+    activationAt,
+    offseasonActive: nowMs >= offseasonStartAt.getTime() && nowMs < nextMs,
+    leagueMatchesPaused: nowMs >= offseasonStartAt.getTime(),
+    publicationDeadlinePassed: nowMs > publicationDeadlineAt.getTime(),
+    activationDue: nowMs >= nextMs,
+  };
+}
