@@ -160,7 +160,7 @@ test('multi-season recovery preserves the persisted S1-to-S2 boundary before app
   assert.equal(result.nextSeasonStart.toISOString(), '2026-11-22T15:00:00.000Z');
 });
 
-test('multi-season recovery preserves a clean world's custom first boundary', async () => {
+test('multi-season recovery preserves a clean-world custom first boundary', async () => {
   const { deriveRecoverySeasonWindow } = await import('../src/app/actions/season-boundary.ts');
   const result = deriveRecoverySeasonWindow(
     1,
