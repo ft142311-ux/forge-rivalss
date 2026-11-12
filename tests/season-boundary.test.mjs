@@ -94,6 +94,14 @@ test('S2 onward uses the same Day 15 and 16:00 MSK publication deadline on a 15-
   assert.equal(window.activationAt.toISOString(), next.toISOString());
 });
 
+test('noncanonical season duration fails closed instead of shifting offseason gates', () => {
+  assert.throws(() => resolveSeasonLifecycleWindow({
+    seasonStart: '2026-10-08T15:00:00.000Z',
+    nextSeasonStart: '2026-10-22T15:00:00.000Z',
+    now: new Date('2026-10-20T15:00:00.000Z'),
+  }), /INVALID_SEASON_LIFECYCLE_WINDOW/);
+});
+
 test('invalid lifecycle dates fail closed', () => {
   assert.throws(() => resolveSeasonLifecycleWindow({
     seasonStart: 'not-a-date',
