@@ -328,7 +328,7 @@ async function buildSeasonCalendar(lease: BuildLease, pristineFirstWorld = false
 
   const phase = String(current.phase || '').toUpperCase();
   const requestedTarget = Number(current.nextSeasonNumber || current.preparationTargetSeason || 0);
-  const transitionRequested = ['FINALIZING', 'GENERATING_NEXT', 'PREPARING_NEXT_SEASON', 'PREPARATION'].includes(phase) || (phase === 'WORLD_BUILDING' && requestedTarget > Number(current.activeSeasonNumber || 1));
+  const transitionRequested = ['FINALIZING', 'GENERATING_NEXT', 'PREPARING_NEXT_SEASON', 'PREPARATION', 'PUBLISHED'].includes(phase) || (phase === 'WORLD_BUILDING' && requestedTarget > Number(current.activeSeasonNumber || 1));
   if (transitionRequested) {
     // A stale/corrupt target must never jump over an intermediate season.
     // Each season requires its own archive, standings, calendar and publication gates.
