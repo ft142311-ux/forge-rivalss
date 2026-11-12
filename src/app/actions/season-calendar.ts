@@ -4,7 +4,7 @@ import { FieldValue } from 'firebase-admin/firestore';
 import { prepareSeasonRollover } from './season-rollover';
 import { acquireSeasonCalendarBuildLock, assertSeasonCalendarBuildLock, commitSeasonCalendarPublication, commitSeasonCalendarWrites, releaseSeasonCalendarBuildLock } from './season-rollover-lock';
 import { buildCarryForwardGroups, buildPromotionRelegationGroups, resolveRecoveryPlacementSource, resolveRolloverPlanPruneIds, validateRolloverPlan } from './season-rollover-plan';
-import { resolveSeasonCatchUpPolicy, type SeasonHistoryState } from './season-history-policy';
+import { resolvePostActivationRetry, resolveSeasonCatchUpPolicy, type SeasonHistoryState } from './season-history-policy';
 import { evaluateCanonicalDocuments } from './season-canonical';
 import { inspectGroupReconciliation } from './season-rollover-standings';
 import { getAdminDb } from '@/lib/firebase-admin';
@@ -1369,6 +1369,37 @@ export async function activatePublishedSeason() {
   const initialSnap = await configRef.get();
   if (!initialSnap.exists) return { success: false, action: 'WORLD_NOT_READY', reason: 'SEASON_CONFIG_MISSING' };
   const initial = initialSnap.data() || {};
+
+  // The activation transaction may have committed immediately before a
+  // process/cron interruption. On retry, prepared* fields are already deleted;
+  // resume only the pending cleanup for the season that is already active.
+  const activationRetry = resolvePostActivationRetry(initial);
+  if (activationRetry.ready) {
+    let cleanup: any = null;
+    try {
+      cleanup = await pruneSeasonHistoryAfterActivation(db, activationRetry.targetSeason,
+        initial.retainedArchiveSeason !== null && initial.retainedArchiveSeason !== undefined &&
+        Number.isSafeInteger(Number(initial.retainedArchiveSeason))
+          ? Number(initial.retainedArchiveSeason) : null);
+      await configRef.set({
+        historyCleanupPending: false,
+        historyCleanupCompletedAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
+      }, { merge: true });
+    } catch (error: any) {
+      cleanup = { pending: true, error: String(error?.message || error) };
+    }
+    return {
+      success: true,
+      action: 'SEASON_ALREADY_ACTIVATED',
+      sourceSeason: activationRetry.sourceSeason,
+      targetSeason: activationRetry.targetSeason,
+      worldReady: true,
+      historyCleanup: cleanup,
+      resumedAfterInterruption: true,
+    };
+  }
+
   const sourceSeason = Number(initial.activeSeasonNumber || 1);
   const targetSeason = Number(initial.preparedSeasonNumber || initial.nextSeasonNumber || 0);
   const recoveryMode = initial.preparedRecoveryMode === true;
