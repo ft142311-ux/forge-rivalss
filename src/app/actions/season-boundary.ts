@@ -197,10 +197,14 @@ export function resolveSeasonLifecycleWindow(input: {
     throw new Error('INVALID_SEASON_LIFECYCLE_WINDOW');
   }
   const offseasonStartAt = new Date(startMs + 14 * dayMs);
+  const finalizationAt = new Date(offseasonStartAt.getTime() - 2 * 60 * 60 * 1000);
+  const lastRoundStartAt = new Date(startMs + 13 * dayMs);
   const offseasonDayEndsAt = new Date(offseasonStartAt.getTime() + dayMs);
   const publicationDeadlineAt = new Date(offseasonStartAt.getTime() + 22 * 60 * 60 * 1000);
   const activationAt = new Date(nextMs);
   return {
+    finalizationAt,
+    lastRoundStartAt,
     offseasonStartAt,
     offseasonDayEndsAt,
     publicationDeadlineAt,
