@@ -148,15 +148,15 @@ test('promotion and relegation move the correct teams through all four divisions
   ]);
   assert.deepEqual(ids('D2-G1'), [
     'D2-G1-R2', 'D2-G1-R3', 'D2-G1-R4', 'D2-G1-R5', 'D2-G1-R6',
-    'D1-G1-R1', 'D3-G1-R1', 'D3-G2-R1',
+    'D1-G1-R7', 'D3-G1-R1', 'D3-G2-R1',
   ]);
   assert.deepEqual(ids('D3-G1'), [
     'D3-G1-R2', 'D3-G1-R3', 'D3-G1-R4', 'D3-G1-R5', 'D3-G1-R6',
-    'D2-G1-R1', 'D4-G1-R1', 'D4-G2-R1',
+    'D2-G1-R7', 'D4-G1-R1', 'D4-G2-R1',
   ]);
   assert.deepEqual(ids('D4-G1'), [
     'D4-G1-R2', 'D4-G1-R3', 'D4-G1-R4', 'D4-G1-R5', 'D4-G1-R6', 'D4-G1-R7', 'D4-G1-R8',
-    'D3-G1-R1',
+    'D3-G1-R7',
   ]);
 
   for (const teams of Object.values(result.groups)) {
@@ -177,7 +177,7 @@ test('promotion/relegation mapping blocks a missing parent or child champion', (
   const result = buildPromotionRelegationGroups(standings);
   assert.equal(result.ready, false);
   assert.equal(result.reason, 'ROLLOVER_GROUP_SIZE_INVALID');
-  assert.equal(result.group, 'D1-G1');
+  assert.equal(result.group, 'D3-G2');
 });
 
 test('cron controlled failures use a non-success HTTP status', () => {
