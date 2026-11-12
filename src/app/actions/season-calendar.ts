@@ -673,7 +673,8 @@ export async function publishPreparedSeason() {
   }
   if (initial.worldReady !== true || initial.preparedWorldReady !== true ||
       Number(initial.preparedSeasonNumber) !== targetSeason ||
-      !initial.preparedSeasonStart || !initial.preparedNextSeasonStart) {
+      !initial.preparedSeasonStart || !initial.preparedNextSeasonStart ||
+      !['GENERATING_NEXT', 'WORLD_BUILDING'].includes(String(initial.phase || ''))) {
     return { success: false, action: 'WORLD_BUILDING', reason: 'PREPARED_WORLD_NOT_READY', sourceSeason, targetSeason, writesStarted: false };
   }
 
@@ -807,7 +808,10 @@ export async function activatePublishedSeason() {
         Number(current.preparationTargetSeason || 0) !== targetSeason ||
         current.worldReady !== true || current.preparedWorldReady !== true ||
         current.preparedPublished !== true ||
+        String(current.phase || '') !== 'PUBLISHED' ||
+        Number(current.preparedCalendarRevision || 0) !== CALENDAR_REVISION ||
         new Date(current.preparedSeasonStart || '').getTime() !== activationAtMs ||
+        new Date(current.nextSeasonStart || '').getTime() !== activationAtMs ||
         Date.now() < activationAtMs) {
       return { success: false, reason: 'ACTIVATION_STATE_CHANGED' };
     }
