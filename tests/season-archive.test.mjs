@@ -42,7 +42,7 @@ function makeSeasonArchive(sourceSeason = 1) {
     integrity: { complete: true, unfinishedMatches: 0, invalidResults: 0, canonicalMatches: 840, duplicateCanonicalFixtures: 0 },
     standings,
   };
-  const plan = { sourceSeason, targetSeason: sourceSeason + 1, ready: true, groups: planGroups };
+  const plan = { sourceSeason, targetSeason: sourceSeason + 1, ready: true, awards: { ready: true }, groups: planGroups };
   return { archive, matches, plan };
 }
 
