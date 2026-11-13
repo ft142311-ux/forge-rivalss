@@ -211,6 +211,15 @@ export function resolveRolloverPlanPruneIds(
  * replace a previously persisted placement decision with a different one.
  * Volatile metadata and post-publication award fields are intentionally ignored.
  */
+function stablePlanValue(value: any): any {
+  if (value === undefined) return null;
+  if (Array.isArray(value)) return value.map(stablePlanValue);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.keys(value).sort().map(key => [key, stablePlanValue(value[key])]));
+  }
+  return value;
+}
+
 export function compareRecoveryRolloverPlans(existing: any, candidate: any) {
   const sourceSeason = Number(candidate?.sourceSeason);
   const targetSeason = Number(candidate?.targetSeason);
@@ -223,7 +232,7 @@ export function compareRecoveryRolloverPlans(existing: any, candidate: any) {
   const fields = ['leagueId', 'mode', 'sourceSeason', 'targetSeason', 'skippedSeasons',
     'lastTrustedSeason', 'placementSource', 'retainedArchiveSeason', 'promotionRule', 'groups'];
   for (const field of fields) {
-    if (JSON.stringify(existing[field] ?? null) !== JSON.stringify(candidate[field] ?? null)) {
+    if (JSON.stringify(stablePlanValue(existing[field])) !== JSON.stringify(stablePlanValue(candidate[field]))) {
       return { same: false as const, reason: 'RECOVERY_ROLLOVER_PLAN_CONTENT_CONFLICT', field };
     }
   }
