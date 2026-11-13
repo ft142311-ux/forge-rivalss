@@ -4,7 +4,7 @@ import { FieldValue } from 'firebase-admin/firestore';
 import { prepareSeasonRollover } from './season-rollover';
 import { acquireSeasonCalendarBuildLock, assertSeasonCalendarBuildLock, commitSeasonCalendarPublication, commitSeasonCalendarWrites, commitSeasonHistoryCleanupWrites, releaseSeasonCalendarBuildLock } from './season-rollover-lock';
 import { buildCarryForwardGroups, buildPromotionRelegationGroups, compareRecoveryRolloverPlans, resolveRecoveryPlacementSource, resolveRolloverPlanPruneIds, validateRolloverPlan } from './season-rollover-plan';
-import { resolveActivatedSkippedSeasons, resolveHistoryCleanupCompletion, resolvePostActivationRetry, resolveSeasonCatchUpPolicy, type SeasonHistoryState } from './season-history-policy';
+import { resolveActivatedSkippedSeasons, resolveHistoryCleanupCompletion, resolvePendingSkippedHistoryMarker, resolvePostActivationRetry, resolveSeasonCatchUpPolicy, type SeasonHistoryState } from './season-history-policy';
 import { evaluateCanonicalDocuments } from './season-canonical';
 import { inspectGroupReconciliation } from './season-rollover-standings';
 import { getAdminDb } from '@/lib/firebase-admin';
@@ -618,6 +618,47 @@ async function prepareRecoveryCarryForwardPlan(
     groups,
     createdAt: FieldValue.serverTimestamp(),
   };
+  // Preflight every existing history marker before publishing the rollover
+  // plan. Retries may reuse an identical pending marker, but conflicting or
+  // already-finalized history must never be silently overwritten.
+  const historyRefs = policy.skippedSeasons.map(skipped => ({
+    skipped,
+    ref: db.collection('league_season_history_v1').doc(`S${skipped.seasonNumber}`),
+  }));
+  const historySnapshots = await Promise.all(historyRefs.map(item => item.ref.get()));
+  const historyWriteCandidates: Array<{ ref: any; data: any; options?: any }> = [];
+  for (let index = 0; index < historyRefs.length; index++) {
+    const { skipped, ref } = historyRefs[index];
+    const snapshot = historySnapshots[index];
+    const marker = resolvePendingSkippedHistoryMarker(
+      snapshot.exists ? snapshot.data() || {} : null,
+      { seasonNumber: skipped.seasonNumber, reason: skipped.reason, targetSeason },
+    );
+    if (!marker.ready) {
+      return {
+        ready: false,
+        reason: marker.reason,
+        details: { seasonNumber: skipped.seasonNumber, targetSeason },
+      };
+    }
+    if (marker.shouldWrite) {
+      historyWriteCandidates.push({
+        ref,
+        data: {
+          seasonNumber: skipped.seasonNumber,
+          status: 'SKIPPED_PENDING_ACTIVATION',
+          reason: skipped.reason,
+          targetSeason,
+          noResultsFabricated: true,
+          awardsApplied: false,
+          promotionRelegationApplied: false,
+          updatedAt: FieldValue.serverTimestamp(),
+        },
+        options: { merge: true },
+      });
+    }
+  }
+
   const planRef = db.collection('league_season_rollovers_v1').doc(`S${targetSeason}`);
   await lease.assert();
   const existingPlanSnap = await planRef.get();
@@ -639,22 +680,8 @@ async function prepareRecoveryCarryForwardPlan(
     await lease.commit([{ ref: planRef, data: plan }]);
   }
 
-  const historyWrites = policy.skippedSeasons.map(skipped => ({
-    ref: db.collection('league_season_history_v1').doc(`S${skipped.seasonNumber}`),
-    data: {
-      seasonNumber: skipped.seasonNumber,
-      status: 'SKIPPED_PENDING_ACTIVATION',
-      reason: skipped.reason,
-      targetSeason,
-      noResultsFabricated: true,
-      awardsApplied: false,
-      promotionRelegationApplied: false,
-      updatedAt: FieldValue.serverTimestamp(),
-    },
-    options: { merge: true },
-  }));
-  for (let offset = 0; offset < historyWrites.length; offset += BATCH_LIMIT) {
-    await lease.commit(historyWrites.slice(offset, offset + BATCH_LIMIT));
+  for (let offset = 0; offset < historyWriteCandidates.length; offset += BATCH_LIMIT) {
+    await lease.commit(historyWriteCandidates.slice(offset, offset + BATCH_LIMIT));
   }
 
   return { ready: true, plan: persistedPlan, skippedSeasons: policy.skippedSeasons, retainedArchiveSeason: policy.retainedArchiveSeason };
