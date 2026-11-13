@@ -43,3 +43,18 @@ test('accepts Firebase Auth lastSignInTime ISO strings and Date values', () => {
   assert.equal(resolveClubInactivity(new Date(expected), NOW).eligible, true);
   assert.equal(resolveClubInactivity(new Date(expected).toISOString(), NOW).eligible, true);
 });
+
+test('recent verified app activity prevents retirement even when Auth sign-in is old', () => {
+  const oldSignIn = NOW - INACTIVITY_WINDOW_MS - 10 * 24 * 60 * 60 * 1000;
+  const recentAppEntry = NOW - 2 * 24 * 60 * 60 * 1000;
+  const result = resolveClubInactivity(oldSignIn, NOW, undefined, recentAppEntry);
+  assert.equal(result.eligible, false);
+  assert.equal(result.reason, 'USER_RECENTLY_ACTIVE');
+});
+
+test('Firestore Timestamp-style activity values are accepted', () => {
+  const recent = NOW - 1000;
+  const timestamp = { toDate: () => new Date(recent) };
+  const result = resolveClubInactivity(NOW - INACTIVITY_WINDOW_MS * 2, NOW, undefined, timestamp);
+  assert.equal(result.eligible, false);
+});
