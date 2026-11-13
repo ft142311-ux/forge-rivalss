@@ -283,6 +283,7 @@ async function prepareRecoveryCarryForwardPlan(
   db: any,
   activeSeason: number,
   targetSeason: number,
+  lease: BuildLease,
 ): Promise<RecoveryPlanResult> {
   const states: Record<number, SeasonHistoryState> = {};
   let latestCompletedArchive: { season: number; standings: Record<string, any[]> } | null = null;
@@ -424,7 +425,7 @@ async function prepareRecoveryCarryForwardPlan(
     });
     if (!snapshot.ready) return snapshot;
     const archiveRef = db.collection('league_season_archives_v1').doc(`S${seasonNumber}`);
-    await archiveRef.set(snapshot.archive);
+    await lease.commit([{ ref: archiveRef, data: snapshot.archive }]);
     return { ready: true, archive: snapshot.archive };
   };
 
@@ -617,11 +618,11 @@ async function prepareRecoveryCarryForwardPlan(
     createdAt: FieldValue.serverTimestamp(),
   };
   const planRef = db.collection('league_season_rollovers_v1').doc(`S${targetSeason}`);
-  await planRef.set(plan);
+  await lease.commit([{ ref: planRef, data: plan }]);
 
-  const historyBatch = db.batch();
-  for (const skipped of policy.skippedSeasons) {
-    historyBatch.set(db.collection('league_season_history_v1').doc(`S${skipped.seasonNumber}`), {
+  const historyWrites = policy.skippedSeasons.map(skipped => ({
+    ref: db.collection('league_season_history_v1').doc(`S${skipped.seasonNumber}`),
+    data: {
       seasonNumber: skipped.seasonNumber,
       status: 'SKIPPED_PENDING_ACTIVATION',
       reason: skipped.reason,
@@ -630,9 +631,12 @@ async function prepareRecoveryCarryForwardPlan(
       awardsApplied: false,
       promotionRelegationApplied: false,
       updatedAt: FieldValue.serverTimestamp(),
-    }, { merge: true });
+    },
+    options: { merge: true },
+  }));
+  for (let offset = 0; offset < historyWrites.length; offset += BATCH_LIMIT) {
+    await lease.commit(historyWrites.slice(offset, offset + BATCH_LIMIT));
   }
-  if (policy.skippedSeasons.length) await historyBatch.commit();
 
   return { ready: true, plan, skippedSeasons: policy.skippedSeasons, retainedArchiveSeason: policy.retainedArchiveSeason };
 }
@@ -755,7 +759,7 @@ async function buildSeasonCalendar(lease: BuildLease, pristineFirstWorld = false
         (!directRecovery || savedPlan.mode === 'recovery_carry_forward')) {
       rolloverPlan = savedPlan;
     } else if (directRecovery) {
-      const recovery = await prepareRecoveryCarryForwardPlan(db, activeSeasonBefore, seasonNumber);
+      const recovery = await prepareRecoveryCarryForwardPlan(db, activeSeasonBefore, seasonNumber, lease);
       if (!recovery.ready) {
         return {
           success: false,
