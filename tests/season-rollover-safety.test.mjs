@@ -237,3 +237,27 @@ test('each protected rollover write renews the lease atomically', async () => {
   assert.ok(db.read().expiresAtMs > before);
   assert.equal(await assertSeasonRolloverLock(db, lease.ownerId, lease.token), true);
 });
+
+
+test('expired rollover owner cannot write after a replacement owner takes the lease', async () => {
+  const db = mockDb();
+  const old = await acquireSeasonRolloverLock(db, 1, 2, {
+    ownerId: 'old-rollover-owner',
+    nowMs: 100,
+    ttlMs: 10,
+  });
+  const replacement = await acquireSeasonRolloverLock(db, 1, 2, {
+    ownerId: 'replacement-rollover-owner',
+    nowMs: 111,
+  });
+  assert.equal(replacement.acquired, true);
+  const ref = db.collection('protected').doc('season-archive');
+  await assert.rejects(
+    () => commitSeasonRolloverWrites(db, old.ownerId, old.token, [
+      { ref, data: { writtenBy: 'stale-owner' } },
+    ]),
+    /SEASON_ROLLOVER_LOCK_LOST/,
+  );
+  assert.equal(db.read('season-archive'), undefined);
+  assert.equal(db.read().ownerId, replacement.ownerId);
+});
