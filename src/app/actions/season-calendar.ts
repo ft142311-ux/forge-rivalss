@@ -10,6 +10,7 @@ import { inspectGroupReconciliation } from './season-rollover-standings';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { advanceAtMostOneSeasonBoundary, deriveRecoverySeasonWindow, deriveSeasonDatePlan, resolveCanonicalSeasonDateWindow, resolveNextSeasonTarget, resolveSeasonActivationWindow, resolveSeasonLifecycleWindow } from './season-boundary';
 import { FIRST_SEASON_NEXT_START_ISO } from '@/app/lib/time-utils';
+import { isRolloverPlanPublicationReady } from './season-awards-policy';
 import { buildRecoveredSeasonArchiveSnapshot, isCompletedSeasonArchive, isRecoveredSeasonArchive, resolveArchivePrunePlan, validateSeasonArchiveSnapshot } from './season-archive';
 import { buildBotClub } from './bot-roster';
 import {
@@ -756,6 +757,7 @@ async function buildSeasonCalendar(lease: BuildLease, pristineFirstWorld = false
     const planSnap = await db.collection('league_season_rollovers_v1').doc(`S${seasonNumber}`).get();
     const savedPlan = planSnap.exists ? planSnap.data() || {} : null;
     if (savedPlan && validateRolloverPlan(savedPlan, planSourceSeason, seasonNumber).valid &&
+        isRolloverPlanPublicationReady(savedPlan) &&
         (!directRecovery || savedPlan.mode === 'recovery_carry_forward')) {
       rolloverPlan = savedPlan;
     } else if (directRecovery) {
@@ -805,7 +807,7 @@ async function buildSeasonCalendar(lease: BuildLease, pristineFirstWorld = false
       if (!rolloverPlan) {
         const preparedPlanSnap = await db.collection('league_season_rollovers_v1').doc(`S${seasonNumber}`).get();
         const preparedPlan = preparedPlanSnap.exists ? preparedPlanSnap.data() || {} : null;
-        if (!validateRolloverPlan(preparedPlan, activeSeasonBefore, seasonNumber).valid) {
+        if (!validateRolloverPlan(preparedPlan, activeSeasonBefore, seasonNumber).valid || !isRolloverPlanPublicationReady(preparedPlan)) {
           return {
             success: false, seasonNumber: activeSeasonBefore,
             targetSeasonNumber: seasonNumber, worldReady: false,
@@ -825,7 +827,7 @@ async function buildSeasonCalendar(lease: BuildLease, pristineFirstWorld = false
     // activeSeasonNumber before all tables/slots/matches were committed.
     const planSnap = await db.collection('league_season_rollovers_v1').doc(`S${seasonNumber}`).get();
     const savedPlan = planSnap.exists ? planSnap.data() || {} : null;
-    if (validateRolloverPlan(savedPlan, seasonNumber - 1, seasonNumber).valid) {
+    if (validateRolloverPlan(savedPlan, seasonNumber - 1, seasonNumber).valid && isRolloverPlanPublicationReady(savedPlan)) {
       rolloverPlan = savedPlan;
     }
   }
@@ -1107,7 +1109,7 @@ async function pruneSeasonHistoryAfterActivation(
   const activePlanRef = db.collection('league_season_rollovers_v1').doc(`S${targetSeason}`);
   const activePlanSnap = await activePlanRef.get();
   const activePlan = activePlanSnap.exists ? activePlanSnap.data() || {} : null;
-  if (!validateRolloverPlan(activePlan, targetSeason - 1, targetSeason).valid) {
+  if (!validateRolloverPlan(activePlan, targetSeason - 1, targetSeason).valid || !isRolloverPlanPublicationReady(activePlan)) {
     throw new Error('ACTIVATED_SEASON_ROLLOVER_PLAN_MISSING_OR_INVALID');
   }
 
@@ -1271,6 +1273,7 @@ export async function publishPreparedSeason() {
       (multiSeasonRecovery || preparedStartMs === new Date(initial.nextSeasonStart || '').getTime()) &&
       preparedNextStartMs === preparedStartMs + TOTAL_CYCLE_DAYS * 24 * 60 * 60 * 1000 &&
       validateRolloverPlan(plan, recoveryMode ? targetSeason - 1 : sourceSeason, targetSeason).valid &&
+      isRolloverPlanPublicationReady(plan) &&
       readiness.ready;
     if (!validPublishedState) {
       return {
@@ -1348,7 +1351,7 @@ export async function publishPreparedSeason() {
   const planSnap = await planRef.get();
   const plan = planSnap.exists ? planSnap.data() || {} : null;
   const planSourceSeason = recoveryMode ? targetSeason - 1 : sourceSeason;
-  if (!plan || !validateRolloverPlan(plan, planSourceSeason, targetSeason).valid) {
+  if (!plan || !validateRolloverPlan(plan, planSourceSeason, targetSeason).valid || !isRolloverPlanPublicationReady(plan)) {
     return { success: false, action: 'ROLLOVER_NOT_READY', sourceSeason, targetSeason, reason: 'ARCHIVE_OR_PLACEMENT_PLAN_NOT_READY' };
   }
 
@@ -1373,7 +1376,7 @@ export async function publishPreparedSeason() {
           calendarRevision: Number(initial.preparedCalendarRevision || 0),
           phase: String(initial.phase || ''),
           planRef,
-          validatePlan: (candidate: any) => validateRolloverPlan(candidate, planSourceSeason, targetSeason).valid,
+          validatePlan: (candidate: any) => validateRolloverPlan(candidate, planSourceSeason, targetSeason).valid && isRolloverPlanPublicationReady(candidate),
           publicationDeadlineMs: overdueRecoveryMode ? preparedStartMs : lifecycle!.publicationDeadlineAt.getTime(),
           activationAtMs: overdueRecoveryMode ? preparedStartMs : lifecycle!.activationAt.getTime(),
           allowOverdueRecovery: overdueRecoveryMode,
@@ -1516,7 +1519,7 @@ export async function activatePublishedSeason() {
     const transactionNowMs = Date.now();
     if (transactionNowMs < activationAtMs) return { success: false, reason: 'ACTIVATION_NOT_DUE' };
     if (transactionNowMs >= preparedNextStartMs) return { success: false, reason: 'ACTIVATION_WINDOW_EXPIRED' };
-    if (!validateRolloverPlan(plan, recoveryMode ? targetSeason - 1 : sourceSeason, targetSeason).valid) {
+    if (!validateRolloverPlan(plan, recoveryMode ? targetSeason - 1 : sourceSeason, targetSeason).valid || !isRolloverPlanPublicationReady(plan)) {
       return { success: false, reason: 'ROLLOVER_PLAN_INVALID' };
     }
     tx.update(configRef, {
@@ -1712,6 +1715,7 @@ export async function ensureSeasonCalendar(requestedTargetSeason?: number) {
       const plan = planSnap.exists ? planSnap.data() || {} : null;
       const publishedReady = latestConfig.preparedWorldReady === true &&
         validateRolloverPlan(plan, planSource, targetSeason).valid &&
+        isRolloverPlanPublicationReady(plan) &&
         readiness.ready;
       if (!publishedReady) {
         return {
