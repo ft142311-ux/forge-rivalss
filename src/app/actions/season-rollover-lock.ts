@@ -156,9 +156,14 @@ export async function commitSeasonCalendarWrites(db: LockDb, ownerId: string, to
   await db.runTransaction(async (tx: any) => {
     const snap = await tx.get(ref);
     const current = snap.exists ? snap.data() || {} : null;
-    if (!current || current.ownerId !== ownerId || current.token !== token || isSeasonRolloverLockStale(current, Date.now())) {
+    const nowMs = Date.now();
+    if (!current || current.ownerId !== ownerId || current.token !== token || isSeasonRolloverLockStale(current, nowMs)) {
       throw new Error('SEASON_CALENDAR_BUILD_LOCK_LOST');
     }
+    // Calendar generation may span many bounded write chunks. Renew the lease
+    // in the same transaction as each chunk so a live builder cannot be replaced
+    // while it is still committing work.
+    tx.set(ref, { expiresAtMs: nowMs + SEASON_CALENDAR_BUILD_LOCK_TTL_MS, renewedAtMs: nowMs }, { merge: true });
     for (const write of writes) tx.set(write.ref, write.data, write.options);
   });
 }
