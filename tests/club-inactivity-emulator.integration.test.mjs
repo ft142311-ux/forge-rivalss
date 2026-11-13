@@ -71,8 +71,8 @@ test('inactive club replacement is atomic and preserves completed match results'
     await ref.set({
       season, leagueId: 'ALPHA', level: division, groupId: group,
       version: 140, type: 'league',
-      homeId: i === 0 ? uid : `opponent_${i}`,
-      homeName: i === 0 ? player.clubName : `Opponent ${i}`,
+      homeId: i === 0 || i === 2 ? uid : `opponent_${i}`,
+      homeName: i === 0 || i === 2 ? player.clubName : `Opponent ${i}`,
       awayId: i === 1 ? uid : `away_${i}`,
       awayName: i === 1 ? player.clubName : `Away ${i}`,
       homeRank: i === 0 ? rank : 1,
@@ -117,8 +117,8 @@ test('inactive club replacement is atomic and preserves completed match results'
   assert.equal(completed.scoreA, 2);
   const future = (await matchRefs[2].get()).data();
   assert.equal(future.homeId, botId);
-  assert.equal(future.homeName, 'Bot0100103');
+  assert.equal(future.homeName, 'Bot01200103');
   const futureAway = (await matchRefs[1].get()).data();
   assert.equal(futureAway.awayId, botId);
-  assert.equal(futureAway.awayName, 'Bot0100103');
+  assert.equal(futureAway.awayName, 'Bot01200103');
 });
