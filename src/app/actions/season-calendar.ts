@@ -4,7 +4,7 @@ import { FieldValue } from 'firebase-admin/firestore';
 import { prepareSeasonRollover } from './season-rollover';
 import { acquireSeasonCalendarBuildLock, assertSeasonCalendarBuildLock, commitSeasonCalendarPublication, commitSeasonCalendarWrites, releaseSeasonCalendarBuildLock } from './season-rollover-lock';
 import { buildCarryForwardGroups, buildPromotionRelegationGroups, resolveRecoveryPlacementSource, resolveRolloverPlanPruneIds, validateRolloverPlan } from './season-rollover-plan';
-import { resolveActivatedSkippedSeasons, resolvePostActivationRetry, resolveSeasonCatchUpPolicy, type SeasonHistoryState } from './season-history-policy';
+import { resolveActivatedSkippedSeasons, resolveHistoryCleanupCompletion, resolvePostActivationRetry, resolveSeasonCatchUpPolicy, type SeasonHistoryState } from './season-history-policy';
 import { evaluateCanonicalDocuments } from './season-canonical';
 import { inspectGroupReconciliation } from './season-rollover-standings';
 import { getAdminDb } from '@/lib/firebase-admin';
@@ -1062,6 +1062,29 @@ async function buildSeasonCalendar(lease: BuildLease, pristineFirstWorld = false
 
 
 /**
+ * Mark post-activation cleanup complete only if this season still owns the
+ * durable cleanup marker. This prevents a stale worker from clearing a newer
+ * season's pending-cleanup state.
+ */
+async function completeSeasonHistoryCleanup(db: any, targetSeason: number) {
+  const configRef = db.collection('system_v1').doc('season_config');
+  return await db.runTransaction(async (tx: any) => {
+    const configSnap = await tx.get(configRef);
+    const config = configSnap.exists ? configSnap.data() || {} : null;
+    const decision = resolveHistoryCleanupCompletion(config, targetSeason);
+    if (!decision.ready) return decision;
+    if (decision.shouldMarkComplete) {
+      tx.update(configRef, {
+        historyCleanupPending: false,
+        historyCleanupCompletedAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+    }
+    return decision;
+  });
+}
+
+/**
  * Enforce the rolling one-archive policy only after a season has activated.
  * Verify the retained archive before deleting anything; delete nested match
  * documents explicitly because Firestore does not cascade subcollections.
@@ -1409,11 +1432,8 @@ export async function activatePublishedSeason() {
         initial.retainedArchiveSeason !== null && initial.retainedArchiveSeason !== undefined &&
         Number.isSafeInteger(Number(initial.retainedArchiveSeason))
           ? Number(initial.retainedArchiveSeason) : null);
-      await configRef.set({
-        historyCleanupPending: false,
-        historyCleanupCompletedAt: FieldValue.serverTimestamp(),
-        updatedAt: FieldValue.serverTimestamp(),
-      }, { merge: true });
+      const completion = await completeSeasonHistoryCleanup(db, activationRetry.targetSeason);
+      if (!completion.ready) throw new Error(completion.reason || 'HISTORY_CLEANUP_COMPLETION_BLOCKED');
     } catch (error: any) {
       cleanup = { pending: true, error: String(error?.message || error) };
     }
@@ -1534,7 +1554,8 @@ export async function activatePublishedSeason() {
   let cleanup: any = null;
   try {
     cleanup = await pruneSeasonHistoryAfterActivation(db, targetSeason, retainedArchiveSeason);
-    await configRef.set({ historyCleanupPending: false, historyCleanupCompletedAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+    const completion = await completeSeasonHistoryCleanup(db, targetSeason);
+    if (!completion.ready) throw new Error(completion.reason || 'HISTORY_CLEANUP_COMPLETION_BLOCKED');
   } catch (error: any) {
     cleanup = { pending: true, error: String(error?.message || error) };
   }
@@ -1554,7 +1575,8 @@ export async function ensureSeasonCalendar(requestedTargetSeason?: number) {
     try {
       await pruneSeasonHistoryAfterActivation(db, Number(config.historyCleanupTargetSeason || config.activeSeasonNumber || 1),
         config.retainedArchiveSeason !== null && config.retainedArchiveSeason !== undefined && Number.isSafeInteger(Number(config.retainedArchiveSeason)) ? Number(config.retainedArchiveSeason) : null);
-      await db.collection('system_v1').doc('season_config').set({ historyCleanupPending: false, historyCleanupCompletedAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+      const completion = await completeSeasonHistoryCleanup(db, Number(config.historyCleanupTargetSeason || config.activeSeasonNumber || 1));
+      if (!completion.ready) throw new Error(completion.reason || 'HISTORY_CLEANUP_COMPLETION_BLOCKED');
       config = { ...config, historyCleanupPending: false };
     } catch (error: any) {
       return { success: false, worldReady: config.worldReady === true, action: 'WORLD_BUILDING', reason: 'SEASON_HISTORY_CLEANUP_PENDING', cleanupError: String(error?.message || error), writesStarted: true };
