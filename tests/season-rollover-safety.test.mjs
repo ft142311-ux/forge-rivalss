@@ -261,3 +261,20 @@ test('expired rollover owner cannot write after a replacement owner takes the le
   assert.equal(db.read('season-archive'), undefined);
   assert.equal(db.read().ownerId, replacement.ownerId);
 });
+
+
+test('each protected calendar write renews the lease atomically', async () => {
+  const db = mockDb();
+  const lease = await acquireSeasonCalendarBuildLock(db, 1, 2, {
+    ownerId: 'renewing-calendar-builder',
+    nowMs: Date.now() - 1_000,
+  });
+  const before = db.read('season_calendar_build_v1').expiresAtMs;
+  const ref = db.collection('protected').doc('calendar-chunk');
+  await commitSeasonCalendarWrites(db, lease.ownerId, lease.token, [
+    { ref, data: { saved: true } },
+  ]);
+  assert.equal(db.read('calendar-chunk').saved, true);
+  assert.ok(db.read('season_calendar_build_v1').expiresAtMs > before);
+  assert.equal(await assertSeasonCalendarBuildLock(db, lease.ownerId, lease.token), true);
+});
