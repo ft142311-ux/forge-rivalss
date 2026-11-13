@@ -293,12 +293,15 @@ test('recovery carry-forward archive, plan, and skipped history writes are fence
     'recovered archive writes must be fenced');
   assert.match(recovery, /await lease\.commit\(\[\{ ref: planRef, data: plan \}\]\)/,
     'carry-forward plan writes must be fenced');
-  assert.match(recovery, /historyWriteCandidates\.slice\(offset, offset \+ BATCH_LIMIT\)/,
-    'new skipped history markers must be chunked and fenced');
-  assert.match(recovery, /resolvePendingSkippedHistoryMarker/,
-    'existing skipped history markers must be validated before they can be reused');
-  assert.match(recovery, /const historySnapshots = await Promise\.all\(historyRefs\.map\(item => item\.ref\.get\(\)\)\)/,
-    'all existing skipped history markers must be preflighted before plan publication');
+  assert.match(recovery, /publishRecoveryRolloverDecision\(/,
+    'recovery plan and history publication must use the retry-safe publication workflow');
+  const publication = await fs.readFile(new URL('../src/app/actions/season-recovery-publication.ts', import.meta.url), 'utf8');
+  assert.match(publication, /Promise\.all\(args\.historyEntries\.map\(entry => args\.read\(entry\.ref\)\)\)/,
+    'all history markers must be preflighted before the plan can be published');
+  assert.match(publication, /args\.commitHistory\(historyWrites\.slice\(offset, offset \+ args\.batchLimit\)\)/,
+    'history marker writes must be chunked through the injected fenced writer');
+  assert.match(publication, /persistedPlan = existingPlan/,
+    'retries must reuse the first durable plan');
   assert.doesNotMatch(recovery, /\.set\(snapshot\.archive\)|\.set\(plan\)|historyBatch\.commit\(\)/,
     'recovery must not bypass the lease with direct writes');
   assert.equal((source.match(/prepareRecoveryCarryForwardPlan\(db, activeSeasonBefore, seasonNumber, lease\)/g) || []).length, 2,
