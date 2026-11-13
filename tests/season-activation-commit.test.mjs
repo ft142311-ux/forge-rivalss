@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { commitSeasonActivation } from '../src/app/actions/season-activation-commit.ts';
+import { resolvePostActivationRetry } from '../src/app/actions/season-history-policy.ts';
 
 const activationAtMs = 10_000;
 const nextSeasonStartMs = 20_000;
@@ -162,4 +163,14 @@ test('multi-season recovery does not require the source nextSeasonStart to equal
 
   assert.deepEqual(result, { success: true });
   assert.equal(db.read('season_config').activeSeasonNumber, 2);
+});
+
+
+test('a crash immediately after activation commit leaves a durable cleanup retry marker', async () => {
+  const db = activationDb();
+  await commitSeasonActivation(db, configRef, planRef, expected());
+
+  const retry = resolvePostActivationRetry(db.read('season_config'));
+  assert.deepEqual(retry, { ready: true, sourceSeason: 1, targetSeason: 2 });
+  assert.equal(db.read('season_config').historyCleanupPending, true);
 });
