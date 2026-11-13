@@ -402,6 +402,31 @@ export async function prepareSeasonRollover(db: any, sourceSeason: number, targe
     };
   }
 
+  // A Firestore subcollection can outlive a missing parent document. Detect
+  // orphaned match chunks before the normal writer can overwrite them from live data.
+  if (!archiveSnap.exists) {
+    const orphanedArchiveMatches = await archiveRef.collection('matches').limit(1).get();
+    if (!orphanedArchiveMatches.empty) {
+      return {
+        ready: false,
+        reason: 'ORPHANED_PARTIAL_SEASON_ARCHIVE_REQUIRES_RECONCILIATION',
+        sourceSeason,
+        targetSeason,
+        writesStarted: true,
+      };
+    }
+  }
+  const existingArchiveStatus = archiveSnap.exists ? String((archiveSnap.data() || {}).status || '') : '';
+  if (archiveSnap.exists && !['preparing', 'completed'].includes(existingArchiveStatus)) {
+    return {
+      ready: false,
+      reason: 'SEASON_ARCHIVE_STATUS_REQUIRES_RECONCILIATION',
+      sourceSeason,
+      targetSeason,
+      archiveStatus: existingArchiveStatus || null,
+      writesStarted: false,
+    };
+  }
   // Mutable snapshots are refreshed after any explicit Season 1 repair writes.
   // Keep them in this commit callback scope for all subsequent validation.
   let tablesSnap = initialTablesSnap;
