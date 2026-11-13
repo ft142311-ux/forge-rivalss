@@ -74,9 +74,13 @@ async function retireInactiveClub({ db, auth, userRecord, now = new Date() }) {
   if (latestAuthRecord.disabled && !pendingSnap.exists) {
     return { action: 'SKIPPED_PREVIOUSLY_DISABLED' };
   }
+  const activityRef = db.collection('user_activity_v1').doc(uid);
+  const activitySnap = await activityRef.get();
   const eligibility = resolveClubInactivity(
     latestAuthRecord.metadata && latestAuthRecord.metadata.lastSignInTime,
-    now.getTime()
+    now.getTime(),
+    undefined,
+    activitySnap.exists ? activitySnap.get('lastActiveAt') : null
   );
   if (!eligibility.eligible) return { action: 'SKIPPED_NOT_INACTIVE', reason: eligibility.reason };
 
@@ -117,9 +121,12 @@ async function retireInactiveClub({ db, auth, userRecord, now = new Date() }) {
   // Close the race where a successful sign-in lands between the metadata read
   // and Auth disable. If its timestamp advanced, restore access and do not retire.
   const postDisableAuthRecord = await auth.getUser(uid);
+  const postDisableActivitySnap = await activityRef.get();
   const postDisableEligibility = resolveClubInactivity(
     postDisableAuthRecord.metadata && postDisableAuthRecord.metadata.lastSignInTime,
-    now.getTime()
+    now.getTime(),
+    undefined,
+    postDisableActivitySnap.exists ? postDisableActivitySnap.get('lastActiveAt') : null
   );
   if (!postDisableEligibility.eligible) {
     await auth.updateUser(uid, { disabled: false });
