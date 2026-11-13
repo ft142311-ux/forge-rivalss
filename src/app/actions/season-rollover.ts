@@ -6,7 +6,7 @@ import { buildPromotionRelegationGroups, validateRolloverPlan } from './season-r
 import { isSeasonArchiveReadyToComplete, validateSeasonArchiveSnapshot } from './season-archive';
 import { runTwoPhaseSeasonOrchestration } from './season-orchestration';
 import { isValidCleanSeasonOneBoundary } from './season-boundary';
-import { isSeasonAwardAlreadyApplied, shouldPersistSeasonTrophies } from './season-awards-policy';
+import { resolveSeasonAwardRecipientState, shouldPersistSeasonTrophies } from './season-awards-policy';
 
 const LEAGUE_ID = 'ALPHA';
 const EXPECTED_MATCHES = TOTAL_GROUPS * TEAMS_PER_GROUP * (TEAMS_PER_GROUP - 1);
@@ -182,6 +182,7 @@ async function applySeasonAwards(db: any, sourceSeason: number, standings: Recor
   let rewardedClubs = 0;
   let totalCredits = 0;
   let trophiesAwarded = 0;
+  const missingProfileUids: string[] = [];
   const champion = standings['D1-G1']?.[0];
   const pyramidCupSnap = await db.collection('cup_pyramid_v1').doc(`cup_s${sourceSeason}_l${LEAGUE_ID}`).get();
   const pyramidCupWinnerId = pyramidCupSnap.exists ? String(pyramidCupSnap.data()?.winnerId || '') : '';
@@ -209,11 +210,12 @@ async function applySeasonAwards(db: any, sourceSeason: number, standings: Recor
           throw new Error('SEASON_ROLLOVER_LOCK_LOST');
         }
         t.set(lockRef, { expiresAtMs: nowMs + SEASON_ROLLOVER_LOCK_TTL_MS, renewedAtMs: nowMs }, { merge: true });
-        if (!playerSnap.exists) return { paid: false, trophy: false };
-        const player = playerSnap.data() || {};
+        const player = playerSnap.exists ? playerSnap.data() || {} : {};
+        const recipientState = resolveSeasonAwardRecipientState(playerSnap.exists, transactionSnap.exists, player, sourceSeason);
+        if (recipientState === 'ALREADY_APPLIED') return { paid: false, trophy: false };
+        if (recipientState === 'PROFILE_MISSING') return { paid: false, trophy: false, missingProfile: true };
         const awardKey = `S${sourceSeason}`;
         const awards = player.seasonAwards && typeof player.seasonAwards === 'object' ? player.seasonAwards : {};
-        if (isSeasonAwardAlreadyApplied(player, transactionSnap.exists, sourceSeason)) return { paid: false, trophy: false };
 
         const before = Math.max(0, Math.floor(Number(player.credits) || 0));
         const after = before + prize;
@@ -267,9 +269,16 @@ async function applySeasonAwards(db: any, sourceSeason: number, standings: Recor
       });
       if (result.paid) { rewardedClubs++; totalCredits += prize; }
       if (result.trophy) trophiesAwarded++;
+      if (result.missingProfile) missingProfileUids.push(uid);
     }
   }
-  return { rewardedClubs, totalCredits, trophiesAwarded };
+  return {
+    ready: missingProfileUids.length === 0,
+    ...(missingProfileUids.length ? { reason: 'SEASON_AWARD_PLAYER_PROFILE_MISSING', missingProfileCount: missingProfileUids.length, missingProfileUids } : {}),
+    rewardedClubs,
+    totalCredits,
+    trophiesAwarded,
+  };
 }
 
 /**
@@ -567,10 +576,23 @@ export async function prepareSeasonRollover(db: any, sourceSeason: number, targe
     const archiveData = archiveSnap.data() || {};
     const savedMatchesSnap = await archiveRef.collection('matches').get();
     const savedMatches = savedMatchesSnap.docs.map((doc: any) => ({ ...doc.data(), matchId: doc.id }));
-    if (!isSeasonArchiveReadyToComplete(archiveData, savedMatches, planSnap.data() || {})) {
-      return { ready: false, reason: 'SEASON_ARCHIVE_VALIDATION_FAILED', sourceSeason, targetSeason, writesStarted: false, archiveMatches: savedMatches.length };
+    const archiveValidation = validateSeasonArchiveSnapshot(archiveData, savedMatches);
+    if (!archiveValidation.valid) {
+      return { ready: false, reason: 'SEASON_ARCHIVE_VALIDATION_FAILED', sourceSeason, targetSeason, writesStarted: false, archiveMatches: savedMatches.length, archiveErrors: archiveValidation.reasons };
     }
     const awards = await applySeasonAwards(db, sourceSeason, archiveData.standings || {}, lock);
+    if (!awards.ready) {
+      return { ready: false, reason: awards.reason, sourceSeason, targetSeason, writesStarted: true, awards };
+    }
+    await commitSeasonRolloverWrites(db, lock.ownerId, lock.token, [{
+      ref: planRef,
+      data: { awards },
+      options: { merge: true },
+    }]);
+    const refreshedPlanSnap = await planRef.get();
+    if (!isSeasonArchiveReadyToComplete(archiveData, savedMatches, refreshedPlanSnap.data() || {})) {
+      return { ready: false, reason: 'SEASON_ARCHIVE_FINALIZATION_VALIDATION_FAILED', sourceSeason, targetSeason, writesStarted: true, awards };
+    }
     if (archiveData.status !== 'completed' || !archiveData.completedAt) {
       await commitSeasonRolloverWrites(db, lock.ownerId, lock.token, [{
         ref: archiveRef,
@@ -701,6 +723,9 @@ export async function prepareSeasonRollover(db: any, sourceSeason: number, targe
 
   // Pay clubs and award the D1 champion before the rollover plan is marked ready.
   const awards = await applySeasonAwards(db, sourceSeason, standings, lock);
+  if (!awards.ready) {
+    return { ready: false, reason: awards.reason, sourceSeason, targetSeason, writesStarted: true, awards };
+  }
 
   // Apply the canonical pyramid movement using the pure, regression-tested
   // placement function. A malformed group blocks the plan before it is persisted.
