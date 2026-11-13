@@ -110,8 +110,11 @@ test('durable archive recovery does not query mutable live projections before re
   const firstLiveQuery = source.indexOf('const [initialTablesSnap, allSeasonMatchesSnap, initialSlotsSnap]');
   const publishedPlanRecovery = source.indexOf("&& planSnap.exists)");
   const noPlanRecovery = source.indexOf("&& !planSnap.exists)", publishedPlanRecovery);
-  const recoveryEnd = source.indexOf('  // A Firestore subcollection can outlive a missing parent document.', noPlanRecovery);
+  const orphanGuard = source.indexOf('ORPHANED_PARTIAL_SEASON_ARCHIVE_REQUIRES_RECONCILIATION');
+  const statusGuard = source.indexOf('SEASON_ARCHIVE_STATUS_REQUIRES_RECONCILIATION');
+  const normalProcessing = source.indexOf('const needsSettlement =');
   assert.ok(publishedPlanRecovery >= 0 && noPlanRecovery > publishedPlanRecovery);
-  assert.ok(recoveryEnd > noPlanRecovery);
-  assert.ok(firstLiveQuery > recoveryEnd, 'live match/table/slot reads must happen only after both archive recovery branches');
+  assert.ok(orphanGuard > noPlanRecovery && statusGuard > orphanGuard);
+  assert.ok(firstLiveQuery > statusGuard, 'live match/table/slot reads must happen only after both archive recovery branches and integrity guards');
+  assert.ok(normalProcessing > firstLiveQuery, 'ordinary preflight must run after live projections are loaded');
 });
