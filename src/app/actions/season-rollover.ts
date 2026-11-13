@@ -602,15 +602,6 @@ export async function prepareSeasonRollover(db: any, sourceSeason: number, targe
     };
   }
 
-  // Only ordinary first-time rollover preparation reaches live projections.
-  // Both durable archive recovery paths above are independent of mutable matches,
-  // standings, and slots, so transient live-query failures cannot block recovery.
-  const [initialTablesSnap, allSeasonMatchesSnap, initialSlotsSnap] = await Promise.all([
-    db.collection('league_tables_v2').where('season', '==', sourceSeason).where('version', '==', 140).get(),
-    db.collection('matches_v2').where('season', '==', sourceSeason).where('version', '==', 140).get(),
-    db.collection('league_slots_v1').where('season', '==', sourceSeason).where('leagueId', '==', LEAGUE_ID).get(),
-  ]);
-
   // A Firestore subcollection can outlive a missing parent document. Detect
   // orphaned match chunks before the normal writer can overwrite them from live data.
   if (!archiveSnap.exists) {
@@ -636,6 +627,15 @@ export async function prepareSeasonRollover(db: any, sourceSeason: number, targe
       writesStarted: false,
     };
   }
+  // Only ordinary first-time rollover preparation reaches live projections.
+  // Both durable archive recovery paths above are independent of mutable matches,
+  // standings, and slots, so transient live-query failures cannot block recovery.
+  const [initialTablesSnap, allSeasonMatchesSnap, initialSlotsSnap] = await Promise.all([
+    db.collection('league_tables_v2').where('season', '==', sourceSeason).where('version', '==', 140).get(),
+    db.collection('matches_v2').where('season', '==', sourceSeason).where('version', '==', 140).get(),
+    db.collection('league_slots_v1').where('season', '==', sourceSeason).where('leagueId', '==', LEAGUE_ID).get(),
+  ]);
+
   // Mutable snapshots are refreshed after any explicit Season 1 repair writes.
   // Keep them in this commit callback scope for all subsequent validation.
   let tablesSnap = initialTablesSnap;
