@@ -723,7 +723,11 @@ export async function prepareSeasonRollover(db: any, sourceSeason: number, targe
   if (!isSeasonArchiveReadyToComplete(finalArchive, finalMatches, finalPlan)) {
     return { ready: false, reason: 'SEASON_ARCHIVE_FINALIZATION_VALIDATION_FAILED', sourceSeason, targetSeason, writesStarted: true, archiveMatches: finalMatches.length };
   }
-  await archiveRef.set({ status: 'completed', completedAt: FieldValue.serverTimestamp() }, { merge: true });
+  await commitSeasonRolloverWrites(db, lock.ownerId, lock.token, [{
+    ref: archiveRef,
+    data: { status: 'completed', completedAt: FieldValue.serverTimestamp() },
+    options: { merge: true },
+  }]);
   return { ready: true, completed: true, alreadyPrepared: false, sourceSeason, targetSeason, expectedMatches: EXPECTED_MATCHES, observedMatches: matchesSnap.size, groupCount: Object.keys(placements).length, awards };
     },
   }) as Record<string, any>;
