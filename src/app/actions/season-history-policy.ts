@@ -132,3 +132,24 @@ export function resolveActivatedSkippedSeasons(skipped: any, targetSeason: numbe
   }
   return { ready: true as const, seasons };
 }
+
+
+/**
+ * Guard cleanup completion against a newer activation replacing the durable
+ * cleanup target while an older worker is still finishing. A repeated
+ * completion for the same target is harmless.
+ */
+export function resolveHistoryCleanupCompletion(config: any, targetSeason: number) {
+  const activeSeason = Number(config?.activeSeasonNumber || 0);
+  const cleanupTarget = Number(config?.historyCleanupTargetSeason || 0);
+  if (!Number.isSafeInteger(targetSeason) || targetSeason < 2 ||
+      activeSeason !== targetSeason || cleanupTarget !== targetSeason ||
+      config?.worldReady !== true) {
+    return { ready: false as const, reason: 'HISTORY_CLEANUP_TARGET_CHANGED', shouldMarkComplete: false };
+  }
+  return {
+    ready: true as const,
+    reason: null,
+    shouldMarkComplete: config?.historyCleanupPending === true,
+  };
+}
