@@ -309,3 +309,26 @@ exports.initializeClub = functions.region('us-central1').https.onCall(async (dat
   }
 });
 
+
+
+// Daily cleanup of clubs whose owners have not successfully signed in for 90 days.
+// The task only disables Firebase Auth users after a durable pending marker exists,
+// and replaces the active league club transactionally in Firestore.
+exports.replaceInactiveClubs = functions
+  .region('us-central1')
+  .runWith({ timeoutSeconds: 540, memory: '512MB' })
+  .pubsub.schedule('15 3 * * *')
+  .timeZone('UTC')
+  .onRun(async () => {
+    const { runClubInactivitySweep } = require('./club-inactivity-sweep');
+    const result = await runClubInactivitySweep({
+      db,
+      auth: admin.auth(),
+      now: new Date(),
+    });
+    console.log('[INACTIVE CLUB SWEEP]', JSON.stringify(result));
+    if (result.errors.length > 0) {
+      throw new Error('INACTIVE_CLUB_SWEEP_PARTIAL_FAILURE');
+    }
+    return result;
+  });
