@@ -619,6 +619,7 @@ async function prepareRecoveryCarryForwardPlan(
     groups,
     createdAt: FieldValue.serverTimestamp(),
   };
+  const planRef = db.collection('league_season_rollovers_v1').doc(`S${targetSeason}`);
   const publication = await publishRecoveryRolloverDecision({
     planRef,
     plan,
