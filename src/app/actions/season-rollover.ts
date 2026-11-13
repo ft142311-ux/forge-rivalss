@@ -290,6 +290,25 @@ export async function prepareSeasonRollover(db: any, sourceSeason: number, targe
     readState: async () => {
       const boundary = await checkSeason1To2Boundary(db, sourceSeason, targetSeason);
       if (!boundary.ready) return boundary;
+      const archiveRef = db.collection('league_season_archives_v1').doc(`S${sourceSeason}`);
+      const planRef = db.collection('league_season_rollovers_v1').doc(`S${targetSeason}`);
+      const [archiveSnap, planSnap] = await Promise.all([archiveRef.get(), planRef.get()]);
+      const archiveData = archiveSnap.exists ? archiveSnap.data() || {} : {};
+      if (archiveData.status === 'preparing' && !planSnap.exists && Array.isArray(archiveData.matchManifest)) {
+        const manifestValidation = validateSeasonArchiveSnapshot(archiveData, archiveData.matchManifest);
+        if (!manifestValidation.valid) {
+          return {
+            ready: false,
+            reason: 'SEASON_ARCHIVE_RECOVERY_MANIFEST_INVALID',
+            sourceSeason,
+            targetSeason,
+            archiveErrors: manifestValidation.reasons,
+          };
+        }
+        // The durable manifest is the recovery source. Do not let a changed live
+        // match/table projection block or rewrite a snapshot already committed.
+        return { ready: true, archiveRecoveryPending: true, sourceSeason, targetSeason, seasonBoundary: boundary };
+      }
       const preflight = await readRolloverGroupPreflight(db, sourceSeason, allowTestSeasonRecovery);
       return { ...preflight, seasonBoundary: boundary };
     },
