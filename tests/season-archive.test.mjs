@@ -102,6 +102,31 @@ test('recovered archive is visible but never treated as a completed season or fi
   assert.equal(getVisibleSeasonArchives([{ ...recovered, startingParticipants: {} }]).length, 0);
 });
 
+test('recovered archive rejects invalid counters, timestamps, metadata, extra groups, and duplicate ranks', () => {
+  const startingParticipants = Object.fromEntries(expectedRolloverGroups().map(group => [group,
+    Array.from({ length: 8 }, (_, i) => ({ id: `${group}-TEAM-${i + 1}`, rank: i + 1 }))]));
+  const base = {
+    sourceSeason: 2, leagueId: 'ALPHA', archiveVersion: 1, status: 'recovered',
+    recoveredAt: '2026-10-27T00:00:00.000Z', expectedMatches: 840,
+    finishedMatches: 137, unresolvedMatches: 703, groups: 15, teamCount: 120,
+    standings: {}, startingParticipants,
+    recovery: { status: 'incomplete', finalStandingsAvailable: false, reason: 'SEASON_INCOMPLETE' },
+  };
+  assert.equal(isRecoveredSeasonArchive(base), true);
+  const invalid = [
+    { ...base, finishedMatches: -1, unresolvedMatches: 841 },
+    { ...base, finishedMatches: 1.5, unresolvedMatches: 838.5 },
+    { ...base, unresolvedMatches: 702 },
+    { ...base, recoveredAt: 'not-a-date' },
+    { ...base, groups: 14 },
+    { ...base, teamCount: 119 },
+    { ...base, recovery: { ...base.recovery, reason: '' } },
+    { ...base, startingParticipants: { ...base.startingParticipants, 'D5-G1': [] } },
+    { ...base, startingParticipants: { ...base.startingParticipants, 'D1-G1': base.startingParticipants['D1-G1'].map((row, i) => ({ ...row, rank: i === 1 ? 1 : row.rank })) } },
+  ];
+  for (const candidate of invalid) assert.equal(isRecoveredSeasonArchive(candidate), false);
+});
+
 
 
 test('archive pruning retains the newest completed archive and only prunes fully verified older archives', async () => {
