@@ -3,7 +3,7 @@ import 'server-only';
 import { FieldValue } from 'firebase-admin/firestore';
 import { prepareSeasonRollover } from './season-rollover';
 import { acquireSeasonCalendarBuildLock, assertSeasonCalendarBuildLock, commitSeasonCalendarPublication, commitSeasonCalendarWrites, commitSeasonHistoryCleanupWrites, releaseSeasonCalendarBuildLock } from './season-rollover-lock';
-import { buildCarryForwardGroups, buildPromotionRelegationGroups, resolveRecoveryPlacementSource, resolveRolloverPlanPruneIds, validateRolloverPlan } from './season-rollover-plan';
+import { buildCarryForwardGroups, buildPromotionRelegationGroups, compareRecoveryRolloverPlans, resolveRecoveryPlacementSource, resolveRolloverPlanPruneIds, validateRolloverPlan } from './season-rollover-plan';
 import { resolveActivatedSkippedSeasons, resolveHistoryCleanupCompletion, resolvePostActivationRetry, resolveSeasonCatchUpPolicy, type SeasonHistoryState } from './season-history-policy';
 import { evaluateCanonicalDocuments } from './season-canonical';
 import { inspectGroupReconciliation } from './season-rollover-standings';
@@ -619,7 +619,25 @@ async function prepareRecoveryCarryForwardPlan(
     createdAt: FieldValue.serverTimestamp(),
   };
   const planRef = db.collection('league_season_rollovers_v1').doc(`S${targetSeason}`);
-  await lease.commit([{ ref: planRef, data: plan }]);
+  await lease.assert();
+  const existingPlanSnap = await planRef.get();
+  let persistedPlan = plan;
+  if (existingPlanSnap.exists) {
+    const existingPlan = existingPlanSnap.data() || {};
+    const comparison = compareRecoveryRolloverPlans(existingPlan, plan);
+    if (!comparison.same) {
+      return {
+        ready: false,
+        reason: comparison.reason,
+        details: { field: (comparison as any).field || null, targetSeason },
+      };
+    }
+    // Keep the first durable publication (including its createdAt and any
+    // post-publication metadata); retries only repair missing history markers.
+    persistedPlan = existingPlan;
+  } else {
+    await lease.commit([{ ref: planRef, data: plan }]);
+  }
 
   const historyWrites = policy.skippedSeasons.map(skipped => ({
     ref: db.collection('league_season_history_v1').doc(`S${skipped.seasonNumber}`),
@@ -639,7 +657,7 @@ async function prepareRecoveryCarryForwardPlan(
     await lease.commit(historyWrites.slice(offset, offset + BATCH_LIMIT));
   }
 
-  return { ready: true, plan, skippedSeasons: policy.skippedSeasons, retainedArchiveSeason: policy.retainedArchiveSeason };
+  return { ready: true, plan: persistedPlan, skippedSeasons: policy.skippedSeasons, retainedArchiveSeason: policy.retainedArchiveSeason };
 }
 
 async function buildSeasonCalendar(lease: BuildLease, pristineFirstWorld = false) {
