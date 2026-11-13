@@ -662,7 +662,7 @@ export async function prepareSeasonRollover(db: any, sourceSeason: number, targe
   }
   await standingsBatch.commit();
 
-  const summary = { sourceSeason, finalizedAt: FieldValue.serverTimestamp(), leagueId: LEAGUE_ID, expectedMatches: EXPECTED_MATCHES, finishedMatches: matchesSnap.size, groups: Object.keys(standings).length, teamCount: Object.values(standings).reduce((n, a) => n + a.length, 0), integrity: { complete: true, unfinishedMatches: 0, invalidResults: 0, canonicalMatches: canonicalMatches.length, ignoredLegacyOrNonLeagueMatches: matchesSnap.size - canonicalMatches.length, duplicateCanonicalFixtures } };
+  const summary = { sourceSeason, finalizedAt: FieldValue.serverTimestamp(), leagueId: LEAGUE_ID, expectedMatches: EXPECTED_MATCHES, finishedMatches: canonicalMatches.length, groups: Object.keys(standings).length, teamCount: Object.values(standings).reduce((n, a) => n + a.length, 0), integrity: { complete: true, unfinishedMatches: 0, invalidResults: 0, canonicalMatches: canonicalMatches.length, ignoredLegacyOrNonLeagueMatches: matchesSnap.size - canonicalMatches.length, duplicateCanonicalFixtures } };
 
   // Write per-match archive records first; immutable IDs make retries harmless.
   for (let i = 0; i < matchArchive.length; i += 400) {
