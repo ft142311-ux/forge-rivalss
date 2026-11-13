@@ -7,6 +7,7 @@ import { acquireSeasonCalendarBuildLock, assertSeasonCalendarBuildLock, commitSe
 import { buildCarryForwardGroups, buildPromotionRelegationGroups, compareRecoveryRolloverPlans, resolveRecoveryPlacementSource, resolveRolloverPlanPruneIds, validateRolloverPlan } from './season-rollover-plan';
 import { resolveActivatedSkippedHistoryMarker, resolveActivatedSkippedSeasons, resolveHistoryCleanupCompletion, resolvePendingSkippedHistoryMarker, resolvePostActivationRetry, resolveSeasonCatchUpPolicy, type SeasonHistoryState } from './season-history-policy';
 import { evaluateCanonicalDocuments } from './season-canonical';
+import { resolvePreparedSlotRetry, shouldRepairExistingMatchCoordinates } from './season-calendar-retry-policy';
 import { publishRecoveryRolloverDecision } from './season-recovery-publication';
 import { inspectGroupReconciliation } from './season-rollover-standings';
 import { getAdminDb } from '@/lib/firebase-admin';
@@ -861,6 +862,33 @@ async function buildSeasonCalendar(lease: BuildLease, pristineFirstWorld = false
     }
   }
 
+  // Preflight every existing target slot against the immutable rollover placement
+  // before the first target-world write. A retry must never silently evict a
+  // human club or replace a conflicting occupant from a partially built world.
+  if (rolloverPlan) {
+    for (let index = 1; index <= TOTAL_GROUPS; index++) {
+      const { tier, group } = getGroupCoordinates(index);
+      const seededTeams = rolloverPlan.groups?.[`D${tier}-G${group}`];
+      if (!Array.isArray(seededTeams) || seededTeams.length !== TEAMS_PER_GROUP) {
+        return { success: false, action: 'WORLD_BUILDING', worldReady: current.worldReady === true,
+          seasonNumber: activeSeasonBefore, targetSeasonNumber: seasonNumber,
+          reason: 'ROLLOVER_PLAN_GROUP_INVALID', writesStarted: false };
+      }
+      for (let rank = 1; rank <= TEAMS_PER_GROUP; rank++) {
+        const plannedId = String(seededTeams[rank - 1]?.id || '');
+        const slotId = `S${seasonNumber}_L${LEAGUE_ID}_D${tier}_G${group}_R${rank}`;
+        const slotSnap = await db.collection('league_slots_v1').doc(slotId).get();
+        const decision = resolvePreparedSlotRetry(slotSnap.exists ? slotSnap.data() || {} : null, plannedId);
+        if (!decision.ready) {
+          return { success: false, action: 'WORLD_BUILDING', worldReady: current.worldReady === true,
+            seasonNumber: activeSeasonBefore, targetSeasonNumber: seasonNumber,
+            reason: decision.reason, slotId, plannedTeamId: plannedId,
+            existingOccupantId: String((slotSnap.data() || {}).occupantId || ''), writesStarted: false };
+        }
+      }
+    }
+  }
+
   // The active world remains registration-ready while the next world is built.
   // Prepared readiness is tracked separately and becomes true only after all
   // 15 groups, 120 slots and 840 matches pass the canonical gate.
@@ -954,7 +982,13 @@ async function buildSeasonCalendar(lease: BuildLease, pristineFirstWorld = false
       const placedTeam = Array.isArray(seededTeams) ? seededTeams[rank - 1] : null;
       const placedId = String(placedTeam?.id || '');
       const isHumanClub = Boolean(placedId && !placedId.startsWith('BOT_'));
-      if (!slotSnap.exists || rolloverPlan) {
+      const slotDecision = rolloverPlan
+        ? resolvePreparedSlotRetry(slotSnap.exists ? slotSnap.data() || {} : null, placedId)
+        : { ready: true, action: slotSnap.exists ? 'PRESERVE' : 'CREATE' };
+      if (!slotDecision.ready) {
+        throw new Error(`PREPARED_SLOT_IDENTITY_CONFLICT:${slotId}`);
+      }
+      if (slotDecision.action === 'CREATE' || slotDecision.action === 'PLACE_HUMAN') {
         batch.set(slotRef, {
           season: seasonNumber, leagueId: LEAGUE_ID, division: tier, group, rank,
           status: isHumanClub ? 'OCCUPIED' : 'FREE',
@@ -1023,7 +1057,7 @@ async function buildSeasonCalendar(lease: BuildLease, pristineFirstWorld = false
         batch.set(ref, payload, { merge: true });
         repairedMatches++;
         batchCount++;
-      } else if (Number(existing.groupId) !== group || Number(existing.level) !== tier) {
+      } else if (shouldRepairExistingMatchCoordinates(existing, tier, group)) {
         batch.set(ref, { groupId: group, level: tier, calendarRevision: CALENDAR_REVISION }, { merge: true });
         repairedMatches++;
         batchCount++;
