@@ -356,11 +356,18 @@ export async function prepareSeasonRollover(db: any, sourceSeason: number, targe
         };
       }
       const expectedById = new Map(manifest.map((match: any) => [String(match.matchId), match]));
+      const timestampValue = (value: any) => {
+        if (value && typeof value.toMillis === 'function') return value.toMillis();
+        if (value && typeof value.toDate === 'function') return value.toDate().getTime();
+        if (value instanceof Date) return value.getTime();
+        return value ?? null;
+      };
       for (const saved of savedMatches) {
         const expected: any = expectedById.get(String(saved.matchId));
         const same = expected &&
-          ['version', 'sourceSeason', 'level', 'group', 'tour', 'homeRank', 'awayRank', 'homeId', 'homeName', 'awayId', 'awayName', 'status', 'isFinished', 'resolvedAt']
+          ['version', 'sourceSeason', 'level', 'group', 'tour', 'homeRank', 'awayRank', 'homeId', 'homeName', 'awayId', 'awayName', 'status', 'isFinished']
             .every((field: string) => (saved[field] ?? null) === (expected[field] ?? null)) &&
+          timestampValue(saved.resolvedAt) === timestampValue(expected.resolvedAt) &&
           Number(saved.score?.home) === Number(expected.score?.home) &&
           Number(saved.score?.away) === Number(expected.score?.away);
         if (!same) {
