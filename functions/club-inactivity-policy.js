@@ -7,14 +7,21 @@ const INACTIVITY_WINDOW_MS = 90 * 24 * 60 * 60 * 1000;
  * Missing or malformed metadata must fail closed: never retire an account
  * when its last successful sign-in cannot be established.
  */
-function resolveClubInactivity(lastSignInAt, nowMs = Date.now(), inactivityWindowMs = INACTIVITY_WINDOW_MS) {
-  const lastSignInMs = typeof lastSignInAt === 'number'
-    ? lastSignInAt
-    : lastSignInAt instanceof Date
-      ? lastSignInAt.getTime()
-      : typeof lastSignInAt === 'string'
-        ? Date.parse(lastSignInAt)
-        : NaN;
+function toTimestampMs(value) {
+  if (typeof value === 'number') return value;
+  if (value instanceof Date) return value.getTime();
+  if (typeof value === 'string') return Date.parse(value);
+  if (value && typeof value.toDate === 'function') {
+    const date = value.toDate();
+    return date instanceof Date ? date.getTime() : NaN;
+  }
+  return NaN;
+}
+
+function resolveClubInactivity(lastSignInAt, nowMs = Date.now(), inactivityWindowMs = INACTIVITY_WINDOW_MS, lastActiveAt = null) {
+  const timestamps = [toTimestampMs(lastSignInAt), toTimestampMs(lastActiveAt)]
+    .filter(Number.isFinite);
+  const lastSignInMs = timestamps.length ? Math.max(...timestamps) : NaN;
 
   if (!Number.isFinite(lastSignInMs) || !Number.isFinite(nowMs) ||
       !Number.isFinite(inactivityWindowMs) || inactivityWindowMs <= 0) {
@@ -39,4 +46,4 @@ function resolveClubInactivity(lastSignInAt, nowMs = Date.now(), inactivityWindo
   };
 }
 
-module.exports = { INACTIVITY_WINDOW_MS, resolveClubInactivity };
+module.exports = { INACTIVITY_WINDOW_MS, resolveClubInactivity, toTimestampMs };
