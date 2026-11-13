@@ -341,12 +341,7 @@ export async function prepareSeasonRollover(db: any, sourceSeason: number, targe
   if (!boundary.ready) return { ...boundary, writesStarted: false };
   const archiveRef = db.collection('league_season_archives_v1').doc(`S${sourceSeason}`);
   const planRef = db.collection('league_season_rollovers_v1').doc(`S${targetSeason}`);
-  const [archiveSnap, planSnap, initialTablesSnap, allSeasonMatchesSnap, initialSlotsSnap] = await Promise.all([
-    archiveRef.get(), planRef.get(),
-    db.collection('league_tables_v2').where('season', '==', sourceSeason).where('version', '==', 140).get(),
-    db.collection('matches_v2').where('season', '==', sourceSeason).where('version', '==', 140).get(),
-    db.collection('league_slots_v1').where('season', '==', sourceSeason).where('leagueId', '==', LEAGUE_ID).get(),
-  ]);
+  const [archiveSnap, planSnap] = await Promise.all([archiveRef.get(), planRef.get()]);
   // A preparing archive is a durable snapshot. If the process crashed after the
   // archive was fully written but before the rollover plan was published, resume
   // exclusively from that snapshot. Never rebuild standings from mutable live
@@ -606,6 +601,15 @@ export async function prepareSeasonRollover(db: any, sourceSeason: number, targe
       awards,
     };
   }
+
+  // Only ordinary first-time rollover preparation reaches live projections.
+  // Both durable archive recovery paths above are independent of mutable matches,
+  // standings, and slots, so transient live-query failures cannot block recovery.
+  const [initialTablesSnap, allSeasonMatchesSnap, initialSlotsSnap] = await Promise.all([
+    db.collection('league_tables_v2').where('season', '==', sourceSeason).where('version', '==', 140).get(),
+    db.collection('matches_v2').where('season', '==', sourceSeason).where('version', '==', 140).get(),
+    db.collection('league_slots_v1').where('season', '==', sourceSeason).where('leagueId', '==', LEAGUE_ID).get(),
+  ]);
 
   // A Firestore subcollection can outlive a missing parent document. Detect
   // orphaned match chunks before the normal writer can overwrite them from live data.
