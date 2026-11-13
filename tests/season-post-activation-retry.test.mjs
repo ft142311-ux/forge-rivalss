@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveActivatedSkippedSeasons, resolvePostActivationRetry } from '../src/app/actions/season-history-policy.ts';
+import { resolveActivatedSkippedSeasons, resolveHistoryCleanupCompletion, resolvePostActivationRetry } from '../src/app/actions/season-history-policy.ts';
 
 test('committed activation with pending cleanup resumes against the active season', () => {
   assert.deepEqual(
@@ -112,4 +112,37 @@ test('post-activation retry rejects duplicate, future, and malformed skipped-sea
 
 test('normal activation without skipped seasons produces an empty idempotent history update', () => {
   assert.deepEqual(resolveActivatedSkippedSeasons(undefined, 2), { ready: true, seasons: [] });
+});
+
+
+test('stale cleanup worker cannot clear a newer season cleanup marker', () => {
+  const result = resolveHistoryCleanupCompletion({
+    activeSeasonNumber: 3,
+    historyCleanupPending: true,
+    historyCleanupTargetSeason: 3,
+    worldReady: true,
+  }, 2);
+  assert.equal(result.ready, false);
+  assert.equal(result.reason, 'HISTORY_CLEANUP_TARGET_CHANGED');
+});
+
+test('cleanup completion is idempotent for its own activated season', () => {
+  assert.deepEqual(
+    resolveHistoryCleanupCompletion({
+      activeSeasonNumber: 2,
+      historyCleanupPending: true,
+      historyCleanupTargetSeason: 2,
+      worldReady: true,
+    }, 2),
+    { ready: true, reason: null, shouldMarkComplete: true },
+  );
+  assert.deepEqual(
+    resolveHistoryCleanupCompletion({
+      activeSeasonNumber: 2,
+      historyCleanupPending: false,
+      historyCleanupTargetSeason: 2,
+      worldReady: true,
+    }, 2),
+    { ready: true, reason: null, shouldMarkComplete: false },
+  );
 });
