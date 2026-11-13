@@ -456,22 +456,22 @@ export async function prepareSeasonRollover(db: any, sourceSeason: number, targe
     }
 
     // One bounded batch (120 slots + 15 table projections = at most 135 writes).
-    const repairBatch = db.batch();
+    const repairWrites: Array<{ ref: any; data: any; options: any }> = [];
     let repairWriteCount = 0;
     for (const plan of repairPlans) {
       for (const slot of plan.slotUpdates) {
         const existing = slotsSnap.docs.find((doc: any) => doc.ref.path === slot.ref.path)?.data() || {};
         if (String(existing.occupantId || '') !== String(slot.occupantId || '') || existing.status !== slot.status) {
-          repairBatch.set(slot.ref, { occupantId: slot.occupantId, status: slot.status, updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+          repairWrites.push({ ref: slot.ref, data: { occupantId: slot.occupantId, status: slot.status, updatedAt: FieldValue.serverTimestamp() }, options: { merge: true } });
           repairWriteCount++;
         }
       }
       if (plan.rebuiltStats && JSON.stringify(tablesSnap.docs.find((doc: any) => doc.ref.path === plan.tableRef.path)?.data()?.stats || {}) !== JSON.stringify(plan.rebuiltStats)) {
-        repairBatch.set(plan.tableRef, { stats: plan.rebuiltStats, updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+        repairWrites.push({ ref: plan.tableRef, data: { stats: plan.rebuiltStats, updatedAt: FieldValue.serverTimestamp() }, options: { merge: true } });
         repairWriteCount++;
       }
     }
-    if (repairWriteCount > 0) await repairBatch.commit();
+    if (repairWriteCount > 0) await commitSeasonRolloverWrites(db, lock.ownerId, lock.token, repairWrites);
     if (repairWriteCount > 0) {
       [tablesSnap, slotsSnap] = await Promise.all([
         db.collection('league_tables_v2').where('season', '==', sourceSeason).where('version', '==', 140).get(),
