@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { resolvePostActivationRetry } from '../src/app/actions/season-history-policy.ts';
+import { resolveActivatedSkippedSeasons, resolvePostActivationRetry } from '../src/app/actions/season-history-policy.ts';
 
 test('committed activation with pending cleanup resumes against the active season', () => {
   assert.deepEqual(
@@ -84,4 +84,32 @@ test('history cleanup refuses to prune anything when the active plan is invalid'
   ], 2);
   assert.equal(result.ready, false);
   assert.deepEqual(result.pruneIds, []);
+});
+
+
+test('post-activation retry restores the final SKIPPED history markers from durable state', () => {
+  const skipped = [
+    { seasonNumber: 2, reason: 'UNFINISHED_MATCHES' },
+    { seasonNumber: 3, reason: 'NO_CANONICAL_RESULTS' },
+  ];
+  const result = resolveActivatedSkippedSeasons(skipped, 4);
+  assert.equal(result.ready, true);
+  assert.deepEqual(result.seasons, skipped);
+});
+
+test('post-activation retry rejects duplicate, future, and malformed skipped-season markers', () => {
+  for (const skipped of [
+    [{ seasonNumber: 2 }, { seasonNumber: 2 }],
+    [{ seasonNumber: 4 }],
+    [{ seasonNumber: 0 }],
+    'not-an-array',
+  ]) {
+    const result = resolveActivatedSkippedSeasons(skipped, 4);
+    assert.equal(result.ready, false);
+    assert.deepEqual(result.seasons, []);
+  }
+});
+
+test('normal activation without skipped seasons produces an empty idempotent history update', () => {
+  assert.deepEqual(resolveActivatedSkippedSeasons(undefined, 2), { ready: true, seasons: [] });
 });
