@@ -227,6 +227,41 @@ export async function commitSeasonCalendarPublication(
   });
 }
 
+/**
+ * Fence post-activation history cleanup against both stale workers and a
+ * concurrent season activation. Every cleanup mutation verifies the live
+ * calendar lease and that the intended season is still the active world.
+ */
+export async function commitSeasonHistoryCleanupWrites(
+  db: LockDb,
+  ownerId: string,
+  token: string,
+  targetSeason: number,
+  writes: LeaseWrite[] = [],
+  deletes: any[] = [],
+) {
+  if (writes.length + deletes.length === 0) return;
+  if (writes.length + deletes.length > 450) throw new Error('SEASON_HISTORY_CLEANUP_CHUNK_TOO_LARGE');
+  const lockRef = db.collection('system_v1').doc(SEASON_CALENDAR_BUILD_LOCK_ID);
+  const configRef = db.collection('system_v1').doc('season_config');
+  await db.runTransaction(async (tx: any) => {
+    const [lockSnap, configSnap] = await Promise.all([tx.get(lockRef), tx.get(configRef)]);
+    const currentLock = lockSnap.exists ? lockSnap.data() || {} : null;
+    const config = configSnap.exists ? configSnap.data() || {} : null;
+    const nowMs = Date.now();
+    if (!currentLock || currentLock.ownerId !== ownerId || currentLock.token !== token ||
+        isSeasonRolloverLockStale(currentLock, nowMs)) {
+      throw new Error('SEASON_CALENDAR_BUILD_LOCK_LOST');
+    }
+    if (!config || Number(config.activeSeasonNumber || 0) !== targetSeason || config.worldReady !== true) {
+      throw new Error('SEASON_HISTORY_CLEANUP_TARGET_CHANGED');
+    }
+    tx.set(lockRef, { expiresAtMs: nowMs + SEASON_CALENDAR_BUILD_LOCK_TTL_MS, renewedAtMs: nowMs }, { merge: true });
+    for (const write of writes) tx.set(write.ref, write.data, write.options);
+    for (const ref of deletes) tx.delete(ref);
+  });
+}
+
 export async function releaseSeasonCalendarBuildLock(db: LockDb, ownerId: string, token: string) {
   return releaseLease(db, SEASON_CALENDAR_BUILD_LOCK_ID, ownerId, token);
 }
