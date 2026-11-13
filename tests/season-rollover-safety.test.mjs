@@ -299,3 +299,96 @@ test('recovery carry-forward archive, plan, and skipped history writes are fence
   assert.equal((source.match(/prepareRecoveryCarryForwardPlan\(db, activeSeasonBefore, seasonNumber, lease\)/g) || []).length, 2,
     'all recovery planner call sites must pass the same active lease');
 });
+
+test('expired rollover lease gets a fresh fencing token when ownerId is reused', async () => {
+  const db = mockDb();
+  const nowMs = Date.now();
+  const old = await acquireSeasonRolloverLock(db, 1, 2, {
+    ownerId: 'reused-rollover-owner',
+    nowMs,
+    ttlMs: 10,
+  });
+  const replacement = await acquireSeasonRolloverLock(db, 1, 2, {
+    ownerId: 'reused-rollover-owner',
+    nowMs: nowMs + 11,
+  });
+
+  assert.equal(replacement.acquired, true);
+  assert.equal(replacement.ownerId, old.ownerId);
+  assert.notEqual(replacement.token, old.token);
+
+  const staleRef = db.collection('protected').doc('same-owner-stale-write');
+  await assert.rejects(
+    () => commitSeasonRolloverWrites(db, old.ownerId, old.token, [
+      { ref: staleRef, data: { writtenBy: 'old-token' } },
+    ]),
+    /SEASON_ROLLOVER_LOCK_LOST/,
+  );
+  assert.equal(db.read('same-owner-stale-write'), undefined);
+
+  const currentRef = db.collection('protected').doc('same-owner-current-write');
+  await commitSeasonRolloverWrites(db, replacement.ownerId, replacement.token, [
+    { ref: currentRef, data: { writtenBy: 'replacement-token' } },
+  ]);
+  assert.equal(db.read('same-owner-current-write').writtenBy, 'replacement-token');
+});
+
+test('expired calendar lease gets a fresh fencing token when ownerId is reused', async () => {
+  const db = mockDb();
+  const nowMs = Date.now();
+  const old = await acquireSeasonCalendarBuildLock(db, 1, 2, {
+    ownerId: 'reused-calendar-owner',
+    nowMs,
+    ttlMs: 10,
+  });
+  const replacement = await acquireSeasonCalendarBuildLock(db, 1, 2, {
+    ownerId: 'reused-calendar-owner',
+    nowMs: nowMs + 11,
+  });
+
+  assert.equal(replacement.acquired, true);
+  assert.equal(replacement.ownerId, old.ownerId);
+  assert.notEqual(replacement.token, old.token);
+
+  const staleRef = db.collection('protected').doc('same-calendar-owner-stale-write');
+  await assert.rejects(
+    () => commitSeasonCalendarWrites(db, old.ownerId, old.token, [
+      { ref: staleRef, data: { writtenBy: 'old-token' } },
+    ]),
+    /SEASON_CALENDAR_BUILD_LOCK_LOST/,
+  );
+  assert.equal(db.read('same-calendar-owner-stale-write'), undefined);
+
+  const currentRef = db.collection('protected').doc('same-calendar-owner-current-write');
+  await commitSeasonCalendarWrites(db, replacement.ownerId, replacement.token, [
+    { ref: currentRef, data: { writtenBy: 'replacement-token' } },
+  ]);
+  assert.equal(db.read('same-calendar-owner-current-write').writtenBy, 'replacement-token');
+});
+
+test('live lease cannot be reacquired by ownerId alone, but calendar token permits explicit reuse', async () => {
+  const db = mockDb();
+  const rollover = await acquireSeasonRolloverLock(db, 1, 2, {
+    ownerId: 'same-live-rollover-owner',
+  });
+  const rolloverDuplicate = await acquireSeasonRolloverLock(db, 1, 2, {
+    ownerId: 'same-live-rollover-owner',
+  });
+  assert.equal(rollover.acquired, true);
+  assert.equal(rolloverDuplicate.acquired, false);
+
+  const calendar = await acquireSeasonCalendarBuildLock(db, 1, 2, {
+    ownerId: 'same-live-calendar-owner',
+  });
+  const calendarDuplicateWithoutToken = await acquireSeasonCalendarBuildLock(db, 1, 2, {
+    ownerId: 'same-live-calendar-owner',
+  });
+  const calendarRetryWithToken = await acquireSeasonCalendarBuildLock(db, 1, 2, {
+    ownerId: 'same-live-calendar-owner',
+    token: calendar.token,
+  });
+  assert.equal(calendar.acquired, true);
+  assert.equal(calendarDuplicateWithoutToken.acquired, false);
+  assert.equal(calendarRetryWithToken.acquired, true);
+  assert.equal(calendarRetryWithToken.token, calendar.token);
+});
