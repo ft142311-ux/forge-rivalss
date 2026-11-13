@@ -293,8 +293,12 @@ test('recovery carry-forward archive, plan, and skipped history writes are fence
     'recovered archive writes must be fenced');
   assert.match(recovery, /await lease\.commit\(\[\{ ref: planRef, data: plan \}\]\)/,
     'carry-forward plan writes must be fenced');
-  assert.match(recovery, /historyWrites\.slice\(offset, offset \+ BATCH_LIMIT\)/,
-    'skipped history writes must be chunked and fenced');
+  assert.match(recovery, /historyWriteCandidates\.slice\(offset, offset \+ BATCH_LIMIT\)/,
+    'new skipped history markers must be chunked and fenced');
+  assert.match(recovery, /resolvePendingSkippedHistoryMarker/,
+    'existing skipped history markers must be validated before they can be reused');
+  assert.match(recovery, /const historySnapshots = await Promise\.all\(historyRefs\.map\(item => item\.ref\.get\(\)\)\)/,
+    'all existing skipped history markers must be preflighted before plan publication');
   assert.doesNotMatch(recovery, /\.set\(snapshot\.archive\)|\.set\(plan\)|historyBatch\.commit\(\)/,
     'recovery must not bypass the lease with direct writes');
   assert.equal((source.match(/prepareRecoveryCarryForwardPlan\(db, activeSeasonBefore, seasonNumber, lease\)/g) || []).length, 2,
