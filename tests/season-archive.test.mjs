@@ -164,7 +164,7 @@ test('archive pruning fails closed for malformed, partial, and unmarked recovere
   const recovered = {
     sourceSeason: 2, leagueId: 'ALPHA', archiveVersion: 1, status: 'recovered',
     recoveredAt: '2026-10-27T00:00:00.000Z', expectedMatches: 840, finishedMatches: 0,
-    unresolvedMatches: 840, standings: {}, startingParticipants,
+    unresolvedMatches: 840, groups: 15, teamCount: 120, standings: {}, startingParticipants,
     recovery: { status: 'incomplete', finalStandingsAvailable: false, reason: 'SEASON_INCOMPLETE' },
   };
   assert.equal(resolveArchivePrunePlan([
