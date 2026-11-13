@@ -181,3 +181,37 @@ export function resolvePendingSkippedHistoryMarker(existing: any, expected: {
   return { ready: true as const, shouldWrite: false, reason: null };
 }
 
+/**
+ * Validate the final skipped marker written after activation. Only the exact
+ * pending marker for this target may transition to SKIPPED; an identical final
+ * marker is an idempotent retry. Missing markers are recoverable after a crash.
+ */
+export function resolveActivatedSkippedHistoryMarker(existing: any, expected: {
+  seasonNumber: number;
+  reason: string;
+  targetSeason: number;
+}) {
+  if (existing === null || existing === undefined) {
+    return { ready: true as const, shouldWrite: true, reason: null };
+  }
+  const commonFieldsMatch =
+    Number(existing.seasonNumber) === expected.seasonNumber &&
+    String(existing.reason || '') === expected.reason &&
+    existing.noResultsFabricated === true &&
+    existing.awardsApplied === false &&
+    existing.promotionRelegationApplied === false;
+  const pendingMatch = commonFieldsMatch &&
+    String(existing.status || '') === 'SKIPPED_PENDING_ACTIVATION' &&
+    Number(existing.targetSeason) === expected.targetSeason;
+  if (pendingMatch) {
+    return { ready: true as const, shouldWrite: true, reason: null };
+  }
+  const finalizedMatch = commonFieldsMatch &&
+    String(existing.status || '') === 'SKIPPED' &&
+    Number(existing.activatedTargetSeason) === expected.targetSeason;
+  if (finalizedMatch) {
+    return { ready: true as const, shouldWrite: false, reason: null };
+  }
+  return { ready: false as const, shouldWrite: false, reason: 'SKIPPED_SEASON_HISTORY_CONFLICT' };
+}
+
