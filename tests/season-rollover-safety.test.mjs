@@ -278,3 +278,24 @@ test('each protected calendar write renews the lease atomically', async () => {
   assert.ok(db.read('season_calendar_build_v1').expiresAtMs > before);
   assert.equal(await assertSeasonCalendarBuildLock(db, lease.ownerId, lease.token), true);
 });
+
+
+test('recovery carry-forward archive, plan, and skipped history writes are fenced by the calendar lease', async () => {
+  const fs = await import('node:fs/promises');
+  const source = await fs.readFile(new URL('../src/app/actions/season-calendar.ts', import.meta.url), 'utf8');
+  const recoveryStart = source.indexOf('async function prepareRecoveryCarryForwardPlan(');
+  const recoveryEnd = source.indexOf('\n}\n\nasync function buildSeasonCalendar', recoveryStart);
+  assert.ok(recoveryStart >= 0 && recoveryEnd > recoveryStart, 'recovery planner must be present');
+  const recovery = source.slice(recoveryStart, recoveryEnd);
+  assert.match(recovery, /lease: BuildLease/, 'recovery planner must receive the active lease');
+  assert.match(recovery, /await lease\.commit\(\[\{ ref: archiveRef, data: snapshot\.archive \}\]\)/,
+    'recovered archive writes must be fenced');
+  assert.match(recovery, /await lease\.commit\(\[\{ ref: planRef, data: plan \}\]\)/,
+    'carry-forward plan writes must be fenced');
+  assert.match(recovery, /historyWrites\.slice\(offset, offset \+ BATCH_LIMIT\)/,
+    'skipped history writes must be chunked and fenced');
+  assert.doesNotMatch(recovery, /\.set\(snapshot\.archive\)|\.set\(plan\)|historyBatch\.commit\(\)/,
+    'recovery must not bypass the lease with direct writes');
+  assert.equal((source.match(/prepareRecoveryCarryForwardPlan\(db, activeSeasonBefore, seasonNumber, lease\)/g) || []).length, 2,
+    'all recovery planner call sites must pass the same active lease');
+});
