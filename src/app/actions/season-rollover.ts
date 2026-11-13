@@ -297,7 +297,7 @@ export async function prepareSeasonRollover(db: any, sourceSeason: number, targe
       const planRef = db.collection('league_season_rollovers_v1').doc(`S${targetSeason}`);
       const [archiveSnap, planSnap] = await Promise.all([archiveRef.get(), planRef.get()]);
       const archiveData = archiveSnap.exists ? archiveSnap.data() || {} : {};
-      if (archiveData.status === 'preparing' && !planSnap.exists && Array.isArray(archiveData.matchManifest)) {
+      if (archiveData.status === 'preparing' && Array.isArray(archiveData.matchManifest)) {
         const manifestValidation = validateSeasonArchiveSnapshot(archiveData, archiveData.matchManifest);
         if (!manifestValidation.valid) {
           return {
@@ -308,9 +308,24 @@ export async function prepareSeasonRollover(db: any, sourceSeason: number, targe
             archiveErrors: manifestValidation.reasons,
           };
         }
-        // The durable manifest is the recovery source. Do not let a changed live
-        // match/table projection block or rewrite a snapshot already committed.
-        return { ready: true, archiveRecoveryPending: true, sourceSeason, targetSeason, seasonBoundary: boundary };
+        if (planSnap.exists && !validateRolloverPlan(planSnap.data() || {}, sourceSeason, targetSeason).valid) {
+          return {
+            ready: false,
+            reason: 'SEASON_ARCHIVE_RECOVERY_PLAN_INVALID',
+            sourceSeason,
+            targetSeason,
+          };
+        }
+        // The durable archive and, when present, the already-published plan are
+        // the recovery source. Do not let mutable live matches/tables block retry.
+        return {
+          ready: true,
+          archiveRecoveryPending: true,
+          archivePlanAlreadyPublished: planSnap.exists,
+          sourceSeason,
+          targetSeason,
+          seasonBoundary: boundary,
+        };
       }
       const preflight = await readRolloverGroupPreflight(db, sourceSeason, allowTestSeasonRecovery);
       return { ...preflight, seasonBoundary: boundary };
@@ -336,6 +351,116 @@ export async function prepareSeasonRollover(db: any, sourceSeason: number, targe
   // archive was fully written but before the rollover plan was published, resume
   // exclusively from that snapshot. Never rebuild standings from mutable live
   // matches/tables in this recovery path.
+  if (archiveSnap.exists && String((archiveSnap.data() || {}).status || '') === 'preparing' && planSnap.exists) {
+    const archiveData = archiveSnap.data() || {};
+    const savedMatchesSnap = await archiveRef.collection('matches').get();
+    const savedMatches = savedMatchesSnap.docs.map((doc: any) => ({ ...doc.data(), matchId: doc.id }));
+    const manifest = Array.isArray(archiveData.matchManifest) ? archiveData.matchManifest : null;
+
+    if (manifest) {
+      const manifestValidation = validateSeasonArchiveSnapshot(archiveData, manifest);
+      if (!manifestValidation.valid) {
+        return {
+          ready: false,
+          reason: 'SEASON_ARCHIVE_RECOVERY_MANIFEST_INVALID',
+          sourceSeason,
+          targetSeason,
+          writesStarted: true,
+          archiveErrors: manifestValidation.reasons,
+        };
+      }
+      const expectedById = new Map(manifest.map((match: any) => [String(match.matchId), match]));
+      const timestampValue = (value: any) => {
+        if (value && typeof value.toMillis === 'function') return value.toMillis();
+        if (value && typeof value.toDate === 'function') return value.toDate().getTime();
+        if (value instanceof Date) return value.getTime();
+        return value ?? null;
+      };
+      for (const saved of savedMatches) {
+        const expected: any = expectedById.get(String(saved.matchId));
+        const same = expected &&
+          ['version', 'sourceSeason', 'level', 'group', 'tour', 'homeRank', 'awayRank', 'homeId', 'homeName', 'awayId', 'awayName', 'status', 'isFinished']
+            .every((field: string) => (saved[field] ?? null) === (expected[field] ?? null)) &&
+          timestampValue(saved.resolvedAt) === timestampValue(expected.resolvedAt) &&
+          Number(saved.score?.home) === Number(expected.score?.home) &&
+          Number(saved.score?.away) === Number(expected.score?.away);
+        if (!same) {
+          return {
+            ready: false,
+            reason: 'SEASON_ARCHIVE_RECOVERY_CHILD_CONFLICT',
+            sourceSeason,
+            targetSeason,
+            writesStarted: true,
+            conflictingMatchId: saved.matchId,
+          };
+        }
+      }
+    }
+
+    const archiveValidation = validateSeasonArchiveSnapshot(archiveData, savedMatches);
+    if (!archiveValidation.valid) {
+      return {
+        ready: false,
+        reason: 'SEASON_ARCHIVE_RECOVERY_SNAPSHOT_INVALID',
+        sourceSeason,
+        targetSeason,
+        writesStarted: true,
+        archiveMatches: savedMatches.length,
+        archiveErrors: archiveValidation.reasons,
+      };
+    }
+
+    // The saved plan is already the durable placement decision. Validate its
+    // identity and shape, but never rebuild or replace its groups during retry.
+    const savedPlan = planSnap.data() || {};
+    if (!validateRolloverPlan(savedPlan, sourceSeason, targetSeason).valid) {
+      return {
+        ready: false,
+        reason: 'SEASON_ARCHIVE_RECOVERY_PLAN_INVALID',
+        sourceSeason,
+        targetSeason,
+        writesStarted: true,
+      };
+    }
+
+    const awards = await applySeasonAwards(db, sourceSeason, archiveData.standings || {}, lock);
+    if (!awards.ready) {
+      return { ready: false, reason: awards.reason, sourceSeason, targetSeason, writesStarted: true, awards };
+    }
+    await commitSeasonRolloverWrites(db, lock.ownerId, lock.token, [{
+      ref: planRef,
+      data: { awards },
+      options: { merge: true },
+    }]);
+
+    const refreshedPlanSnap = await planRef.get();
+    const refreshedPlan = refreshedPlanSnap.exists ? refreshedPlanSnap.data() || {} : {};
+    if (!isSeasonArchiveReadyToComplete(archiveData, savedMatches, refreshedPlan)) {
+      return {
+        ready: false,
+        reason: 'SEASON_ARCHIVE_RECOVERY_FINALIZATION_FAILED',
+        sourceSeason,
+        targetSeason,
+        writesStarted: true,
+      };
+    }
+    await commitSeasonRolloverWrites(db, lock.ownerId, lock.token, [{
+      ref: archiveRef,
+      data: { status: 'completed', completedAt: FieldValue.serverTimestamp() },
+      options: { merge: true },
+    }]);
+    return {
+      ready: true,
+      completed: true,
+      resumedAfterPlanPublication: true,
+      sourceSeason,
+      targetSeason,
+      expectedMatches: EXPECTED_MATCHES,
+      observedMatches: savedMatches.length,
+      awards,
+    };
+  }
+
   if (archiveSnap.exists && String((archiveSnap.data() || {}).status || '') === 'preparing' && !planSnap.exists) {
     let savedMatchesSnap = await archiveRef.collection('matches').get();
     const archiveData = archiveSnap.data() || {};
