@@ -315,9 +315,60 @@ export async function prepareSeasonRollover(db: any, sourceSeason: number, targe
   // exclusively from that snapshot. Never rebuild standings from mutable live
   // matches/tables in this recovery path.
   if (archiveSnap.exists && String((archiveSnap.data() || {}).status || '') === 'preparing' && !planSnap.exists) {
-    const savedMatchesSnap = await archiveRef.collection('matches').get();
+    let savedMatchesSnap = await archiveRef.collection('matches').get();
     const archiveData = archiveSnap.data() || {};
-    const savedMatches = savedMatchesSnap.docs.map((doc: any) => ({ ...doc.data(), matchId: doc.id }));
+    let savedMatches = savedMatchesSnap.docs.map((doc: any) => ({ ...doc.data(), matchId: doc.id }));
+    const manifest = Array.isArray(archiveData.matchManifest) ? archiveData.matchManifest : null;
+
+    if (manifest) {
+      // New archives publish their immutable match manifest before child chunks.
+      // This lets a retry reconstruct missing child documents without consulting
+      // mutable live matches or standings.
+      const manifestValidation = validateSeasonArchiveSnapshot(archiveData, manifest);
+      if (!manifestValidation.valid) {
+        return {
+          ready: false,
+          reason: 'SEASON_ARCHIVE_RECOVERY_MANIFEST_INVALID',
+          sourceSeason,
+          targetSeason,
+          writesStarted: true,
+          manifestMatches: manifest.length,
+          archiveErrors: manifestValidation.reasons,
+        };
+      }
+      const expectedById = new Map(manifest.map((match: any) => [String(match.matchId), match]));
+      for (const saved of savedMatches) {
+        const expected: any = expectedById.get(String(saved.matchId));
+        const same = expected &&
+          ['version', 'sourceSeason', 'level', 'group', 'tour', 'homeRank', 'awayRank', 'homeId', 'homeName', 'awayId', 'awayName', 'status', 'isFinished', 'resolvedAt']
+            .every((field: string) => (saved[field] ?? null) === (expected[field] ?? null)) &&
+          Number(saved.score?.home) === Number(expected.score?.home) &&
+          Number(saved.score?.away) === Number(expected.score?.away);
+        if (!same) {
+          return {
+            ready: false,
+            reason: 'SEASON_ARCHIVE_RECOVERY_CHILD_CONFLICT',
+            sourceSeason,
+            targetSeason,
+            writesStarted: true,
+            conflictingMatchId: saved.matchId,
+          };
+        }
+      }
+      const savedIds = new Set(savedMatches.map((match: any) => String(match.matchId)));
+      const missingMatches = manifest.filter((match: any) => !savedIds.has(String(match.matchId)));
+      for (let i = 0; i < missingMatches.length; i += 400) {
+        const writes = missingMatches.slice(i, i + 400).map((match: any) => ({
+          ref: archiveRef.collection('matches').doc(String(match.matchId)),
+          data: { ...match, archivedAt: FieldValue.serverTimestamp() },
+          options: { merge: false },
+        }));
+        await commitSeasonRolloverWrites(db, lock.ownerId, lock.token, writes);
+      }
+      savedMatchesSnap = await archiveRef.collection('matches').get();
+      savedMatches = savedMatchesSnap.docs.map((doc: any) => ({ ...doc.data(), matchId: doc.id }));
+    }
+
     const archiveValidation = validateSeasonArchiveSnapshot(archiveData, savedMatches);
     if (!archiveValidation.valid) {
       return {
@@ -798,6 +849,14 @@ export async function prepareSeasonRollover(db: any, sourceSeason: number, targe
     standings[key] = rows.map((row, i) => ({ ...row, rank: i + 1 }));
   }
 
+  // Keep the complete immutable match snapshot in the parent document before
+  // writing child chunks. A retry can then reconstruct missing children from this
+  // manifest without re-reading mutable match results.
+  const manifestBytes = new TextEncoder().encode(JSON.stringify(matchArchive)).length;
+  if (manifestBytes > 700_000) {
+    return { ready: false, reason: 'SEASON_ARCHIVE_MANIFEST_TOO_LARGE', sourceSeason, targetSeason, manifestBytes, writesStarted: false };
+  }
+
   // Persist the canonical standings projection only after every canonical fixture
   // has a valid final result. This removes stale rows/duplicate ranks so the next
   // rollover starts from a consistent table instead of inheriting old projections.
@@ -815,20 +874,21 @@ export async function prepareSeasonRollover(db: any, sourceSeason: number, targe
 
   const summary = { sourceSeason, finalizedAt: FieldValue.serverTimestamp(), leagueId: LEAGUE_ID, expectedMatches: EXPECTED_MATCHES, finishedMatches: canonicalMatches.length, groups: Object.keys(standings).length, teamCount: Object.values(standings).reduce((n, a) => n + a.length, 0), integrity: { complete: true, unfinishedMatches: 0, invalidResults: 0, canonicalMatches: canonicalMatches.length, ignoredLegacyOrNonLeagueMatches: matchesSnap.size - canonicalMatches.length, duplicateCanonicalFixtures } };
 
-  // Write per-match archive records first; immutable IDs make retries harmless.
+  // Publish the durable parent snapshot and complete manifest first. Child writes
+  // are now independently resumable after any chunk-level interruption.
+  await commitSeasonRolloverWrites(db, lock.ownerId, lock.token, [{
+    ref: archiveRef,
+    data: { ...summary, standings, archiveVersion: 1, status: 'preparing', matchManifest: matchArchive },
+    options: { merge: false },
+  }]);
   for (let i = 0; i < matchArchive.length; i += 400) {
     const writes = matchArchive.slice(i, i + 400).map((match: any) => ({
       ref: archiveRef.collection('matches').doc(match.matchId),
-      data: { ...match, sourceSeason, archivedAt: FieldValue.serverTimestamp() },
-      options: { merge: true },
+      data: { ...match, archivedAt: FieldValue.serverTimestamp() },
+      options: { merge: false },
     }));
     await commitSeasonRolloverWrites(db, lock.ownerId, lock.token, writes);
   }
-  await commitSeasonRolloverWrites(db, lock.ownerId, lock.token, [{
-    ref: archiveRef,
-    data: { ...summary, standings, archiveVersion: 1, status: 'preparing' },
-    options: { merge: true },
-  }]);
   const preparedArchiveSnap = await archiveRef.get();
   const preparedArchive = preparedArchiveSnap.exists ? preparedArchiveSnap.data() || {} : {};
   const preparedMatchesSnap = await archiveRef.collection('matches').get();
