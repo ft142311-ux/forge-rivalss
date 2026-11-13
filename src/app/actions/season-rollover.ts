@@ -186,7 +186,7 @@ async function applySeasonAwards(db: any, sourceSeason: number, standings: Recor
   const recipients: Array<{ uid: string; level: number; group: number; row: TeamRow; prize: number; isChampion: boolean; isPyramidWinner: boolean }> = [];
 
   for (const [group, rows] of Object.entries(standings)) {
-    const match = /^D([1-4])-G(\\d+)$/.exec(group);
+    const match = /^D([1-4])-G(\d+)$/.exec(group);
     if (!match) continue;
     const level = Number(match[1]);
     for (const row of rows) {
