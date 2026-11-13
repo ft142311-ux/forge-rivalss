@@ -34,3 +34,32 @@ test('orphaned archive match chunks and unknown archive states fail closed befor
   assert.ok(statusGuard > orphanGuard, 'unknown archive states must be rejected');
   assert.ok(normalLiveProcessing > statusGuard, 'archive-state guards must run before live-state processing');
 });
+
+
+test('partial archive chunks resume only from a validated parent manifest', async () => {
+  const source = await readFile(sourceUrl, 'utf8');
+  const readStateStart = source.indexOf('readState: async () => {');
+  const readStateEnd = source.indexOf('    preflight: state =>', readStateStart);
+  assert.ok(readStateStart >= 0 && readStateEnd > readStateStart);
+  const readState = source.slice(readStateStart, readStateEnd);
+  assert.ok(readState.includes('Array.isArray(archiveData.matchManifest)'));
+  assert.ok(readState.includes('validateSeasonArchiveSnapshot(archiveData, archiveData.matchManifest)'));
+  assert.ok(readState.includes('archiveRecoveryPending: true'));
+  assert.ok(readState.indexOf('archiveRecoveryPending: true') < readState.indexOf('readRolloverGroupPreflight'));
+
+  const recoveryStart = source.indexOf("if (archiveSnap.exists && String((archiveSnap.data() || {}).status || '') === 'preparing' && !planSnap.exists)");
+  const recoveryEnd = source.indexOf('  // A Firestore subcollection can outlive a missing parent document.', recoveryStart);
+  const recovery = source.slice(recoveryStart, recoveryEnd);
+  assert.ok(recovery.includes('const manifest = Array.isArray(archiveData.matchManifest)'));
+  assert.ok(recovery.includes('SEASON_ARCHIVE_RECOVERY_CHILD_CONFLICT'));
+  assert.ok(recovery.includes('const missingMatches = manifest.filter'));
+  assert.ok(recovery.includes('SEASON_ARCHIVE_RECOVERY_SNAPSHOT_INVALID'));
+  assert.ok(recovery.indexOf('manifestValidation') < recovery.indexOf('missingMatches'));
+  assert.ok(recovery.indexOf('missingMatches') < recovery.indexOf('validateSeasonArchiveSnapshot(archiveData, savedMatches)'));
+
+  const parentWrite = source.indexOf("status: 'preparing', matchManifest: matchArchive");
+  const childWrite = source.indexOf('archiveRef.collection(\'matches\').doc(match.matchId)', parentWrite);
+  assert.ok(parentWrite >= 0, 'parent must contain a complete immutable manifest');
+  assert.ok(childWrite > parentWrite, 'parent manifest must be committed before match chunks');
+  assert.ok(source.includes('SEASON_ARCHIVE_MANIFEST_TOO_LARGE'));
+});
