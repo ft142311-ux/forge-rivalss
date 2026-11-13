@@ -153,3 +153,31 @@ export function resolveHistoryCleanupCompletion(config: any, targetSeason: numbe
     shouldMarkComplete: config?.historyCleanupPending === true,
   };
 }
+
+/**
+ * Validate the pre-activation marker for a skipped season. A retry may reuse
+ * the exact marker it first published, but it must never overwrite a marker
+ * belonging to another target or a different lifecycle outcome.
+ */
+export function resolvePendingSkippedHistoryMarker(existing: any, expected: {
+  seasonNumber: number;
+  reason: string;
+  targetSeason: number;
+}) {
+  if (existing === null || existing === undefined) {
+    return { ready: true as const, shouldWrite: true, reason: null };
+  }
+  const sameMarker =
+    Number(existing.seasonNumber) === expected.seasonNumber &&
+    String(existing.status || '') === 'SKIPPED_PENDING_ACTIVATION' &&
+    String(existing.reason || '') === expected.reason &&
+    Number(existing.targetSeason) === expected.targetSeason &&
+    existing.noResultsFabricated === true &&
+    existing.awardsApplied === false &&
+    existing.promotionRelegationApplied === false;
+  if (!sameMarker) {
+    return { ready: false as const, shouldWrite: false, reason: 'SKIPPED_SEASON_HISTORY_CONFLICT' };
+  }
+  return { ready: true as const, shouldWrite: false, reason: null };
+}
+
