@@ -43,9 +43,17 @@ async function acquireLease(
   return db.runTransaction(async (tx: any) => {
     const snap = await tx.get(ref);
     const current = snap.exists ? snap.data() || {} : null;
-    const ownedByCaller = current?.ownerId === ownerId && (!options.token || current?.token === options.token);
-    if (current && !ownedByCaller && !isSeasonRolloverLockStale(current, nowMs)) {
-      return { acquired: false, ownerId, lockOwnerId: String(current.ownerId || ''), expiresAtMs: Number(current.expiresAtMs || 0) };
+    const hasLiveLease = Boolean(current) && !isSeasonRolloverLockStale(current, nowMs);
+    // A matching ownerId alone is not proof that this is the same process:
+    // after expiry, an old worker may still be running. Reuse a live lease only
+    // when the caller presents its exact fencing token; every expired lease gets
+    // a fresh token, even when ownerId is accidentally reused.
+    const ownedByCaller = hasLiveLease &&
+      current?.ownerId === ownerId &&
+      Boolean(options.token) &&
+      current?.token === options.token;
+    if (hasLiveLease && !ownedByCaller) {
+      return { acquired: false, ownerId, lockOwnerId: String(current?.ownerId || ''), expiresAtMs: Number(current?.expiresAtMs || 0) };
     }
     const token = ownedByCaller ? String(current.token) : randomUUID();
     tx.set(ref, { ownerId, token, sourceSeason, targetSeason, acquiredAtMs: nowMs, expiresAtMs: nowMs + ttlMs }, { merge: true });
