@@ -204,3 +204,28 @@ export function resolveRolloverPlanPruneIds(
   }
   return { ready: true as const, reason: null, pruneIds };
 }
+
+
+/**
+ * Recovery retries may republish the same deterministic plan, but must never
+ * replace a previously persisted placement decision with a different one.
+ * Volatile metadata and post-publication award fields are intentionally ignored.
+ */
+export function compareRecoveryRolloverPlans(existing: any, candidate: any) {
+  const sourceSeason = Number(candidate?.sourceSeason);
+  const targetSeason = Number(candidate?.targetSeason);
+  const existingValidation = validateRolloverPlan(existing, sourceSeason, targetSeason);
+  const candidateValidation = validateRolloverPlan(candidate, sourceSeason, targetSeason);
+  if (!existingValidation.valid || !candidateValidation.valid ||
+      existing?.mode !== 'recovery_carry_forward' || candidate?.mode !== 'recovery_carry_forward') {
+    return { same: false as const, reason: 'RECOVERY_ROLLOVER_PLAN_METADATA_CONFLICT' };
+  }
+  const fields = ['leagueId', 'mode', 'sourceSeason', 'targetSeason', 'skippedSeasons',
+    'lastTrustedSeason', 'placementSource', 'retainedArchiveSeason', 'promotionRule', 'groups'];
+  for (const field of fields) {
+    if (JSON.stringify(existing[field] ?? null) !== JSON.stringify(candidate[field] ?? null)) {
+      return { same: false as const, reason: 'RECOVERY_ROLLOVER_PLAN_CONTENT_CONFLICT', field };
+    }
+  }
+  return { same: true as const, reason: null };
+}
