@@ -98,3 +98,37 @@ export function resolvePostActivationRetry(config: any) {
   }
   return { ready: true as const, sourceSeason: activeSeason - 1, targetSeason };
 }
+
+
+/**
+ * Validate the durable skipped-season list written atomically with activation.
+ * Cleanup retries use this marker to finish history status updates even if the
+ * process stopped immediately after the activation transaction committed.
+ */
+export function resolveActivatedSkippedSeasons(skipped: any, targetSeason: number) {
+  if (!Number.isSafeInteger(targetSeason) || targetSeason < 2) {
+    return { ready: false as const, reason: 'SKIPPED_SEASON_TARGET_INVALID', seasons: [] as Array<{ seasonNumber: number; reason: string }> };
+  }
+  if (skipped === undefined || skipped === null) {
+    return { ready: true as const, seasons: [] as Array<{ seasonNumber: number; reason: string }> };
+  }
+  if (!Array.isArray(skipped)) {
+    return { ready: false as const, reason: 'SKIPPED_SEASON_LIST_INVALID', seasons: [] as Array<{ seasonNumber: number; reason: string }> };
+  }
+  const seen = new Set<number>();
+  const seasons: Array<{ seasonNumber: number; reason: string }> = [];
+  for (const item of skipped) {
+    const seasonNumber = Number(item?.seasonNumber);
+    if (!Number.isSafeInteger(seasonNumber) || seasonNumber < 1 || seasonNumber >= targetSeason || seen.has(seasonNumber)) {
+      return { ready: false as const, reason: 'SKIPPED_SEASON_ENTRY_INVALID', seasons: [] as Array<{ seasonNumber: number; reason: string }> };
+    }
+    seen.add(seasonNumber);
+    seasons.push({
+      seasonNumber,
+      reason: typeof item?.reason === 'string' && item.reason.trim()
+        ? item.reason.trim()
+        : 'SEASON_SKIPPED_DURING_RECOVERY',
+    });
+  }
+  return { ready: true as const, seasons };
+}
