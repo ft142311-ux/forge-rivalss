@@ -5,6 +5,7 @@ import React, { createContext, useContext, ReactNode, useMemo, useState, useEffe
 import { FirebaseApp } from 'firebase/app';
 import { Firestore } from 'firebase/firestore';
 import { Auth, onAuthStateChanged, User, signOut } from 'firebase/auth';
+import { recordUserActivityAction } from '@/app/actions/user-activity';
 
 /**
  * ПРОВАЙДЕР FIREBASE v3.1 (Passive Mode).
@@ -60,9 +61,22 @@ export const FirebaseProvider: React.FC<{ children: ReactNode; firebaseApp: Fire
         try {
           // Force Firebase to issue/refresh the ID token on each new auth session.
           // Do not mark the app as ready until the refresh has completed.
-          await user.getIdToken(true);
+          const idToken = await user.getIdToken(true);
           if (sequence !== authChangeSequence || auth.currentUser?.uid !== user.uid) return;
-          setUserAuthState({ user, isUserLoading: false, userError: null });
+
+          // A persistent Firebase session can open the game without a new
+          // password login. Record each verified app entry, not just Auth's
+          // lastSignInTime, so active managers are never retired by mistake.
+          const activity = await recordUserActivityAction(idToken);
+          if (sequence !== authChangeSequence || auth.currentUser?.uid !== user.uid) return;
+          if (activity?.error === 'ACCOUNT_DISABLED') {
+            try { await signOut(auth); } catch { /* Auth listener settles state. */ }
+            return;
+          }
+          if (!activity?.success) {
+            console.warn('[AUTH ACTIVITY] Session activity was not acknowledged:', activity?.error || 'UNKNOWN');
+          }
+          setUserAuthState({ user, isUserLoading: false, userError: activity?.success ? null : new Error('USER_ACTIVITY_NOT_RECORDED') });
         } catch (error: any) {
           if (sequence !== authChangeSequence) return;
           const code = String(error?.code || '').toLowerCase();
