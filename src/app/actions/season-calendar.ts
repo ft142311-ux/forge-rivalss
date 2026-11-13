@@ -788,7 +788,7 @@ async function buildSeasonCalendar(lease: BuildLease, pristineFirstWorld = false
             totalExpectedSlots: TOTAL_GROUPS * TEAMS_PER_GROUP,
           };
         }
-        const recovery = await prepareRecoveryCarryForwardPlan(db, activeSeasonBefore, seasonNumber);
+        const recovery = await prepareRecoveryCarryForwardPlan(db, activeSeasonBefore, seasonNumber, lease);
         if (!recovery.ready) {
           return {
             success: false,
