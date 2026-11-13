@@ -81,3 +81,14 @@ test('missing recipient profile blocks reward publication without losing prior s
   assert.equal(result.totalCredits, 500);
   assert.deepEqual(result.missingProfileUids, ['club-missing']);
 });
+
+
+test('production rollover delegates per-recipient settlement to retry-stable accounting', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const source = await readFile(new URL('../src/app/actions/season-rollover.ts', import.meta.url), 'utf8');
+  assert.ok(source.includes("import { applySeasonAwardRecipients } from './season-award-reconciliation'"));
+  assert.ok(source.includes('return applySeasonAwardRecipients(recipients, async recipient =>'));
+  assert.ok(source.includes("if (recipientState === 'ALREADY_APPLIED')"));
+  assert.ok(source.includes('return { settled: true, prize, trophy: Boolean(isChampion || isPyramidWinner) }'));
+  assert.ok(source.includes('return { settled: false, prize, trophy: false, missingProfile: true }'));
+});
