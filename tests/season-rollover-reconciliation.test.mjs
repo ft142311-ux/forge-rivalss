@@ -46,7 +46,7 @@ test('canonical slot repair refuses incomplete fixtures', () => {
 test('Season 1 recovery re-reads table and slot snapshots after repair writes', async () => {
   const fs = await import('node:fs/promises');
   const source = await fs.readFile(new URL('../src/app/actions/season-rollover.ts', import.meta.url), 'utf8');
-  const repairCommit = source.indexOf('if (repairWriteCount > 0) await repairBatch.commit();');
+  const repairCommit = source.indexOf('if (repairWriteCount > 0) await commitSeasonRolloverWrites(db, lock.ownerId, lock.token, repairWrites);');
   const refresh = source.indexOf('[tablesSnap, slotsSnap] = await Promise.all([', repairCommit);
   const consistencyGate = source.indexOf('const groupConsistency =', refresh);
   assert.ok(repairCommit >= 0, 'recovery repair commit must exist');
