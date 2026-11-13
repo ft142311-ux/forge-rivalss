@@ -6,6 +6,7 @@ import { acquireSeasonCalendarBuildLock, assertSeasonCalendarBuildLock, commitSe
 import { buildCarryForwardGroups, buildPromotionRelegationGroups, compareRecoveryRolloverPlans, resolveRecoveryPlacementSource, resolveRolloverPlanPruneIds, validateRolloverPlan } from './season-rollover-plan';
 import { resolveActivatedSkippedHistoryMarker, resolveActivatedSkippedSeasons, resolveHistoryCleanupCompletion, resolvePendingSkippedHistoryMarker, resolvePostActivationRetry, resolveSeasonCatchUpPolicy, type SeasonHistoryState } from './season-history-policy';
 import { evaluateCanonicalDocuments } from './season-canonical';
+import { publishRecoveryRolloverDecision } from './season-recovery-publication';
 import { inspectGroupReconciliation } from './season-rollover-standings';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { advanceAtMostOneSeasonBoundary, deriveRecoverySeasonWindow, deriveSeasonDatePlan, resolveCanonicalSeasonDateWindow, resolveNextSeasonTarget, resolveSeasonActivationWindow, resolveSeasonLifecycleWindow } from './season-boundary';
@@ -618,73 +619,54 @@ async function prepareRecoveryCarryForwardPlan(
     groups,
     createdAt: FieldValue.serverTimestamp(),
   };
-  // Preflight every existing history marker before publishing the rollover
-  // plan. Retries may reuse an identical pending marker, but conflicting or
-  // already-finalized history must never be silently overwritten.
-  const historyRefs = policy.skippedSeasons.map(skipped => ({
-    skipped,
-    ref: db.collection('league_season_history_v1').doc(`S${skipped.seasonNumber}`),
-  }));
-  const historySnapshots = await Promise.all(historyRefs.map(item => item.ref.get()));
-  const historyWriteCandidates: Array<{ ref: any; data: any; options?: any }> = [];
-  for (let index = 0; index < historyRefs.length; index++) {
-    const { skipped, ref } = historyRefs[index];
-    const snapshot = historySnapshots[index];
-    const marker = resolvePendingSkippedHistoryMarker(
-      snapshot.exists ? snapshot.data() || {} : null,
-      { seasonNumber: skipped.seasonNumber, reason: skipped.reason, targetSeason },
-    );
-    if (!marker.ready) {
-      return {
-        ready: false,
-        reason: marker.reason,
-        details: { seasonNumber: skipped.seasonNumber, targetSeason },
-      };
-    }
-    if (marker.shouldWrite) {
-      historyWriteCandidates.push({
-        ref,
-        data: {
-          seasonNumber: skipped.seasonNumber,
-          status: 'SKIPPED_PENDING_ACTIVATION',
-          reason: skipped.reason,
-          targetSeason,
-          noResultsFabricated: true,
-          awardsApplied: false,
-          promotionRelegationApplied: false,
-          updatedAt: FieldValue.serverTimestamp(),
-        },
-        options: { merge: true },
-      });
-    }
+  const publication = await publishRecoveryRolloverDecision({
+    planRef,
+    plan,
+    historyEntries: policy.skippedSeasons.map(skipped => ({
+      seasonNumber: skipped.seasonNumber,
+      reason: skipped.reason,
+      ref: db.collection('league_season_history_v1').doc(`S${skipped.seasonNumber}`),
+    })),
+    targetSeason,
+    batchLimit: BATCH_LIMIT,
+    read: async ref => {
+      const snapshot = await ref.get();
+      return snapshot.exists ? snapshot.data() || {} : null;
+    },
+    commitPlan: async (ref, value) => {
+      await lease.assert();
+      await lease.commit([{ ref, data: value }]);
+    },
+    commitHistory: async writes => {
+      await lease.commit(writes);
+    },
+    comparePlans: compareRecoveryRolloverPlans,
+    resolvePendingMarker: resolvePendingSkippedHistoryMarker,
+    buildPendingMarker: (entry, target) => ({
+      seasonNumber: entry.seasonNumber,
+      status: 'SKIPPED_PENDING_ACTIVATION',
+      reason: entry.reason,
+      targetSeason: target,
+      noResultsFabricated: true,
+      awardsApplied: false,
+      promotionRelegationApplied: false,
+      updatedAt: FieldValue.serverTimestamp(),
+    }),
+  });
+  if (!publication.ready) {
+    return {
+      ready: false,
+      reason: publication.reason,
+      details: publication.details || { targetSeason },
+    };
   }
 
-  const planRef = db.collection('league_season_rollovers_v1').doc(`S${targetSeason}`);
-  await lease.assert();
-  const existingPlanSnap = await planRef.get();
-  let persistedPlan = plan;
-  if (existingPlanSnap.exists) {
-    const existingPlan = existingPlanSnap.data() || {};
-    const comparison = compareRecoveryRolloverPlans(existingPlan, plan);
-    if (!comparison.same) {
-      return {
-        ready: false,
-        reason: comparison.reason,
-        details: { field: (comparison as any).field || null, targetSeason },
-      };
-    }
-    // Keep the first durable publication (including its createdAt and any
-    // post-publication metadata); retries only repair missing history markers.
-    persistedPlan = existingPlan;
-  } else {
-    await lease.commit([{ ref: planRef, data: plan }]);
-  }
-
-  for (let offset = 0; offset < historyWriteCandidates.length; offset += BATCH_LIMIT) {
-    await lease.commit(historyWriteCandidates.slice(offset, offset + BATCH_LIMIT));
-  }
-
-  return { ready: true, plan: persistedPlan, skippedSeasons: policy.skippedSeasons, retainedArchiveSeason: policy.retainedArchiveSeason };
+  return {
+    ready: true,
+    plan: publication.plan,
+    skippedSeasons: policy.skippedSeasons,
+    retainedArchiveSeason: policy.retainedArchiveSeason,
+  };
 }
 
 async function buildSeasonCalendar(lease: BuildLease, pristineFirstWorld = false) {
