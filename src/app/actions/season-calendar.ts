@@ -1,6 +1,7 @@
 import 'server-only';
 
 import { FieldValue } from 'firebase-admin/firestore';
+import { commitSeasonActivation } from './season-activation-commit';
 import { prepareSeasonRollover } from './season-rollover';
 import { acquireSeasonCalendarBuildLock, assertSeasonCalendarBuildLock, commitSeasonCalendarPublication, commitSeasonCalendarWrites, commitSeasonHistoryCleanupWrites, releaseSeasonCalendarBuildLock } from './season-rollover-lock';
 import { buildCarryForwardGroups, buildPromotionRelegationGroups, compareRecoveryRolloverPlans, resolveRecoveryPlacementSource, resolveRolloverPlanPruneIds, validateRolloverPlan } from './season-rollover-plan';
@@ -1554,32 +1555,17 @@ export async function activatePublishedSeason() {
     return { success: false, action: 'WORLD_NOT_READY', reason: 'CANONICAL_CALENDAR_INCOMPLETE', sourceSeason, targetSeason, ...readiness };
   }
 
-  const result = await db.runTransaction(async (tx: any) => {
-    const [configSnap, planSnap] = await Promise.all([tx.get(configRef), tx.get(planRef)]);
-    if (!configSnap.exists) return { success: false, reason: 'SEASON_CONFIG_MISSING' };
-    const current = configSnap.data() || {};
-    const plan = planSnap.exists ? planSnap.data() || {} : null;
-    if (Number(current.activeSeasonNumber || 1) !== sourceSeason ||
-        Number(current.preparedSeasonNumber || 0) !== targetSeason ||
-        Number(current.nextSeasonNumber || 0) !== targetSeason ||
-        Number(current.preparationTargetSeason || 0) !== targetSeason ||
-        current.worldReady !== true || current.preparedWorldReady !== true ||
-        current.preparedPublished !== true ||
-        String(current.phase || '') !== 'PUBLISHED' ||
-        Number(current.preparedCalendarRevision || 0) !== CALENDAR_REVISION ||
-        new Date(current.preparedSeasonStart || '').getTime() !== activationAtMs ||
-        new Date(current.preparedNextSeasonStart || '').getTime() !== preparedNextStartMs ||
-        (!multiSeasonRecovery && new Date(current.nextSeasonStart || '').getTime() !== activationAtMs) ||
-        (recoveryMode && current.preparedRecoveryMode !== true)) {
-      return { success: false, reason: 'ACTIVATION_STATE_CHANGED' };
-    }
-    const transactionNowMs = Date.now();
-    if (transactionNowMs < activationAtMs) return { success: false, reason: 'ACTIVATION_NOT_DUE' };
-    if (transactionNowMs >= preparedNextStartMs) return { success: false, reason: 'ACTIVATION_WINDOW_EXPIRED' };
-    if (!validateRolloverPlan(plan, recoveryMode ? targetSeason - 1 : sourceSeason, targetSeason).valid || !isRolloverPlanPublicationReady(plan)) {
-      return { success: false, reason: 'ROLLOVER_PLAN_INVALID' };
-    }
-    tx.update(configRef, {
+  const result = await commitSeasonActivation(db, configRef, planRef, {
+    sourceSeason,
+    targetSeason,
+    calendarRevision: CALENDAR_REVISION,
+    activationAtMs,
+    nextSeasonStartMs: preparedNextStartMs,
+    multiSeasonRecovery,
+    recoveryMode,
+    isPlanReady: plan => validateRolloverPlan(plan, recoveryMode ? targetSeason - 1 : sourceSeason, targetSeason).valid &&
+      isRolloverPlanPublicationReady(plan),
+    buildUpdate: (current, plan) => ({
       activeSeasonNumber: targetSeason,
       phase: 'REGULAR_SEASON',
       worldReady: true,
@@ -1603,8 +1589,7 @@ export async function activatePublishedSeason() {
       lastRecoverySkippedSeasons: recoveryMode ? (Array.isArray(plan.skippedSeasons) ? plan.skippedSeasons : []) : FieldValue.delete(),
       activatedAt: FieldValue.serverTimestamp(),
       updatedAt: FieldValue.serverTimestamp(),
-    });
-    return { success: true };
+    }),
   });
 
   if (result.success !== true) {
