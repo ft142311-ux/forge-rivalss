@@ -65,13 +65,20 @@ function isFinished(match) {
  */
 async function retireInactiveClub({ db, auth, userRecord, now = new Date() }) {
   const uid = userRecord && userRecord.uid;
-  if (!uid || !userRecord.metadata || userRecord.disabled) {
-    // Disabled users are intentionally still eligible for retry; callers pass
-    // their record through the same flow below.
-    if (!uid || !userRecord || !userRecord.metadata) return { action: 'SKIPPED_INVALID_AUTH_RECORD' };
+  if (!uid || !userRecord || !userRecord.metadata) return { action: 'SKIPPED_INVALID_AUTH_RECORD' };
+
+  const pendingRef = db.collection('inactive_club_retirements_v1').doc(uid);
+  const pendingSnap = await pendingRef.get();
+  if (userRecord.disabled && !pendingSnap.exists) {
+    return { action: 'SKIPPED_PREVIOUSLY_DISABLED' };
   }
 
-  const eligibility = resolveClubInactivity(userRecord.metadata.lastSignInTime, now.getTime());
+  // Refresh Auth metadata immediately before making the eligibility decision.
+  const latestAuthRecord = await auth.getUser(uid);
+  const eligibility = resolveClubInactivity(
+    latestAuthRecord.metadata && latestAuthRecord.metadata.lastSignInTime,
+    now.getTime()
+  );
   if (!eligibility.eligible) return { action: 'SKIPPED_NOT_INACTIVE', reason: eligibility.reason };
 
   const playerRef = db.collection('players_v14').doc(uid);
@@ -93,9 +100,19 @@ async function retireInactiveClub({ db, auth, userRecord, now = new Date() }) {
 
   // Disable sign-in and revoke refresh tokens before retiring the club. If the
   // process stops here, the next scheduled pass resumes for this disabled UID.
-  if (!userRecord.disabled) {
-    await auth.updateUser(uid, { disabled: true });
+  if (!pendingSnap.exists) {
+    await pendingRef.create({
+      uid,
+      phase: 'PENDING_AUTH_DISABLE',
+      lastSignInAt: eligibility.inactiveSince,
+      requestedAt: now,
+      season,
+      division,
+      group,
+      rank,
+    });
   }
+  if (!latestAuthRecord.disabled) await auth.updateUser(uid, { disabled: true });
   await auth.revokeRefreshTokens(uid);
 
   const slotQuery = db.collection('league_slots_v1')
@@ -114,18 +131,21 @@ async function retireInactiveClub({ db, auth, userRecord, now = new Date() }) {
     .where('version', '==', 140);
 
   const result = await db.runTransaction(async (transaction) => {
-    const [freshPlayer, slots, table, bot, archive, matches] = await Promise.all([
+    const [freshPlayer, slots, table, bot, archive, matches, pending] = await Promise.all([
       transaction.get(playerRef),
       transaction.get(slotQuery),
       transaction.get(tableRef),
       transaction.get(botRef),
       transaction.get(archiveRef),
       transaction.get(matchesQuery),
+      transaction.get(pendingRef),
     ]);
 
     if (archive.exists && !freshPlayer.exists) {
+      if (pending.exists) transaction.delete(pendingRef);
       return { action: 'ALREADY_RETIRED', botId };
     }
+    if (!pending.exists) return { action: 'BLOCKED_RETIREMENT_MARKER_MISSING' };
     if (!freshPlayer.exists || slots.size !== 1 || !table.exists || matches.size !== 56) {
       return { action: 'BLOCKED_INTEGRITY_CHECK', reason: 'CLUB_SLOT_TABLE_OR_FIXTURES_MISMATCH' };
     }
@@ -154,8 +174,13 @@ async function retireInactiveClub({ db, auth, userRecord, now = new Date() }) {
 
     for (const matchDoc of matches.docs) {
       const match = matchDoc.data() || {};
-      if (!isFinished(match) && match.isProcessing === true) {
+      if (isFinished(match)) continue;
+      if (match.isProcessing === true) {
         return { action: 'DEFERRED_MATCH_PROCESSING', matchId: matchDoc.id };
+      }
+      const startMs = Date.parse(String(match.startTime || ''));
+      if (Number.isFinite(startMs) && startMs <= now.getTime()) {
+        return { action: 'DEFERRED_MATCH_ALREADY_DUE', matchId: matchDoc.id };
       }
     }
 
@@ -215,10 +240,17 @@ async function retireInactiveClub({ db, auth, userRecord, now = new Date() }) {
       createdAt: now,
     });
     transaction.delete(playerRef);
+    transaction.delete(pendingRef);
 
     return { action: 'RETIRED_AND_REPLACED', botId, season, division, group, rank };
   });
 
+  if (!['RETIRED_AND_REPLACED', 'ALREADY_RETIRED'].includes(result.action)) {
+    // Business/integrity conflicts must not lock a manager out. Remove the
+    // pending marker and restore sign-in; a later daily pass can re-evaluate.
+    await auth.updateUser(uid, { disabled: false }).catch(() => undefined);
+    await pendingRef.delete().catch(() => undefined);
+  }
   return result;
 }
 
