@@ -82,3 +82,44 @@ test('recovery placement uses the newest trusted baseline and never reapplies ol
   assert.equal(resolveRecoveryPlacementSource(null, 2), 'recovered_participants');
   assert.equal(resolveRecoveryPlacementSource(null, null), 'active_slots');
 });
+
+
+test('recovery rollover retries preserve the first published plan', async () => {
+  const { compareRecoveryRolloverPlans } = await import('../src/app/actions/season-rollover-plan.ts');
+  const groups = sourceGroups();
+  const plan = {
+    sourceSeason: 2,
+    targetSeason: 3,
+    leagueId: 'ALPHA',
+    ready: true,
+    mode: 'recovery_carry_forward',
+    skippedSeasons: [{ seasonNumber: 2, reason: 'SEASON_INCOMPLETE' }],
+    lastTrustedSeason: 1,
+    placementSource: 'recovered_participants',
+    retainedArchiveSeason: 1,
+    promotionRule: 'carry_forward_without_promotion_or_relegation',
+    groups,
+    createdAt: 'first-publication',
+  };
+  const retry = { ...plan, createdAt: 'retry-publication', awards: { ready: true } };
+  assert.deepEqual(compareRecoveryRolloverPlans(plan, retry), { same: true, reason: null });
+});
+
+test('recovery rollover retry rejects a changed placement baseline or skipped-season history', async () => {
+  const { compareRecoveryRolloverPlans } = await import('../src/app/actions/season-rollover-plan.ts');
+  const plan = {
+    sourceSeason: 2, targetSeason: 3, leagueId: 'ALPHA', ready: true,
+    mode: 'recovery_carry_forward',
+    skippedSeasons: [{ seasonNumber: 2, reason: 'SEASON_INCOMPLETE' }],
+    lastTrustedSeason: 1, placementSource: 'recovered_participants',
+    retainedArchiveSeason: 1,
+    promotionRule: 'carry_forward_without_promotion_or_relegation',
+    groups: sourceGroups(),
+  };
+  const changedGroups = sourceGroups();
+  changedGroups['D1-G1'][0] = { ...changedGroups['D1-G1'][0], id: 'DIFFERENT_TEAM' };
+  assert.equal(compareRecoveryRolloverPlans(plan, { ...plan, groups: changedGroups }).same, false);
+  assert.equal(compareRecoveryRolloverPlans(plan, {
+    ...plan, skippedSeasons: [{ seasonNumber: 2, reason: 'UNKNOWN' }],
+  }).same, false);
+});
