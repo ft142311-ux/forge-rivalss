@@ -4,7 +4,7 @@ import { FieldValue } from 'firebase-admin/firestore';
 import { prepareSeasonRollover } from './season-rollover';
 import { acquireSeasonCalendarBuildLock, assertSeasonCalendarBuildLock, commitSeasonCalendarPublication, commitSeasonCalendarWrites, releaseSeasonCalendarBuildLock } from './season-rollover-lock';
 import { buildCarryForwardGroups, buildPromotionRelegationGroups, resolveRecoveryPlacementSource, resolveRolloverPlanPruneIds, validateRolloverPlan } from './season-rollover-plan';
-import { resolvePostActivationRetry, resolveSeasonCatchUpPolicy, type SeasonHistoryState } from './season-history-policy';
+import { resolveActivatedSkippedSeasons, resolvePostActivationRetry, resolveSeasonCatchUpPolicy, type SeasonHistoryState } from './season-history-policy';
 import { evaluateCanonicalDocuments } from './season-canonical';
 import { inspectGroupReconciliation } from './season-rollover-standings';
 import { getAdminDb } from '@/lib/firebase-admin';
@@ -1084,6 +1084,34 @@ async function pruneSeasonHistoryAfterActivation(
     throw new Error('ACTIVATED_SEASON_ROLLOVER_PLAN_MISSING_OR_INVALID');
   }
 
+  // The activation transaction durably records skipped seasons in both the
+  // active rollover plan and season_config. Reapply their final history status
+  // here so every cleanup entry point can recover after any post-activation
+  // interruption, including a crash before the original status-write batches.
+  const configSkipped = resolveActivatedSkippedSeasons(activeConfig.lastRecoverySkippedSeasons, targetSeason);
+  const planSkipped = resolveActivatedSkippedSeasons(activePlan.skippedSeasons, targetSeason);
+  if (!configSkipped.ready || !planSkipped.ready ||
+      JSON.stringify(configSkipped.seasons) !== JSON.stringify(planSkipped.seasons)) {
+    throw new Error('ACTIVATED_SKIPPED_SEASON_MARKERS_INVALID');
+  }
+  for (let offset = 0; offset < configSkipped.seasons.length; offset += 400) {
+    const batch = db.batch();
+    for (const item of configSkipped.seasons.slice(offset, offset + 400)) {
+      batch.set(db.collection('league_season_history_v1').doc(`S${item.seasonNumber}`), {
+        seasonNumber: item.seasonNumber,
+        status: 'SKIPPED',
+        reason: item.reason,
+        activatedTargetSeason: targetSeason,
+        activatedAt: FieldValue.serverTimestamp(),
+        noResultsFabricated: true,
+        awardsApplied: false,
+        promotionRelegationApplied: false,
+        updatedAt: FieldValue.serverTimestamp(),
+      }, { merge: true });
+    }
+    if (configSkipped.seasons.length) await batch.commit();
+  }
+
   const [archivesSnap, historySnap, plansSnap] = await Promise.all([
     db.collection('league_season_archives_v1').get(),
     db.collection('league_season_history_v1').get(),
@@ -1500,19 +1528,6 @@ export async function activatePublishedSeason() {
   }
   const activatedPlanSnap = await planRef.get();
   const activatedPlan = activatedPlanSnap.exists ? activatedPlanSnap.data() || {} : {};
-  if (recoveryMode) {
-    const skipped = Array.isArray(activatedPlan.skippedSeasons) ? activatedPlan.skippedSeasons : [];
-    for (let offset = 0; offset < skipped.length; offset += 400) {
-      const batch = db.batch();
-      for (const item of skipped.slice(offset, offset + 400)) {
-        batch.set(db.collection('league_season_history_v1').doc(`S${Number(item.seasonNumber)}`), {
-          status: 'SKIPPED', activatedTargetSeason: targetSeason, activatedAt: FieldValue.serverTimestamp(),
-          noResultsFabricated: true, awardsApplied: false, promotionRelegationApplied: false,
-        }, { merge: true });
-      }
-      await batch.commit();
-    }
-  }
   const retainedArchiveSeason = recoveryMode
     ? (activatedPlan.retainedArchiveSeason !== null && activatedPlan.retainedArchiveSeason !== undefined && Number.isSafeInteger(Number(activatedPlan.retainedArchiveSeason)) ? Number(activatedPlan.retainedArchiveSeason) : null)
     : sourceSeason;
