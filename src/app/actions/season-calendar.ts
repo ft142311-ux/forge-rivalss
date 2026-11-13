@@ -4,7 +4,7 @@ import { FieldValue } from 'firebase-admin/firestore';
 import { prepareSeasonRollover } from './season-rollover';
 import { acquireSeasonCalendarBuildLock, assertSeasonCalendarBuildLock, commitSeasonCalendarPublication, commitSeasonCalendarWrites, commitSeasonHistoryCleanupWrites, releaseSeasonCalendarBuildLock } from './season-rollover-lock';
 import { buildCarryForwardGroups, buildPromotionRelegationGroups, compareRecoveryRolloverPlans, resolveRecoveryPlacementSource, resolveRolloverPlanPruneIds, validateRolloverPlan } from './season-rollover-plan';
-import { resolveActivatedSkippedSeasons, resolveHistoryCleanupCompletion, resolvePendingSkippedHistoryMarker, resolvePostActivationRetry, resolveSeasonCatchUpPolicy, type SeasonHistoryState } from './season-history-policy';
+import { resolveActivatedSkippedHistoryMarker, resolveActivatedSkippedSeasons, resolveHistoryCleanupCompletion, resolvePendingSkippedHistoryMarker, resolvePostActivationRetry, resolveSeasonCatchUpPolicy, type SeasonHistoryState } from './season-history-policy';
 import { evaluateCanonicalDocuments } from './season-canonical';
 import { inspectGroupReconciliation } from './season-rollover-standings';
 import { getAdminDb } from '@/lib/firebase-admin';
@@ -1171,23 +1171,45 @@ async function pruneSeasonHistoryAfterActivation(
   const cleanupLock = await acquireSeasonCalendarBuildLock(db, targetSeason - 1, targetSeason);
   if (!cleanupLock.acquired) throw new Error('SEASON_HISTORY_CLEANUP_LOCKED');
   try {
-    for (let offset = 0; offset < configSkipped.seasons.length; offset += 400) {
-      const writes = configSkipped.seasons.slice(offset, offset + 400).map(item => ({
-        ref: db.collection('league_season_history_v1').doc(`S${item.seasonNumber}`),
-        data: {
-          seasonNumber: item.seasonNumber,
-          status: 'SKIPPED',
-          reason: item.reason,
-          activatedTargetSeason: targetSeason,
-          activatedAt: FieldValue.serverTimestamp(),
-          noResultsFabricated: true,
-          awardsApplied: false,
-          promotionRelegationApplied: false,
-          updatedAt: FieldValue.serverTimestamp(),
-        },
-        options: { merge: true },
-      }));
-      await commitSeasonHistoryCleanupWrites(db, cleanupLock.ownerId, cleanupLock.token, targetSeason, writes);
+    const skippedHistoryRefs = configSkipped.seasons.map(item => ({
+      item,
+      ref: db.collection('league_season_history_v1').doc(`S${item.seasonNumber}`),
+    }));
+    const skippedHistorySnapshots = await Promise.all(skippedHistoryRefs.map(entry => entry.ref.get()));
+    const skippedHistoryWrites: Array<{ ref: any; data: any; options?: any }> = [];
+    for (let index = 0; index < skippedHistoryRefs.length; index++) {
+      const { item, ref } = skippedHistoryRefs[index];
+      const snapshot = skippedHistorySnapshots[index];
+      const marker = resolveActivatedSkippedHistoryMarker(
+        snapshot.exists ? snapshot.data() || {} : null,
+        { seasonNumber: item.seasonNumber, reason: item.reason, targetSeason },
+      );
+      if (!marker.ready) {
+        throw new Error(`SKIPPED_SEASON_HISTORY_CONFLICT:S${item.seasonNumber}`);
+      }
+      if (marker.shouldWrite) {
+        skippedHistoryWrites.push({
+          ref,
+          data: {
+            seasonNumber: item.seasonNumber,
+            status: 'SKIPPED',
+            reason: item.reason,
+            activatedTargetSeason: targetSeason,
+            activatedAt: FieldValue.serverTimestamp(),
+            noResultsFabricated: true,
+            awardsApplied: false,
+            promotionRelegationApplied: false,
+            updatedAt: FieldValue.serverTimestamp(),
+          },
+          options: { merge: true },
+        });
+      }
+    }
+    for (let offset = 0; offset < skippedHistoryWrites.length; offset += 400) {
+      await commitSeasonHistoryCleanupWrites(
+        db, cleanupLock.ownerId, cleanupLock.token, targetSeason,
+        skippedHistoryWrites.slice(offset, offset + 400),
+      );
     }
 
   const [archivesSnap, historySnap, plansSnap] = await Promise.all([
