@@ -63,3 +63,43 @@ test('partial archive chunks resume only from a validated parent manifest', asyn
   assert.ok(childWrite > parentWrite, 'parent manifest must be committed before match chunks');
   assert.ok(source.includes('SEASON_ARCHIVE_MANIFEST_TOO_LARGE'));
 });
+
+
+test('crash after plan publication resumes from the saved plan without recalculating placements', async () => {
+  const source = await readFile(sourceUrl, 'utf8');
+  const readStateStart = source.indexOf('readState: async () => {');
+  const readStateEnd = source.indexOf('    preflight: state =>', readStateStart);
+  const readState = source.slice(readStateStart, readStateEnd);
+  assert.ok(readState.includes("archiveData.status === 'preparing' && Array.isArray(archiveData.matchManifest)"));
+  assert.ok(readState.includes('planSnap.exists && !validateRolloverPlan'));
+  assert.ok(readState.includes('archivePlanAlreadyPublished: planSnap.exists'));
+  assert.ok(readState.indexOf('archivePlanAlreadyPublished') < readState.indexOf('readRolloverGroupPreflight'));
+
+  const recoveryStart = source.indexOf("if (archiveSnap.exists && String((archiveSnap.data() || {}).status || '') === 'preparing' && planSnap.exists)");
+  const recoveryEnd = source.indexOf("if (archiveSnap.exists && String((archiveSnap.data() || {}).status || '') === 'preparing' && !planSnap.exists)", recoveryStart);
+  assert.ok(recoveryStart >= 0 && recoveryEnd > recoveryStart, 'published-plan recovery must run before no-plan recovery');
+  const recovery = source.slice(recoveryStart, recoveryEnd);
+
+  assert.ok(recovery.includes('validateSeasonArchiveSnapshot(archiveData, savedMatches)'));
+  assert.ok(recovery.includes('validateRolloverPlan(savedPlan, sourceSeason, targetSeason)'));
+  assert.ok(recovery.includes('applySeasonAwards(db, sourceSeason, archiveData.standings || {}, lock)'));
+  assert.ok(recovery.includes('data: { awards }'));
+  assert.ok(recovery.includes('resumedAfterPlanPublication: true'));
+  assert.ok(!recovery.includes('buildPromotionRelegationGroups('), 'saved placements must not be recalculated');
+  assert.ok(!recovery.includes('data: { groups:'), 'saved plan groups must never be overwritten');
+  assert.ok(recovery.indexOf('validateRolloverPlan') < recovery.indexOf('applySeasonAwards'));
+  assert.ok(recovery.indexOf('applySeasonAwards') < recovery.indexOf('data: { awards }'));
+  assert.ok(recovery.indexOf('isSeasonArchiveReadyToComplete') < recovery.indexOf("data: { status: 'completed'"));
+});
+
+test('a published rollover plan is preserved while only award reconciliation metadata is refreshed', async () => {
+  const source = await readFile(sourceUrl, 'utf8');
+  const start = source.indexOf("if (archiveSnap.exists && String((archiveSnap.data() || {}).status || '') === 'preparing' && planSnap.exists)");
+  const end = source.indexOf("if (archiveSnap.exists && String((archiveSnap.data() || {}).status || '') === 'preparing' && !planSnap.exists)", start);
+  const branch = source.slice(start, end);
+  const planWrite = branch.slice(branch.indexOf('ref: planRef'), branch.indexOf('const refreshedPlanSnap'));
+  assert.match(planWrite, /data:\s*\{\s*awards\s*\}/);
+  assert.doesNotMatch(planWrite, /groups\s*:/);
+  assert.match(branch, /const savedPlan = planSnap\.data\(\) \|\| \{\}/);
+  assert.match(branch, /validateRolloverPlan\(savedPlan, sourceSeason, targetSeason\)/);
+});
