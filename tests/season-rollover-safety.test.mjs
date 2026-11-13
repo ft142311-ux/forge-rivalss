@@ -9,6 +9,7 @@ import {
   acquireSeasonCalendarBuildLock,
   assertSeasonCalendarBuildLock,
   commitSeasonCalendarWrites,
+  commitSeasonHistoryCleanupWrites,
   releaseSeasonCalendarBuildLock,
 } from '../src/app/actions/season-rollover-lock.ts';
 import { buildPromotionRelegationGroups, validateRolloverPlan, expectedRolloverGroups } from '../src/app/actions/season-rollover-plan.ts';
@@ -391,4 +392,74 @@ test('live lease cannot be reacquired by ownerId alone, but calendar token permi
   assert.equal(calendarDuplicateWithoutToken.acquired, false);
   assert.equal(calendarRetryWithToken.acquired, true);
   assert.equal(calendarRetryWithToken.token, calendar.token);
+});
+
+
+function mockCleanupDb(activeSeasonNumber = 3) {
+  const states = new Map([
+    ['season_calendar_build_v1', null],
+    ['season_config', { activeSeasonNumber, worldReady: true }],
+  ]);
+  let queue = Promise.resolve();
+  return {
+    collection: () => ({ doc: id => ({ id, get: async () => ({ exists: Boolean(states.get(id)), data: () => states.get(id) }) }) }),
+    runTransaction: fn => {
+      const next = queue.then(async () => {
+        const tx = {
+          get: async ref => ({ exists: Boolean(states.get(ref.id)), data: () => states.get(ref.id) }),
+          set: (ref, value) => { states.set(ref.id, { ...(states.get(ref.id) || {}), ...value }); },
+          delete: ref => { states.set(ref.id, null); },
+        };
+        return fn(tx);
+      });
+      queue = next.catch(() => {});
+      return next;
+    },
+    read: id => states.get(id),
+  };
+}
+
+test('post-activation cleanup writes are fenced by the live calendar lease and active season', async () => {
+  const db = mockCleanupDb(3);
+  const lease = await acquireSeasonCalendarBuildLock(db, 2, 3);
+  const ref = db.collection('cleanup').doc('archive');
+  await commitSeasonHistoryCleanupWrites(db, lease.ownerId, lease.token, 3, [{ ref, data: { marker: true } }]);
+  assert.equal(db.read('archive').marker, true);
+  await releaseSeasonCalendarBuildLock(db, lease.ownerId, lease.token);
+});
+
+test('stale cleanup owner cannot delete after a replacement calendar lease is acquired', async () => {
+  const db = mockCleanupDb(3);
+  const stale = await acquireSeasonCalendarBuildLock(db, 2, 3, { ownerId: 'cleanup-old', nowMs: 100, ttlMs: 10 });
+  await acquireSeasonCalendarBuildLock(db, 2, 3, { ownerId: 'cleanup-new', nowMs: 111 });
+  const ref = db.collection('cleanup').doc('old-archive');
+  await assert.rejects(
+    () => commitSeasonHistoryCleanupWrites(db, stale.ownerId, stale.token, 3, [], [ref]),
+    /SEASON_CALENDAR_BUILD_LOCK_LOST/,
+  );
+  assert.notEqual(db.read('old-archive'), null);
+});
+
+test('cleanup mutations stop if a newer season activates during pruning', async () => {
+  const db = mockCleanupDb(3);
+  const lease = await acquireSeasonCalendarBuildLock(db, 2, 3);
+  db.runTransaction(async tx => {
+    tx.set(db.collection('system_v1').doc('season_config'), { activeSeasonNumber: 4, worldReady: true });
+  });
+  const ref = db.collection('cleanup').doc('archive');
+  await assert.rejects(
+    () => commitSeasonHistoryCleanupWrites(db, lease.ownerId, lease.token, 3, [], [ref]),
+    /SEASON_HISTORY_CLEANUP_TARGET_CHANGED/,
+  );
+});
+
+test('post-activation archive and rollover pruning never bypass the cleanup lease', async () => {
+  const source = (await import('node:fs')).readFileSync(new URL('../src/app/actions/season-calendar.ts', import.meta.url), 'utf8');
+  const start = source.indexOf('async function pruneSeasonHistoryAfterActivation(');
+  const end = source.indexOf('/** Read-only canonical gate shared by build and the final publication step. */', start);
+  const cleanup = source.slice(start, end);
+  assert.match(cleanup, /acquireSeasonCalendarBuildLock\(db, targetSeason - 1, targetSeason\)/);
+  assert.match(cleanup, /commitSeasonHistoryCleanupWrites\(/);
+  assert.match(cleanup, /finally\s*\{\s*await releaseSeasonCalendarBuildLock/);
+  assert.doesNotMatch(cleanup, /batch\.commit\(\)|\.ref\.delete\(\)|\.ref\.set\(/);
 });
