@@ -123,3 +123,24 @@ test('recovery rollover retry rejects a changed placement baseline or skipped-se
     ...plan, skippedSeasons: [{ seasonNumber: 2, reason: 'UNKNOWN' }],
   }).same, false);
 });
+
+
+test('recovery plan comparison ignores object key order but preserves array order', async () => {
+  const { compareRecoveryRolloverPlans } = await import('../src/app/actions/season-rollover-plan.ts');
+  const plan = {
+    sourceSeason: 2, targetSeason: 3, leagueId: 'ALPHA', ready: true,
+    mode: 'recovery_carry_forward',
+    skippedSeasons: [{ seasonNumber: 2, reason: 'SEASON_INCOMPLETE' }],
+    lastTrustedSeason: 1, placementSource: 'recovered_participants',
+    retainedArchiveSeason: 1,
+    promotionRule: 'carry_forward_without_promotion_or_relegation',
+    groups: sourceGroups(),
+  };
+  const reorderedGroups = Object.fromEntries(Object.entries(plan.groups).reverse().map(([key, rows]) => [
+    key, rows.map(row => ({ name: row.name, rank: row.rank, id: row.id, points: row.points, matchesPlayed: row.matchesPlayed })),
+  ]));
+  const reordered = { ...plan, groups: reorderedGroups };
+  assert.equal(compareRecoveryRolloverPlans(plan, reordered).same, true);
+  const reorderedRows = { ...plan, groups: { ...plan.groups, 'D1-G1': [...plan.groups['D1-G1']].reverse() } };
+  assert.equal(compareRecoveryRolloverPlans(plan, reorderedRows).same, false);
+});
