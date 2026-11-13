@@ -1,5 +1,6 @@
 import { calculateGroupStandings, hasCompleteCanonicalFixtureSet } from './season-rollover-standings';
 import { buildCarryForwardGroups, expectedRolloverGroups, validateRolloverPlan } from './season-rollover-plan';
+import { isRolloverPlanPublicationReady } from './season-awards-policy';
 
 const MATCHES_PER_SEASON = 840;
 
@@ -104,7 +105,8 @@ export function isSeasonArchiveReadyToComplete(archive: any, matches: any[], rol
   const snapshot = validateSeasonArchiveSnapshot(archive, matches);
   const sourceSeason = Number(archive?.sourceSeason);
   return snapshot.valid &&
-    validateRolloverPlan(rolloverPlan, sourceSeason, sourceSeason + 1).valid;
+    validateRolloverPlan(rolloverPlan, sourceSeason, sourceSeason + 1).valid &&
+    isRolloverPlanPublicationReady(rolloverPlan);
 }
 
 /** Client list gate: unfinished, partial, or malformed archives stay hidden. */
