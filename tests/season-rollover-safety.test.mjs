@@ -305,6 +305,23 @@ test('recovery carry-forward archive, plan, and skipped history writes are fence
     'all recovery planner call sites must pass the same active lease');
 });
 
+test('post-activation skipped history cleanup preflights existing markers before fenced writes', async () => {
+  const fs = await import('node:fs/promises');
+  const source = await fs.readFile(new URL('../src/app/actions/season-calendar.ts', import.meta.url), 'utf8');
+  const cleanupStart = source.indexOf('async function pruneSeasonHistoryAfterActivation(');
+  const cleanupEnd = source.indexOf('\n}\n\n/** Read-only canonical gate', cleanupStart);
+  assert.ok(cleanupStart >= 0 && cleanupEnd > cleanupStart, 'history cleanup must be present');
+  const cleanup = source.slice(cleanupStart, cleanupEnd);
+  assert.match(cleanup, /resolveActivatedSkippedHistoryMarker/,
+    'final skipped markers must be validated before cleanup writes');
+  assert.match(cleanup, /skippedHistorySnapshots = await Promise\.all\(skippedHistoryRefs\.map\(entry => entry\.ref\.get\(\)\)\)/,
+    'cleanup must read every existing marker before writing any final status');
+  assert.match(cleanup, /skippedHistoryWrites\.slice\(offset, offset \+ 400\)/,
+    'final skipped marker writes must remain chunked');
+  assert.match(cleanup, /commitSeasonHistoryCleanupWrites\(/,
+    'final skipped marker writes must use the fenced cleanup lease');
+});
+
 test('expired rollover lease gets a fresh fencing token when ownerId is reused', async () => {
   const db = mockDb();
   const nowMs = Date.now();
