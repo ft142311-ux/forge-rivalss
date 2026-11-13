@@ -113,3 +113,55 @@ test('pending skipped history marker rejects conflicting or already-finalized re
   }
 });
 
+test('activated skipped history marker finalizes a matching pending marker exactly once', async () => {
+  const { resolveActivatedSkippedHistoryMarker } = await import('../src/app/actions/season-history-policy.ts');
+  const expected = { seasonNumber: 3, reason: 'SEASON_INCOMPLETE', targetSeason: 4 };
+  assert.deepEqual(resolveActivatedSkippedHistoryMarker(null, expected), {
+    ready: true, shouldWrite: true, reason: null,
+  });
+  const pending = {
+    seasonNumber: 3,
+    status: 'SKIPPED_PENDING_ACTIVATION',
+    reason: 'SEASON_INCOMPLETE',
+    targetSeason: 4,
+    noResultsFabricated: true,
+    awardsApplied: false,
+    promotionRelegationApplied: false,
+  };
+  assert.deepEqual(resolveActivatedSkippedHistoryMarker(pending, expected), {
+    ready: true, shouldWrite: true, reason: null,
+  });
+  assert.deepEqual(resolveActivatedSkippedHistoryMarker({
+    ...pending,
+    status: 'SKIPPED',
+    activatedTargetSeason: 4,
+  }, expected), {
+    ready: true, shouldWrite: false, reason: null,
+  });
+});
+
+test('activated skipped history marker refuses to overwrite a conflicting lifecycle record', async () => {
+  const { resolveActivatedSkippedHistoryMarker } = await import('../src/app/actions/season-history-policy.ts');
+  const expected = { seasonNumber: 3, reason: 'SEASON_INCOMPLETE', targetSeason: 4 };
+  const pending = {
+    seasonNumber: 3,
+    status: 'SKIPPED_PENDING_ACTIVATION',
+    reason: 'SEASON_INCOMPLETE',
+    targetSeason: 4,
+    noResultsFabricated: true,
+    awardsApplied: false,
+    promotionRelegationApplied: false,
+  };
+  for (const conflicting of [
+    { ...pending, targetSeason: 5 },
+    { ...pending, reason: 'OTHER_REASON' },
+    { ...pending, status: 'COMPLETED' },
+    { ...pending, status: 'SKIPPED', activatedTargetSeason: 5 },
+    { ...pending, promotionRelegationApplied: true },
+  ]) {
+    assert.deepEqual(resolveActivatedSkippedHistoryMarker(conflicting, expected), {
+      ready: false, shouldWrite: false, reason: 'SKIPPED_SEASON_HISTORY_CONFLICT',
+    });
+  }
+});
+
