@@ -291,8 +291,10 @@ test('recovery carry-forward archive, plan, and skipped history writes are fence
   assert.match(recovery, /lease: BuildLease/, 'recovery planner must receive the active lease');
   assert.match(recovery, /await lease\.commit\(\[\{ ref: archiveRef, data: snapshot\.archive \}\]\)/,
     'recovered archive writes must be fenced');
-  assert.match(recovery, /await lease\.commit\(\[\{ ref: planRef, data: plan \}\]\)/,
-    'carry-forward plan writes must be fenced');
+  assert.match(recovery, /commitPlan: async \(ref, value\) => \{/,
+    'carry-forward plan publication must use the lease-fenced writer');
+  assert.match(recovery, /commitHistory: async writes => \{\s*await lease\.commit\(writes\);\s*\}/,
+    'skipped history publication must use the lease-fenced writer');
   assert.match(recovery, /publishRecoveryRolloverDecision\(/,
     'recovery plan and history publication must use the retry-safe publication workflow');
   const publication = await fs.readFile(new URL('../src/app/actions/season-recovery-publication.ts', import.meta.url), 'utf8');
