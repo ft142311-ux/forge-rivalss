@@ -67,3 +67,49 @@ test('season award retries are blocked by either the player marker or the econom
   assert.equal(isSeasonAwardAlreadyApplied({}, false, 4), false);
   assert.equal(isSeasonAwardAlreadyApplied({}, false, 0), true);
 });
+
+test('pending skipped history marker is created only when absent and reused unchanged on retry', async () => {
+  const { resolvePendingSkippedHistoryMarker } = await import('../src/app/actions/season-history-policy.ts');
+  const expected = { seasonNumber: 3, reason: 'SEASON_INCOMPLETE', targetSeason: 4 };
+  assert.deepEqual(resolvePendingSkippedHistoryMarker(null, expected), {
+    ready: true, shouldWrite: true, reason: null,
+  });
+  assert.deepEqual(resolvePendingSkippedHistoryMarker({
+    seasonNumber: 3,
+    status: 'SKIPPED_PENDING_ACTIVATION',
+    reason: 'SEASON_INCOMPLETE',
+    targetSeason: 4,
+    noResultsFabricated: true,
+    awardsApplied: false,
+    promotionRelegationApplied: false,
+    createdAt: 'first-write',
+  }, expected), {
+    ready: true, shouldWrite: false, reason: null,
+  });
+});
+
+test('pending skipped history marker rejects conflicting or already-finalized records', async () => {
+  const { resolvePendingSkippedHistoryMarker } = await import('../src/app/actions/season-history-policy.ts');
+  const expected = { seasonNumber: 3, reason: 'SEASON_INCOMPLETE', targetSeason: 4 };
+  const valid = {
+    seasonNumber: 3,
+    status: 'SKIPPED_PENDING_ACTIVATION',
+    reason: 'SEASON_INCOMPLETE',
+    targetSeason: 4,
+    noResultsFabricated: true,
+    awardsApplied: false,
+    promotionRelegationApplied: false,
+  };
+  for (const conflicting of [
+    { ...valid, targetSeason: 5 },
+    { ...valid, reason: 'NO_CANONICAL_RESULTS' },
+    { ...valid, status: 'SKIPPED', activatedTargetSeason: 4 },
+    { ...valid, awardsApplied: true },
+    { ...valid, noResultsFabricated: false },
+  ]) {
+    assert.deepEqual(resolvePendingSkippedHistoryMarker(conflicting, expected), {
+      ready: false, shouldWrite: false, reason: 'SKIPPED_SEASON_HISTORY_CONFLICT',
+    });
+  }
+});
+
