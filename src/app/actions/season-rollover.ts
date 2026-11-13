@@ -7,6 +7,7 @@ import { isSeasonArchiveReadyToComplete, validateSeasonArchiveSnapshot } from '.
 import { runTwoPhaseSeasonOrchestration } from './season-orchestration';
 import { isValidCleanSeasonOneBoundary } from './season-boundary';
 import { resolveSeasonAwardRecipientState, shouldPersistSeasonTrophies } from './season-awards-policy';
+import { applySeasonAwardRecipients } from './season-award-reconciliation';
 
 const LEAGUE_ID = 'ALPHA';
 const EXPECTED_MATCHES = TOTAL_GROUPS * TEAMS_PER_GROUP * (TEAMS_PER_GROUP - 1);
@@ -179,106 +180,108 @@ export async function diagnoseSeasonRolloverPreflight(
  * The existing profile UI reads the `trophies` array from players_v14.
  */
 async function applySeasonAwards(db: any, sourceSeason: number, standings: Record<string, TeamRow[]>, lock: { ownerId: string; token: string }) {
-  let rewardedClubs = 0;
-  let totalCredits = 0;
-  let trophiesAwarded = 0;
-  const missingProfileUids: string[] = [];
   const champion = standings['D1-G1']?.[0];
   const pyramidCupSnap = await db.collection('cup_pyramid_v1').doc(`cup_s${sourceSeason}_l${LEAGUE_ID}`).get();
   const pyramidCupWinnerId = pyramidCupSnap.exists ? String(pyramidCupSnap.data()?.winnerId || '') : '';
+  const recipients: Array<{ uid: string; level: number; group: number; row: TeamRow; prize: number; isChampion: boolean; isPyramidWinner: boolean }> = [];
 
   for (const [group, rows] of Object.entries(standings)) {
-    const match = /^D([1-4])-G(\d+)$/.exec(group);
+    const match = /^D([1-4])-G(\\d+)$/.exec(group);
     if (!match) continue;
     const level = Number(match[1]);
     for (const row of rows) {
       const uid = String(row?.id || '');
       // Bots have no player wallet/profile to reward.
       if (!uid || uid.startsWith('BOT_')) continue;
-      const prize = seasonPrize(level, Number(row.rank));
-      const playerRef = db.collection('players_v14').doc(uid);
-      const txRef = db.collection('economy_transactions').doc(`season_${sourceSeason}_${uid}`);
-      const isChampion = champion && String(champion.id) === uid;
-
-      const result = await db.runTransaction(async (t: any) => {
-        const lockRef = db.collection('system_v1').doc('season_rollover_v1');
-        const [lockSnap, playerSnap, transactionSnap] = await Promise.all([t.get(lockRef), t.get(playerRef), t.get(txRef)]);
-        const currentLock = lockSnap.exists ? lockSnap.data() || {} : {};
-        const nowMs = Date.now();
-        if (currentLock.ownerId !== lock.ownerId || currentLock.token !== lock.token ||
-            Number(currentLock.expiresAtMs || 0) <= nowMs) {
-          throw new Error('SEASON_ROLLOVER_LOCK_LOST');
-        }
-        t.set(lockRef, { expiresAtMs: nowMs + SEASON_ROLLOVER_LOCK_TTL_MS, renewedAtMs: nowMs }, { merge: true });
-        const player = playerSnap.exists ? playerSnap.data() || {} : {};
-        const recipientState = resolveSeasonAwardRecipientState(playerSnap.exists, transactionSnap.exists, player, sourceSeason);
-        if (recipientState === 'ALREADY_APPLIED') return { paid: false, trophy: false };
-        if (recipientState === 'PROFILE_MISSING') return { paid: false, trophy: false, missingProfile: true };
-        const awardKey = `S${sourceSeason}`;
-        const awards = player.seasonAwards && typeof player.seasonAwards === 'object' ? player.seasonAwards : {};
-
-        const before = Math.max(0, Math.floor(Number(player.credits) || 0));
-        const after = before + prize;
-        const existingTrophies = Array.isArray(player.trophies) ? player.trophies : [];
-        const trophyId = `league-cup-season-${sourceSeason}`;
-        const pyramidTrophyId = `pyramid-cup-season-${sourceSeason}`;
-        const hasCup = existingTrophies.some((item: any) => item?.id === trophyId);
-        const hasPyramidCup = existingTrophies.some((item: any) => item?.id === pyramidTrophyId);
-        const shouldAddCup = Boolean(isChampion && !hasCup);
-        const shouldAddPyramidCup = Boolean(pyramidCupWinnerId && pyramidCupWinnerId === uid && !hasPyramidCup);
-        let trophies = existingTrophies;
-        if (shouldAddCup) trophies = [...trophies, {
-          id: trophyId,
-          name: `РљСѓР±РѕРє Р»РёРіРё вЂ” СЃРµР·РѕРЅ ${sourceSeason}`,
-          type: 'league_champion',
-          date: new Date().toISOString(),
-          reward: prize,
-          season: sourceSeason,
-          division: 1,
-          rank: 1,
-        }];
-        if (shouldAddPyramidCup) trophies = [...trophies, {
-          id: pyramidTrophyId,
-          name: `РљСѓР±РѕРє РџРёСЂР°РјРёРґС‹ вЂ” СЃРµР·РѕРЅ ${sourceSeason}`,
-          type: 'pyramid_cup_champion',
-          date: new Date().toISOString(),
-          season: sourceSeason,
-        }];
-
-        t.update(playerRef, {
-          credits: after,
-          seasonAwards: { ...awards, [awardKey]: { season: sourceSeason, division: level, group: Number(match[2]), rank: Number(row.rank), prize, awardedAt: FieldValue.serverTimestamp() } },
-          ...(shouldPersistSeasonTrophies(shouldAddCup, shouldAddPyramidCup) ? { trophies } : {}),
-          updatedAt: FieldValue.serverTimestamp(),
-        });
-        t.set(txRef, {
-          userId: uid,
-          amount: prize,
-          currency: 'credits',
-          type: 'LEAGUE_SEASON_REWARD',
-          referenceId: `S${sourceSeason}`,
-          description: `Season ${sourceSeason} finish: Division ${level}, place ${Number(row.rank)}`,
-          division: level,
-          group: Number(match[2]),
-          rank: Number(row.rank),
-          balanceBefore: before,
-          balanceAfter: after,
-          timestamp: FieldValue.serverTimestamp(),
-        });
-        return { paid: true, trophy: shouldAddCup || shouldAddPyramidCup };
+      recipients.push({
+        uid,
+        level,
+        group: Number(match[2]),
+        row,
+        prize: seasonPrize(level, Number(row.rank)),
+        isChampion: Boolean(champion && String(champion.id) === uid),
+        isPyramidWinner: Boolean(pyramidCupWinnerId && pyramidCupWinnerId === uid),
       });
-      if (result.paid) { rewardedClubs++; totalCredits += prize; }
-      if (result.trophy) trophiesAwarded++;
-      if (result.missingProfile) missingProfileUids.push(uid);
     }
   }
-  return {
-    ready: missingProfileUids.length === 0,
-    ...(missingProfileUids.length ? { reason: 'SEASON_AWARD_PLAYER_PROFILE_MISSING', missingProfileCount: missingProfileUids.length, missingProfileUids } : {}),
-    rewardedClubs,
-    totalCredits,
-    trophiesAwarded,
-  };
+
+  return applySeasonAwardRecipients(recipients, async recipient => {
+    const { uid, level, group, row, prize, isChampion, isPyramidWinner } = recipient;
+    const playerRef = db.collection('players_v14').doc(uid);
+    const txRef = db.collection('economy_transactions').doc(`season_${sourceSeason}_${uid}`);
+    const result = await db.runTransaction(async (t: any) => {
+      const lockRef = db.collection('system_v1').doc('season_rollover_v1');
+      const [lockSnap, playerSnap, transactionSnap] = await Promise.all([t.get(lockRef), t.get(playerRef), t.get(txRef)]);
+      const currentLock = lockSnap.exists ? lockSnap.data() || {} : {};
+      const nowMs = Date.now();
+      if (currentLock.ownerId !== lock.ownerId || currentLock.token !== lock.token ||
+          Number(currentLock.expiresAtMs || 0) <= nowMs) {
+        throw new Error('SEASON_ROLLOVER_LOCK_LOST');
+      }
+      t.set(lockRef, { expiresAtMs: nowMs + SEASON_ROLLOVER_LOCK_TTL_MS, renewedAtMs: nowMs }, { merge: true });
+      const player = playerSnap.exists ? playerSnap.data() || {} : {};
+      const recipientState = resolveSeasonAwardRecipientState(playerSnap.exists, transactionSnap.exists, player, sourceSeason);
+      if (recipientState === 'ALREADY_APPLIED') {
+        return { settled: true, prize, trophy: Boolean(isChampion || isPyramidWinner) };
+      }
+      if (recipientState === 'PROFILE_MISSING') {
+        return { settled: false, prize, trophy: false, missingProfile: true };
+      }
+      const awardKey = `S${sourceSeason}`;
+      const awards = player.seasonAwards && typeof player.seasonAwards === 'object' ? player.seasonAwards : {};
+
+      const before = Math.max(0, Math.floor(Number(player.credits) || 0));
+      const after = before + prize;
+      const existingTrophies = Array.isArray(player.trophies) ? player.trophies : [];
+      const trophyId = `league-cup-season-${sourceSeason}`;
+      const pyramidTrophyId = `pyramid-cup-season-${sourceSeason}`;
+      const hasCup = existingTrophies.some((item: any) => item?.id === trophyId);
+      const hasPyramidCup = existingTrophies.some((item: any) => item?.id === pyramidTrophyId);
+      const shouldAddCup = Boolean(isChampion && !hasCup);
+      const shouldAddPyramidCup = Boolean(isPyramidWinner && !hasPyramidCup);
+      let trophies = existingTrophies;
+      if (shouldAddCup) trophies = [...trophies, {
+        id: trophyId,
+        name: `Кубок лиги — сезон ${sourceSeason}`,
+        type: 'league_champion',
+        date: new Date().toISOString(),
+        reward: prize,
+        season: sourceSeason,
+        division: 1,
+        rank: 1,
+      }];
+      if (shouldAddPyramidCup) trophies = [...trophies, {
+        id: pyramidTrophyId,
+        name: `Кубок Пирамиды — сезон ${sourceSeason}`,
+        type: 'pyramid_cup_champion',
+        date: new Date().toISOString(),
+        season: sourceSeason,
+      }];
+
+      t.update(playerRef, {
+        credits: after,
+        seasonAwards: { ...awards, [awardKey]: { season: sourceSeason, division: level, group, rank: Number(row.rank), prize, awardedAt: FieldValue.serverTimestamp() } },
+        ...(shouldPersistSeasonTrophies(shouldAddCup, shouldAddPyramidCup) ? { trophies } : {}),
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+      t.set(txRef, {
+        userId: uid,
+        amount: prize,
+        currency: 'credits',
+        type: 'LEAGUE_SEASON_REWARD',
+        referenceId: `S${sourceSeason}`,
+        description: `Season ${sourceSeason} finish: Division ${level}, place ${Number(row.rank)}`,
+        division: level,
+        group,
+        rank: Number(row.rank),
+        balanceBefore: before,
+        balanceAfter: after,
+        timestamp: FieldValue.serverTimestamp(),
+      });
+      return { settled: true, prize, trophy: shouldAddCup || shouldAddPyramidCup || Boolean(isChampion || isPyramidWinner) };
+    });
+    return { ...result, prize };
+  });
 }
 
 /**
