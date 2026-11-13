@@ -430,8 +430,9 @@ test('post-activation cleanup writes are fenced by the live calendar lease and a
 
 test('stale cleanup owner cannot delete after a replacement calendar lease is acquired', async () => {
   const db = mockCleanupDb(3);
-  const stale = await acquireSeasonCalendarBuildLock(db, 2, 3, { ownerId: 'cleanup-old', nowMs: 100, ttlMs: 10 });
-  await acquireSeasonCalendarBuildLock(db, 2, 3, { ownerId: 'cleanup-new', nowMs: 111 });
+  const nowMs = Date.now();
+  const stale = await acquireSeasonCalendarBuildLock(db, 2, 3, { ownerId: 'cleanup-old', nowMs, ttlMs: 10 });
+  await acquireSeasonCalendarBuildLock(db, 2, 3, { ownerId: 'cleanup-new', nowMs: nowMs + 11 });
   const ref = db.collection('cleanup').doc('old-archive');
   await assert.rejects(
     () => commitSeasonHistoryCleanupWrites(db, stale.ownerId, stale.token, 3, [], [ref]),
@@ -443,7 +444,7 @@ test('stale cleanup owner cannot delete after a replacement calendar lease is ac
 test('cleanup mutations stop if a newer season activates during pruning', async () => {
   const db = mockCleanupDb(3);
   const lease = await acquireSeasonCalendarBuildLock(db, 2, 3);
-  db.runTransaction(async tx => {
+  await db.runTransaction(async tx => {
     tx.set(db.collection('system_v1').doc('season_config'), { activeSeasonNumber: 4, worldReady: true });
   });
   const ref = db.collection('cleanup').doc('archive');
