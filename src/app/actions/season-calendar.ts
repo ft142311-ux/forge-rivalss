@@ -1208,7 +1208,7 @@ async function pruneSeasonHistoryAfterActivation(
     const matchesSnap = await item.ref.collection('matches').get();
     for (let offset = 0; offset < matchesSnap.docs.length; offset += 400) {
       const chunk = matchesSnap.docs.slice(offset, offset + 400);
-      await commitSeasonHistoryCleanupWrites(db, cleanupLock.ownerId, cleanupLock.token, targetSeason, [], chunk.map(matchDoc => matchDoc.ref));
+      await commitSeasonHistoryCleanupWrites(db, cleanupLock.ownerId, cleanupLock.token, targetSeason, [], chunk.map((matchDoc: (typeof matchesSnap.docs)[number]) => matchDoc.ref));
       deletedArchiveMatches += chunk.length;
     }
     await commitSeasonHistoryCleanupWrites(db, cleanupLock.ownerId, cleanupLock.token, targetSeason, [], [item.ref]);
