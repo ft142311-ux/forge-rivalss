@@ -2,7 +2,7 @@ import 'server-only';
 
 import { FieldValue } from 'firebase-admin/firestore';
 import { prepareSeasonRollover } from './season-rollover';
-import { acquireSeasonCalendarBuildLock, assertSeasonCalendarBuildLock, commitSeasonCalendarPublication, commitSeasonCalendarWrites, releaseSeasonCalendarBuildLock } from './season-rollover-lock';
+import { acquireSeasonCalendarBuildLock, assertSeasonCalendarBuildLock, commitSeasonCalendarPublication, commitSeasonCalendarWrites, commitSeasonHistoryCleanupWrites, releaseSeasonCalendarBuildLock } from './season-rollover-lock';
 import { buildCarryForwardGroups, buildPromotionRelegationGroups, resolveRecoveryPlacementSource, resolveRolloverPlanPruneIds, validateRolloverPlan } from './season-rollover-plan';
 import { resolveActivatedSkippedSeasons, resolveHistoryCleanupCompletion, resolvePostActivationRetry, resolveSeasonCatchUpPolicy, type SeasonHistoryState } from './season-history-policy';
 import { evaluateCanonicalDocuments } from './season-canonical';
@@ -1123,23 +1123,27 @@ async function pruneSeasonHistoryAfterActivation(
       JSON.stringify(configSkipped.seasons) !== JSON.stringify(planSkipped.seasons)) {
     throw new Error('ACTIVATED_SKIPPED_SEASON_MARKERS_INVALID');
   }
-  for (let offset = 0; offset < configSkipped.seasons.length; offset += 400) {
-    const batch = db.batch();
-    for (const item of configSkipped.seasons.slice(offset, offset + 400)) {
-      batch.set(db.collection('league_season_history_v1').doc(`S${item.seasonNumber}`), {
-        seasonNumber: item.seasonNumber,
-        status: 'SKIPPED',
-        reason: item.reason,
-        activatedTargetSeason: targetSeason,
-        activatedAt: FieldValue.serverTimestamp(),
-        noResultsFabricated: true,
-        awardsApplied: false,
-        promotionRelegationApplied: false,
-        updatedAt: FieldValue.serverTimestamp(),
-      }, { merge: true });
+  const cleanupLock = await acquireSeasonCalendarBuildLock(db, targetSeason - 1, targetSeason);
+  if (!cleanupLock.acquired) throw new Error('SEASON_HISTORY_CLEANUP_LOCKED');
+  try {
+    for (let offset = 0; offset < configSkipped.seasons.length; offset += 400) {
+      const writes = configSkipped.seasons.slice(offset, offset + 400).map(item => ({
+        ref: db.collection('league_season_history_v1').doc(`S${item.seasonNumber}`),
+        data: {
+          seasonNumber: item.seasonNumber,
+          status: 'SKIPPED',
+          reason: item.reason,
+          activatedTargetSeason: targetSeason,
+          activatedAt: FieldValue.serverTimestamp(),
+          noResultsFabricated: true,
+          awardsApplied: false,
+          promotionRelegationApplied: false,
+          updatedAt: FieldValue.serverTimestamp(),
+        },
+        options: { merge: true },
+      }));
+      await commitSeasonHistoryCleanupWrites(db, cleanupLock.ownerId, cleanupLock.token, targetSeason, writes);
     }
-    if (configSkipped.seasons.length) await batch.commit();
-  }
 
   const [archivesSnap, historySnap, plansSnap] = await Promise.all([
     db.collection('league_season_archives_v1').get(),
@@ -1183,13 +1187,17 @@ async function pruneSeasonHistoryAfterActivation(
   for (const archiveId of archivePlan.pruneIds) {
     const item = archiveItems.find(candidate => candidate.id === archiveId)!;
     if (item.archive.pruneStatus !== 'PRUNING') {
-      await item.ref.set({
-        pruneStatus: 'PRUNING',
-        pruneTargetSeason: targetSeason,
-        pruneRetainedArchiveSeason: retainedArchiveSeason,
-        prunePolicyVersion: 1,
-        pruneStartedAt: FieldValue.serverTimestamp(),
-      }, { merge: true });
+      await commitSeasonHistoryCleanupWrites(db, cleanupLock.ownerId, cleanupLock.token, targetSeason, [{
+        ref: item.ref,
+        data: {
+          pruneStatus: 'PRUNING',
+          pruneTargetSeason: targetSeason,
+          pruneRetainedArchiveSeason: retainedArchiveSeason,
+          prunePolicyVersion: 1,
+          pruneStartedAt: FieldValue.serverTimestamp(),
+        },
+        options: { merge: true },
+      }]);
     }
   }
 
@@ -1199,22 +1207,18 @@ async function pruneSeasonHistoryAfterActivation(
     const item = archiveItems.find(candidate => candidate.id === archiveId)!;
     const matchesSnap = await item.ref.collection('matches').get();
     for (let offset = 0; offset < matchesSnap.docs.length; offset += 400) {
-      const batch = db.batch();
       const chunk = matchesSnap.docs.slice(offset, offset + 400);
-      for (const matchDoc of chunk) batch.delete(matchDoc.ref);
-      await batch.commit();
+      await commitSeasonHistoryCleanupWrites(db, cleanupLock.ownerId, cleanupLock.token, targetSeason, [], chunk.map(matchDoc => matchDoc.ref));
       deletedArchiveMatches += chunk.length;
     }
-    await item.ref.delete();
+    await commitSeasonHistoryCleanupWrites(db, cleanupLock.ownerId, cleanupLock.token, targetSeason, [], [item.ref]);
     deletedArchives++;
   }
 
   let deletedRolloverPlans = 0;
   for (let offset = 0; offset < rolloverPlan.pruneIds.length; offset += 400) {
-    const batch = db.batch();
     const chunk = rolloverPlan.pruneIds.slice(offset, offset + 400);
-    for (const planId of chunk) batch.delete(db.collection('league_season_rollovers_v1').doc(planId));
-    if (chunk.length) await batch.commit();
+    if (chunk.length) await commitSeasonHistoryCleanupWrites(db, cleanupLock.ownerId, cleanupLock.token, targetSeason, [], chunk.map(planId => db.collection('league_season_rollovers_v1').doc(planId)));
     deletedRolloverPlans += chunk.length;
   }
   return {
@@ -1222,7 +1226,10 @@ async function pruneSeasonHistoryAfterActivation(
     deletedArchiveMatches,
     deletedRolloverPlans,
     retainedArchiveSeason,
-  };
+    };
+  } finally {
+    await releaseSeasonCalendarBuildLock(db, cleanupLock.ownerId, cleanupLock.token);
+  }
 }
 
 /** Read-only canonical gate shared by build and the final publication step. */
