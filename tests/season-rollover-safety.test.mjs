@@ -227,7 +227,7 @@ test('expired rollover lease cannot commit protected writes', async () => {
 
 test('each protected rollover write renews the lease atomically', async () => {
   const db = mockDb();
-  const lease = await acquireSeasonRolloverLock(db, 1, 2, { ownerId: 'renewing-writer' });
+  const lease = await acquireSeasonRolloverLock(db, 1, 2, { ownerId: 'renewing-writer', nowMs: Date.now() - 1_000 });
   const before = db.read().expiresAtMs;
   const ref = db.collection('protected').doc('archive-chunk');
   await commitSeasonRolloverWrites(db, lease.ownerId, lease.token, [
