@@ -138,28 +138,43 @@ export function isCompletedSeasonArchive(archive: any): boolean {
  * by the completed-season or rollover gates.
  */
 export function isRecoveredSeasonArchive(archive: any): boolean {
+  const sourceSeason = Number(archive?.sourceSeason);
+  const finishedMatches = Number(archive?.finishedMatches);
+  const unresolvedMatches = Number(archive?.unresolvedMatches);
+  const recoveredAt = Date.parse(String(archive?.recoveredAt || ''));
   if (archive?.status !== 'recovered' || archive?.recovery?.status !== 'incomplete' ||
-      archive?.recovery?.finalStandingsAvailable !== false || !archive?.recoveredAt ||
-      !Number.isSafeInteger(Number(archive?.sourceSeason)) || Number(archive.sourceSeason) < 1 ||
+      archive?.recovery?.finalStandingsAvailable !== false ||
+      !String(archive?.recovery?.reason || '').trim() ||
+      !Number.isSafeInteger(sourceSeason) || sourceSeason < 1 ||
+      !Number.isFinite(recoveredAt) ||
       archive?.leagueId !== 'ALPHA' || Number(archive?.archiveVersion) !== 1 ||
       Number(archive?.expectedMatches) !== MATCHES_PER_SEASON ||
-      !archive?.standings || typeof archive.standings !== 'object' || Object.keys(archive.standings).length !== 0) return false;
+      Number(archive?.groups) !== 15 || Number(archive?.teamCount) !== 120 ||
+      !Number.isInteger(finishedMatches) || finishedMatches < 0 || finishedMatches > MATCHES_PER_SEASON ||
+      !Number.isInteger(unresolvedMatches) || unresolvedMatches < 0 || unresolvedMatches > MATCHES_PER_SEASON ||
+      finishedMatches + unresolvedMatches !== MATCHES_PER_SEASON ||
+      !archive?.standings || typeof archive.standings !== 'object' || Array.isArray(archive.standings) ||
+      Object.keys(archive.standings).length !== 0) return false;
   const participants = archive?.startingParticipants;
-  if (!participants || typeof participants !== 'object') return false;
+  if (!participants || typeof participants !== 'object' || Array.isArray(participants)) return false;
   const expected = expectedRolloverGroups();
+  if (Object.keys(participants).length !== expected.length ||
+      Object.keys(participants).some(group => !expected.includes(group))) return false;
   const ids = new Set<string>();
   for (const group of expected) {
     const rows = participants[group];
     if (!Array.isArray(rows) || rows.length !== 8) return false;
+    const ranks = new Set<number>();
     for (const row of rows) {
       const id = String(row?.id || '');
       const rank = Number(row?.rank);
-      if (!id || ids.has(id) || !Number.isInteger(rank) || rank < 1 || rank > 8) return false;
+      if (!id || ids.has(id) || !Number.isInteger(rank) || rank < 1 || rank > 8 || ranks.has(rank)) return false;
       ids.add(id);
+      ranks.add(rank);
     }
+    if (ranks.size !== 8) return false;
   }
-  return ids.size === 120 && Number(archive.finishedMatches || 0) <= MATCHES_PER_SEASON &&
-    Number(archive.unresolvedMatches || 0) === MATCHES_PER_SEASON - Number(archive.finishedMatches || 0);
+  return ids.size === 120;
 }
 
 function getUniqueSeasonArchives(
