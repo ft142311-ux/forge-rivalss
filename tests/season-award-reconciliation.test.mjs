@@ -26,10 +26,14 @@ test('partial reward failure retries without double credit and reports stable se
     { uid: 'club-c', prize: 200, trophy: false },
   ];
   const wallet = new Map(recipients.map(item => [item.uid, { credits: 1000, award: false, ledger: false }]));
-  let failAt = 3;
+  let successfulWritesBeforeFailure = 2;
+  let injectFailure = true;
 
   const applyRecipient = async recipient => {
-    if (failAt === 0) throw new Error('injected process interruption');
+    if (injectFailure && successfulWritesBeforeFailure === 0) {
+      injectFailure = false;
+      throw new Error('injected process interruption');
+    }
     const current = wallet.get(recipient.uid);
     if (current.ledger || current.award) {
       return { settled: true, prize: recipient.prize, trophy: recipient.trophy };
@@ -37,7 +41,7 @@ test('partial reward failure retries without double credit and reports stable se
     current.credits += recipient.prize;
     current.award = true;
     current.ledger = true;
-    failAt--;
+    if (injectFailure) successfulWritesBeforeFailure--;
     return { settled: true, prize: recipient.prize, trophy: recipient.trophy };
   };
 
@@ -49,7 +53,6 @@ test('partial reward failure retries without double credit and reports stable se
   assert.equal(wallet.get('club-b').credits, 1300);
   assert.equal(wallet.get('club-c').credits, 1000);
 
-  failAt = 0;
   const retried = await applySeasonAwardRecipients(recipients, applyRecipient);
   assert.deepEqual(retried, {
     ready: true,
