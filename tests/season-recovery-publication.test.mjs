@@ -108,6 +108,7 @@ test('crash between history chunks resumes without rewriting already committed m
   assert.equal(fixture.store.has('history:S3'), false);
 
   const firstMarker = structuredClone(fixture.store.get('history:S2'));
+  fixture.setFailure(null);
   const retry = await publishRecoveryRolloverDecision(fixture.args);
   assert.equal(retry.ready, true);
   assert.deepEqual(fixture.store.get('history:S2'), firstMarker);
