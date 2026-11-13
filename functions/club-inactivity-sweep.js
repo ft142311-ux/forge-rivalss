@@ -69,12 +69,11 @@ async function retireInactiveClub({ db, auth, userRecord, now = new Date() }) {
 
   const pendingRef = db.collection('inactive_club_retirements_v1').doc(uid);
   const pendingSnap = await pendingRef.get();
-  if (userRecord.disabled && !pendingSnap.exists) {
-    return { action: 'SKIPPED_PREVIOUSLY_DISABLED' };
-  }
-
   // Refresh Auth metadata immediately before making the eligibility decision.
   const latestAuthRecord = await auth.getUser(uid);
+  if (latestAuthRecord.disabled && !pendingSnap.exists) {
+    return { action: 'SKIPPED_PREVIOUSLY_DISABLED' };
+  }
   const eligibility = resolveClubInactivity(
     latestAuthRecord.metadata && latestAuthRecord.metadata.lastSignInTime,
     now.getTime()
@@ -115,6 +114,19 @@ async function retireInactiveClub({ db, auth, userRecord, now = new Date() }) {
   if (!latestAuthRecord.disabled) await auth.updateUser(uid, { disabled: true });
   await auth.revokeRefreshTokens(uid);
 
+  // Close the race where a successful sign-in lands between the metadata read
+  // and Auth disable. If its timestamp advanced, restore access and do not retire.
+  const postDisableAuthRecord = await auth.getUser(uid);
+  const postDisableEligibility = resolveClubInactivity(
+    postDisableAuthRecord.metadata && postDisableAuthRecord.metadata.lastSignInTime,
+    now.getTime()
+  );
+  if (!postDisableEligibility.eligible) {
+    await auth.updateUser(uid, { disabled: false });
+    await pendingRef.delete().catch(() => undefined);
+    return { action: 'SKIPPED_ACTIVITY_RACE', reason: postDisableEligibility.reason };
+  }
+
   const slotQuery = db.collection('league_slots_v1')
     .where('season', '==', season)
     .where('occupantId', '==', uid);
@@ -144,6 +156,9 @@ async function retireInactiveClub({ db, auth, userRecord, now = new Date() }) {
     if (archive.exists && !freshPlayer.exists) {
       if (pending.exists) transaction.delete(pendingRef);
       return { action: 'ALREADY_RETIRED', botId };
+    }
+    if (archive.exists && freshPlayer.exists) {
+      return { action: 'BLOCKED_ARCHIVE_COLLISION' };
     }
     if (!pending.exists) return { action: 'BLOCKED_RETIREMENT_MARKER_MISSING' };
     if (!freshPlayer.exists || slots.size !== 1 || !table.exists || matches.size !== 56) {
@@ -185,7 +200,11 @@ async function retireInactiveClub({ db, auth, userRecord, now = new Date() }) {
     }
 
     const existingBot = bot.exists ? bot.data() || {} : null;
-    if (existingBot && existingBot.isBot !== true) {
+    if (existingBot && (
+      existingBot.isBot !== true ||
+      !Array.isArray(existingBot.ownedPlayers) ||
+      existingBot.ownedPlayers.length !== 5
+    )) {
       return { action: 'BLOCKED_BOT_ID_COLLISION' };
     }
 
