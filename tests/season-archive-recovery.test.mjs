@@ -103,3 +103,15 @@ test('a published rollover plan is preserved while only award reconciliation met
   assert.match(branch, /const savedPlan = planSnap\.data\(\) \|\| \{\}/);
   assert.match(branch, /validateRolloverPlan\(savedPlan, sourceSeason, targetSeason\)/);
 });
+
+
+test('durable archive recovery does not query mutable live projections before recovery branches', async () => {
+  const source = await readFile(sourceUrl, 'utf8');
+  const firstLiveQuery = source.indexOf('const [initialTablesSnap, allSeasonMatchesSnap, initialSlotsSnap]');
+  const publishedPlanRecovery = source.indexOf("&& planSnap.exists)");
+  const noPlanRecovery = source.indexOf("&& !planSnap.exists)", publishedPlanRecovery);
+  const recoveryEnd = source.indexOf('  // A Firestore subcollection can outlive a missing parent document.', noPlanRecovery);
+  assert.ok(publishedPlanRecovery >= 0 && noPlanRecovery > publishedPlanRecovery);
+  assert.ok(recoveryEnd > noPlanRecovery);
+  assert.ok(firstLiveQuery > recoveryEnd, 'live match/table/slot reads must happen only after both archive recovery branches');
+});
