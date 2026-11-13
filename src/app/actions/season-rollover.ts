@@ -1,7 +1,7 @@
 import { FieldValue } from 'firebase-admin/firestore';
 import { getTableId, MAX_LEVELS, TEAMS_PER_GROUP, TOTAL_GROUPS } from '@/app/lib/leagues-data';
 import { buildCanonicalSlotRepairs, calculateGroupStandings, evaluateRolloverPreflight, hasCanonicalFixtureStructure, hasCompleteCanonicalFixtureSet, inspectGroupReconciliation } from './season-rollover-standings';
-import { acquireSeasonRolloverLock, releaseSeasonRolloverLock } from './season-rollover-lock';
+import { acquireSeasonRolloverLock, commitSeasonRolloverWrites, releaseSeasonRolloverLock, SEASON_ROLLOVER_LOCK_TTL_MS } from './season-rollover-lock';
 import { buildPromotionRelegationGroups, validateRolloverPlan } from './season-rollover-plan';
 import { isSeasonArchiveReadyToComplete, validateSeasonArchiveSnapshot } from './season-archive';
 import { runTwoPhaseSeasonOrchestration } from './season-orchestration';
@@ -178,7 +178,7 @@ export async function diagnoseSeasonRolloverPreflight(
  * so retries and concurrent orchestrator ticks cannot pay a club twice.
  * The existing profile UI reads the `trophies` array from players_v14.
  */
-async function applySeasonAwards(db: any, sourceSeason: number, standings: Record<string, TeamRow[]>) {
+async function applySeasonAwards(db: any, sourceSeason: number, standings: Record<string, TeamRow[]>, lock: { ownerId: string; token: string }) {
   let rewardedClubs = 0;
   let totalCredits = 0;
   let trophiesAwarded = 0;
@@ -200,7 +200,15 @@ async function applySeasonAwards(db: any, sourceSeason: number, standings: Recor
       const isChampion = champion && String(champion.id) === uid;
 
       const result = await db.runTransaction(async (t: any) => {
-        const [playerSnap, transactionSnap] = await Promise.all([t.get(playerRef), t.get(txRef)]);
+        const lockRef = db.collection('system_v1').doc('season_rollover_v1');
+        const [lockSnap, playerSnap, transactionSnap] = await Promise.all([t.get(lockRef), t.get(playerRef), t.get(txRef)]);
+        const currentLock = lockSnap.exists ? lockSnap.data() || {} : {};
+        const nowMs = Date.now();
+        if (currentLock.ownerId !== lock.ownerId || currentLock.token !== lock.token ||
+            Number(currentLock.expiresAtMs || 0) <= nowMs) {
+          throw new Error('SEASON_ROLLOVER_LOCK_LOST');
+        }
+        t.set(lockRef, { expiresAtMs: nowMs + SEASON_ROLLOVER_LOCK_TTL_MS, renewedAtMs: nowMs }, { merge: true });
         if (!playerSnap.exists) return { paid: false, trophy: false };
         const player = playerSnap.data() || {};
         const awardKey = `S${sourceSeason}`;
@@ -562,9 +570,13 @@ export async function prepareSeasonRollover(db: any, sourceSeason: number, targe
     if (!isSeasonArchiveReadyToComplete(archiveData, savedMatches, planSnap.data() || {})) {
       return { ready: false, reason: 'SEASON_ARCHIVE_VALIDATION_FAILED', sourceSeason, targetSeason, writesStarted: false, archiveMatches: savedMatches.length };
     }
-    const awards = await applySeasonAwards(db, sourceSeason, archiveData.standings || {});
+    const awards = await applySeasonAwards(db, sourceSeason, archiveData.standings || {}, lock);
     if (archiveData.status !== 'completed' || !archiveData.completedAt) {
-      await archiveRef.set({ status: 'completed', completedAt: FieldValue.serverTimestamp() }, { merge: true });
+      await commitSeasonRolloverWrites(db, lock.ownerId, lock.token, [{
+        ref: archiveRef,
+        data: { status: 'completed', completedAt: FieldValue.serverTimestamp() },
+        options: { merge: true },
+      }]);
     }
     return { ready: true, alreadyPrepared: true, completed: true, sourceSeason, targetSeason, expectedMatches: EXPECTED_MATCHES, observedMatches: matchesSnap.size, awards };
   }
@@ -650,7 +662,7 @@ export async function prepareSeasonRollover(db: any, sourceSeason: number, targe
   // Persist the canonical standings projection only after every canonical fixture
   // has a valid final result. This removes stale rows/duplicate ranks so the next
   // rollover starts from a consistent table instead of inheriting old projections.
-  const standingsBatch = db.batch();
+  const standingsWrites: Array<{ ref: any; data: any; options: any }> = [];
   for (const key of expectedGroups) {
     const tableDoc = freshTablesSnap.docs.find((doc: any) => {
       const data = doc.data() || {};
@@ -658,19 +670,26 @@ export async function prepareSeasonRollover(db: any, sourceSeason: number, targe
     });
     if (!tableDoc) return { ready: false, reason: 'TABLE_MISSING_DURING_STANDINGS_REBUILD', group: key, writesStarted: true };
     const stats = Object.fromEntries((standings[key] || []).map((row: any) => [String(row.id), { ...row, id: String(row.id) }]));
-    standingsBatch.set(tableDoc.ref, { stats, updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+    standingsWrites.push({ ref: tableDoc.ref, data: { stats, updatedAt: FieldValue.serverTimestamp() }, options: { merge: true } });
   }
-  await standingsBatch.commit();
+  await commitSeasonRolloverWrites(db, lock.ownerId, lock.token, standingsWrites);
 
   const summary = { sourceSeason, finalizedAt: FieldValue.serverTimestamp(), leagueId: LEAGUE_ID, expectedMatches: EXPECTED_MATCHES, finishedMatches: canonicalMatches.length, groups: Object.keys(standings).length, teamCount: Object.values(standings).reduce((n, a) => n + a.length, 0), integrity: { complete: true, unfinishedMatches: 0, invalidResults: 0, canonicalMatches: canonicalMatches.length, ignoredLegacyOrNonLeagueMatches: matchesSnap.size - canonicalMatches.length, duplicateCanonicalFixtures } };
 
   // Write per-match archive records first; immutable IDs make retries harmless.
   for (let i = 0; i < matchArchive.length; i += 400) {
-    const batch = db.batch();
-    for (const match of matchArchive.slice(i, i + 400)) batch.set(archiveRef.collection('matches').doc(match.matchId), { ...match, sourceSeason, archivedAt: FieldValue.serverTimestamp() }, { merge: true });
-    await batch.commit();
+    const writes = matchArchive.slice(i, i + 400).map((match: any) => ({
+      ref: archiveRef.collection('matches').doc(match.matchId),
+      data: { ...match, sourceSeason, archivedAt: FieldValue.serverTimestamp() },
+      options: { merge: true },
+    }));
+    await commitSeasonRolloverWrites(db, lock.ownerId, lock.token, writes);
   }
-  await archiveRef.set({ ...summary, standings, archiveVersion: 1, status: 'preparing' }, { merge: true });
+  await commitSeasonRolloverWrites(db, lock.ownerId, lock.token, [{
+    ref: archiveRef,
+    data: { ...summary, standings, archiveVersion: 1, status: 'preparing' },
+    options: { merge: true },
+  }]);
   const preparedArchiveSnap = await archiveRef.get();
   const preparedArchive = preparedArchiveSnap.exists ? preparedArchiveSnap.data() || {} : {};
   const preparedMatchesSnap = await archiveRef.collection('matches').get();
@@ -681,7 +700,7 @@ export async function prepareSeasonRollover(db: any, sourceSeason: number, targe
   }
 
   // Pay clubs and award the D1 champion before the rollover plan is marked ready.
-  const awards = await applySeasonAwards(db, sourceSeason, standings);
+  const awards = await applySeasonAwards(db, sourceSeason, standings, lock);
 
   // Apply the canonical pyramid movement using the pure, regression-tested
   // placement function. A malformed group blocks the plan before it is persisted.
@@ -690,7 +709,11 @@ export async function prepareSeasonRollover(db: any, sourceSeason: number, targe
     return { ready: false, reason: placementResult.reason, group: placementResult.group, count: placementResult.count };
   }
   const placements = placementResult.groups as Record<string, TeamRow[]>;
-  await planRef.set({ sourceSeason, targetSeason, leagueId: LEAGUE_ID, ready: true, createdAt: FieldValue.serverTimestamp(), promotionRule: 'group_champion_up; bottom_two_down_to_child_groups; division_1_and_4_boundaries_preserved', groups: placements, awards }, { merge: true });
+  await commitSeasonRolloverWrites(db, lock.ownerId, lock.token, [{
+    ref: planRef,
+    data: { sourceSeason, targetSeason, leagueId: LEAGUE_ID, ready: true, createdAt: FieldValue.serverTimestamp(), promotionRule: 'group_champion_up; bottom_two_down_to_child_groups; division_1_and_4_boundaries_preserved', groups: placements, awards },
+    options: { merge: true },
+  }]);
   const [finalArchiveSnap, finalMatchesSnap, finalPlanSnap] = await Promise.all([
     archiveRef.get(), archiveRef.collection('matches').get(), planRef.get(),
   ]);
