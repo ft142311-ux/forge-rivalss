@@ -310,6 +310,98 @@ export async function prepareSeasonRollover(db: any, sourceSeason: number, targe
     db.collection('matches_v2').where('season', '==', sourceSeason).where('version', '==', 140).get(),
     db.collection('league_slots_v1').where('season', '==', sourceSeason).where('leagueId', '==', LEAGUE_ID).get(),
   ]);
+  // A preparing archive is a durable snapshot. If the process crashed after the
+  // archive was fully written but before the rollover plan was published, resume
+  // exclusively from that snapshot. Never rebuild standings from mutable live
+  // matches/tables in this recovery path.
+  if (archiveSnap.exists && String((archiveSnap.data() || {}).status || '') === 'preparing' && !planSnap.exists) {
+    const savedMatchesSnap = await archiveRef.collection('matches').get();
+    const archiveData = archiveSnap.data() || {};
+    const savedMatches = savedMatchesSnap.docs.map((doc: any) => ({ ...doc.data(), matchId: doc.id }));
+    const archiveValidation = validateSeasonArchiveSnapshot(archiveData, savedMatches);
+    if (!archiveValidation.valid) {
+      return {
+        ready: false,
+        reason: 'SEASON_ARCHIVE_RECOVERY_SNAPSHOT_INVALID',
+        sourceSeason,
+        targetSeason,
+        writesStarted: true,
+        archiveMatches: savedMatches.length,
+        archiveErrors: archiveValidation.reasons,
+      };
+    }
+
+    const placementResult = buildPromotionRelegationGroups(archiveData.standings || {});
+    if (!placementResult.ready) {
+      return {
+        ready: false,
+        reason: 'SEASON_ARCHIVE_RECOVERY_STANDINGS_INVALID',
+        sourceSeason,
+        targetSeason,
+        group: placementResult.group,
+        count: placementResult.count,
+        writesStarted: true,
+      };
+    }
+
+    const awards = await applySeasonAwards(db, sourceSeason, archiveData.standings || {}, lock);
+    if (!awards.ready) {
+      return { ready: false, reason: awards.reason, sourceSeason, targetSeason, writesStarted: true, awards };
+    }
+
+    const placements = placementResult.groups as Record<string, TeamRow[]>;
+    await commitSeasonRolloverWrites(db, lock.ownerId, lock.token, [{
+      ref: planRef,
+      data: {
+        sourceSeason,
+        targetSeason,
+        leagueId: LEAGUE_ID,
+        ready: true,
+        createdAt: FieldValue.serverTimestamp(),
+        promotionRule: 'group_champion_up; bottom_two_down_to_child_groups; division_1_and_4_boundaries_preserved',
+        groups: placements,
+        awards,
+        recoveredFromArchiveSnapshot: true,
+      },
+      options: { merge: false },
+    }]);
+
+    const [finalArchiveSnap, finalMatchesSnap, finalPlanSnap] = await Promise.all([
+      archiveRef.get(),
+      archiveRef.collection('matches').get(),
+      planRef.get(),
+    ]);
+    const finalArchive = finalArchiveSnap.exists ? finalArchiveSnap.data() || {} : {};
+    const finalMatches = finalMatchesSnap.docs.map((doc: any) => ({ ...doc.data(), matchId: doc.id }));
+    const finalPlan = finalPlanSnap.exists ? finalPlanSnap.data() || {} : {};
+    if (!isSeasonArchiveReadyToComplete(finalArchive, finalMatches, finalPlan)) {
+      return {
+        ready: false,
+        reason: 'SEASON_ARCHIVE_RECOVERY_FINALIZATION_FAILED',
+        sourceSeason,
+        targetSeason,
+        writesStarted: true,
+        archiveMatches: finalMatches.length,
+      };
+    }
+    await commitSeasonRolloverWrites(db, lock.ownerId, lock.token, [{
+      ref: archiveRef,
+      data: { status: 'completed', completedAt: FieldValue.serverTimestamp() },
+      options: { merge: true },
+    }]);
+    return {
+      ready: true,
+      completed: true,
+      recoveredFromArchiveSnapshot: true,
+      sourceSeason,
+      targetSeason,
+      expectedMatches: EXPECTED_MATCHES,
+      observedMatches: savedMatches.length,
+      groupCount: Object.keys(placements).length,
+      awards,
+    };
+  }
+
   // Mutable snapshots are refreshed after any explicit Season 1 repair writes.
   // Keep them in this commit callback scope for all subsequent validation.
   let tablesSnap = initialTablesSnap;
