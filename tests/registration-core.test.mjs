@@ -109,6 +109,10 @@ test('registration match plan leaves completed fixtures unchanged and rewrites o
   completed.status = 'finished';
   completed.isFinished = true;
   completed.startTime = '2020-01-01T00:00:00.000Z';
+  completed.homeLogo = 'historical-bot-logo';
+
+  const future = matches.find(match => match.homeRank === 3 && match.awayRank === 2);
+  future.homeLogo = 'old-bot-logo';
 
   const result = buildRegistrationMatchPlan(
     matches, 'bot-3', 'user-b', 'New Club', Date.parse('2026-11-14T12:00:00.000Z')
@@ -119,6 +123,7 @@ test('registration match plan leaves completed fixtures unchanged and rewrites o
   assert.ok(result.updates.every(update =>
     update.patch.homeId === 'user-b' || update.patch.awayId === 'user-b'
   ));
+  assert.equal(result.updates.find(update => update.matchId === future.id).patch.homeLogo, null);
 });
 
 test('registration is deferred while a future fixture is already processing', () => {
