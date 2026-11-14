@@ -124,7 +124,10 @@ test('registration HTTP API enforces its boundary and safely initializes a club'
         ...(replacementActivityRef ? [replacementActivityRef] : []),
         ...(replacementAuditQuery ? (await replacementAuditQuery.get()).docs.map((doc) => doc.ref) : []),
         ...contenderUidsForCleanup.flatMap((contenderUid) => [
+          db.collection('players_v14').doc(contenderUid),
           db.collection('user_activity_v1').doc(contenderUid),
+          db.collection('inactive_clubs_v1').doc(contenderUid),
+          db.collection('inactive_club_retirements_v1').doc(contenderUid),
         ]),
         ...(await Promise.all(contenderUidsForCleanup.map((contenderUid) =>
           db.collection('security_audit_v1').where('actorUid', '==', contenderUid).get()
@@ -554,5 +557,108 @@ test('registration HTTP API enforces its boundary and safely initializes a club'
     assert.equal((await retirementHistoryRef.get()).get('newOccupantId'), replacementBotId);
     assert.equal((await db.collection('league_slot_history_v1')
       .doc(`${targetSlotId}_G10`).get()).get('newOccupantId'), replacementUid);
+
+    // Exercise repeated ownership generations on the same slot:
+    // USER -> BOT -> USER -> BOT -> USER. Each retirement and registration
+    // must advance generation exactly once and preserve the same standings.
+    let currentOwnerUid = replacementUid;
+    for (let cycle = 1; cycle <= 2; cycle += 1) {
+      const currentActivityRef = db.collection('user_activity_v1').doc(currentOwnerUid);
+      const currentArchiveRef = db.collection('inactive_clubs_v1').doc(currentOwnerUid);
+      const currentPlayerRef = db.collection('players_v14').doc(currentOwnerUid);
+      const currentEmail = (await auth.getUser(currentOwnerUid)).email;
+      const currentInactiveSince = new Date(Date.now() - 91 * 24 * 60 * 60 * 1000).toISOString();
+      await currentActivityRef.set({ uid: currentOwnerUid, lastActiveAt: currentInactiveSince });
+      const currentAuthRecord = await auth.getUser(currentOwnerUid);
+      const cycleRetirementAuth = {
+        getUser: async (targetUid) => {
+          const record = await auth.getUser(targetUid);
+          return {
+            ...record,
+            metadata: { ...record.metadata, lastSignInTime: currentInactiveSince },
+          };
+        },
+        updateUser: (...args) => auth.updateUser(...args),
+        revokeRefreshTokens: (...args) => auth.revokeRefreshTokens(...args),
+      };
+      const beforeGeneration = 10 + (cycle - 1) * 2;
+      const cycleRetirement = await retireInactiveClub({
+        db,
+        auth: cycleRetirementAuth,
+        userRecord: {
+          ...currentAuthRecord,
+          metadata: { ...currentAuthRecord.metadata, lastSignInTime: currentInactiveSince },
+        },
+        now: new Date(),
+      });
+      assert.equal(cycleRetirement.action, 'RETIRED_AND_REPLACED');
+      assert.equal((await auth.getUser(currentOwnerUid)).disabled, true);
+      assert.equal((await currentPlayerRef.get()).exists, false);
+      const freed = (await db.collection('league_slots_v1').doc(targetSlotId).get()).data();
+      assert.equal(freed.status, 'FREE');
+      assert.equal(freed.occupantId, null);
+      assert.equal(freed.occupancyGeneration, beforeGeneration + 1);
+      const retirementEvent = await db.collection('league_slot_history_v1')
+        .doc(`${targetSlotId}_G${beforeGeneration + 1}`).get();
+      assert.equal(retirementEvent.get('reason'), 'INACTIVITY_RETIREMENT');
+      assert.equal(retirementEvent.get('previousOccupantId'), currentOwnerUid);
+      assert.equal(retirementEvent.get('newOccupantId'), replacementBotId);
+      const immutableArchive = (await currentArchiveRef.get()).data();
+      assert.equal(immutableArchive.uid, currentOwnerUid);
+      historyRefs.push(retirementEvent.ref);
+
+      const nextEmail = `cycle-${cycle}-${runId}@example.test`;
+      const nextPassword = `Cycle-${randomUUID()}-Cc3!`;
+      const nextUser = await auth.createUser({
+        email: nextEmail,
+        password: nextPassword,
+        emailVerified: true,
+      });
+      contenderUidsForCleanup.push(nextUser.uid);
+      const nextLogin = await fetch(
+        `http://${authHost}/identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=fake-api-key`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ email: nextEmail, password: nextPassword, returnSecureToken: true }),
+        },
+      );
+      assert.equal(nextLogin.status, 200);
+      const nextTokens = await nextLogin.json();
+      const nextResponse = await POST(new Request('http://localhost/api/registration/initialize', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${nextTokens.idToken}`,
+        },
+        body: JSON.stringify({ clubName: `Cycle ${cycle} Club` }),
+      }));
+      const nextBody = await nextResponse.json();
+      assert.equal(nextResponse.status, 200, JSON.stringify(nextBody));
+      assert.equal(nextBody.alreadyInitialized, false);
+      assert.equal(nextBody.rank, 8);
+      currentOwnerUid = nextUser.uid;
+      const occupied = (await db.collection('league_slots_v1').doc(targetSlotId).get()).data();
+      assert.equal(occupied.status, 'OCCUPIED');
+      assert.equal(occupied.occupantId, currentOwnerUid);
+      assert.equal(occupied.occupancyGeneration, beforeGeneration + 2);
+      const registrationEvent = await db.collection('league_slot_history_v1')
+        .doc(`${targetSlotId}_G${beforeGeneration + 2}`).get();
+      assert.equal(registrationEvent.get('reason'), 'NEW_REGISTRATION');
+      assert.equal(registrationEvent.get('previousOccupantId'), replacementBotId);
+      assert.equal(registrationEvent.get('newOccupantId'), currentOwnerUid);
+      historyRefs.push(registrationEvent.ref);
+      const currentStanding = (await tableRef.get()).get(`stats.${currentOwnerUid}`);
+      assert.equal(currentStanding.matchesPlayed, 4);
+      assert.equal(currentStanding.wins, 3);
+      assert.equal(currentStanding.losses, 1);
+      assert.equal(currentStanding.points, 9);
+      assert.equal(currentStanding.diff, 5);
+      assert.equal((await db.collection('players_v14').doc(replacementBotId).get()).exists, false);
+      assert.equal((await statsRef.get()).get('totalPlayers'), 1002 + cycle);
+    }
+    assert.equal((await db.collection('league_slots_v1').doc(targetSlotId).get()).get('occupancyGeneration'), 14);
+    assert.equal((await db.collection('league_slots_v1').doc(targetSlotId).get()).get('occupantId'), currentOwnerUid);
+    assert.equal((await completedMatchRef.get()).data().homeId, botId);
   });
 });
