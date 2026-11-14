@@ -30,9 +30,12 @@ test('reports queue excludes locally and server-marked viewed matches', () => {
 });
 
 
-test('match report access recognizes every supported participant identity field', () => {
+test('report loading and viewed acknowledgement recognize every participant identity field', () => {
   const getReport = matchReportAction.slice(matchReportAction.indexOf('export async function getMatchReportAction'), matchReportAction.indexOf('export async function markMatchViewedAction'));
+  const markViewed = matchReportAction.slice(matchReportAction.indexOf('export async function markMatchViewedAction'));
   for (const field of ['homeId', 'awayId', 'homeUid', 'awayUid', 'hostId', 'challengerId']) {
     assert.match(getReport, new RegExp(`match\\.${field}`));
+    assert.match(markViewed, new RegExp(`m\\.${field}`));
   }
+  assert.match(markViewed, /\.some\(\(participantId\) => String\(participantId \|\| ''\) === uid\)/);
 });

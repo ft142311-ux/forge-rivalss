@@ -75,9 +75,8 @@ export async function markMatchViewedAction(idToken: string, matchId: string) {
     }
 
     const m = snap.data() || {};
-    const isParticipant =
-      m.homeId === uid || m.awayId === uid ||
-      String(m.homeUid || '') === uid || String(m.awayUid || '') === uid;
+    const isParticipant = [m.homeId, m.awayId, m.homeUid, m.awayUid, m.hostId, m.challengerId]
+      .some((participantId) => String(participantId || '') === uid);
 
     // Rank-based league records need the player's rank to be resolved from the profile.
     let rankParticipant = false;
