@@ -7,11 +7,11 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 type RegistrationMatchPlan =
-  | { ok: true; updates: Array<{ matchId: string | null; patch: Record<string, unknown> }> }
+  | { ok: true; updates: Array<{ matchId: string | null; patch: Record<string, any> }> }
   | { ok: false; reason: string; updates: []; matchId?: string };
 
 type RegistrationStandingTransfer =
-  | { ok: true; stats: Record<string, Record<string, unknown>>; transferredRow: Record<string, unknown> }
+  | { ok: true; stats: Record<string, Record<string, any>>; transferredRow: Record<string, any> }
   | { ok: false; reason: string };
 
 type RegistrationCore = {
@@ -26,7 +26,7 @@ type RegistrationCore = {
     nowMs?: number,
   ) => RegistrationMatchPlan;
   transferBotStandingToUser: (
-    stats: Record<string, Record<string, unknown>>,
+    stats: Record<string, Record<string, any>>,
     botId: string,
     userId: string,
     clubName: string,
