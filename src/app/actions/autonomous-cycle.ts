@@ -49,10 +49,21 @@ type SportingPlayer = Record<string, any>;
  * The server is authoritative and the salary ledger makes the operation idempotent.
  */
 async function processDueSalaries(db: any, nowMs: number) {
-  const snap = await db.collection('players_v14').limit(500).get();
+  const pageSize = 200;
+  let cursor: any = null;
   let processed = 0;
 
-  for (const playerDoc of snap.docs) {
+  // Process every club, not just the first 500 documents. Stable document-ID
+  // pagination remains correct while salary transactions update player docs.
+  while (true) {
+    let query = db.collection('players_v14')
+      .orderBy(FieldPath.documentId())
+      .limit(pageSize);
+    if (cursor) query = query.startAfter(cursor);
+    const snap = await query.get();
+    if (snap.empty) break;
+
+    for (const playerDoc of snap.docs) {
     const ref = playerDoc.ref;
     try {
       const result = await db.runTransaction(async (t: any) => {
@@ -132,6 +143,10 @@ async function processDueSalaries(db: any, nowMs: number) {
     } catch (error) {
       logger.warn(`[SALARY] Failed for ${playerDoc.id}`);
     }
+    }
+
+    cursor = snap.docs[snap.docs.length - 1];
+    if (snap.size < pageSize) break;
   }
 
   return processed;
