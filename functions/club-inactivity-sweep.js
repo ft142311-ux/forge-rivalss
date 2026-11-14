@@ -484,7 +484,17 @@ async function retireInactiveClub({ db, auth, userRecord, now = new Date() }) {
 }
 
 async function runClubInactivitySweep({ db, auth, now = new Date(), pageSize = BATCH_SIZE }) {
-  const summary = { scannedAuthUsers: 0, inactiveCandidates: 0, retired: 0, deferred: 0, skipped: 0, errors: [] };
+  const summary = {
+    scannedAuthUsers: 0,
+    inactiveCandidates: 0,
+    retired: 0,
+    deferred: 0,
+    inProgress: 0,
+    recoveredCancellations: 0,
+    reviewRequired: 0,
+    skipped: 0,
+    errors: [],
+  };
   let pageToken;
   do {
     const page = await auth.listUsers(pageSize, pageToken);
@@ -497,6 +507,9 @@ async function runClubInactivitySweep({ db, auth, now = new Date(), pageSize = B
         const result = await retireInactiveClub({ db, auth, userRecord, now });
         if (result.action === 'RETIRED_AND_REPLACED' || result.action === 'ALREADY_RETIRED') summary.retired++;
         else if (result.action.startsWith('DEFERRED')) summary.deferred++;
+        else if (result.action === 'SKIPPED_RETIREMENT_IN_PROGRESS') summary.inProgress++;
+        else if (result.action === 'CANCELLED_PENDING_CLEANUP') summary.recoveredCancellations++;
+        else if (result.action === 'SKIPPED_REVIEW_REQUIRED' || result.action.startsWith('BLOCKED_')) summary.reviewRequired++;
         else summary.skipped++;
       } catch (error) {
         summary.errors.push({ uid: userRecord.uid, code: String(error && (error.code || error.message) || 'UNKNOWN').slice(0, 120) });
