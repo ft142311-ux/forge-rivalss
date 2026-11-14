@@ -1,6 +1,7 @@
 'use strict';
 
 const { resolveClubInactivity } = require('./club-inactivity-policy');
+const { timestampToMillis } = require('./registration-core');
 
 const LEAGUE_ID = 'ALPHA';
 const BATCH_SIZE = 1000;
@@ -213,10 +214,17 @@ async function retireInactiveClub({ db, auth, userRecord, now = new Date() }) {
     for (const matchDoc of matches.docs) {
       const match = matchDoc.data() || {};
       if (isFinished(match)) continue;
-      if (match.isProcessing === true) {
+
+      // Only a match involving this retiring club can delay its ownership
+      // transition. Other teams' due fixtures must not block this slot.
+      if (match.homeId !== uid && match.awayId !== uid) continue;
+
+      const status = String(match.status || '').toLowerCase();
+      if (match.isProcessing === true ||
+          ['in_progress', 'in-progress', 'processing', 'resolving'].includes(status)) {
         return { action: 'DEFERRED_MATCH_PROCESSING', matchId: matchDoc.id };
       }
-      const startMs = Date.parse(String(match.startTime || ''));
+      const startMs = timestampToMillis(match.startTime || match.scheduledStartAt);
       if (Number.isFinite(startMs) && startMs <= now.getTime()) {
         return { action: 'DEFERRED_MATCH_ALREADY_DUE', matchId: matchDoc.id };
       }
