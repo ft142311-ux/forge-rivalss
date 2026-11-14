@@ -26,9 +26,11 @@ async function recordUserActivityUnlessRetiring(db, uid, nowMs = Date.now()) {
       transaction.get(activityRef),
     ]);
 
-    if (pending.exists && pending.get('phase') === 'CANCELLED') {
-      transaction.delete(pendingRef);
-    } else if (pending.exists) {
+    // CANCELLED is a recoverable cleanup state, not permission to remove the
+    // fence. The Auth account may still be disabled if the previous worker
+    // crashed between marking cancellation and re-enabling it. Only the sweep
+    // may re-enable Auth and then remove this marker.
+    if (pending.exists) {
       return { success: false, error: 'ACCOUNT_RETIRING' };
     }
     if (retired.exists) return { success: false, error: 'ACCOUNT_RETIRED' };
