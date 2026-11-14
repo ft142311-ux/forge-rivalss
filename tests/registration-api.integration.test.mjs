@@ -81,6 +81,7 @@ test('registration HTTP API enforces its boundary and safely initializes a club'
     const uid = user.uid;
     const slotRefs = [];
     const matchRefs = [];
+    const historyRefs = [];
     const auditQuery = db.collection('security_audit_v1').where('actorUid', '==', uid);
     const tableRef = db.collection('league_tables_v2')
       .doc(`table_v140_S${season}_LALPHA_V${division}_G${group}`);
@@ -94,6 +95,7 @@ test('registration HTTP API enforces its boundary and safely initializes a club'
       const cleanupRefs = [
         ...slotRefs,
         ...matchRefs,
+        ...historyRefs,
         ...auditSnapshot.docs.map((doc) => doc.ref),
         tableRef,
         configRef,
@@ -116,6 +118,9 @@ test('registration HTTP API enforces its boundary and safely initializes a club'
       worldReady: true,
     });
     await statsRef.set({ totalPlayers: 1000 });
+    const targetSlotId = `${runId}-slot-${division}-${group}-8`;
+    const historyRef = db.collection('league_slot_history_v1').doc(`${targetSlotId}_G8`);
+    historyRefs.push(historyRef);
 
     const tableStats = {};
     for (let rank = 1; rank <= 8; rank += 1) {
@@ -255,6 +260,12 @@ test('registration HTTP API enforces its boundary and safely initializes a club'
     assert.equal(claimedSlot.get('status'), 'OCCUPIED');
     assert.equal(claimedSlot.get('occupantId'), uid);
     assert.equal(claimedSlot.get('occupancyGeneration'), 8);
+    const history = await historyRef.get();
+    assert.equal(history.exists, true);
+    assert.equal(history.get('reason'), 'NEW_REGISTRATION');
+    assert.equal(history.get('previousOccupantId'), botId);
+    assert.equal(history.get('newOccupantId'), uid);
+    assert.equal(history.get('generation'), 8);
     assert.equal(matches.size, 56);
     assert.equal(matches.docs.filter((doc) =>
       doc.get('homeId') === uid || doc.get('awayId') === uid
