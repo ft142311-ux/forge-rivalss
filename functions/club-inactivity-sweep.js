@@ -261,7 +261,45 @@ async function retireInactiveClub({ db, auth, userRecord, now = new Date() }) {
   if (!claim.claimed) {
     return { action: 'SKIPPED_ACTIVITY_RACE', reason: claim.reason || 'RECENT_ACTIVITY' };
   }
-  if (!latestAuthRecord.disabled) await auth.updateUser(uid, { disabled: true });
+
+  // Auth and Firestore cannot share a transaction. Re-read Auth metadata after
+  // claiming the Firestore fence so a sign-in that completed just before the
+  // claim is not accidentally retired using the earlier Auth snapshot.
+  const claimAuthRecord = await auth.getUser(uid);
+  const claimActivitySnap = await activityRef.get();
+  const claimEligibility = resolveClubInactivity(
+    claimAuthRecord.metadata && claimAuthRecord.metadata.lastSignInTime,
+    now.getTime(),
+    undefined,
+    claimActivitySnap.exists ? claimActivitySnap.get('lastActiveAt') : null,
+  );
+  if (!claimEligibility.eligible) {
+    const markedCancelled = await db.runTransaction(async (transaction) => {
+      const pending = await transaction.get(pendingRef);
+      if (!pending.exists || pending.get('leaseOwner') !== leaseOwner ||
+          pending.get('phase') !== 'PENDING_AUTH_DISABLE') return false;
+      transaction.update(pendingRef, {
+        phase: 'CANCELLED',
+        cancellationReason: 'RECENT_ACTIVITY_AFTER_CLAIM',
+        leaseOwner: null,
+        leaseUntil: null,
+        updatedAt: now,
+      });
+      return true;
+    });
+    if (markedCancelled) {
+      if (claimAuthRecord.disabled) await auth.updateUser(uid, { disabled: false });
+      await db.runTransaction(async (transaction) => {
+        const pending = await transaction.get(pendingRef);
+        if (pending.exists && pending.get('phase') === 'CANCELLED') {
+          transaction.delete(pendingRef);
+        }
+      });
+    }
+    return { action: 'SKIPPED_ACTIVITY_RACE', reason: claimEligibility.reason };
+  }
+
+  if (!claimAuthRecord.disabled) await auth.updateUser(uid, { disabled: true });
   await auth.revokeRefreshTokens(uid);
 
   const postDisableAuthRecord = await auth.getUser(uid);
