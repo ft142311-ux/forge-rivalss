@@ -66,3 +66,46 @@ test('bot standings transfer preserves results and rejects a second transfer', (
   const duplicateUser = transferBotStandingToUser(first.stats, 'BOT_ALPHA_L2_G1_R3', 'user-123', 'New Club', 3);
   assert.deepEqual(duplicateUser, { ok: false, reason: 'LEAGUE_TABLE_SLOT_CONFLICT' });
 });
+
+
+test('canonical league pyramid contains exactly 120 unique slots across 15 groups', () => {
+  const season = 9;
+  const groupsByDivision = new Map([[1, 1], [2, 2], [3, 4], [4, 8]]);
+  const slots = [];
+
+  for (const [division, groupCount] of groupsByDivision) {
+    for (let group = 1; group <= groupCount; group++) {
+      for (let rank = 1; rank <= 8; rank++) {
+        slots.push({
+          id: `S${season}_LALPHA_D${division}_G${group}_R${rank}`,
+          season,
+          leagueId: 'ALPHA',
+          division,
+          group,
+          rank,
+          status: 'FREE',
+          occupantId: null,
+        });
+      }
+    }
+  }
+
+  assert.equal(slots.length, 120);
+  assert.equal(new Set(slots.map((slot) => slot.id)).size, 120);
+  assert.equal(new Set(slots.map((slot) => `${slot.division}:${slot.group}`)).size, 15);
+
+  for (const [division, groupCount] of groupsByDivision) {
+    const divisionSlots = slots.filter((slot) => slot.division === division);
+    assert.equal(divisionSlots.length, groupCount * 8);
+    for (let group = 1; group <= groupCount; group++) {
+      const groupSlots = divisionSlots.filter((slot) => slot.group === group);
+      assert.deepEqual(groupSlots.map((slot) => slot.rank).sort((a, b) => a - b), [1,2,3,4,5,6,7,8]);
+      assert.ok(groupSlots.every((slot) => isEligibleRegistrationSlot(slot, season)));
+    }
+  }
+
+  assert.equal(slots.filter((slot) => slot.division === 1).length, 8);
+  assert.equal(slots.filter((slot) => slot.division === 2).length, 16);
+  assert.equal(slots.filter((slot) => slot.division === 3).length, 32);
+  assert.equal(slots.filter((slot) => slot.division === 4).length, 64);
+});
