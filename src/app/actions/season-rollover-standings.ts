@@ -346,8 +346,7 @@ export function inspectGroupReconciliation(
     const slotHasCurrentIdentity = (status === 'OCCUPIED' && Boolean(slotId)) ||
       status === 'FREE' || (!status && Boolean(slotId));
     if ((!expectedId && (historicalIds.size > 1 || entries.length > 1)) ||
-        (!slotHasCurrentIdentity && !activeId && historicalIds.size > 1) ||
-        (!slotHasCurrentIdentity && !activeId && entries.length > 1 && historicalIds.size > 1) ||
+        (!slotHasCurrentIdentity && !activeId && entries.length !== 1 && historicalIds.size > 1) ||
         (status === 'FREE' && !hasBotSource && !(activeId?.startsWith('BOT_')) &&
           !(historicalIds.size === 1 && [...historicalIds][0].startsWith('BOT_')))) {
       unresolvedRanks.push(rank);
