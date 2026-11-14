@@ -29,7 +29,8 @@ export async function getMatchReportAction(idToken: string, matchId: string) {
     const snap = await db.collection(collectionName).doc(id).get();
     if (!snap.exists) continue;
     const match: any = snap.data() || {};
-    const participant = match.homeId === uid || match.awayId === uid || match.hostId === uid || match.challengerId === uid;
+    const participant = [match.homeId, match.awayId, match.homeUid, match.awayUid, match.hostId, match.challengerId]
+      .some((participantId) => String(participantId || '') === uid);
     let rankParticipant = false;
     if (!participant && (match.homeRank != null || match.awayRank != null)) {
       const profile = await db.collection('players_v14').doc(uid).get();

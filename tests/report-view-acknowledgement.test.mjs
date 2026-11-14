@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs';
 const store = readFileSync(new URL('../src/app/lib/store.tsx', import.meta.url), 'utf8');
 const matchPage = readFileSync(new URL('../src/app/match/page.tsx', import.meta.url), 'utf8');
 const reportsPage = readFileSync(new URL('../src/app/reports/page.tsx', import.meta.url), 'utf8');
+const matchReportAction = readFileSync(new URL('../src/app/actions/match-report.ts', import.meta.url), 'utf8');
 
 test('view acknowledgement persists locally before awaiting the server', () => {
   const start = store.indexOf('const markMatchIdAsSeen = useCallback(async');
@@ -26,4 +27,12 @@ test('reports queue excludes locally and server-marked viewed matches', () => {
   assert.match(reportsPage, /!isLocallyViewed\(m\)/);
   assert.match(reportsPage, /m\.seen !== true/);
   assert.match(reportsPage, /m\.reportStatus !== 'viewed'/);
+});
+
+
+test('match report access recognizes every supported participant identity field', () => {
+  const getReport = matchReportAction.slice(matchReportAction.indexOf('export async function getMatchReportAction'), matchReportAction.indexOf('export async function markMatchViewedAction'));
+  for (const field of ['homeId', 'awayId', 'homeUid', 'awayUid', 'hostId', 'challengerId']) {
+    assert.match(getReport, new RegExp(`match\\.${field}`));
+  }
 });
