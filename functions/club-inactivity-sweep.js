@@ -90,12 +90,17 @@ function isValidBotClub(bot, botId) {
  */
 async function recoverCancelledRetirement({ db, auth, uid, pendingRef, now }) {
   const cleanupToken = randomUUID();
+  const cleanupLeaseUntil = new Date(now.getTime() + 10 * 60 * 1000);
   const claimed = await db.runTransaction(async (transaction) => {
     const pending = await transaction.get(pendingRef);
     if (!pending.exists || pending.get('phase') !== 'CANCELLED') return false;
+    const activeLeaseUntil = timestampToMillis(pending.get('cleanupLeaseUntil'));
+    if (pending.get('cleanupToken') && Number.isFinite(activeLeaseUntil) &&
+        activeLeaseUntil > now.getTime()) return false;
     transaction.update(pendingRef, {
       cleanupToken,
       cleanupStartedAt: now,
+      cleanupLeaseUntil,
       updatedAt: now,
     });
     return true;
@@ -103,6 +108,18 @@ async function recoverCancelledRetirement({ db, auth, uid, pendingRef, now }) {
   if (!claimed) return false;
 
   const authRecord = await auth.getUser(uid);
+  // Revalidate ownership after the external Auth read. A worker that lost its
+  // cleanup lease must not re-enable an account now being retired by a newer
+  // operation.
+  const stillOwnsCleanup = await db.runTransaction(async (transaction) => {
+    const pending = await transaction.get(pendingRef);
+    if (!pending.exists ||
+        pending.get('phase') !== 'CANCELLED' ||
+        pending.get('cleanupToken') !== cleanupToken) return false;
+    const leaseUntilMs = timestampToMillis(pending.get('cleanupLeaseUntil'));
+    return Number.isFinite(leaseUntilMs) && leaseUntilMs > now.getTime();
+  });
+  if (!stillOwnsCleanup) return false;
   if (authRecord.disabled) await auth.updateUser(uid, { disabled: false });
 
   return db.runTransaction(async (transaction) => {
