@@ -77,7 +77,10 @@ test('inactive club replacement is atomic and preserves completed match results'
       awayName: i === 1 ? player.clubName : `Away ${i}`,
       homeRank: i === 0 ? rank : 1,
       awayRank: i === 1 ? rank : 2,
-      startTime: new Date(now.getTime() + (i + 1) * 60 * 60 * 1000).toISOString(),
+      // A due fixture for unrelated teams must not block this user's retirement.
+      startTime: i === 3
+        ? new Date(now.getTime() - 60 * 60 * 1000).toISOString()
+        : new Date(now.getTime() + (i + 1) * 60 * 60 * 1000).toISOString(),
       isFinished: i === 0,
       status: i === 0 ? 'finished' : 'scheduled',
       isProcessing: false,
