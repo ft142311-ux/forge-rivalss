@@ -484,7 +484,9 @@ test('registration HTTP API enforces its boundary and safely initializes a club'
     }
     const losingUid = losers[0].contender.uid;
     assert.equal((await db.collection('players_v14').doc(losingUid).get()).exists, false);
-    assert.equal((await db.collection('user_activity_v1').doc(losingUid).get()).exists, false);
+    // The authenticated losing contender may record session activity, but it
+    // must not receive a club, standings row, or registration audit event.
+    assert.equal((await db.collection('user_activity_v1').doc(losingUid).get()).exists, true);
     assert.equal((await db.collection('security_audit_v1').where('actorUid', '==', losingUid).get()).size, 0);
     assert.equal((await db.collection('players_v14').doc(replacementUid).get()).exists, true);
     assert.equal((await db.collection('security_audit_v1').where('actorUid', '==', replacementUid).get()).size, 1);
