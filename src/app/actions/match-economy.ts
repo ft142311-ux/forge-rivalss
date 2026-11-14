@@ -2,6 +2,7 @@ import 'server-only';
 
 import { FieldValue } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
+import { assertMatchDocumentId } from '@/app/lib/match-id';
 
 export type MatchEconomy = {
   attendance: number;
@@ -77,6 +78,14 @@ export async function recordMatchEconomy(
   matchId: string,
   economy: MatchEconomy,
 ) {
+  assertMatchDocumentId(matchId, { rejectBackslash: true });
+  if (typeof uid !== 'string' || !uid.trim()) throw new Error('INVALID_MATCH_ECONOMY_UID');
+
+  const amount = Number(economy?.totalRevenue);
+  if (!Number.isSafeInteger(amount) || amount < 0) {
+    throw new Error('INVALID_MATCH_ECONOMY_AMOUNT');
+  }
+
   const db = getAdminDb();
   const playerRef = db.collection('players_v14').doc(uid);
   const txRef = db.collection('economy_transactions').doc(`match_${matchId}_${uid}`);
@@ -84,11 +93,21 @@ export async function recordMatchEconomy(
   await db.runTransaction(async (t) => {
     const [playerSnap, txSnap] = await Promise.all([t.get(playerRef), t.get(txRef)]);
     if (!playerSnap.exists) throw new Error('PLAYER_NOT_FOUND');
-    if (txSnap.exists) return;
+    if (txSnap.exists) {
+      const receipt = txSnap.data() || {};
+      const receiptMatchesOperation =
+        receipt.userId === uid &&
+        receipt.referenceId === matchId &&
+        receipt.currency === 'credits' &&
+        receipt.type === 'MATCH_REVENUE' &&
+        Number(receipt.amount) === amount;
+      if (!receiptMatchesOperation) throw new Error('IDEMPOTENCY_KEY_REUSED');
+      return;
+    }
 
     const player = playerSnap.data() || {};
     const before = n(player.credits);
-    const after = before + economy.totalRevenue;
+    const after = before + amount;
 
     t.update(playerRef, {
       credits: after,
@@ -99,7 +118,7 @@ export async function recordMatchEconomy(
 
     t.set(txRef, {
       userId: uid,
-      amount: economy.totalRevenue,
+      amount,
       currency: 'credits',
       type: 'MATCH_REVENUE',
       referenceId: matchId,
