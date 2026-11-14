@@ -404,6 +404,16 @@ test('registration HTTP API enforces its boundary and safely initializes a club'
       /TOKEN_EXPIRED|INVALID_GRANT|USER_DISABLED|TOKEN_REVOKED/i,
     );
 
+    // A previously issued ID token must also fail server-side revocation
+    // verification; the old owner cannot keep using an already-open session.
+    const retiredOwnerRequest = await request();
+    const retiredOwnerBody = await retiredOwnerRequest.json();
+    assert.equal(retiredOwnerRequest.status, 401, JSON.stringify(retiredOwnerBody));
+    assert.ok(
+      ['ACCOUNT_DISABLED', 'AUTH_TOKEN_REVOKED'].includes(retiredOwnerBody.error),
+      `unexpected retired-token response: ${retiredOwnerBody.error}`,
+    );
+
     const releasedSlot = (await db.collection('league_slots_v1')
       .doc(targetSlotId).get()).data();
     assert.equal(releasedSlot.status, 'FREE');
