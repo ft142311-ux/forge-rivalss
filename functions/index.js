@@ -29,7 +29,7 @@ exports.initializeClub = functions.region('us-central1').https.onCall(async (dat
 
   const userId = context.auth.uid;
   const authorization = context.rawRequest?.headers?.authorization || '';
-  const tokenMatch = String(authorization).match(/^Bearer\\s+([^\\s]+)$/i);
+  const tokenMatch = String(authorization).match(/^Bearer\s+([^\s]+)$/i);
   if (!tokenMatch) {
     throw new functions.https.HttpsError('unauthenticated', 'AUTHENTICATION_REQUIRED');
   }
