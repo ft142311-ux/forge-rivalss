@@ -5,6 +5,9 @@ import { createRequire } from 'node:module';
 import { deleteApp, initializeApp } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
 import { getAuth } from 'firebase-admin/auth';
+import { initializeApp as initializeClientApp, deleteApp as deleteClientApp } from 'firebase/app';
+import { getAuth as getClientAuth, connectAuthEmulator, signInWithEmailAndPassword, signOut } from 'firebase/auth';
+import { getFirestore as getClientFirestore, connectFirestoreEmulator, doc, getDoc } from 'firebase/firestore';
 
 const require = createRequire(import.meta.url);
 const { buildBotClub, isValidBotClub, retireInactiveClub } = require('../functions/club-inactivity-sweep.js');
@@ -30,6 +33,63 @@ test('bot club validator accepts the canonical five-player roster and rejects co
   assert.equal(isValidBotClub(invalidRating, botId), false);
 
   assert.equal(isValidBotClub({ ...bot, id: 'BOT_OTHER' }, botId), false);
+});
+
+test('Firestore rules deny a retired account access to its active club data', {
+  skip: !emulatorHost || !process.env.FIREBASE_AUTH_EMULATOR_HOST,
+}, async (t) => {
+  const firestoreHost = emulatorHost.split(':')[0];
+  const firestorePort = Number(emulatorHost.split(':')[1]);
+  const authHost = process.env.FIREBASE_AUTH_EMULATOR_HOST;
+  const testProjectId = process.env.GCLOUD_PROJECT || 'demo-forge-rivals';
+  const adminApp = initializeApp({ projectId: testProjectId }, `retired-rules-admin-${randomUUID()}`);
+  const adminDb = getFirestore(adminApp);
+  const adminAuth = getAuth(adminApp);
+  const email = `retired-rules-${randomUUID()}@example.test`;
+  const password = 'TestPassword123!';
+  const authUser = await adminAuth.createUser({ email, password });
+  const uid = authUser.uid;
+  const playerRef = adminDb.collection('players_v14').doc(uid);
+  const pendingRef = adminDb.collection('inactive_club_retirements_v1').doc(uid);
+  const retiredRef = adminDb.collection('inactive_clubs_v1').doc(uid);
+
+  const clientApp = initializeClientApp({
+    apiKey: 'fake-api-key',
+    authDomain: 'localhost',
+    projectId: testProjectId,
+  }, `retired-rules-client-${randomUUID()}`);
+  const clientAuth = getClientAuth(clientApp);
+  const clientDb = getClientFirestore(clientApp);
+  connectAuthEmulator(clientAuth, `http://${authHost}`, { disableWarnings: true });
+  connectFirestoreEmulator(clientDb, firestoreHost, firestorePort);
+
+  t.after(async () => {
+    await signOut(clientAuth).catch(() => undefined);
+    await playerRef.delete().catch(() => undefined);
+    await pendingRef.delete().catch(() => undefined);
+    await retiredRef.delete().catch(() => undefined);
+    await adminAuth.deleteUser(uid).catch(() => undefined);
+    await deleteClientApp(clientApp);
+    await deleteApp(adminApp);
+  });
+
+  await playerRef.set({ id: uid, clubName: 'Rules Test Club' });
+  await signInWithEmailAndPassword(clientAuth, email, password);
+  const playerDoc = doc(clientDb, 'players_v14', uid);
+  assert.equal((await getDoc(playerDoc)).exists(), true);
+
+  await pendingRef.set({ uid, phase: 'PENDING_AUTH_DISABLE' });
+  await assert.rejects(
+    getDoc(playerDoc),
+    (error) => error && error.code === 'permission-denied',
+  );
+
+  await pendingRef.delete();
+  await retiredRef.set({ uid, retiredAt: new Date() });
+  await assert.rejects(
+    getDoc(playerDoc),
+    (error) => error && error.code === 'permission-denied',
+  );
 });
 
 test('login activity handshake is blocked once retirement has been claimed', {
