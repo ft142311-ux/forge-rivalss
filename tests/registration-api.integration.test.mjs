@@ -88,6 +88,7 @@ test('registration HTTP API enforces its boundary and safely initializes a club'
     const configRef = db.collection('system_v1').doc('season_config');
     const statsRef = db.collection('system_v1').doc('global_stats');
     const playerRef = db.collection('players_v14').doc(uid);
+    const activityRef = db.collection('user_activity_v1').doc(uid);
     const botPlayerRef = db.collection('players_v14').doc(botId);
 
     t.after(async () => {
@@ -101,6 +102,7 @@ test('registration HTTP API enforces its boundary and safely initializes a club'
         configRef,
         statsRef,
         playerRef,
+        activityRef,
         botPlayerRef,
       ];
       for (let i = 0; i < cleanupRefs.length; i += 400) {
