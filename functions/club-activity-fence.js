@@ -26,7 +26,11 @@ async function recordUserActivityUnlessRetiring(db, uid, nowMs = Date.now()) {
       transaction.get(activityRef),
     ]);
 
-    if (pending.exists) return { success: false, error: 'ACCOUNT_RETIRING' };
+    if (pending.exists && pending.get('phase') === 'CANCELLED') {
+      transaction.delete(pendingRef);
+    } else if (pending.exists) {
+      return { success: false, error: 'ACCOUNT_RETIRING' };
+    }
     if (retired.exists) return { success: false, error: 'ACCOUNT_RETIRED' };
 
     const lastActiveAt = activity.data()?.lastActiveAt;
