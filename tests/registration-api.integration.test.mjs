@@ -252,11 +252,28 @@ test('registration HTTP API enforces its boundary and safely initializes a club'
       body: JSON.stringify({ clubName: 'Forge Test Club' }),
     }));
 
-    const response = await request();
-    const responseBody = await response.json();
-    assert.equal(response.status, 200, JSON.stringify(responseBody));
-    assert.equal(responseBody.success, true);
-    assert.equal(responseBody.alreadyInitialized, false);
+    // Two simultaneous requests from the same authenticated UID must
+    // converge on one player document and one slot allocation.
+    const [firstResponse, simultaneousRetryResponse] = await Promise.all([request(), request()]);
+    const [firstBody, simultaneousRetryBody] = await Promise.all([
+      firstResponse.json(),
+      simultaneousRetryResponse.json(),
+    ]);
+    assert.equal(firstResponse.status, 200, JSON.stringify(firstBody));
+    assert.equal(simultaneousRetryResponse.status, 200, JSON.stringify(simultaneousRetryBody));
+    const createdRegistration = firstBody.alreadyInitialized === false
+      ? { response: firstResponse, body: firstBody }
+      : { response: simultaneousRetryResponse, body: simultaneousRetryBody };
+    const idempotentRegistration = firstBody.alreadyInitialized === true
+      ? { response: firstResponse, body: firstBody }
+      : { response: simultaneousRetryResponse, body: simultaneousRetryBody };
+    assert.equal(createdRegistration.body.success, true);
+    assert.equal(createdRegistration.body.alreadyInitialized, false);
+    assert.equal(idempotentRegistration.body.success, true);
+    assert.equal(idempotentRegistration.body.alreadyInitialized, true);
+    assert.equal(idempotentRegistration.body.numericId, createdRegistration.body.numericId);
+    const response = createdRegistration.response;
+    const responseBody = createdRegistration.body;
     assert.equal(responseBody.clubName, 'Forge Test Club');
     assert.equal(responseBody.tier, division);
     assert.equal(responseBody.group, group);
