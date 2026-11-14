@@ -344,7 +344,12 @@ export function inspectGroupReconciliation(
       }
     }
 
-    if (!expectedId && (historicalIds.size > 1 || entries.length > 1)) unresolvedRanks.push(rank);
+    const hasBotSource = entries.some(entry => entry.row?.isBot === true || entry.id.startsWith('BOT_'));
+    if ((!expectedId && (historicalIds.size > 1 || entries.length > 1)) ||
+        (status === 'FREE' && !hasBotSource && !(activeId?.startsWith('BOT_')) &&
+          !(historicalIds.size === 1 && [...historicalIds][0].startsWith('BOT_')))) {
+      unresolvedRanks.push(rank);
+    }
     if (activeId && expectedId && activeId !== expectedId) {
       slotConflicts.push({ rank, fixtureParticipantId: activeId, slotParticipantId: slotId });
       continue;
@@ -354,23 +359,23 @@ export function inspectGroupReconciliation(
     let conflict = false;
     if (status === 'OCCUPIED') {
       conflict = !slotId ||
+        (entries.length > 0 && !selected) ||
         (selected ? selected.id !== slotId || selected.row?.isBot === true : false) ||
-        (activeId ? activeId !== slotId : false) ||
-        (!selected && !activeId && historicalIds.size === 1 && [...historicalIds][0] !== slotId);
+        (activeId ? activeId !== slotId : false);
     } else if (status === 'FREE') {
       conflict = Boolean(slotId) ||
+        (entries.length > 0 && !selected) ||
         (selected ? !(selected.row?.isBot === true || selected.id.startsWith('BOT_')) : false) ||
-        (activeId ? !activeId.startsWith('BOT_') : false) ||
-        (!selected && !activeId && historicalIds.size === 1 && ![...historicalIds][0].startsWith('BOT_'));
+        (activeId ? !activeId.startsWith('BOT_') : false);
     } else if (!status) {
       if (slotId) {
-        conflict = (selected ? selected.id !== slotId : false) ||
-          (activeId ? activeId !== slotId : false) ||
-          (!selected && !activeId && historicalIds.size === 1 && [...historicalIds][0] !== slotId);
+        conflict = (entries.length > 0 && !selected) ||
+          (selected ? selected.id !== slotId : false) ||
+          (activeId ? activeId !== slotId : false);
       } else {
-        conflict = (selected ? !(selected.row?.isBot === true || selected.id.startsWith('BOT_')) : false) ||
-          (activeId ? !activeId.startsWith('BOT_') : false) ||
-          (!selected && !activeId && historicalIds.size === 1 && ![...historicalIds][0].startsWith('BOT_'));
+        conflict = (entries.length > 0 && !selected) ||
+          (selected ? !(selected.row?.isBot === true || selected.id.startsWith('BOT_')) : false) ||
+          (activeId ? !activeId.startsWith('BOT_') : false);
       }
     } else {
       conflict = true;
