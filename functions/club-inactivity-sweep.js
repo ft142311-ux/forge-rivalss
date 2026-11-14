@@ -273,10 +273,12 @@ async function retireInactiveClub({ db, auth, userRecord, now = new Date() }) {
       if (match.homeId === uid) {
         patch.homeId = botId;
         patch.homeName = botName;
+        patch.homeLogo = null;
       }
       if (match.awayId === uid) {
         patch.awayId = botId;
         patch.awayName = botName;
+        patch.awayLogo = null;
       }
       if (Object.keys(patch).length) transaction.update(matchDoc.ref, patch);
     }
