@@ -70,7 +70,7 @@ test('login activity handshake is blocked once retirement has been claimed', {
   assert.equal(retirementAttempt.action, 'SKIPPED_NOT_INACTIVE');
   assert.equal((await auth.getUser(uid)).disabled, false);
 
-  await pendingRef.set({ uid, status: 'CLAIMED', claimedAt: new Date() });
+  await pendingRef.set({ uid, phase: 'PENDING_AUTH_DISABLE', requestedAt: new Date() });
   const blocked = await recordUserActivityUnlessRetiring(db, uid);
   assert.deepEqual(blocked, { success: false, error: 'ACCOUNT_RETIRING' });
 
