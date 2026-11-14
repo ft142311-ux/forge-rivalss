@@ -224,10 +224,11 @@ test('inactive club replacement is atomic and preserves completed match results'
   }
 
   let disabled = false;
+  let revokedTokenCalls = 0;
   const auth = {
     getUser: async () => ({ uid, disabled, metadata: { lastSignInTime } }),
     updateUser: async (_uid, patch) => { disabled = patch.disabled; return { uid, disabled }; },
-    revokeRefreshTokens: async () => undefined,
+    revokeRefreshTokens: async () => { revokedTokenCalls++; },
   };
   const userRecord = { uid, disabled: false, metadata: { lastSignInTime } };
 
@@ -241,11 +242,30 @@ test('inactive club replacement is atomic and preserves completed match results'
   const concurrentAttempt = await retireInactiveClub({ db, auth, userRecord, now });
   assert.equal(concurrentAttempt.action, 'SKIPPED_RETIREMENT_IN_PROGRESS');
   assert.equal(disabled, false);
+  await pendingRef.set({
+    uid,
+    phase: 'UNRECOGNIZED_PHASE',
+    leaseOwner: 'old-worker',
+    leaseUntil: new Date(now.getTime() - 60 * 1000),
+    attempts: 1,
+  });
+  const unknownPhase = await retireInactiveClub({ db, auth, userRecord, now });
+  assert.equal(unknownPhase.action, 'SKIPPED_REVIEW_REQUIRED');
+  assert.equal((await pendingRef.get()).get('phase'), 'REVIEW_REQUIRED');
+  assert.equal(disabled, false);
   await pendingRef.delete();
 
+  await pendingRef.set({
+    uid,
+    phase: 'PENDING_AUTH_DISABLE',
+    leaseOwner: 'expired-worker',
+    leaseUntil: new Date(now.getTime() - 60 * 1000),
+    attempts: 1,
+  });
   const result = await retireInactiveClub({ db, auth, userRecord, now });
   assert.equal(result.action, 'RETIRED_AND_REPLACED');
   assert.equal(disabled, true);
+  assert.equal(revokedTokenCalls, 1);
   assert.equal((await playerRef.get()).exists, false);
   assert.equal((await pendingRef.get()).exists, false);
   assert.equal((await archiveRef.get()).get('replacedByBotId'), botId);
