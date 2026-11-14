@@ -136,37 +136,53 @@ async function retireInactiveClub({ db, auth, userRecord, now = new Date() }) {
     return { action: 'SKIPPED_INVALID_CLUB_COORDINATES' };
   }
 
-  // Disable sign-in and revoke refresh tokens before retiring the club. If the
-  // process stops here, the next scheduled pass resumes for this disabled UID.
+  // Claim retirement in the same Firestore transaction that reads activity.
+  // The login handshake reads this marker and writes the activity document, so
+  // exactly one side wins a concurrent login/retirement race.
   if (!pendingSnap.exists) {
-    await pendingRef.create({
-      uid,
-      phase: 'PENDING_AUTH_DISABLE',
-      lastSignInAt: eligibility.inactiveSince,
-      requestedAt: now,
-      season,
-      division,
-      group,
-      rank,
+    const claim = await db.runTransaction(async (transaction) => {
+      const [pending, latestActivity] = await Promise.all([
+        transaction.get(pendingRef),
+        transaction.get(activityRef),
+      ]);
+      if (pending.exists) return { claimed: false, alreadyClaimed: true };
+
+      const claimEligibility = resolveClubInactivity(
+        latestAuthRecord.metadata && latestAuthRecord.metadata.lastSignInTime,
+        now.getTime(),
+        undefined,
+        latestActivity.exists ? latestActivity.get('lastActiveAt') : null,
+      );
+      if (!claimEligibility.eligible) {
+        return { claimed: false, alreadyClaimed: false, reason: claimEligibility.reason };
+      }
+
+      transaction.create(pendingRef, {
+        uid,
+        phase: 'PENDING_AUTH_DISABLE',
+        lastSignInAt: latestAuthRecord.metadata && latestAuthRecord.metadata.lastSignInTime || null,
+        inactiveSince: claimEligibility.inactiveSince || eligibility.inactiveSince,
+        requestedAt: now,
+        season,
+        division,
+        group,
+        rank,
+        expectedSlotId,
+        expectedGeneration,
+      });
+      return { claimed: true, alreadyClaimed: false };
     });
+
+    if (!claim.claimed && !claim.alreadyClaimed) {
+      return { action: 'SKIPPED_ACTIVITY_RACE', reason: claim.reason || 'RECENT_ACTIVITY' };
+    }
   }
   if (!latestAuthRecord.disabled) await auth.updateUser(uid, { disabled: true });
   await auth.revokeRefreshTokens(uid);
 
-  // Close the race where a successful sign-in lands between the metadata read
-  // and Auth disable. If its timestamp advanced, restore access and do not retire.
   const postDisableAuthRecord = await auth.getUser(uid);
-  const postDisableActivitySnap = await activityRef.get();
-  const postDisableEligibility = resolveClubInactivity(
-    postDisableAuthRecord.metadata && postDisableAuthRecord.metadata.lastSignInTime,
-    now.getTime(),
-    undefined,
-    postDisableActivitySnap.exists ? postDisableActivitySnap.get('lastActiveAt') : null
-  );
-  if (!postDisableEligibility.eligible) {
-    await auth.updateUser(uid, { disabled: false });
-    await pendingRef.delete().catch(() => undefined);
-    return { action: 'SKIPPED_ACTIVITY_RACE', reason: postDisableEligibility.reason };
+  if (!postDisableAuthRecord.disabled) {
+    throw new Error('AUTH_ACCOUNT_DISABLE_NOT_CONFIRMED');
   }
 
   const tableRef = db.collection('league_tables_v2')
