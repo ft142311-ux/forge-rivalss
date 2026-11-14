@@ -120,13 +120,61 @@ async function recoverCancelledRetirement({ db, auth, uid, pendingRef, now }) {
     return Number.isFinite(leaseUntilMs) && leaseUntilMs > now.getTime();
   });
   if (!stillOwnsCleanup) return false;
-  if (authRecord.disabled) await auth.updateUser(uid, { disabled: false });
+  if (authRecord.disabled) {
+    await auth.updateUser(uid, { disabled: false });
+
+    // Auth is outside Firestore transactions. A worker can lose its lease
+    // after the check above but before this external update completes. Recheck
+    // ownership after re-enabling; if another worker took over, immediately
+    // fail closed again and restore a durable fence for manual recovery.
+    const stillOwnsAfterEnable = await db.runTransaction(async (transaction) => {
+      const pending = await transaction.get(pendingRef);
+      if (!pending.exists ||
+          pending.get('phase') !== 'CANCELLED' ||
+          pending.get('cleanupToken') !== cleanupToken) return false;
+      const leaseUntilMs = timestampToMillis(pending.get('cleanupLeaseUntil'));
+      return Number.isFinite(leaseUntilMs) && leaseUntilMs > now.getTime();
+    });
+    if (!stillOwnsAfterEnable) {
+      await auth.updateUser(uid, { disabled: true });
+      await auth.revokeRefreshTokens(uid);
+      await db.runTransaction(async (transaction) => {
+        const [pending, archive] = await Promise.all([
+          transaction.get(pendingRef),
+          transaction.get(db.collection('inactive_clubs_v1').doc(uid)),
+        ]);
+        if (archive.exists) return;
+        if (!pending.exists) {
+          transaction.create(pendingRef, {
+            uid,
+            phase: 'REVIEW_REQUIRED',
+            lastErrorCode: 'STALE_CANCELLED_CLEANUP_LOST_FENCE',
+            reviewRequiredAt: now,
+            requestedAt: now,
+            updatedAt: now,
+          });
+          return;
+        }
+        if (pending.get('phase') === 'CANCELLED') {
+          transaction.update(pendingRef, {
+            phase: 'REVIEW_REQUIRED',
+            lastErrorCode: 'STALE_CANCELLED_CLEANUP_LOST_FENCE',
+            reviewRequiredAt: now,
+            updatedAt: now,
+          });
+        }
+      });
+      return false;
+    }
+  }
 
   return db.runTransaction(async (transaction) => {
     const pending = await transaction.get(pendingRef);
     if (!pending.exists ||
         pending.get('phase') !== 'CANCELLED' ||
         pending.get('cleanupToken') !== cleanupToken) return false;
+    const leaseUntilMs = timestampToMillis(pending.get('cleanupLeaseUntil'));
+    if (!Number.isFinite(leaseUntilMs) || leaseUntilMs <= now.getTime()) return false;
     transaction.delete(pendingRef);
     return true;
   });
