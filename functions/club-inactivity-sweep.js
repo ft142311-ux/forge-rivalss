@@ -157,7 +157,12 @@ async function retireInactiveClub({ db, auth, userRecord, now = new Date() }) {
       transaction.get(pendingRef),
       transaction.get(activityRef),
     ]);
-    if (pending.exists) return { claimed: false, alreadyClaimed: true };
+    if (pending.exists) {
+      if (pending.get('phase') === 'REVIEW_REQUIRED') {
+        return { claimed: false, alreadyClaimed: false, reviewRequired: true };
+      }
+      return { claimed: false, alreadyClaimed: true };
+    }
 
     const claimEligibility = resolveClubInactivity(
       latestAuthRecord.metadata && latestAuthRecord.metadata.lastSignInTime,
@@ -185,6 +190,7 @@ async function retireInactiveClub({ db, auth, userRecord, now = new Date() }) {
     return { claimed: true, alreadyClaimed: false };
   });
 
+  if (claim.reviewRequired) return { action: 'SKIPPED_REVIEW_REQUIRED' };
   if (!claim.claimed && !claim.alreadyClaimed) {
     return { action: 'SKIPPED_ACTIVITY_RACE', reason: claim.reason || 'RECENT_ACTIVITY' };
   }
