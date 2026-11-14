@@ -240,7 +240,7 @@ test('login activity handshake is blocked once retirement has been claimed', {
     db,
     auth,
     userRecord: { ...authUser, disabled: true, metadata: authUser.metadata },
-    now,
+    now: new Date(now.getTime() + 11 * 60 * 1000),
   });
   assert.equal(cancelledRecovery.action, 'CANCELLED_PENDING_CLEANUP');
   assert.equal((await auth.getUser(uid)).disabled, false);
