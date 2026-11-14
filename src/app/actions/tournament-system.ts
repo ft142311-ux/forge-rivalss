@@ -1,5 +1,6 @@
 'use server';
 
+import { randomUUID } from 'node:crypto';
 import { FieldValue } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { requireServerActor } from '@/lib/server-auth';
@@ -8,6 +9,7 @@ import { hash32 } from '@/app/lib/hash-utils';
 import { buildMatchTeamSnapshot, createDeterministicBotSquad } from '@/app/lib/match-simulation';
 import { runMatchEngine } from '@/app/lib/match-engine';
 import { MATCH_COLLECTIONS } from '@/app/lib/match-storage';
+import { isTournamentMatchLeaseExpired, TOURNAMENT_MATCH_LEASE_MS } from '@/app/lib/tournament-match-lease';
 
 const TOURNAMENTS = [
   { id: 'iron-kettle', name: 'Чугунный чайник', type: 'Тов', maxParticipants: 16, start: '10:00' },
@@ -379,13 +381,41 @@ async function participantSnapshot(db: any, tournamentRef: any, id: string) {
 async function resolveTournamentMatch(db: any, tournamentId: string, matchId: string, now: number) {
   const tournamentRef = db.collection('tournaments_v1').doc(tournamentId);
   const matchRef = tournamentRef.collection('matches').doc(matchId);
+  const processingToken = randomUUID();
   const claim = await db.runTransaction(async (t: any) => {
     const snap = await t.get(matchRef);
     if (!snap.exists) return false;
     const m = snap.data() || {};
+    const status = String(m.status || '');
     const attempts = Number(m.attemptCount || 0);
-    if (!['scheduled', 'error'].includes(String(m.status)) || attempts >= 3 || Number(m.scheduledAt) > now) return false;
-    t.update(matchRef, { status: 'processing', attemptCount: attempts + 1, processingAt: FieldValue.serverTimestamp(), lastError: FieldValue.delete() });
+    const staleProcessing = status === 'processing' &&
+      isTournamentMatchLeaseExpired(m.processingAt, now, TOURNAMENT_MATCH_LEASE_MS);
+
+    if (status === 'processing' && !staleProcessing) return false;
+    if (!['scheduled', 'error', 'processing'].includes(status) || Number(m.scheduledAt) > now) return false;
+
+    // A crashed third attempt is made visibly retry-exhausted instead of
+    // remaining in processing forever and blocking tournament progression.
+    if (attempts >= 3) {
+      if (staleProcessing) {
+        t.update(matchRef, {
+          status: 'error',
+          processingToken: FieldValue.delete(),
+          lastError: 'TOURNAMENT_MATCH_RETRY_EXHAUSTED',
+          failedAt: FieldValue.serverTimestamp(),
+          updatedAt: FieldValue.serverTimestamp(),
+        });
+      }
+      return false;
+    }
+
+    t.update(matchRef, {
+      status: 'processing',
+      attemptCount: attempts + 1,
+      processingAt: FieldValue.serverTimestamp(),
+      processingToken,
+      lastError: FieldValue.delete(),
+    });
     return true;
   });
   if (!claim) return false;
@@ -413,9 +443,10 @@ async function resolveTournamentMatch(db: any, tournamentId: string, matchId: st
     const homeScore = simulation.games.reduce((s, g) => s + g.homeScore, 0);
     const awayScore = simulation.games.reduce((s, g) => s + g.awayScore, 0);
 
-    await db.runTransaction(async (t: any) => {
+    const finalized = await db.runTransaction(async (t: any) => {
       const fresh = await t.get(matchRef);
-      if (!fresh.exists || fresh.data()?.status !== 'processing') return;
+      const freshData = fresh.data() || {};
+      if (!fresh.exists || freshData.status !== 'processing' || freshData.processingToken !== processingToken) return false;
       const groupRef = m.stage === 'groups' ? tournamentRef.collection('groups').doc(m.groupId) : null;
       const groupSnap = groupRef ? await t.get(groupRef) : null;
 
@@ -490,10 +521,26 @@ async function resolveTournamentMatch(db: any, tournamentId: string, matchId: st
           }
         }
       }
+      return true;
     });
-    return true;
+    return finalized === true;
   } catch (error) {
-    await matchRef.update({ status: 'error', error: String((error as any)?.message || error), lastError: String((error as any)?.message || error), failedAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp() });
+    const message = String((error as any)?.message || error || 'TOURNAMENT_MATCH_FAILED').slice(0, 300);
+    // A worker whose lease was reclaimed must never overwrite the newer
+    // worker's state or publish a stale result.
+    await db.runTransaction(async (t: any) => {
+      const fresh = await t.get(matchRef);
+      const data = fresh.data() || {};
+      if (!fresh.exists || data.status !== 'processing' || data.processingToken !== processingToken) return;
+      t.update(matchRef, {
+        status: 'error',
+        processingToken: FieldValue.delete(),
+        error: message,
+        lastError: message,
+        failedAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+    }).catch(() => undefined);
     return false;
   }
 }
@@ -640,12 +687,12 @@ export async function runTournamentCycle(cronToken: string) {
       if (await initializeTournament(db, tournament.id, now)) initialized++;
       continue;
     }
-    const matchesSnap = await doc.ref.collection('matches').where('status', 'in', ['scheduled', 'error']).get();
+    const matchesSnap = await doc.ref.collection('matches').where('status', 'in', ['scheduled', 'error', 'processing']).get();
     for (const matchDoc of matchesSnap.docs) {
       const match = matchDoc.data() || {};
       // Повторяем сбойную симуляцию до 3 попыток. Ошибки не считаются сыгранными
       // и не позволяют турниру перейти к следующему этапу.
-      if (Number(match.scheduledAt) <= now && Number(match.attemptCount || 0) < 3) {
+      if (Number(match.scheduledAt) <= now) {
         if (await resolveTournamentMatch(db, tournament.id, matchDoc.id, now)) resolved++;
       }
     }
