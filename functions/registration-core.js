@@ -1,9 +1,6 @@
 'use strict';
 
-const {
-  isEligibleRegistrationSlot,
-  validateRegistrationSchedule,
-} = require('./league-integrity');
+const { isEligibleRegistrationSlot } = require('./league-integrity');
 
 /**
  * Shared registration primitives. This module lives inside the Firebase
