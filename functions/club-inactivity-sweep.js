@@ -88,20 +88,22 @@ function isValidBotClub(bot, botId) {
  * before Auth has been re-enabled. A per-attempt token prevents a delayed
  * worker from deleting a marker that another recovery attempt now owns.
  */
-async function recoverCancelledRetirement({ db, auth, uid, pendingRef, now }) {
+async function recoverCancelledRetirement({ db, auth, uid, pendingRef, now, clock = () => Date.now() }) {
   const cleanupToken = randomUUID();
-  const cleanupLeaseUntil = new Date(now.getTime() + 10 * 60 * 1000);
   const claimed = await db.runTransaction(async (transaction) => {
+    const currentMs = clock();
+    const currentTime = new Date(currentMs);
+    const cleanupLeaseUntil = new Date(currentMs + 10 * 60 * 1000);
     const pending = await transaction.get(pendingRef);
     if (!pending.exists || pending.get('phase') !== 'CANCELLED') return false;
     const activeLeaseUntil = timestampToMillis(pending.get('cleanupLeaseUntil'));
     if (pending.get('cleanupToken') && Number.isFinite(activeLeaseUntil) &&
-        activeLeaseUntil > now.getTime()) return false;
+        activeLeaseUntil > currentMs) return false;
     transaction.update(pendingRef, {
       cleanupToken,
-      cleanupStartedAt: now,
+      cleanupStartedAt: currentTime,
       cleanupLeaseUntil,
-      updatedAt: now,
+      updatedAt: currentTime,
     });
     return true;
   });
@@ -112,12 +114,13 @@ async function recoverCancelledRetirement({ db, auth, uid, pendingRef, now }) {
   // cleanup lease must not re-enable an account now being retired by a newer
   // operation.
   const stillOwnsCleanup = await db.runTransaction(async (transaction) => {
+    const currentMs = clock();
     const pending = await transaction.get(pendingRef);
     if (!pending.exists ||
         pending.get('phase') !== 'CANCELLED' ||
         pending.get('cleanupToken') !== cleanupToken) return false;
     const leaseUntilMs = timestampToMillis(pending.get('cleanupLeaseUntil'));
-    return Number.isFinite(leaseUntilMs) && leaseUntilMs > now.getTime();
+    return Number.isFinite(leaseUntilMs) && leaseUntilMs > currentMs;
   });
   if (!stillOwnsCleanup) return false;
   if (authRecord.disabled) {
@@ -128,12 +131,13 @@ async function recoverCancelledRetirement({ db, auth, uid, pendingRef, now }) {
     // ownership after re-enabling; if another worker took over, immediately
     // fail closed again and restore a durable fence for manual recovery.
     const stillOwnsAfterEnable = await db.runTransaction(async (transaction) => {
+      const currentMs = clock();
       const pending = await transaction.get(pendingRef);
       if (!pending.exists ||
           pending.get('phase') !== 'CANCELLED' ||
           pending.get('cleanupToken') !== cleanupToken) return false;
       const leaseUntilMs = timestampToMillis(pending.get('cleanupLeaseUntil'));
-      return Number.isFinite(leaseUntilMs) && leaseUntilMs > now.getTime();
+      return Number.isFinite(leaseUntilMs) && leaseUntilMs > currentMs;
     });
     if (!stillOwnsAfterEnable) {
       await auth.updateUser(uid, { disabled: true });
@@ -169,12 +173,13 @@ async function recoverCancelledRetirement({ db, auth, uid, pendingRef, now }) {
   }
 
   return db.runTransaction(async (transaction) => {
+    const currentMs = clock();
     const pending = await transaction.get(pendingRef);
     if (!pending.exists ||
         pending.get('phase') !== 'CANCELLED' ||
         pending.get('cleanupToken') !== cleanupToken) return false;
     const leaseUntilMs = timestampToMillis(pending.get('cleanupLeaseUntil'));
-    if (!Number.isFinite(leaseUntilMs) || leaseUntilMs <= now.getTime()) return false;
+    if (!Number.isFinite(leaseUntilMs) || leaseUntilMs <= currentMs) return false;
     transaction.delete(pendingRef);
     return true;
   });
