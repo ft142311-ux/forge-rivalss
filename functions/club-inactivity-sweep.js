@@ -227,7 +227,7 @@ async function preflightRetirementResult({ db, pendingRef, now, action, code }) 
  * committed atomically. A retry can safely finish a previously interrupted
  * retirement because disabled Auth users remain visible to listUsers().
  */
-async function retireInactiveClub({ db, auth, userRecord, now = new Date() }) {
+async function retireInactiveClub({ db, auth, userRecord, now = new Date(), clock = () => Date.now() }) {
   const uid = userRecord && userRecord.uid;
   if (!uid || !userRecord || !userRecord.metadata) return { action: 'SKIPPED_INVALID_AUTH_RECORD' };
 
@@ -257,7 +257,7 @@ async function retireInactiveClub({ db, auth, userRecord, now = new Date() }) {
   // Refresh Auth metadata immediately before making the eligibility decision.
   const latestAuthRecord = await auth.getUser(uid);
   if (pendingSnap.exists && pendingSnap.get('phase') === 'CANCELLED') {
-    const recovered = await recoverCancelledRetirement({ db, auth, uid, pendingRef, now });
+    const recovered = await recoverCancelledRetirement({ db, auth, uid, pendingRef, now, clock });
     return { action: recovered ? 'CANCELLED_PENDING_CLEANUP' : 'SKIPPED_RETIREMENT_IN_PROGRESS' };
   }
   if (latestAuthRecord.disabled && !pendingSnap.exists) {
@@ -312,7 +312,7 @@ async function retireInactiveClub({ db, auth, userRecord, now = new Date() }) {
         return { action: 'SKIPPED_REVIEW_REQUIRED' };
       }
       if (cancellation === 'CANCELLED') {
-        const recovered = await recoverCancelledRetirement({ db, auth, uid, pendingRef, now });
+        const recovered = await recoverCancelledRetirement({ db, auth, uid, pendingRef, now, clock });
         return { action: recovered ? 'CANCELLED_PENDING_CLEANUP' : 'SKIPPED_RETIREMENT_IN_PROGRESS' };
       }
     }
@@ -447,7 +447,7 @@ async function retireInactiveClub({ db, auth, userRecord, now = new Date() }) {
   if (claim.reviewRequired) return { action: 'SKIPPED_REVIEW_REQUIRED' };
   if (claim.busy) return { action: 'SKIPPED_RETIREMENT_IN_PROGRESS' };
   if (claim.cancelled) {
-    const recovered = await recoverCancelledRetirement({ db, auth, uid, pendingRef, now });
+    const recovered = await recoverCancelledRetirement({ db, auth, uid, pendingRef, now, clock });
     return { action: recovered ? 'CANCELLED_PENDING_CLEANUP' : 'SKIPPED_RETIREMENT_IN_PROGRESS' };
   }
   if (!claim.claimed) {
@@ -480,7 +480,7 @@ async function retireInactiveClub({ db, auth, userRecord, now = new Date() }) {
       return true;
     });
     if (markedCancelled) {
-      await recoverCancelledRetirement({ db, auth, uid, pendingRef, now });
+      await recoverCancelledRetirement({ db, auth, uid, pendingRef, now, clock });
     }
     return { action: 'SKIPPED_ACTIVITY_RACE', reason: claimEligibility.reason };
   }
@@ -752,7 +752,7 @@ async function retireInactiveClub({ db, auth, userRecord, now = new Date() }) {
     if (markedCancelled) {
       // The marker remains an access fence until Auth is enabled. A cleanup
       // token prevents delayed workers from deleting a newer recovery marker.
-      await recoverCancelledRetirement({ db, auth, uid, pendingRef, now });
+      await recoverCancelledRetirement({ db, auth, uid, pendingRef, now, clock });
     }
   }
   return result;
