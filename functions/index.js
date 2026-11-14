@@ -1,6 +1,7 @@
 const functions = require('firebase-functions');
 const admin = require('firebase-admin');
 const { isEligibleRegistrationSlot, validateRegistrationSchedule, generateStartingSquad, buildRegistrationMatchPlan, transferBotStandingToUser } = require('./registration-core');
+const { recordUserActivityUnlessRetiring } = require('./club-activity-fence');
 
 /**
  * @fileOverview Р•РґРёРЅРѕРµ СЃРµСЂРІРµСЂРЅРѕРµ СЏРґСЂРѕ СЂРµРіРёСЃС‚СЂР°С†РёРё v165.
@@ -27,10 +28,36 @@ exports.initializeClub = functions.region('us-central1').https.onCall(async (dat
   }
 
   const userId = context.auth.uid;
-  const email = context.auth.token.email;
+  const authorization = context.rawRequest?.headers?.authorization || '';
+  const tokenMatch = String(authorization).match(/^Bearer\\s+([^\\s]+)$/i);
+  if (!tokenMatch) {
+    throw new functions.https.HttpsError('unauthenticated', 'AUTHENTICATION_REQUIRED');
+  }
+
+  let decodedToken;
+  try {
+    decodedToken = await admin.auth().verifyIdToken(tokenMatch[1], true);
+  } catch (error) {
+    const authCode = String(error?.code || '').toLowerCase();
+    const authMessage = String(error?.message || '').toLowerCase();
+    const reason = authCode.includes('user-disabled') || authMessage.includes('user disabled')
+      ? 'ACCOUNT_DISABLED'
+      : (authCode.includes('id-token-revoked') ? 'AUTH_TOKEN_REVOKED' : 'AUTH_TOKEN_INVALID');
+    throw new functions.https.HttpsError('unauthenticated', reason);
+  }
+  if (decodedToken.uid !== userId) {
+    throw new functions.https.HttpsError('unauthenticated', 'AUTHENTICATION_REQUIRED');
+  }
+
+  const activityFence = await recordUserActivityUnlessRetiring(db, userId);
+  if (!activityFence.success) {
+    throw new functions.https.HttpsError('permission-denied', activityFence.error);
+  }
+
+  const email = typeof decodedToken.email === 'string' ? decodedToken.email : '';
   const leagueId = 'ALPHA';
   console.log('[INIT] AUTH OK. UID:', userId, 'League:', leagueId);
-  
+
   if (!email) {
     console.error('[INIT] EMAIL FAILED: Missing in token');
     throw new functions.https.HttpsError('failed-precondition', 'EMAIL_REQUIRED');
