@@ -6,10 +6,32 @@ import { getAdminDb } from '@/lib/firebase-admin';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+type RegistrationMatchPlan =
+  | { ok: true; updates: Array<{ matchId: string | null; patch: Record<string, unknown> }> }
+  | { ok: false; reason: string; updates: []; matchId?: string };
+
+type RegistrationStandingTransfer =
+  | { ok: true; stats: Record<string, Record<string, unknown>>; transferredRow: Record<string, unknown> }
+  | { ok: false; reason: string };
+
 type RegistrationCore = {
   isEligibleRegistrationSlot: (slot: Record<string, unknown>, season: number) => boolean;
   validateRegistrationSchedule: (matches: Record<string, unknown>[], rank: number, botId: string) => boolean;
   generateStartingSquad: () => Record<string, unknown>[];
+  buildRegistrationMatchPlan: (
+    matches: Record<string, unknown>[],
+    botId: string,
+    userId: string,
+    clubName: string,
+    nowMs?: number,
+  ) => RegistrationMatchPlan;
+  transferBotStandingToUser: (
+    stats: Record<string, Record<string, unknown>>,
+    botId: string,
+    userId: string,
+    clubName: string,
+    rank: number,
+  ) => RegistrationStandingTransfer;
 };
 
 // Keep the same audited invariants and squad generator as the emulator callable.
