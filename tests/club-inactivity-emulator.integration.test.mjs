@@ -103,8 +103,8 @@ test('Firestore rules deny a retired account access to its active club data', {
     (error) => error && error.code === 'permission-denied',
   );
 
-  // A different authenticated account must not be able to read the former
-  // owner's private retirement archive through the client Firestore SDK.
+  // Even an authenticated client cannot read the private retirement archive
+  // through the client Firestore SDK; archive access remains server-only.
   const retiredArchiveDoc = doc(clientDb, 'inactive_clubs_v1', uid);
   await assert.rejects(
     getDoc(retiredArchiveDoc),
