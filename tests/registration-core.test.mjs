@@ -137,6 +137,16 @@ test('registration is deferred while a future fixture for this slot is already p
   assert.equal(result.reason, 'SLOT_MATCH_IN_PROGRESS');
 });
 
+test('registration is deferred when a fixture has started even if processing flag is stale', () => {
+  const matches = createRoundRobin();
+  for (const match of matches) match.startTime = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+  const target = matches.find(match => match.homeId === 'bot-3' || match.awayId === 'bot-3');
+  target.startedAt = new Date(Date.now() - 60 * 1000).toISOString();
+  const result = buildRegistrationMatchPlan(matches, 'bot-3', 'user-b', 'New Club', Date.now());
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'SLOT_MATCH_IN_PROGRESS');
+});
+
 test('registration is deferred when an unfinished fixture for this slot is already due', () => {
   const matches = createRoundRobin();
   for (const match of matches) match.startTime = new Date(Date.now() + 60 * 60 * 1000).toISOString();
