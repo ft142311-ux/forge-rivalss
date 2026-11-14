@@ -102,6 +102,14 @@ test('Firestore rules deny a retired account access to its active club data', {
     getDoc(playerDoc),
     (error) => error && error.code === 'permission-denied',
   );
+
+  // A different authenticated account must not be able to read the former
+  // owner's private retirement archive through the client Firestore SDK.
+  const retiredArchiveDoc = doc(clientDb, 'inactive_clubs_v1', uid);
+  await assert.rejects(
+    getDoc(retiredArchiveDoc),
+    (error) => error && error.code === 'permission-denied',
+  );
 });
 
 test('login activity handshake is blocked once retirement has been claimed', {
