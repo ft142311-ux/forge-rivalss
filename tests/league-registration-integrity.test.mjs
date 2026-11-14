@@ -30,15 +30,19 @@ test('registration refuses duplicate rank identities and incomplete round robins
 
 
 test('new registration can randomly claim any free D1-D4 slot in the active season', () => {
-  const base = { season: 7, status: 'FREE', occupantId: null };
-  for (const division of [1, 2, 3, 4]) {
-    assert.equal(isEligibleRegistrationSlot({ ...base, division }, 7), true);
+  const base = { season: 7, status: 'FREE', occupantId: null, group: 1, rank: 8 };
+  for (const [division, group] of [[1, 1], [2, 2], [3, 4], [4, 8]]) {
+    assert.equal(isEligibleRegistrationSlot({ ...base, division, group }, 7), true);
   }
   assert.equal(isEligibleRegistrationSlot({ ...base, division: 0 }, 7), false);
   assert.equal(isEligibleRegistrationSlot({ ...base, division: 5 }, 7), false);
+  assert.equal(isEligibleRegistrationSlot({ ...base, division: 4, group: 9 }, 7), false);
+  assert.equal(isEligibleRegistrationSlot({ ...base, division: 3, group: 5 }, 7), false);
+  assert.equal(isEligibleRegistrationSlot({ ...base, division: 2, group: 2, rank: 9 }, 7), false);
   assert.equal(isEligibleRegistrationSlot({ ...base, division: 4 }, 8), false);
   assert.equal(isEligibleRegistrationSlot({ ...base, division: 4, status: 'OCCUPIED', occupantId: 'user-1' }, 7), false);
   assert.equal(isEligibleRegistrationSlot({ ...base, division: 4, occupantId: 'user-1' }, 7), false);
+  assert.equal(isEligibleRegistrationSlot({ ...base, division: 4, group: undefined }, 7), false);
 });
 
 
