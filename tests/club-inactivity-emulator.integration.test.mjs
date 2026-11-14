@@ -203,6 +203,9 @@ test('login activity handshake is blocked once retirement has been claimed', {
   await retiredRef.delete();
   await pendingRef.set({ uid, phase: 'CANCELLED', cancellationReason: 'DEFERRED_MATCH_PROCESSING' });
   await auth.updateUser(uid, { disabled: true });
+  const cancelledFence = await recordUserActivityUnlessRetiring(db, uid);
+  assert.deepEqual(cancelledFence, { success: false, error: 'ACCOUNT_RETIRING' });
+  assert.equal((await pendingRef.get()).get('phase'), 'CANCELLED');
   const cancelledRecovery = await retireInactiveClub({
     db,
     auth,
