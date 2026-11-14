@@ -10,7 +10,13 @@ import { getAuth as getClientAuth, connectAuthEmulator, signInWithEmailAndPasswo
 import { getFirestore as getClientFirestore, connectFirestoreEmulator, doc, getDoc } from 'firebase/firestore';
 
 const require = createRequire(import.meta.url);
-const { buildBotClub, isValidBotClub, retireInactiveClub, runClubInactivitySweep } = require('../functions/club-inactivity-sweep.js');
+const {
+  buildBotClub,
+  isValidBotClub,
+  recoverCancelledRetirement,
+  retireInactiveClub,
+  runClubInactivitySweep,
+} = require('../functions/club-inactivity-sweep.js');
 const { recordUserActivityUnlessRetiring } = require('../functions/club-activity-fence.js');
 const emulatorHost = process.env.FIRESTORE_EMULATOR_HOST;
 const projectId = process.env.GCLOUD_PROJECT || 'demo-forge-rivals';
@@ -480,6 +486,59 @@ test('inactive club replacement is atomic and preserves completed match results'
   assert.equal(futureAway.awayName, 'Bot01200103');
 });
 
+
+
+
+test('a delayed cancellation cleanup cannot delete a newer retirement marker', {
+  skip: !emulatorHost,
+}, async (t) => {
+  const testProjectId = `demo-cleanup-${randomUUID().slice(0, 8)}`;
+  const app = initializeApp({ projectId: testProjectId }, `cancel-cleanup-test-${randomUUID()}`);
+  const db = getFirestore(app);
+  const uid = `cancel-cleanup-${randomUUID()}`;
+  const pendingRef = db.collection('inactive_club_retirements_v1').doc(uid);
+  const now = new Date('2026-11-14T12:00:00.000Z');
+
+  t.after(async () => {
+    await pendingRef.delete().catch(() => undefined);
+    await deleteApp(app);
+  });
+
+  await pendingRef.set({ uid, phase: 'CANCELLED', cancellationReason: 'FIRST_ATTEMPT' });
+
+  let releaseFirst;
+  let signalFirstStarted;
+  const firstStarted = new Promise((resolve) => { signalFirstStarted = resolve; });
+  const firstGate = new Promise((resolve) => { releaseFirst = resolve; });
+  let authReads = 0;
+  const auth = {
+    getUser: async () => {
+      authReads++;
+      if (authReads === 1) {
+        signalFirstStarted();
+        await firstGate;
+      }
+      return { uid, disabled: true };
+    },
+    updateUser: async () => ({ uid, disabled: false }),
+  };
+
+  const delayedRecovery = recoverCancelledRetirement({ db, auth, uid, pendingRef, now });
+  await firstStarted;
+
+  const completedRecovery = await recoverCancelledRetirement({ db, auth, uid, pendingRef, now });
+  assert.equal(completedRecovery, true);
+  assert.equal((await pendingRef.get()).exists, false);
+
+  await pendingRef.set({ uid, phase: 'CANCELLED', cancellationReason: 'NEWER_OPERATION' });
+  releaseFirst();
+  const staleRecovery = await delayedRecovery;
+
+  assert.equal(staleRecovery, false);
+  const remaining = await pendingRef.get();
+  assert.equal(remaining.exists, true);
+  assert.equal(remaining.get('cancellationReason'), 'NEWER_OPERATION');
+});
 
 test('a pending retirement with recent activity is safely cancelled and Auth access restored', {
   skip: !emulatorHost,
