@@ -166,6 +166,8 @@ export async function hireFoundationStaffAction(idToken: string, roleValue: stri
         type: 'STAFF_HIRE',
         referenceId: hired.id,
         description: `Hire ${role}`,
+        balanceBefore: balance,
+        balanceAfter: balance - cost,
         timestamp: FieldValue.serverTimestamp(),
       });
 

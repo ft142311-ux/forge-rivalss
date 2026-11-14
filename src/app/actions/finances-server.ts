@@ -4,68 +4,78 @@
  * @fileOverview Серверный модуль финансов на базе Admin SDK.
  */
 
-import { FieldValue, Timestamp } from 'firebase-admin/firestore';
+import { FieldValue } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { FinancialOpSchema } from '@/app/lib/validation-schemas';
 import { logger } from '@/app/lib/logger';
 import { requireServerActor } from '@/lib/server-auth';
 
 /**
- * Выполняет финансовую операцию с проверкой ключа идемпотентности через Admin SDK.
+ * Выполняет финансовую операцию с постоянным ключом идемпотентности,
+ * scoped к пользователю. Баланс, receipt и economy ledger фиксируются атомарно.
  */
-export async function processFinancialOperation(idToken: string, data: any) {
+export async function processFinancialOperation(idToken: string, data: unknown) {
   const { uid: userId } = await requireServerActor(idToken);
   const validation = FinancialOpSchema.safeParse(data);
-  if (!validation.success) return { success: false, error: "INVALID_INPUT" };
+  if (!validation.success) return { success: false, error: 'INVALID_INPUT' };
 
   const { idempotencyKey, amount, type, description } = validation.data;
   const db = getAdminDb();
 
   try {
-    const result = await db.runTransaction(async (transaction) => {
-      const logRef = db.collection('system_v1').doc(`idempotency_${idempotencyKey}`);
-      const logSnap = await transaction.get(logRef);
+    return await db.runTransaction(async (transaction) => {
+      const receiptRef = db.collection('system_v1').doc(`financial_op_${userId}_${idempotencyKey}`);
+      const playerRef = db.collection('players_v14').doc(userId);
+      const ledgerRef = db.collection('economy_transactions').doc(`financial_${userId}_${idempotencyKey}`);
 
-      if (logSnap.exists) {
-        logger.warn("Idempotency match detected. Skipping operation.", { idempotencyKey });
+      const receiptSnap = await transaction.get(receiptRef);
+      if (receiptSnap.exists) {
+        const receipt = receiptSnap.data() || {};
+        if (receipt.amount !== amount || receipt.type !== type) {
+          throw new Error('IDEMPOTENCY_KEY_REUSED');
+        }
+        logger.warn('Idempotency match detected. Skipping operation.', { userId, idempotencyKey });
         return { success: true, alreadyProcessed: true };
       }
 
-      const playerRef = db.collection('players_v14').doc(userId);
       const playerSnap = await transaction.get(playerRef);
-      if (!playerSnap.exists) throw new Error("PLAYER_NOT_FOUND");
+      if (!playerSnap.exists) throw new Error('PLAYER_NOT_FOUND');
 
-      const pData = playerSnap.data()!;
-      const currentBalance = Number(pData[type] || 0);
+      const player = playerSnap.data() || {};
+      const balanceBefore = Number(player[type] || 0);
+      if (!Number.isSafeInteger(balanceBefore) || balanceBefore < 0) throw new Error('INVALID_BALANCE');
+      if (amount < 0 && balanceBefore < Math.abs(amount)) throw new Error('INSUFFICIENT_FUNDS');
 
-      if (amount < 0 && currentBalance < Math.abs(amount)) {
-        throw new Error("INSUFFICIENT_FUNDS");
-      }
+      const balanceAfter = balanceBefore + amount;
+      if (!Number.isSafeInteger(balanceAfter) || balanceAfter < 0) throw new Error('INVALID_BALANCE');
 
-      transaction.update(playerRef, { 
-        [type]: currentBalance + amount,
-        updatedAt: FieldValue.serverTimestamp() 
+      transaction.update(playerRef, {
+        [type]: balanceAfter,
+        updatedAt: FieldValue.serverTimestamp(),
       });
-
-      // TTL: 7 дней для очистки ключей
-      const expiresAt = new Date();
-      expiresAt.setDate(expiresAt.getDate() + 7);
-
-      transaction.set(logRef, {
+      transaction.create(ledgerRef, {
+        userId,
+        amount,
+        currency: type,
+        type: 'FINANCIAL_OPERATION',
+        description: description || 'Financial operation',
+        balanceBefore,
+        balanceAfter,
+        idempotencyKey,
+        timestamp: FieldValue.serverTimestamp(),
+      });
+      transaction.create(receiptRef, {
         userId,
         amount,
         type,
-        description,
+        ledgerId: ledgerRef.id,
         processedAt: FieldValue.serverTimestamp(),
-        expiresAt: Timestamp.fromDate(expiresAt)
       });
 
       return { success: true };
     });
-
-    return result;
   } catch (error: any) {
-    logger.error("Financial operation failed", error, { userId, idempotencyKey });
-    return { success: false, error: error.message };
+    logger.error('Financial operation failed', error, { userId, idempotencyKey });
+    return { success: false, error: error?.message || 'FINANCIAL_OPERATION_FAILED' };
   }
 }

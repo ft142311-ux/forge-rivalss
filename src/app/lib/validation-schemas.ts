@@ -27,8 +27,8 @@ export const InitializeClubSchema = z.object({
 });
 
 export const FinancialOpSchema = z.object({
-  idempotencyKey: z.string().min(10),
+  idempotencyKey: z.string().min(10).max(128).regex(/^[A-Za-z0-9_-]+$/),
   amount: z.number().int().min(-1000000).max(1000000), // Защита от аномалий
   type: z.enum(['credits', 'crystals']),
-  description: z.string().optional(),
+  description: z.string().max(240).optional(),
 });

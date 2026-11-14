@@ -285,7 +285,16 @@ export async function associationTreasuryPaymentAction(idToken: string, amount: 
       const assoc = assocSnap.data() || {};
       t.update(managerRef, { credits: balance-payment, updatedAt: FieldValue.serverTimestamp() });
       t.update(assocRef, { treasury: Math.max(0, Number(assoc.treasury || 0))+payment, updatedAt: FieldValue.serverTimestamp() });
-      t.set(db.collection(FOUNDATION_COLLECTIONS.economy).doc(), { userId:uid, associationId, amount:-payment, currency:'credits', type:'ASSOCIATION_PAYMENT', timestamp:FieldValue.serverTimestamp() });
+      t.set(db.collection(FOUNDATION_COLLECTIONS.economy).doc(), {
+        userId: uid,
+        associationId,
+        amount: -payment,
+        currency: 'credits',
+        type: 'ASSOCIATION_PAYMENT',
+        balanceBefore: balance,
+        balanceAfter: balance - payment,
+        timestamp: FieldValue.serverTimestamp(),
+      });
     });
     return { success:true, amount:Math.round(Number(amount||0)) };
   } catch(e) { return { success:false, error:errorOf(e) }; }
