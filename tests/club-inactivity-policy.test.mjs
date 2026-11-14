@@ -13,15 +13,18 @@ test('keeps a club when the last successful sign-in was less than 90 days ago', 
   assert.equal(result.reason, 'USER_RECENTLY_ACTIVE');
 });
 
-test('marks a club eligible at the exact 90-day boundary', () => {
+test('keeps a club at the exact 90-day boundary because retirement requires more than 90 days', () => {
   const result = resolveClubInactivity(NOW - INACTIVITY_WINDOW_MS, NOW);
-  assert.equal(result.eligible, true);
-  assert.equal(result.reason, 'INACTIVE_OVER_THRESHOLD');
-  assert.equal(result.inactiveSince, new Date(NOW - INACTIVITY_WINDOW_MS).toISOString());
+  assert.equal(result.eligible, false);
+  assert.equal(result.reason, 'USER_RECENTLY_ACTIVE');
+  assert.equal(result.inactiveForMs, INACTIVITY_WINDOW_MS);
 });
 
-test('marks a club eligible after more than 90 days', () => {
-  assert.equal(resolveClubInactivity(NOW - INACTIVITY_WINDOW_MS - 1, NOW).eligible, true);
+test('marks a club eligible only after more than 90 days', () => {
+  const result = resolveClubInactivity(NOW - INACTIVITY_WINDOW_MS - 1, NOW);
+  assert.equal(result.eligible, true);
+  assert.equal(result.reason, 'INACTIVE_OVER_THRESHOLD');
+  assert.equal(result.inactiveSince, new Date(NOW - INACTIVITY_WINDOW_MS - 1).toISOString());
 });
 
 test('fails closed when last sign-in metadata is missing or malformed', () => {
@@ -46,7 +49,7 @@ test('fails closed for a future last sign-in timestamp', () => {
 });
 
 test('accepts Firebase Auth lastSignInTime ISO strings and Date values', () => {
-  const expected = NOW - INACTIVITY_WINDOW_MS;
+  const expected = NOW - INACTIVITY_WINDOW_MS - 1;
   assert.equal(resolveClubInactivity(new Date(expected), NOW).eligible, true);
   assert.equal(resolveClubInactivity(new Date(expected).toISOString(), NOW).eligible, true);
 });

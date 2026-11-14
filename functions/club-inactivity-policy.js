@@ -37,7 +37,9 @@ function resolveClubInactivity(lastSignInAt, nowMs = Date.now(), inactivityWindo
   }
 
   const inactiveForMs = nowMs - lastSignInMs;
-  if (inactiveForMs < inactivityWindowMs) {
+  // The policy is strictly "more than 90 days". At the exact boundary,
+  // keep the club for one more sweep; this avoids retiring on day 90 itself.
+  if (inactiveForMs <= inactivityWindowMs) {
     return { eligible: false, reason: 'USER_RECENTLY_ACTIVE', inactiveForMs };
   }
 
