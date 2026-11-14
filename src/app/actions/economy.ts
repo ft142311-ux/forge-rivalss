@@ -5,6 +5,7 @@ import { FieldValue, Timestamp } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { z } from 'zod';
 import { getMoscowDateString } from '@/app/lib/time-utils';
+import { getDailyRewardForDay } from '@/app/lib/daily-reward';
 import { requireServerActor } from '@/lib/server-auth';
 
 /**
@@ -77,8 +78,7 @@ export async function claimDailyRewardAction(idToken: string) {
       if (p.lastRewardClaimDate === today) throw new Error("ALREADY_CLAIMED");
 
       const rewardDay = (p.rewardDay || 0) % 30 + 1;
-      const credits = 100000 + (rewardDay * 50000);
-      const crystals = 10 + (rewardDay % 7 === 0 ? 50 : 0);
+      const { credits, crystals } = getDailyRewardForDay(rewardDay);
 
       // Применяем награду
       t.update(playerRef, {
