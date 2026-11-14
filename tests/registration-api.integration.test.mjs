@@ -1,12 +1,15 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { randomUUID } from 'node:crypto';
+import { createRequire } from 'node:module';
 import { deleteApp, initializeApp } from 'firebase-admin/app';
 import { getAuth } from 'firebase-admin/auth';
 import { getFirestore } from 'firebase-admin/firestore';
 
 const firestoreHost = process.env.FIRESTORE_EMULATOR_HOST;
 const authHost = process.env.FIREBASE_AUTH_EMULATOR_HOST;
+const require = createRequire(import.meta.url);
+const { retireInactiveClub } = require('../functions/club-inactivity-sweep.js');
 
 test('registration HTTP API enforces its boundary and safely initializes a club', {
   skip: !firestoreHost || !authHost,
@@ -89,7 +92,15 @@ test('registration HTTP API enforces its boundary and safely initializes a club'
     const statsRef = db.collection('system_v1').doc('global_stats');
     const playerRef = db.collection('players_v14').doc(uid);
     const activityRef = db.collection('user_activity_v1').doc(uid);
+    const archiveRef = db.collection('inactive_clubs_v1').doc(uid);
+    const pendingRef = db.collection('inactive_club_retirements_v1').doc(uid);
+    const replacementBotId = `BOT_ALPHA_L${division}_G${group}_R8`;
+    const replacementBotRef = db.collection('players_v14').doc(replacementBotId);
+    let retirementHistoryRef;
     const botPlayerRef = db.collection('players_v14').doc(botId);
+    let replacementUid = null;
+    let replacementActivityRef = null;
+    let replacementAuditQuery = null;
 
     t.after(async () => {
       const auditSnapshot = await auditQuery.get();
@@ -103,6 +114,12 @@ test('registration HTTP API enforces its boundary and safely initializes a club'
         statsRef,
         playerRef,
         activityRef,
+        archiveRef,
+        pendingRef,
+        replacementBotRef,
+        ...(retirementHistoryRef ? [retirementHistoryRef] : []),
+        ...(replacementActivityRef ? [replacementActivityRef] : []),
+        ...(replacementAuditQuery ? (await replacementAuditQuery.get()).docs.map((doc) => doc.ref) : []),
         botPlayerRef,
       ];
       for (let i = 0; i < cleanupRefs.length; i += 400) {
@@ -122,7 +139,8 @@ test('registration HTTP API enforces its boundary and safely initializes a club'
     await statsRef.set({ totalPlayers: 1000 });
     const targetSlotId = `${runId}-slot-${division}-${group}-8`;
     const historyRef = db.collection('league_slot_history_v1').doc(`${targetSlotId}_G8`);
-    historyRefs.push(historyRef);
+    retirementHistoryRef = db.collection('league_slot_history_v1').doc(`${targetSlotId}_G9`);
+    historyRefs.push(historyRef, retirementHistoryRef);
 
     const tableStats = {};
     for (let rank = 1; rank <= 8; rank += 1) {
@@ -218,8 +236,9 @@ test('registration HTTP API enforces its boundary and safely initializes a club'
       },
     );
     assert.equal(signIn.status, 200, 'Auth Emulator should issue an ID token');
-    const { idToken } = await signIn.json();
+    const { idToken, refreshToken } = await signIn.json();
     assert.equal(typeof idToken, 'string');
+    assert.equal(typeof refreshToken, 'string');
 
     const request = () => POST(new Request('http://localhost/api/registration/initialize', {
       method: 'POST',
@@ -315,5 +334,154 @@ test('registration HTTP API enforces its boundary and safely initializes a club'
     assert.equal(afterRetryStats.get('totalPlayers'), 1001);
     assert.equal(afterRetryAudit.size, 1);
     assert.equal(afterRetrySlots.docs.filter((doc) => doc.get('occupantId') === uid).length, 1);
+
+    // Retire the original owner through the real inactivity saga, then prove
+    // that the same slot can be claimed by a new account without rewriting
+    // the former owner's archive or any completed fixture.
+    const completedMatchRef = db.collection('matches_v2').doc(`${runId}-match-8-1`);
+    const completedMatchBefore = (await completedMatchRef.get()).data();
+    const inactiveSince = new Date(Date.now() - 91 * 24 * 60 * 60 * 1000).toISOString();
+    const actualAuthRecord = await auth.getUser(uid);
+    const retirementAuth = {
+      getUser: async (targetUid) => {
+        const record = await auth.getUser(targetUid);
+        return {
+          ...record,
+          metadata: { ...record.metadata, lastSignInTime: inactiveSince },
+        };
+      },
+      updateUser: (...args) => auth.updateUser(...args),
+      revokeRefreshTokens: (...args) => auth.revokeRefreshTokens(...args),
+    };
+    const retirement = await retireInactiveClub({
+      db,
+      auth: retirementAuth,
+      userRecord: {
+        ...actualAuthRecord,
+        metadata: { ...actualAuthRecord.metadata, lastSignInTime: inactiveSince },
+      },
+      now: new Date(),
+    });
+    assert.equal(retirement.action, 'RETIRED_AND_REPLACED');
+    assert.equal(retirement.botId, replacementBotId);
+    assert.equal((await auth.getUser(uid)).disabled, true);
+    assert.equal((await playerRef.get()).exists, false);
+    const archivedBeforeReclaim = (await archiveRef.get()).data();
+    assert.equal(archivedBeforeReclaim.replacedByBotId, replacementBotId);
+    assert.equal(archivedBeforeReclaim.clubSnapshot.clubName, 'Forge Test Club');
+    assert.equal((await retirementHistoryRef.get()).get('reason'), 'INACTIVITY_RETIREMENT');
+
+    const oldPasswordLogin = await fetch(
+      `http://${authHost}/identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=fake-api-key`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ email, password, returnSecureToken: true }),
+      },
+    );
+    assert.equal(oldPasswordLogin.status, 400, 'retired owner cannot sign in with the old password');
+    const oldPasswordError = await oldPasswordLogin.json();
+    assert.match(String(oldPasswordError.error?.message || ''), /USER_DISABLED/i);
+
+    const oldRefresh = await fetch(
+      `http://${authHost}/securetoken.googleapis.com/v1/token?key=fake-api-key`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: refreshToken }),
+      },
+    );
+    assert.equal(oldRefresh.status, 400, 'retirement revokes previously issued refresh tokens');
+    const oldRefreshError = await oldRefresh.json();
+    assert.match(
+      String(oldRefreshError.error?.message || ''),
+      /TOKEN_EXPIRED|INVALID_GRANT|USER_DISABLED|TOKEN_REVOKED/i,
+    );
+
+    const releasedSlot = (await db.collection('league_slots_v1')
+      .doc(targetSlotId).get()).data();
+    assert.equal(releasedSlot.status, 'FREE');
+    assert.equal(releasedSlot.occupantId, null);
+    assert.equal(releasedSlot.occupancyGeneration, 9);
+    const botStanding = (await tableRef.get()).get(`stats.${replacementBotId}`);
+    assert.equal(botStanding.isBot, true);
+    assert.equal(botStanding.matchesPlayed, 4);
+    assert.equal(botStanding.wins, 3);
+    assert.equal(botStanding.points, 9);
+    assert.equal((await replacementBotRef.get()).get('ownedPlayers').length, 5);
+
+    const replacementEmail = `replacement-${runId}@example.test`;
+    const replacementPassword = `Replacement-${randomUUID()}-Bb2!`;
+    const replacementUser = await auth.createUser({
+      email: replacementEmail,
+      password: replacementPassword,
+      emailVerified: true,
+    });
+    replacementUid = replacementUser.uid;
+    replacementActivityRef = db.collection('user_activity_v1').doc(replacementUid);
+    replacementAuditQuery = db.collection('security_audit_v1').where('actorUid', '==', replacementUid);
+
+    const replacementLogin = await fetch(
+      `http://${authHost}/identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=fake-api-key`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          email: replacementEmail,
+          password: replacementPassword,
+          returnSecureToken: true,
+        }),
+      },
+    );
+    assert.equal(replacementLogin.status, 200);
+    const replacementTokens = await replacementLogin.json();
+    const replacementResponse = await POST(new Request('http://localhost/api/registration/initialize', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${replacementTokens.idToken}`,
+      },
+      body: JSON.stringify({ clubName: 'Replacement Club' }),
+    }));
+    const replacementBody = await replacementResponse.json();
+    assert.equal(replacementResponse.status, 200, JSON.stringify(replacementBody));
+    assert.equal(replacementBody.success, true);
+    assert.equal(replacementBody.alreadyInitialized, false);
+    assert.equal(replacementBody.rank, 8);
+
+    const reclaimedSlot = (await db.collection('league_slots_v1').doc(targetSlotId).get()).data();
+    assert.equal(reclaimedSlot.status, 'OCCUPIED');
+    assert.equal(reclaimedSlot.occupantId, replacementUid);
+    assert.equal(reclaimedSlot.occupancyGeneration, 10);
+    assert.equal((await playerRef.get()).exists, false);
+    const replacementPlayer = await db.collection('players_v14').doc(replacementUid).get();
+    assert.equal(replacementPlayer.exists, true);
+    assert.equal(replacementPlayer.get('clubName'), 'Replacement Club');
+    assert.equal((await replacementBotRef.get()).exists, false);
+
+    const finalTable = (await tableRef.get()).data();
+    assert.equal(finalTable.stats[replacementUid].rank, 8);
+    assert.equal(finalTable.stats[replacementUid].isBot, false);
+    assert.equal(finalTable.stats[replacementUid].matchesPlayed, 4);
+    assert.equal(finalTable.stats[replacementUid].wins, 3);
+    assert.equal(finalTable.stats[replacementUid].losses, 1);
+    assert.equal(finalTable.stats[replacementUid].points, 9);
+    assert.equal(finalTable.stats[replacementUid].diff, 5);
+    assert.equal(finalTable.stats[uid], undefined);
+    assert.equal(finalTable.stats[replacementBotId], undefined);
+
+    const completedMatchAfter = (await completedMatchRef.get()).data();
+    assert.deepEqual(completedMatchAfter, completedMatchBefore);
+    const futureFixture = (await db.collection('matches_v2')
+      .doc(`${runId}-match-8-2`).get()).data();
+    assert.equal(futureFixture.homeId, replacementUid);
+    assert.equal(futureFixture.homeLogo, null);
+
+    const archivedAfterReclaim = (await archiveRef.get()).data();
+    assert.deepEqual(archivedAfterReclaim, archivedBeforeReclaim);
+    assert.equal((await retirementHistoryRef.get()).get('previousOccupantId'), uid);
+    assert.equal((await retirementHistoryRef.get()).get('newOccupantId'), replacementBotId);
+    assert.equal((await db.collection('league_slot_history_v1')
+      .doc(`${targetSlotId}_G10`).get()).get('newOccupantId'), replacementUid);
   });
 });
