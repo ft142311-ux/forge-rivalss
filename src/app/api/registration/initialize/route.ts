@@ -73,6 +73,7 @@ function mapRegistrationError(error: unknown): { status: number; code: string } 
     LEAGUE_TABLE_MISSING: { status: 503, code: 'LEAGUE_TABLE_MISSING' },
     LEAGUE_TABLE_MISMATCH: { status: 503, code: 'LEAGUE_TABLE_MISMATCH' },
     BOT_NOT_FOUND_IN_SLOT: { status: 503, code: 'BOT_NOT_FOUND_IN_SLOT' },
+    BOT_PLAYER_INVALID: { status: 503, code: 'BOT_PLAYER_INVALID' },
     INVALID_LEAGUE_SLOT: { status: 409, code: 'INVALID_LEAGUE_SLOT' },
     NO_FREE_SLOTS_IN_LEAGUE: { status: 409, code: 'NO_FREE_SLOTS_IN_LEAGUE' },
     SLOT_MATCH_IN_PROGRESS: { status: 409, code: 'SLOT_MATCH_IN_PROGRESS' },
@@ -249,6 +250,11 @@ export async function POST(request: NextRequest) {
       const botPlayerSnapshot = await transaction.get(botPlayerRef);
       if (matchesSnapshot.size !== 56) throw new Error('WORLD_NOT_READY');
       if (historySnapshot.exists) throw new Error('SLOT_HISTORY_EVENT_EXISTS');
+      const botPlayer = botPlayerSnapshot.data() || {};
+      if (!botPlayerSnapshot.exists || botPlayer.id !== botId || botPlayer.isBot !== true ||
+          !Array.isArray(botPlayer.ownedPlayers) || botPlayer.ownedPlayers.length !== 5) {
+        throw new Error('BOT_PLAYER_INVALID');
+      }
 
       const matches = matchesSnapshot.docs.map((document) => document.data() || {});
       if (!registrationCore.validateRegistrationSchedule(matches, Number(slot.rank), botId)) {

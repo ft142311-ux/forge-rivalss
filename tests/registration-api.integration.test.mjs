@@ -265,6 +265,18 @@ test('registration HTTP API enforces its boundary and safely initializes a club'
       body: JSON.stringify({ clubName: 'Forge Test Club' }),
     }));
 
+    // A standings row alone is not enough to replace a bot. The backing
+    // player document must exist and be a valid five-player bot profile.
+    const validBotProfile = (await botPlayerRef.get()).data();
+    await botPlayerRef.set({ ...validBotProfile, isBot: false });
+    const invalidBotResponse = await request();
+    const invalidBotBody = await invalidBotResponse.json();
+    assert.equal(invalidBotResponse.status, 503);
+    assert.equal(invalidBotBody.error, 'BOT_PLAYER_INVALID');
+    assert.equal((await playerRef.get()).exists, false);
+    assert.equal((await db.collection('league_slots_v1').doc(targetSlotId).get()).get('status'), 'FREE');
+    await botPlayerRef.set(validBotProfile);
+
     // Two simultaneous requests from the same authenticated UID must
     // converge on one player document and one slot allocation.
     const [firstResponse, simultaneousRetryResponse] = await Promise.all([request(), request()]);
