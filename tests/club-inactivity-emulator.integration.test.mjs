@@ -548,7 +548,7 @@ test('inconsistent expired retirement preflight is routed to review while active
   assert.equal((await activeRef.get()).get('leaseOwner'), 'live-worker');
 });
 
-test('a delayed cancellation cleanup cannot delete a newer retirement marker', {
+test('a stale cancellation worker cannot re-enable Auth after a newer cleanup completes', {
   skip: !emulatorHost,
 }, async (t) => {
   const testProjectId = `demo-cleanup-${randomUUID().slice(0, 8)}`;
@@ -557,6 +557,7 @@ test('a delayed cancellation cleanup cannot delete a newer retirement marker', {
   const uid = `cancel-cleanup-${randomUUID()}`;
   const pendingRef = db.collection('inactive_club_retirements_v1').doc(uid);
   const now = new Date('2026-11-14T12:00:00.000Z');
+  let disabled = true;
 
   t.after(async () => {
     await pendingRef.delete().catch(() => undefined);
@@ -569,44 +570,45 @@ test('a delayed cancellation cleanup cannot delete a newer retirement marker', {
   let signalFirstStarted;
   const firstStarted = new Promise((resolve) => { signalFirstStarted = resolve; });
   const firstGate = new Promise((resolve) => { releaseFirst = resolve; });
-  let authReads = 0;
   let authUpdates = 0;
+  let revokeCalls = 0;
   const auth = {
-    getUser: async () => {
-      authReads++;
-      if (authReads === 1) {
+    getUser: async () => ({ uid, disabled }),
+    updateUser: async (_uid, patch) => {
+      authUpdates++;
+      if (authUpdates === 1 && patch.disabled === false) {
+        // The first worker has passed its ownership check but its external
+        // Auth update is delayed until a newer worker completes.
         signalFirstStarted();
         await firstGate;
       }
-      return { uid, disabled: true };
+      disabled = patch.disabled;
+      return { uid, disabled };
     },
-    updateUser: async () => {
-      authUpdates++;
-      return { uid, disabled: false };
-    },
+    revokeRefreshTokens: async () => { revokeCalls++; },
   };
 
   const delayedRecovery = recoverCancelledRetirement({ db, auth, uid, pendingRef, now });
   await firstStarted;
 
-  // A second worker may take over only after the first cleanup lease expires.
   const takeoverNow = new Date(now.getTime() + 11 * 60 * 1000);
   const completedRecovery = await recoverCancelledRetirement({
     db, auth, uid, pendingRef, now: takeoverNow,
   });
   assert.equal(completedRecovery, true);
   assert.equal((await pendingRef.get()).exists, false);
-  assert.equal(authUpdates, 1);
+  assert.equal(disabled, false);
 
-  await pendingRef.set({ uid, phase: 'CANCELLED', cancellationReason: 'NEWER_OPERATION' });
   releaseFirst();
   const staleRecovery = await delayedRecovery;
 
   assert.equal(staleRecovery, false);
-  assert.equal(authUpdates, 1, 'stale cleanup must not re-enable Auth after losing its lease');
+  assert.equal(disabled, true, 'stale worker must fail closed after its delayed Auth update');
+  assert.equal(revokeCalls, 1, 'stale worker must revoke tokens after re-disabling Auth');
   const remaining = await pendingRef.get();
   assert.equal(remaining.exists, true);
-  assert.equal(remaining.get('cancellationReason'), 'NEWER_OPERATION');
+  assert.equal(remaining.get('phase'), 'REVIEW_REQUIRED');
+  assert.equal(remaining.get('lastErrorCode'), 'STALE_CANCELLED_CLEANUP_LOST_FENCE');
 });
 
 test('a pending retirement with recent activity is safely cancelled and Auth access restored', {
