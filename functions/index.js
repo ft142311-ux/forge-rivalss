@@ -401,6 +401,9 @@ exports.replaceInactiveClubs = functions
       now: new Date(),
     });
     console.log('[INACTIVE CLUB SWEEP]', JSON.stringify(result));
+    if (result.reviewRequired > 0) {
+      console.error('[INACTIVE CLUB SWEEP] Manual review required for one or more accounts.');
+    }
     if (result.errors.length > 0) {
       throw new Error('INACTIVE_CLUB_SWEEP_PARTIAL_FAILURE');
     }
