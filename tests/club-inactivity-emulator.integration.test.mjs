@@ -489,6 +489,65 @@ test('inactive club replacement is atomic and preserves completed match results'
 
 
 
+
+
+test('inconsistent expired retirement preflight is routed to review while active leases remain untouched', {
+  skip: !emulatorHost,
+}, async (t) => {
+  const testProjectId = `demo-preflight-${randomUUID().slice(0, 8)}`;
+  const app = initializeApp({ projectId: testProjectId }, `inactive-preflight-test-${randomUUID()}`);
+  const db = getFirestore(app);
+  const now = new Date('2026-11-14T12:00:00.000Z');
+  const oldSignIn = new Date(now.getTime() - 120 * 24 * 60 * 60 * 1000).toISOString();
+  const expiredUid = `expired-preflight-${randomUUID()}`;
+  const activeUid = `active-preflight-${randomUUID()}`;
+  const expiredRef = db.collection('inactive_club_retirements_v1').doc(expiredUid);
+  const activeRef = db.collection('inactive_club_retirements_v1').doc(activeUid);
+
+  t.after(async () => {
+    await expiredRef.delete().catch(() => undefined);
+    await activeRef.delete().catch(() => undefined);
+    await deleteApp(app);
+  });
+
+  await expiredRef.set({
+    uid: expiredUid,
+    phase: 'PENDING_AUTH_DISABLE',
+    leaseOwner: 'crashed-worker',
+    leaseUntil: new Date(now.getTime() - 60 * 1000),
+    attempts: 1,
+  });
+  const auth = {
+    getUser: async (uid) => ({ uid, disabled: true, metadata: { lastSignInTime: oldSignIn } }),
+    updateUser: async (uid, patch) => ({ uid, ...patch }),
+    revokeRefreshTokens: async () => undefined,
+  };
+  const expired = await retireInactiveClub({
+    db, auth,
+    userRecord: { uid: expiredUid, disabled: true, metadata: { lastSignInTime: oldSignIn } },
+    now,
+  });
+  assert.equal(expired.action, 'SKIPPED_REVIEW_REQUIRED');
+  assert.equal((await expiredRef.get()).get('phase'), 'REVIEW_REQUIRED');
+  assert.equal((await expiredRef.get()).get('lastErrorCode'), 'PREFLIGHT_PLAYER_MISSING');
+
+  await activeRef.set({
+    uid: activeUid,
+    phase: 'PENDING_AUTH_DISABLE',
+    leaseOwner: 'live-worker',
+    leaseUntil: new Date(now.getTime() + 5 * 60 * 1000),
+    attempts: 1,
+  });
+  const active = await retireInactiveClub({
+    db, auth,
+    userRecord: { uid: activeUid, disabled: true, metadata: { lastSignInTime: oldSignIn } },
+    now,
+  });
+  assert.equal(active.action, 'SKIPPED_RETIREMENT_IN_PROGRESS');
+  assert.equal((await activeRef.get()).get('phase'), 'PENDING_AUTH_DISABLE');
+  assert.equal((await activeRef.get()).get('leaseOwner'), 'live-worker');
+});
+
 test('a delayed cancellation cleanup cannot delete a newer retirement marker', {
   skip: !emulatorHost,
 }, async (t) => {
