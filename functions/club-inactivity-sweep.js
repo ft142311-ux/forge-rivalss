@@ -166,7 +166,20 @@ async function retireInactiveClub({ db, auth, userRecord, now = new Date() }) {
       transaction.get(activityRef),
     ]);
     if (pending.exists) {
-      if (pending.get('phase') === 'REVIEW_REQUIRED') {
+      const pendingPhase = String(pending.get('phase') || '');
+      if (pendingPhase === 'CANCELLED') {
+        return { claimed: false, cancelled: true };
+      }
+      if (pendingPhase === 'REVIEW_REQUIRED') {
+        return { claimed: false, reviewRequired: true };
+      }
+      if (pendingPhase !== 'PENDING_AUTH_DISABLE') {
+        transaction.update(pendingRef, {
+          phase: 'REVIEW_REQUIRED',
+          lastErrorCode: 'UNKNOWN_RETIREMENT_PHASE',
+          reviewRequiredAt: now,
+          updatedAt: now,
+        });
         return { claimed: false, reviewRequired: true };
       }
       const currentLeaseUntil = timestampToMillis(pending.get('leaseUntil'));
@@ -213,6 +226,16 @@ async function retireInactiveClub({ db, auth, userRecord, now = new Date() }) {
 
   if (claim.reviewRequired) return { action: 'SKIPPED_REVIEW_REQUIRED' };
   if (claim.busy) return { action: 'SKIPPED_RETIREMENT_IN_PROGRESS' };
+  if (claim.cancelled) {
+    if (latestAuthRecord.disabled) await auth.updateUser(uid, { disabled: false });
+    await db.runTransaction(async (transaction) => {
+      const pending = await transaction.get(pendingRef);
+      if (pending.exists && pending.get('phase') === 'CANCELLED') {
+        transaction.delete(pendingRef);
+      }
+    });
+    return { action: 'CANCELLED_PENDING_CLEANUP' };
+  }
   if (!claim.claimed) {
     return { action: 'SKIPPED_ACTIVITY_RACE', reason: claim.reason || 'RECENT_ACTIVITY' };
   }
@@ -262,6 +285,13 @@ async function retireInactiveClub({ db, auth, userRecord, now = new Date() }) {
     }
     if (!pending.exists) return { action: 'BLOCKED_RETIREMENT_MARKER_MISSING' };
     if (pending.get('leaseOwner') !== leaseOwner) return { action: 'BLOCKED_STALE_RETIREMENT_WORKER' };
+    if (pending.get('phase') !== 'PENDING_AUTH_DISABLE') {
+      return { action: 'BLOCKED_RETIREMENT_PHASE_INVALID' };
+    }
+    const currentLeaseUntil = timestampToMillis(pending.get('leaseUntil'));
+    if (!Number.isFinite(currentLeaseUntil) || currentLeaseUntil <= now.getTime()) {
+      return { action: 'BLOCKED_STALE_RETIREMENT_WORKER' };
+    }
     if (history.exists) return { action: 'BLOCKED_HISTORY_EVENT_COLLISION' };
 
     const currentConfig = activeConfig.exists ? activeConfig.data() || {} : {};
@@ -431,6 +461,10 @@ async function retireInactiveClub({ db, auth, userRecord, now = new Date() }) {
     return { action: 'RETIRED_AND_REPLACED', botId, season, division, group, rank };
   });
 
+  if (result.action === 'BLOCKED_STALE_RETIREMENT_WORKER') {
+    return result;
+  }
+
   if ([
     'BLOCKED_ARCHIVE_COLLISION',
     'BLOCKED_HISTORY_EVENT_COLLISION',
@@ -438,10 +472,11 @@ async function retireInactiveClub({ db, auth, userRecord, now = new Date() }) {
     'BLOCKED_TABLE_IDENTITY_CONFLICT',
     'BLOCKED_BOT_ID_COLLISION',
     'BLOCKED_INTEGRITY_CHECK',
+    'BLOCKED_RETIREMENT_PHASE_INVALID',
   ].includes(result.action)) {
     await db.runTransaction(async (transaction) => {
       const pending = await transaction.get(pendingRef);
-      if (pending.exists) {
+      if (pending.exists && pending.get('leaseOwner') === leaseOwner) {
         transaction.update(pendingRef, {
           phase: 'REVIEW_REQUIRED',
           lastErrorCode: result.action,
