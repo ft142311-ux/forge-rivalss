@@ -1004,8 +1004,10 @@ export async function prepareSeasonRollover(db: any, sourceSeason: number, targe
     });
     const groupSlots = freshSlotsSnap.docs
       .map((doc: any) => doc.data() || {})
-      .filter((slot: any) => Number(slot.division || slot.level || 0) === Number(key.split('-')[0]) &&
-        Number(slot.group || 0) === Number(key.split('-')[1]));
+      .filter((slot: any) => groupKey(
+        Number(slot.division || slot.level || 0),
+        Number(slot.group || 0),
+      ) === key);
     const rows = calculateGroupStandings(
       tableDoc?.data()?.stats || {},
       fixturesByGroup.get(key) || [],
