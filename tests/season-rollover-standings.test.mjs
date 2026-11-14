@@ -241,6 +241,25 @@ test('rollover preflight explicitly refuses a slot/fixture conflict', () => {
   assert.deepEqual(result.failedGroups, ['D1-G1']);
 });
 
+test('rollover preflight rejects duplicate slot ranks even when the slot count is eight', () => {
+  const currentStats = Object.fromEntries(Object.entries(idsByRank).map(([rank, id]) => [id, {
+    id, rank: Number(rank), isBot: id.startsWith('BOT_'),
+  }]));
+  const slots = Array.from({ length: 8 }, (_, index) => {
+    const rank = index + 1;
+    const id = idsByRank[rank];
+    return id.startsWith('BOT_')
+      ? { rank, status: 'FREE', occupantId: null }
+      : { rank, status: 'OCCUPIED', occupantId: id };
+  });
+  slots[7] = { ...slots[7], rank: 7 };
+
+  const inspection = inspectGroupReconciliation(currentStats, completeFixtures(), slots);
+  assert.equal(inspection.ready, false);
+  assert.ok(inspection.reasons.includes('DUPLICATE_SLOT_RANKS'));
+  assert.ok(inspection.reasons.includes('INCOMPLETE_SLOT_SET'));
+});
+
 test('rollover preflight refuses an incomplete slot set even without an occupant conflict', () => {
   const inspection = inspectGroupReconciliation({}, completeFixtures(), []);
   const result = evaluateRolloverPreflight([{ group: 'D1-G1', ...inspection }]);
