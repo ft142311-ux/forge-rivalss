@@ -19,11 +19,12 @@ test('group match settlement validates standings rows before atomically publishi
   const end = source.indexOf('async function stageMatchesDone', start);
   assert.ok(start >= 0 && end > start);
   const resolver = source.slice(start, end);
-  const guard = resolver.indexOf('TOURNAMENT_GROUP_STANDINGS_INTEGRITY_FAILED');
-  const matchWrite = resolver.indexOf("t.update(matchRef, {");
-  const reportWrite = resolver.indexOf("t.set(db.collection(MATCH_COLLECTIONS.tournament)");
-  const standingsWrite = resolver.indexOf("t.update(groupRef, { teams: groupRows");
-  assert.ok(guard >= 0 && matchWrite > guard && reportWrite > guard && standingsWrite > reportWrite);
+  const finalizeStart = resolver.indexOf('const finalized = await db.runTransaction');
+  const guard = resolver.indexOf('TOURNAMENT_GROUP_STANDINGS_INTEGRITY_FAILED', finalizeStart);
+  const matchWrite = resolver.indexOf("t.update(matchRef, {", finalizeStart);
+  const reportWrite = resolver.indexOf("t.set(db.collection(MATCH_COLLECTIONS.tournament)", finalizeStart);
+  const standingsWrite = resolver.indexOf("t.update(groupRef, { teams: groupRows", finalizeStart);
+  assert.ok(finalizeStart >= 0 && guard > finalizeStart && matchWrite > guard && reportWrite > guard && standingsWrite > reportWrite);
   assert.match(resolver, /const homeRow = groupRows\.find/);
   assert.match(resolver, /const awayRow = groupRows\.find/);
 });
