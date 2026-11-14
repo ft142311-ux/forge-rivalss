@@ -72,6 +72,7 @@ export const FirebaseProvider: React.FC<{ children: ReactNode; firebaseApp: Fire
           const terminalActivityError = [
             'ACCOUNT_DISABLED',
             'ACCOUNT_RETIRING',
+            'ACCOUNT_RETIRED',
             'AUTH_TOKEN_REVOKED',
             'AUTH_TOKEN_INVALID',
           ].includes(String(activity?.error || ''));
