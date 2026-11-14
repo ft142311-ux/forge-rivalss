@@ -221,7 +221,14 @@ test('login activity handshake is blocked once retirement has been claimed', {
     leaseUntil: new Date(Date.now() - 60 * 1000),
     attempts: 1,
   });
-  const sweep = await runClubInactivitySweep({ db, auth, now: new Date() });
+  const sweepAuth = {
+    getUser: (...args) => auth.getUser(...args),
+    listUsers: async (_pageSize, pageToken) => ({
+      users: pageToken ? [] : [await auth.getUser(uid)],
+      pageToken: undefined,
+    }),
+  };
+  const sweep = await runClubInactivitySweep({ db, auth: sweepAuth, now: new Date() });
   assert.equal(sweep.pendingOperationsScanned, 1);
   assert.equal(sweep.recoveredCancellations, 1);
   assert.equal((await pendingRef.get()).exists, false);
