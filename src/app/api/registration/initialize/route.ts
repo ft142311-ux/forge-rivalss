@@ -55,6 +55,7 @@ function mapRegistrationError(error: unknown): { status: number; code: string } 
     NO_FREE_SLOTS_IN_LEAGUE: { status: 409, code: 'NO_FREE_SLOTS_IN_LEAGUE' },
     SLOT_MATCH_IN_PROGRESS: { status: 409, code: 'SLOT_MATCH_IN_PROGRESS' },
     SLOT_MATCH_DUE: { status: 409, code: 'SLOT_MATCH_DUE' },
+    SLOT_MATCH_TIME_UNKNOWN: { status: 409, code: 'SLOT_MATCH_TIME_UNKNOWN' },
     NO_UPCOMING_FIXTURES_FOR_SLOT: { status: 409, code: 'NO_UPCOMING_FIXTURES_FOR_SLOT' },
     LEAGUE_TABLE_SLOT_CONFLICT: { status: 503, code: 'LEAGUE_TABLE_SLOT_CONFLICT' },
     LEAGUE_SCHEDULE_SLOT_CONFLICT: { status: 503, code: 'LEAGUE_SCHEDULE_SLOT_CONFLICT' },
