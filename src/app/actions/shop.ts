@@ -1,6 +1,7 @@
 'use server';
 
 import { FieldValue } from 'firebase-admin/firestore';
+import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { requireServerActor } from '@/lib/server-auth';
@@ -35,6 +36,7 @@ export async function purchaseLicenseAction(idToken: string, requestedTier: numb
     if (!cost) throw new Error('INVALID_LICENSE_TIER');
 
     const db = getAdminDb();
+    const playerId = `shop_${uid}_${randomUUID()}`;
     return await db.runTransaction(async (t) => {
       const ref = db.collection('players_v14').doc(uid);
       const snap = await t.get(ref);
@@ -323,13 +325,13 @@ export async function createShopPlayerAction(
       const youth: Player[] = Array.isArray(data.youthAcademyPlayers) ? data.youthAcademyPlayers : [];
       if ([...owned, ...youth].some((p: any) => String(p?.name || '').toLowerCase() === nickname.toLowerCase())) throw new Error('PLAYER_NAME_ALREADY_EXISTS');
 
-      const player = generateUniquePlayer(parsedRole, owned.length + youth.length, false, `shop_${uid}_${Date.now()}`);
+      const player = generateUniquePlayer(parsedRole, owned.length + youth.length, false, playerId);
       const overall = Math.round(30 + (talent - 3.5) * 20);
       const gameYearMs = 7 * 24 * 60 * 60 * 1000;
       const birthDate = new Date(Date.now() - age * gameYearMs).toISOString();
       const updated: Player = {
         ...player,
-        id: `shop_${uid}_${Date.now()}`,
+        id: playerId,
         name: nickname,
         overallRating: overall,
         price: overall * 2000 + 40000,
