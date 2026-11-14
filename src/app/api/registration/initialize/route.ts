@@ -78,6 +78,7 @@ function mapRegistrationError(error: unknown): { status: number; code: string } 
     SLOT_MATCH_IN_PROGRESS: { status: 409, code: 'SLOT_MATCH_IN_PROGRESS' },
     SLOT_MATCH_DUE: { status: 409, code: 'SLOT_MATCH_DUE' },
     SLOT_MATCH_TIME_UNKNOWN: { status: 409, code: 'SLOT_MATCH_TIME_UNKNOWN' },
+    SLOT_HISTORY_EVENT_EXISTS: { status: 409, code: 'SLOT_HISTORY_EVENT_EXISTS' },
     NO_UPCOMING_FIXTURES_FOR_SLOT: { status: 409, code: 'NO_UPCOMING_FIXTURES_FOR_SLOT' },
     LEAGUE_TABLE_SLOT_CONFLICT: { status: 503, code: 'LEAGUE_TABLE_SLOT_CONFLICT' },
     LEAGUE_SCHEDULE_SLOT_CONFLICT: { status: 503, code: 'LEAGUE_SCHEDULE_SLOT_CONFLICT' },
@@ -202,6 +203,9 @@ export async function POST(request: NextRequest) {
       if (slot.status !== 'FREE' || slot.occupantId || Number(slot.season) !== seasonNum) {
         throw new Error('INVALID_LEAGUE_SLOT');
       }
+      const targetGeneration = Math.max(0, Number(slot.occupancyGeneration) || 0) + 1;
+      const historyRef = db.collection('league_slot_history_v1')
+        .doc(`${slotDocument.id}_G${targetGeneration}`);
 
       const tableId = `table_v140_S${seasonNum}_L${LEAGUE_ID}_V${slot.division}_G${slot.group}`;
       const tableRef = db.collection('league_tables_v2').doc(tableId);
@@ -235,7 +239,9 @@ export async function POST(request: NextRequest) {
         .where('groupId', '==', Number(slot.group))
         .where('version', '==', 140);
       const matchesSnapshot = await transaction.get(matchesQuery);
+      const historySnapshot = await transaction.get(historyRef);
       if (matchesSnapshot.size !== 56) throw new Error('WORLD_NOT_READY');
+      if (historySnapshot.exists) throw new Error('SLOT_HISTORY_EVENT_EXISTS');
 
       const matches = matchesSnapshot.docs.map((document) => document.data() || {});
       if (!registrationCore.validateRegistrationSchedule(matches, Number(slot.rank), botId)) {
@@ -264,7 +270,7 @@ export async function POST(request: NextRequest) {
       transaction.update(slotDocument.ref, {
         status: 'OCCUPIED',
         occupantId: userId,
-        occupancyGeneration: Math.max(0, Number(slot.occupancyGeneration) || 0) + 1,
+        occupancyGeneration: targetGeneration,
         lastOccupantId: botId,
         lastTransitionReason: 'NEW_REGISTRATION',
         lastTransitionAt: new Date(),
@@ -273,6 +279,28 @@ export async function POST(request: NextRequest) {
 
       // The slot owns its season-to-date record. Transfer identity only; do not
       // reset wins, draws, losses, points, match count, diff or additive fields.
+      transaction.create(historyRef, {
+        slotId: slotDocument.id,
+        season: seasonNum,
+        leagueId: LEAGUE_ID,
+        division: Number(slot.division),
+        group: Number(slot.group),
+        rank: Number(slot.rank),
+        previousGeneration: targetGeneration - 1,
+        generation: targetGeneration,
+        previousOccupantType: 'BOT',
+        previousOccupantId: botId,
+        previousOwnerUid: null,
+        previousClubId: botId,
+        newOccupantType: 'USER',
+        newOccupantId: userId,
+        newOwnerUid: userId,
+        newClubId: userId,
+        reason: 'NEW_REGISTRATION',
+        operationId: registrationRef.id,
+        createdAt: new Date(),
+      });
+
       transaction.update(tableRef, {
         stats: standingTransfer.stats,
         updatedAt: new Date(),
