@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getAuth } from 'firebase-admin/auth';
 import { getAppCheck } from 'firebase-admin/app-check';
 import { getAdminDb } from '@/lib/firebase-admin';
+import { requireServerActor } from '@/lib/server-auth';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -105,9 +105,9 @@ export async function POST(request: NextRequest) {
 
   try {
     const db = getAdminDb();
-    const decoded = await getAuth().verifyIdToken(tokenMatch[1], true);
-    const userId = decoded.uid;
-    const email = typeof decoded.email === 'string' ? decoded.email : '';
+    const actor = await requireServerActor(tokenMatch[1]);
+    const userId = actor.uid;
+    const email = actor.email || '';
 
     if (!email) {
       return json(403, { success: false, error: 'EMAIL_REQUIRED' });
