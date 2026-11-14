@@ -60,6 +60,28 @@ function isFinished(match) {
   return Boolean(match && match.isFinished === true) || status === 'finished' || status === 'completed';
 }
 
+function isValidBotClub(bot, botId) {
+  if (!bot || bot.isBot !== true || bot.id !== botId ||
+      !Array.isArray(bot.ownedPlayers) || bot.ownedPlayers.length !== 5 ||
+      !bot.lineup || typeof bot.lineup !== 'object') return false;
+
+  const playerIds = new Set();
+  for (const player of bot.ownedPlayers) {
+    if (!player || typeof player.id !== 'string' || !player.id ||
+        player.isBot !== true ||
+        !Number.isFinite(Number(player.overallRating)) ||
+        Number(player.overallRating) < 1 || Number(player.overallRating) > 100 ||
+        !player.proStats || typeof player.proStats !== 'object') return false;
+    if (playerIds.has(player.id)) return false;
+    playerIds.add(player.id);
+  }
+
+  const requiredLineupKeys = ['carry', 'mid', 'offlane', 'support', 'full_support'];
+  return requiredLineupKeys.every((key) =>
+    typeof bot.lineup[key] === 'string' && playerIds.has(bot.lineup[key])
+  );
+}
+
 /**
  * Replaces one inactive human club with its deterministic bot identity.
  * Auth is disabled before the transaction, and all Firestore mutations are
@@ -368,12 +390,11 @@ async function retireInactiveClub({ db, auth, userRecord, now = new Date() }) {
     }
 
     const existingBot = bot.exists ? bot.data() || {} : null;
-    if (existingBot && (
-      existingBot.isBot !== true ||
-      !Array.isArray(existingBot.ownedPlayers) ||
-      existingBot.ownedPlayers.length !== 5
-    )) {
+    if (existingBot && !isValidBotClub(existingBot, botId)) {
       return { action: 'BLOCKED_BOT_ID_COLLISION' };
+    }
+    if (Object.prototype.hasOwnProperty.call(stats, botId)) {
+      return { action: 'BLOCKED_TABLE_IDENTITY_CONFLICT' };
     }
 
     const botName = botNameFor(slot);
@@ -451,7 +472,8 @@ async function retireInactiveClub({ db, auth, userRecord, now = new Date() }) {
       group,
       rank,
       reason: 'INACTIVE_OVER_90_DAYS',
-      lastSignInAt: eligibility.inactiveSince,
+      lastSignInAt: latestAuthRecord.metadata && latestAuthRecord.metadata.lastSignInTime || null,
+      lastActiveAt: eligibility.inactiveSince,
       retiredAt: now,
       createdAt: now,
     });
@@ -555,4 +577,4 @@ async function runClubInactivitySweep({ db, auth, now = new Date(), pageSize = B
   return summary;
 }
 
-module.exports = { buildBotClub, botIdFor, isFinished, retireInactiveClub, runClubInactivitySweep };
+module.exports = { buildBotClub, botIdFor, isFinished, isValidBotClub, retireInactiveClub, runClubInactivitySweep };
