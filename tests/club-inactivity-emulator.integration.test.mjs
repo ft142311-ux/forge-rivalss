@@ -388,7 +388,32 @@ test('inactive club replacement is atomic and preserves completed match results'
     leaseUntil: new Date(now.getTime() - 60 * 1000),
     attempts: 1,
   });
-  const result = await retireInactiveClub({ db, auth, userRecord, now });
+
+  const authDisableFailure = {
+    ...auth,
+    updateUser: async () => { throw new Error('SIMULATED_AUTH_DISABLE_FAILURE'); },
+  };
+  await assert.rejects(
+    retireInactiveClub({ db, auth: authDisableFailure, userRecord, now }),
+    /SIMULATED_AUTH_DISABLE_FAILURE/,
+  );
+  assert.equal(disabled, false);
+  assert.equal((await pendingRef.get()).get('phase'), 'PENDING_AUTH_DISABLE');
+
+  const afterDisableFailure = new Date(now.getTime() + 11 * 60 * 1000);
+  const tokenRevokeFailure = {
+    ...auth,
+    revokeRefreshTokens: async () => { throw new Error('SIMULATED_TOKEN_REVOCATION_FAILURE'); },
+  };
+  await assert.rejects(
+    retireInactiveClub({ db, auth: tokenRevokeFailure, userRecord, now: afterDisableFailure }),
+    /SIMULATED_TOKEN_REVOCATION_FAILURE/,
+  );
+  assert.equal(disabled, true);
+  assert.equal((await pendingRef.get()).get('phase'), 'PENDING_AUTH_DISABLE');
+
+  const recoveryNow = new Date(now.getTime() + 22 * 60 * 1000);
+  const result = await retireInactiveClub({ db, auth, userRecord, now: recoveryNow });
   assert.equal(result.action, 'RETIRED_AND_REPLACED');
   assert.equal(disabled, true);
   assert.equal(revokedTokenCalls, 1);
