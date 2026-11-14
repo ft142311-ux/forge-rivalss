@@ -180,7 +180,23 @@ async function finishTechnically(db: any, season: number, round: number, pairing
     const existing: any = snap.data() || {};
     const terminal = existing.isFinished === true ||
       ['finished', 'completed'].includes(String(existing.status || '').toLowerCase());
-    if (terminal) return Boolean(existing.winnerId);
+    if (terminal && existing.winnerId) return true;
+
+    // A completed knockout draw still needs a bracket winner. Preserve its real
+    // score/report and apply only the deterministic seed tie-break when no winner exists.
+    if (terminal) {
+      const stronger = pairing.home!.seed < pairing.away!.seed ? pairing.home! : pairing.away!;
+      tx.set(ref, {
+        winnerId: stronger.id,
+        winner: stronger.id === pairing.home!.id ? pairing.home!.name : pairing.away!.name,
+        isFinished: true,
+        status: 'finished',
+        technicalDecision: true,
+        technicalDecisionReason: 'Completed cup knockout draw resolved by deterministic seed tie-break',
+        updatedAt: FieldValue.serverTimestamp(),
+      }, { merge: true });
+      return true;
+    }
 
     // Deadline fallback only: the stronger seeded team advances if Match Core could not finish in time.
     const stronger = pairing.home!.seed < pairing.away!.seed ? pairing.home! : pairing.away!;
