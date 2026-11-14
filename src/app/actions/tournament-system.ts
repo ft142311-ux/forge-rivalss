@@ -10,6 +10,7 @@ import { buildMatchTeamSnapshot, createDeterministicBotSquad } from '@/app/lib/m
 import { runMatchEngine } from '@/app/lib/match-engine';
 import { MATCH_COLLECTIONS } from '@/app/lib/match-storage';
 import { isTournamentMatchLeaseExpired, TOURNAMENT_MATCH_LEASE_MS } from '@/app/lib/tournament-match-lease';
+import { getTournamentStageMatchKey, isTournamentStageMatchComplete } from '@/app/lib/tournament-stage-utils';
 
 const TOURNAMENTS = [
   { id: 'iron-kettle', name: 'Чугунный чайник', type: 'Тов', maxParticipants: 16, start: '10:00' },
@@ -562,13 +563,11 @@ async function stageMatchesDone(tournamentRef: any, stage: string, expectedCount
   const ids = new Set<string>();
   for (const doc of snap.docs) {
     const match = doc.data() || {};
-    if (match.status !== 'finished' || !match.homeId || !match.awayId) return false;
-    // Group BO2 fixtures may legitimately end in a draw; knockout fixtures need a winner.
-    if (stage !== 'groups' && !match.winnerId) return false;
-    if (match.winnerId && ![match.homeId, match.awayId].includes(match.winnerId)) return false;
-    if (match.homeId === match.awayId) return false;
-    const key = `${match.stage}:${match.index ?? doc.id}`;
-    if (ids.has(key)) return false;
+    if (!isTournamentStageMatchComplete(match, stage)) return false;
+    // Group match indices repeat by group and round; the composite key must not
+    // mistake valid fixtures for duplicates or allow a duplicated fixture through.
+    const key = getTournamentStageMatchKey(match, stage, doc.id);
+    if (!key || ids.has(key)) return false;
     ids.add(key);
   }
   return true;
