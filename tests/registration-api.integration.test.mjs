@@ -102,6 +102,7 @@ test('registration HTTP API enforces its boundary and safely initializes a club'
     let replacementPlayerRef = null;
     let replacementActivityRef = null;
     let replacementAuditQuery = null;
+    let contenderUidsForCleanup = [];
 
     t.after(async () => {
       const auditSnapshot = await auditQuery.get();
@@ -122,6 +123,12 @@ test('registration HTTP API enforces its boundary and safely initializes a club'
         ...(replacementPlayerRef ? [replacementPlayerRef] : []),
         ...(replacementActivityRef ? [replacementActivityRef] : []),
         ...(replacementAuditQuery ? (await replacementAuditQuery.get()).docs.map((doc) => doc.ref) : []),
+        ...contenderUidsForCleanup.flatMap((contenderUid) => [
+          db.collection('user_activity_v1').doc(contenderUid),
+        ]),
+        ...(await Promise.all(contenderUidsForCleanup.map((contenderUid) =>
+          db.collection('security_audit_v1').where('actorUid', '==', contenderUid).get()
+        ))).flatMap((snapshot) => snapshot.docs.map((doc) => doc.ref)),
         botPlayerRef,
       ];
       for (let i = 0; i < cleanupRefs.length; i += 400) {
@@ -130,6 +137,9 @@ test('registration HTTP API enforces its boundary and safely initializes a club'
         await batch.commit();
       }
       await auth.deleteUser(uid).catch(() => undefined);
+      for (const contenderUid of contenderUidsForCleanup) {
+        await auth.deleteUser(contenderUid).catch(() => undefined);
+      }
       if (replacementUid) await auth.deleteUser(replacementUid).catch(() => undefined);
       await deleteApp(app);
     });
@@ -462,6 +472,7 @@ test('registration HTTP API enforces its boundary and safely initializes a club'
       const tokens = await login.json();
       return { uid: user.uid, email, password, idToken: tokens.idToken };
     }));
+    contenderUidsForCleanup = contenders.map(({ uid }) => uid);
     const contenderPlayerRefs = contenders.map(({ uid }) => db.collection('players_v14').doc(uid));
     const contenderActivityRefs = contenders.map(({ uid }) => db.collection('user_activity_v1').doc(uid));
     const contenderAuditQueries = contenders.map(({ uid }) =>
