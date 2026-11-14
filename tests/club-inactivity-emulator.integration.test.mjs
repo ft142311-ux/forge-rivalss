@@ -588,12 +588,14 @@ test('a stale cancellation worker cannot re-enable Auth after a newer cleanup co
     revokeRefreshTokens: async () => { revokeCalls++; },
   };
 
-  const delayedRecovery = recoverCancelledRetirement({ db, auth, uid, pendingRef, now });
+  const delayedRecovery = recoverCancelledRetirement({
+    db, auth, uid, pendingRef, now, clock: () => now.getTime(),
+  });
   await firstStarted;
 
   const takeoverNow = new Date(now.getTime() + 11 * 60 * 1000);
   const completedRecovery = await recoverCancelledRetirement({
-    db, auth, uid, pendingRef, now: takeoverNow,
+    db, auth, uid, pendingRef, now: takeoverNow, clock: () => takeoverNow.getTime(),
   });
   assert.equal(completedRecovery, true);
   assert.equal((await pendingRef.get()).exists, false);
