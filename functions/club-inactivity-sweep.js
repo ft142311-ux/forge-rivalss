@@ -85,13 +85,12 @@ async function retireInactiveClub({ db, auth, userRecord, now = new Date() }) {
     activitySnap.exists ? activitySnap.get('lastActiveAt') : null
   );
   if (!eligibility.eligible) {
-    // Recover the crash window where a prior pass disabled Auth and then
-    // stopped before the post-disable activity check. Recent verified activity
-    // cancels that pending retirement and restores sign-in access.
+    // Once a retirement marker exists, it is a committed account fence.
+    // Never let a second worker cancel or delete another worker's operation.
+    // The transactional claim below prevents fresh activity from creating a
+    // new marker in the first place; legacy/conflicting markers fail closed.
     if (pendingSnap.exists) {
-      if (latestAuthRecord.disabled) await auth.updateUser(uid, { disabled: false });
-      await pendingRef.delete().catch(() => undefined);
-      return { action: 'CANCELLED_PENDING_RETIREMENT', reason: eligibility.reason };
+      return { action: 'BLOCKED_PENDING_RETIREMENT_ACTIVITY_CONFLICT', reason: eligibility.reason };
     }
     return { action: 'SKIPPED_NOT_INACTIVE', reason: eligibility.reason };
   }
