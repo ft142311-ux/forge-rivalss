@@ -16,7 +16,7 @@ test('inactive club replacement is atomic and preserves completed match results'
   assert.match(emulatorHost, /^(127[.]0[.]0[.]1|localhost):[0-9]+$/);
   assert.equal(projectId, 'demo-forge-rivals');
 
-  const testProjectId = `${projectId}-retirement-${randomUUID()}`;
+  const testProjectId = `demo-inact-${randomUUID().slice(0, 8)}`;
   const app = initializeApp({ projectId: testProjectId }, `inactive-club-test-${randomUUID()}`);
   const db = getFirestore(app);
   const uid = `inactive-test-${randomUUID()}`;
@@ -145,7 +145,7 @@ test('a pending retirement is cancelled and Auth is re-enabled when recent activ
   skip: !emulatorHost,
 }, async (t) => {
   assert.match(emulatorHost, /^(127[.]0[.]0[.]1|localhost):[0-9]+$/);
-  const testProjectId = `${projectId}-recovery-${randomUUID()}`;
+  const testProjectId = `demo-recov-${randomUUID().slice(0, 8)}`;
   const app = initializeApp({ projectId: testProjectId }, `inactive-recovery-test-${randomUUID()}`);
   const db = getFirestore(app);
   const uid = `inactive-recovery-${randomUUID()}`;
