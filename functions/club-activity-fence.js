@@ -32,7 +32,9 @@ async function recordUserActivityUnlessRetiring(db, uid, nowMs = Date.now()) {
     const lastActiveAt = activity.data()?.lastActiveAt;
     const lastActiveMs = typeof lastActiveAt?.toMillis === 'function'
       ? lastActiveAt.toMillis()
-      : (lastActiveAt instanceof Date ? lastActiveAt.getTime() : Date.parse(String(lastActiveAt || '')));
+      : (lastActiveAt instanceof Date
+        ? lastActiveAt.getTime()
+        : (typeof lastActiveAt === 'number' ? lastActiveAt : Date.parse(String(lastActiveAt || ''))));
     const refreshDue = !Number.isFinite(lastActiveMs) || nowMs - lastActiveMs >= 60_000;
 
     // Throttle writes to at most once per minute, while still reading the
