@@ -15,6 +15,11 @@ function startTimeMs(match: any): number {
   return timestampToMillis(raw);
 }
 
+function isTrialMatchTerminal(match: any): boolean {
+  return match?.isFinished === true ||
+    ['finished', 'completed'].includes(String(match?.status || '').toLowerCase());
+}
+
 
 /** Creates and persists an immediate BO2 trial match using the authoritative profile. */
 export async function createTrialMatchAction(idToken: string) {
@@ -133,7 +138,7 @@ export async function resolveDueTrialMatchesForUserAction(idToken: string) {
     const matchId = matchDoc.id;
     const match = matchDoc.data() as any;
     const dueAt = startTimeMs(match);
-    if (!Number.isFinite(dueAt) || dueAt > Date.now() || !match.teamA || !match.teamB || match.isProcessing) {
+    if (isTrialMatchTerminal(match) || !Number.isFinite(dueAt) || dueAt > Date.now() || !match.teamA || !match.teamB || match.isProcessing) {
       skipped++;
       continue;
     }
@@ -144,7 +149,7 @@ export async function resolveDueTrialMatchesForUserAction(idToken: string) {
       claimed = await db.runTransaction(async transaction => {
         const fresh = await transaction.get(matchRef);
         const data = fresh.data() as any;
-        if (!fresh.exists || data?.homeId !== uid || data?.isTrial !== true || data?.isFinished === true || data?.isProcessing === true) return false;
+        if (!fresh.exists || data?.homeId !== uid || data?.isTrial !== true || isTrialMatchTerminal(data) || data?.isProcessing === true) return false;
         const freshDueAt = startTimeMs(data);
         if (!Number.isFinite(freshDueAt) || freshDueAt > Date.now() || !data.teamA || !data.teamB) return false;
         transaction.update(matchRef, {
@@ -165,7 +170,7 @@ export async function resolveDueTrialMatchesForUserAction(idToken: string) {
         const fresh = await transaction.get(matchRef);
         const data = fresh.data() as any;
         if (!fresh.exists || data?.homeId !== uid || data?.isTrial !== true) throw new Error('TRIAL_MATCH_OWNERSHIP_CHANGED');
-        if (data?.isFinished === true) return false;
+        if (isTrialMatchTerminal(data)) return false;
         if (data?.isProcessing !== true) throw new Error('TRIAL_MATCH_LOCK_LOST');
         transaction.update(matchRef, {
           scoreA, scoreB, homeScore: scoreA, awayScore: scoreB,
@@ -189,7 +194,7 @@ export async function resolveDueTrialMatchesForUserAction(idToken: string) {
         await db.runTransaction(async transaction => {
           const fresh = await transaction.get(matchRef);
           const data = fresh.data() as any;
-          if (fresh.exists && data?.homeId === uid && data?.isTrial === true && data?.isFinished !== true && data?.isProcessing === true) {
+          if (fresh.exists && data?.homeId === uid && data?.isTrial === true && !isTrialMatchTerminal(data) && data?.isProcessing === true) {
             transaction.update(matchRef, { isProcessing: false, status: 'scheduled', processingErrorAt: FieldValue.serverTimestamp() });
           }
         }).catch(resetError => console.error('[TRIAL MATCH SERVER] Could not release claim:', matchId, resetError));
