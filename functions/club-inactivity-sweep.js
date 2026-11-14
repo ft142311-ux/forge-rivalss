@@ -84,6 +84,38 @@ function isValidBotClub(bot, botId) {
 }
 
 /**
+ * Complete a cancelled retirement without ever dropping the access fence
+ * before Auth has been re-enabled. A per-attempt token prevents a delayed
+ * worker from deleting a marker that another recovery attempt now owns.
+ */
+async function recoverCancelledRetirement({ db, auth, uid, pendingRef, now }) {
+  const cleanupToken = randomUUID();
+  const claimed = await db.runTransaction(async (transaction) => {
+    const pending = await transaction.get(pendingRef);
+    if (!pending.exists || pending.get('phase') !== 'CANCELLED') return false;
+    transaction.update(pendingRef, {
+      cleanupToken,
+      cleanupStartedAt: now,
+      updatedAt: now,
+    });
+    return true;
+  });
+  if (!claimed) return false;
+
+  const authRecord = await auth.getUser(uid);
+  if (authRecord.disabled) await auth.updateUser(uid, { disabled: false });
+
+  return db.runTransaction(async (transaction) => {
+    const pending = await transaction.get(pendingRef);
+    if (!pending.exists ||
+        pending.get('phase') !== 'CANCELLED' ||
+        pending.get('cleanupToken') !== cleanupToken) return false;
+    transaction.delete(pendingRef);
+    return true;
+  });
+}
+
+/**
  * Replaces one inactive human club with its deterministic bot identity.
  * Auth is disabled before the transaction, and all Firestore mutations are
  * committed atomically. A retry can safely finish a previously interrupted
@@ -119,9 +151,8 @@ async function retireInactiveClub({ db, auth, userRecord, now = new Date() }) {
   // Refresh Auth metadata immediately before making the eligibility decision.
   const latestAuthRecord = await auth.getUser(uid);
   if (pendingSnap.exists && pendingSnap.get('phase') === 'CANCELLED') {
-    if (latestAuthRecord.disabled) await auth.updateUser(uid, { disabled: false });
-    await pendingRef.delete().catch(() => undefined);
-    return { action: 'CANCELLED_PENDING_CLEANUP' };
+    const recovered = await recoverCancelledRetirement({ db, auth, uid, pendingRef, now });
+    return { action: recovered ? 'CANCELLED_PENDING_CLEANUP' : 'SKIPPED_RETIREMENT_IN_PROGRESS' };
   }
   if (latestAuthRecord.disabled && !pendingSnap.exists) {
     return { action: 'SKIPPED_PREVIOUSLY_DISABLED' };
@@ -175,15 +206,8 @@ async function retireInactiveClub({ db, auth, userRecord, now = new Date() }) {
         return { action: 'SKIPPED_REVIEW_REQUIRED' };
       }
       if (cancellation === 'CANCELLED') {
-        const currentAuthRecord = await auth.getUser(uid);
-        if (currentAuthRecord.disabled) await auth.updateUser(uid, { disabled: false });
-        await db.runTransaction(async (transaction) => {
-          const pending = await transaction.get(pendingRef);
-          if (pending.exists && pending.get('phase') === 'CANCELLED') {
-            transaction.delete(pendingRef);
-          }
-        });
-        return { action: 'CANCELLED_PENDING_CLEANUP' };
+        const recovered = await recoverCancelledRetirement({ db, auth, uid, pendingRef, now });
+        return { action: recovered ? 'CANCELLED_PENDING_CLEANUP' : 'SKIPPED_RETIREMENT_IN_PROGRESS' };
       }
     }
     return { action: 'SKIPPED_NOT_INACTIVE', reason: eligibility.reason };
@@ -301,14 +325,8 @@ async function retireInactiveClub({ db, auth, userRecord, now = new Date() }) {
   if (claim.reviewRequired) return { action: 'SKIPPED_REVIEW_REQUIRED' };
   if (claim.busy) return { action: 'SKIPPED_RETIREMENT_IN_PROGRESS' };
   if (claim.cancelled) {
-    if (latestAuthRecord.disabled) await auth.updateUser(uid, { disabled: false });
-    await db.runTransaction(async (transaction) => {
-      const pending = await transaction.get(pendingRef);
-      if (pending.exists && pending.get('phase') === 'CANCELLED') {
-        transaction.delete(pendingRef);
-      }
-    });
-    return { action: 'CANCELLED_PENDING_CLEANUP' };
+    const recovered = await recoverCancelledRetirement({ db, auth, uid, pendingRef, now });
+    return { action: recovered ? 'CANCELLED_PENDING_CLEANUP' : 'SKIPPED_RETIREMENT_IN_PROGRESS' };
   }
   if (!claim.claimed) {
     return { action: 'SKIPPED_ACTIVITY_RACE', reason: claim.reason || 'RECENT_ACTIVITY' };
@@ -340,13 +358,7 @@ async function retireInactiveClub({ db, auth, userRecord, now = new Date() }) {
       return true;
     });
     if (markedCancelled) {
-      if (claimAuthRecord.disabled) await auth.updateUser(uid, { disabled: false });
-      await db.runTransaction(async (transaction) => {
-        const pending = await transaction.get(pendingRef);
-        if (pending.exists && pending.get('phase') === 'CANCELLED') {
-          transaction.delete(pendingRef);
-        }
-      });
+      await recoverCancelledRetirement({ db, auth, uid, pendingRef, now });
     }
     return { action: 'SKIPPED_ACTIVITY_RACE', reason: claimEligibility.reason };
   }
@@ -616,15 +628,9 @@ async function retireInactiveClub({ db, auth, userRecord, now = new Date() }) {
       return true;
     });
     if (markedCancelled) {
-      // If Auth re-enable fails or the worker crashes, the CANCELLED marker is
-      // recoverable by the next sweep and is ignored by the login fence.
-      await auth.updateUser(uid, { disabled: false });
-      await db.runTransaction(async (transaction) => {
-        const pending = await transaction.get(pendingRef);
-        if (pending.exists && pending.get('phase') === 'CANCELLED') {
-          transaction.delete(pendingRef);
-        }
-      });
+      // The marker remains an access fence until Auth is enabled. A cleanup
+      // token prevents delayed workers from deleting a newer recovery marker.
+      await recoverCancelledRetirement({ db, auth, uid, pendingRef, now });
     }
   }
   return result;
