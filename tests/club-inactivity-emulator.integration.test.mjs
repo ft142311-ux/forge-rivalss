@@ -511,4 +511,14 @@ test('a pending retirement with recent activity is safely cancelled and Auth acc
   assert.equal(result.action, 'CANCELLED_PENDING_CLEANUP');
   assert.equal(disabled, false);
   assert.equal((await pendingRef.get()).exists, false);
+
+  await pendingRef.set({ uid, phase: 'UNRECOGNIZED_PHASE', requestedAt: now });
+  const unknownPhase = await retireInactiveClub({
+    db,
+    auth,
+    userRecord,
+    now: new Date(now.getTime() + 7 * 60 * 1000),
+  });
+  assert.equal(unknownPhase.action, 'SKIPPED_REVIEW_REQUIRED');
+  assert.equal((await pendingRef.get()).get('phase'), 'REVIEW_REQUIRED');
 });
