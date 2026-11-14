@@ -180,8 +180,8 @@ function buildRegistrationMatchPlan(matches, botId, userId, clubName, nowMs = Da
     if (!involvesBot) continue;
 
     const status = String(match.status || '').toLowerCase();
-    if (match.isProcessing === true ||
-        ['in_progress', 'in-progress', 'processing', 'resolving'].includes(status)) {
+    if (match.isProcessing === true || match.startedAt || match.processingStartedAt ||
+        ['in_progress', 'in-progress', 'processing', 'resolving', 'running', 'live'].includes(status)) {
       return { ok: false, reason: 'SLOT_MATCH_IN_PROGRESS', matchId: match.id, updates: [] };
     }
 
