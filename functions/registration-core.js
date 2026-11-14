@@ -62,8 +62,160 @@ function generateStartingSquad() {
   });
 }
 
+function isCompletedMatch(match) {
+  const status = String(match && match.status || '').toLowerCase();
+  return Boolean(match && match.isFinished === true) ||
+    status === 'finished' ||
+    status === 'completed';
+}
+
+function timestampToMillis(value) {
+  if (typeof value === 'number') return value;
+  if (value instanceof Date) return value.getTime();
+  if (typeof value === 'string') return Date.parse(value);
+  if (value && typeof value.toMillis === 'function') return value.toMillis();
+  if (value && typeof value.toDate === 'function') {
+    const date = value.toDate();
+    return date instanceof Date ? date.getTime() : NaN;
+  }
+  if (value && Number.isFinite(Number(value.seconds))) {
+    return Number(value.seconds) * 1000 + Number(value.nanoseconds || 0) / 1e6;
+  }
+  return NaN;
+}
+
+/**
+ * Validate the full rank-based round robin while allowing completed fixtures
+ * to retain the identity that actually played them. Only unfinished fixtures
+ * must agree on the current participant for each rank.
+ */
+function validateRegistrationSchedule(matches, rank, currentBotId, teamsPerGroup = 8) {
+  if (!Array.isArray(matches) || matches.length !== teamsPerGroup * (teamsPerGroup - 1) ||
+      !Number.isInteger(Number(rank)) || Number(rank) < 1 || Number(rank) > teamsPerGroup ||
+      typeof currentBotId !== 'string' || !currentBotId) return false;
+
+  const coordinates = new Set();
+  const appearancesByRank = new Map();
+  const currentParticipantByRank = new Map();
+
+  for (const match of matches) {
+    const homeId = String(match && match.homeId || '');
+    const awayId = String(match && match.awayId || '');
+    const homeRank = Number(match && match.homeRank);
+    const awayRank = Number(match && match.awayRank);
+
+    if (!homeId || !awayId || homeId === awayId ||
+        !Number.isInteger(homeRank) || !Number.isInteger(awayRank) ||
+        homeRank < 1 || homeRank > teamsPerGroup ||
+        awayRank < 1 || awayRank > teamsPerGroup ||
+        homeRank === awayRank) return false;
+
+    const coordinate = `${homeRank}>${awayRank}`;
+    if (coordinates.has(coordinate)) return false;
+    coordinates.add(coordinate);
+
+    for (const teamRank of [homeRank, awayRank]) {
+      appearancesByRank.set(teamRank, (appearancesByRank.get(teamRank) || 0) + 1);
+    }
+
+    if (isCompletedMatch(match)) continue;
+
+    for (const [id, teamRank] of [[homeId, homeRank], [awayId, awayRank]]) {
+      if (currentParticipantByRank.has(teamRank) && currentParticipantByRank.get(teamRank) !== id) {
+        return false;
+      }
+      currentParticipantByRank.set(teamRank, id);
+    }
+  }
+
+  const currentIds = [...currentParticipantByRank.values()];
+  return coordinates.size === teamsPerGroup * (teamsPerGroup - 1) &&
+    appearancesByRank.size === teamsPerGroup &&
+    [...appearancesByRank.values()].every(count => count === 2 * (teamsPerGroup - 1)) &&
+    currentParticipantByRank.get(Number(rank)) === currentBotId &&
+    new Set(currentIds).size === currentIds.length;
+}
+
+/**
+ * Move the existing standings row from the temporary bot identity to the new
+ * user identity without resetting any season-to-date sporting statistics.
+ */
+function transferBotStandingToUser(stats, botId, userId, clubName, rank) {
+  if (!stats || typeof stats !== 'object' || Array.isArray(stats) ||
+      !botId || !userId || botId === userId || Object.prototype.hasOwnProperty.call(stats, userId)) {
+    return { ok: false, reason: 'LEAGUE_TABLE_SLOT_CONFLICT' };
+  }
+
+  const botRow = stats[botId];
+  const rowsAtRank = Object.entries(stats).filter(([, row]) => Number(row && row.rank) === Number(rank));
+  if (!botRow || botRow.isBot !== true || Number(botRow.rank) !== Number(rank) ||
+      rowsAtRank.length !== 1 || rowsAtRank[0][0] !== botId) {
+    return { ok: false, reason: 'LEAGUE_TABLE_SLOT_CONFLICT' };
+  }
+
+  const nextStats = { ...stats };
+  delete nextStats[botId];
+  nextStats[userId] = {
+    ...botRow,
+    id: userId,
+    name: clubName,
+    rank: Number(rank),
+    isBot: false,
+  };
+  return { ok: true, stats: nextStats, transferredRow: { ...botRow } };
+}
+
+/**
+ * Prepare only future fixture rewrites. A completed match is historical evidence
+ * and is never changed. A due or processing fixture blocks registration until
+ * the canonical match resolver has settled it.
+ */
+function buildRegistrationMatchPlan(matches, botId, userId, clubName, nowMs = Date.now()) {
+  if (!Array.isArray(matches) || !Number.isFinite(nowMs)) {
+    return { ok: false, reason: 'LEAGUE_SCHEDULE_SLOT_CONFLICT', updates: [] };
+  }
+
+  const updates = [];
+  for (const match of matches) {
+    if (isCompletedMatch(match)) continue;
+
+    const status = String(match && match.status || '').toLowerCase();
+    if (match && match.isProcessing === true ||
+        ['in_progress', 'in-progress', 'processing', 'resolving'].includes(status)) {
+      return { ok: false, reason: 'SLOT_MATCH_IN_PROGRESS', matchId: match && match.id, updates: [] };
+    }
+
+    const startMs = timestampToMillis(match && (match.startTime || match.scheduledStartAt));
+    if (Number.isFinite(startMs) && startMs <= nowMs) {
+      return { ok: false, reason: 'SLOT_MATCH_DUE', matchId: match && match.id, updates: [] };
+    }
+
+    const patch = {};
+    if (match && match.homeId === botId) {
+      patch.homeId = userId;
+      patch.homeName = clubName;
+    }
+    if (match && match.awayId === botId) {
+      patch.awayId = userId;
+      patch.awayName = clubName;
+    }
+    if (Object.keys(patch).length) {
+      updates.push({ matchId: match.id || null, patch });
+    }
+  }
+
+  if (updates.length === 0) {
+    return { ok: false, reason: 'NO_UPCOMING_FIXTURES_FOR_SLOT', updates: [] };
+  }
+  return { ok: true, updates };
+}
+
 module.exports = {
   isEligibleRegistrationSlot,
   validateRegistrationSchedule,
   generateStartingSquad,
+  isCompletedMatch,
+  timestampToMillis,
+  transferBotStandingToUser,
+  buildRegistrationMatchPlan,
 };
