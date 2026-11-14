@@ -70,7 +70,7 @@ function inspectRolloverGroup(
 ) {
   const inspection = inspectGroupReconciliation(stats, fixtures, slots, expectedTeams);
   if (!allowTestSeasonRecovery || sourceSeason !== 1) return inspection;
-  const repairs = buildCanonicalSlotRepairs(fixtures, slots, expectedTeams);
+  const repairs = buildCanonicalSlotRepairs(fixtures, slots, expectedTeams, stats);
   if (!inspection.fixtureStructureComplete || !repairs) return inspection;
   const recoveryRequired = inspection.reasons.length > 0 || inspection.staleRows.length > 0 || inspection.slotConflicts.length > 0;
   return {
@@ -769,7 +769,7 @@ export async function prepareSeasonRollover(db: any, sourceSeason: number, targe
           return Number(slot.division || slot.level || 0) === level && Number(slot.group || 0) === group;
         });
         const slotData = slotDocs.map((doc: any) => doc.data() || {});
-        const slotRepairs = buildCanonicalSlotRepairs(fixtures, slotData, TEAMS_PER_GROUP);
+        const slotRepairs = buildCanonicalSlotRepairs(fixtures, slotData, TEAMS_PER_GROUP, currentStats);
         if (!tableDoc || !hasCanonicalFixtureStructure(fixtures, TEAMS_PER_GROUP) || !slotRepairs) {
           return { ready: false, reason: 'SEASON_RECOVERY_UNSAFE_GROUP', sourceSeason, targetSeason, group: key, writesStarted: false };
         }
@@ -1002,7 +1002,16 @@ export async function prepareSeasonRollover(db: any, sourceSeason: number, targe
       const data = doc.data() || {};
       return groupKey(Number(data.level || 0), Number(data.group || 0)) === key;
     });
-    const rows = calculateGroupStandings(tableDoc?.data()?.stats || {}, fixturesByGroup.get(key) || [], TEAMS_PER_GROUP);
+    const groupSlots = freshSlotsSnap.docs
+      .map((doc: any) => doc.data() || {})
+      .filter((slot: any) => Number(slot.division || slot.level || 0) === Number(key.split('-')[0]) &&
+        Number(slot.group || 0) === Number(key.split('-')[1]));
+    const rows = calculateGroupStandings(
+      tableDoc?.data()?.stats || {},
+      fixturesByGroup.get(key) || [],
+      TEAMS_PER_GROUP,
+      groupSlots,
+    );
     if (rows.length !== TEAMS_PER_GROUP) return { ready: false, reason: 'STANDINGS_TEAM_COUNT_INVALID', group: key, count: rows.length };
     standings[key] = rows.map((row, i) => ({ ...row, rank: i + 1 }));
   }
