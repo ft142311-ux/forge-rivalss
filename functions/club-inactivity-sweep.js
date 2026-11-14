@@ -139,43 +139,41 @@ async function retireInactiveClub({ db, auth, userRecord, now = new Date() }) {
   // Claim retirement in the same Firestore transaction that reads activity.
   // The login handshake reads this marker and writes the activity document, so
   // exactly one side wins a concurrent login/retirement race.
-  if (!pendingSnap.exists) {
-    const claim = await db.runTransaction(async (transaction) => {
-      const [pending, latestActivity] = await Promise.all([
-        transaction.get(pendingRef),
-        transaction.get(activityRef),
-      ]);
-      if (pending.exists) return { claimed: false, alreadyClaimed: true };
+  const claim = await db.runTransaction(async (transaction) => {
+    const [pending, latestActivity] = await Promise.all([
+      transaction.get(pendingRef),
+      transaction.get(activityRef),
+    ]);
+    if (pending.exists) return { claimed: false, alreadyClaimed: true };
 
-      const claimEligibility = resolveClubInactivity(
-        latestAuthRecord.metadata && latestAuthRecord.metadata.lastSignInTime,
-        now.getTime(),
-        undefined,
-        latestActivity.exists ? latestActivity.get('lastActiveAt') : null,
-      );
-      if (!claimEligibility.eligible) {
-        return { claimed: false, alreadyClaimed: false, reason: claimEligibility.reason };
-      }
-
-      transaction.create(pendingRef, {
-        uid,
-        phase: 'PENDING_AUTH_DISABLE',
-        lastSignInAt: latestAuthRecord.metadata && latestAuthRecord.metadata.lastSignInTime || null,
-        inactiveSince: claimEligibility.inactiveSince || eligibility.inactiveSince,
-        requestedAt: now,
-        season,
-        division,
-        group,
-        rank,
-        expectedSlotId,
-        expectedGeneration,
-      });
-      return { claimed: true, alreadyClaimed: false };
-    });
-
-    if (!claim.claimed && !claim.alreadyClaimed) {
-      return { action: 'SKIPPED_ACTIVITY_RACE', reason: claim.reason || 'RECENT_ACTIVITY' };
+    const claimEligibility = resolveClubInactivity(
+      latestAuthRecord.metadata && latestAuthRecord.metadata.lastSignInTime,
+      now.getTime(),
+      undefined,
+      latestActivity.exists ? latestActivity.get('lastActiveAt') : null,
+    );
+    if (!claimEligibility.eligible) {
+      return { claimed: false, alreadyClaimed: false, reason: claimEligibility.reason };
     }
+
+    transaction.create(pendingRef, {
+      uid,
+      phase: 'PENDING_AUTH_DISABLE',
+      lastSignInAt: latestAuthRecord.metadata && latestAuthRecord.metadata.lastSignInTime || null,
+      inactiveSince: claimEligibility.inactiveSince || eligibility.inactiveSince,
+      requestedAt: now,
+      season,
+      division,
+      group,
+      rank,
+      expectedSlotId,
+      expectedGeneration,
+    });
+    return { claimed: true, alreadyClaimed: false };
+  });
+
+  if (!claim.claimed && !claim.alreadyClaimed) {
+    return { action: 'SKIPPED_ACTIVITY_RACE', reason: claim.reason || 'RECENT_ACTIVITY' };
   }
   if (!latestAuthRecord.disabled) await auth.updateUser(uid, { disabled: true });
   await auth.revokeRefreshTokens(uid);
