@@ -77,6 +77,11 @@ async function retireInactiveClub({ db, auth, userRecord, now = new Date() }) {
   }
   // Refresh Auth metadata immediately before making the eligibility decision.
   const latestAuthRecord = await auth.getUser(uid);
+  if (pendingSnap.exists && pendingSnap.get('phase') === 'CANCELLED') {
+    if (latestAuthRecord.disabled) await auth.updateUser(uid, { disabled: false });
+    await pendingRef.delete().catch(() => undefined);
+    return { action: 'CANCELLED_PENDING_CLEANUP' };
+  }
   if (latestAuthRecord.disabled && !pendingSnap.exists) {
     return { action: 'SKIPPED_PREVIOUSLY_DISABLED' };
   }
@@ -451,14 +456,28 @@ async function retireInactiveClub({ db, auth, userRecord, now = new Date() }) {
   if (!['RETIRED_AND_REPLACED', 'ALREADY_RETIRED'].includes(result.action)) {
     // Only the current lease owner may release the operation or re-enable Auth.
     // A stale worker must never undo a newer worker's progress.
-    const stillOwnsLease = await db.runTransaction(async (transaction) => {
+    const markedCancelled = await db.runTransaction(async (transaction) => {
       const pending = await transaction.get(pendingRef);
       if (!pending.exists || pending.get('leaseOwner') !== leaseOwner) return false;
-      transaction.delete(pendingRef);
+      transaction.update(pendingRef, {
+        phase: 'CANCELLED',
+        cancellationReason: result.action,
+        leaseOwner: null,
+        leaseUntil: null,
+        updatedAt: now,
+      });
       return true;
     });
-    if (stillOwnsLease) {
-      await auth.updateUser(uid, { disabled: false }).catch(() => undefined);
+    if (markedCancelled) {
+      // If Auth re-enable fails or the worker crashes, the CANCELLED marker is
+      // recoverable by the next sweep and is ignored by the login fence.
+      await auth.updateUser(uid, { disabled: false });
+      await db.runTransaction(async (transaction) => {
+        const pending = await transaction.get(pendingRef);
+        if (pending.exists && pending.get('phase') === 'CANCELLED') {
+          transaction.delete(pendingRef);
+        }
+      });
     }
   }
   return result;
