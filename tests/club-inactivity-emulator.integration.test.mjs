@@ -98,6 +98,19 @@ test('login activity handshake is blocked once retirement has been claimed', {
   await retiredRef.set({ uid, retiredAt: new Date() });
   const permanentlyBlocked = await recordUserActivityUnlessRetiring(db, uid);
   assert.deepEqual(permanentlyBlocked, { success: false, error: 'ACCOUNT_RETIRED' });
+
+  await retiredRef.delete();
+  await pendingRef.set({ uid, phase: 'CANCELLED', cancellationReason: 'DEFERRED_MATCH_PROCESSING' });
+  await auth.updateUser(uid, { disabled: true });
+  const cancelledRecovery = await retireInactiveClub({
+    db,
+    auth,
+    userRecord: { ...authUser, disabled: true, metadata: authUser.metadata },
+    now,
+  });
+  assert.equal(cancelledRecovery.action, 'CANCELLED_PENDING_CLEANUP');
+  assert.equal((await auth.getUser(uid)).disabled, false);
+  assert.equal((await pendingRef.get()).exists, false);
 });
 
 test('inactive club replacement is atomic and preserves completed match results', {
@@ -198,6 +211,18 @@ test('inactive club replacement is atomic and preserves completed match results'
     revokeRefreshTokens: async () => undefined,
   };
   const userRecord = { uid, disabled: false, metadata: { lastSignInTime } };
+
+  await pendingRef.set({
+    uid,
+    phase: 'PENDING_AUTH_DISABLE',
+    leaseOwner: 'other-worker',
+    leaseUntil: new Date(now.getTime() + 5 * 60 * 1000),
+    attempts: 1,
+  });
+  const concurrentAttempt = await retireInactiveClub({ db, auth, userRecord, now });
+  assert.equal(concurrentAttempt.action, 'SKIPPED_RETIREMENT_IN_PROGRESS');
+  assert.equal(disabled, false);
+  await pendingRef.delete();
 
   const result = await retireInactiveClub({ db, auth, userRecord, now });
   assert.equal(result.action, 'RETIRED_AND_REPLACED');
