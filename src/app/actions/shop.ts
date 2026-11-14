@@ -360,7 +360,17 @@ export async function createShopPlayerAction(
         updatedAt: FieldValue.serverTimestamp(),
       });
       const tx = db.collection('economy_transactions').doc();
-      t.set(tx, { userId: uid, amount: -creationCost, currency: 'crystals', type: 'SHOP_PLAYER_CREATION', referenceId: updated.id, description: `Create player ${nickname}`, timestamp: FieldValue.serverTimestamp() });
+      t.set(tx, {
+        userId: uid,
+        amount: -creationCost,
+        currency: 'crystals',
+        type: 'SHOP_PLAYER_CREATION',
+        referenceId: updated.id,
+        description: `Create player ${nickname}`,
+        balanceBefore: crystals,
+        balanceAfter: crystals - creationCost,
+        timestamp: FieldValue.serverTimestamp(),
+      });
       return { success: true, player: updated, creationCost, crystals: crystals - creationCost, isYouth: age < 18 };
     });
   } catch (e) {

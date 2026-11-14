@@ -87,7 +87,22 @@ async function processManager(db: any, ref: DocumentReference, now: Date) {
     t.update(ref, updates);
     t.set(cycleRef, { userId: ref.id, date: periodKey, paid, playerSalary: grossPlayerSalary, staffSalary, eventId: event?.id || null, createdAt: FieldValue.serverTimestamp() });
     const txRef = db.collection(FOUNDATION_COLLECTIONS.economy).doc(`foundation_salary_${ref.id}_${periodKey}`);
-    t.set(txRef, { userId: ref.id, amount: -paid, currency: 'credits', type: 'DAILY_SALARY', description: 'Daily player and staff salary at 00:00 MSK', playerSalary: grossPlayerSalary, staffSalary, amountDue: totalDue, paid, unpaid, periodKey, timestamp: FieldValue.serverTimestamp() });
+    t.set(txRef, {
+      userId: ref.id,
+      amount: -paid,
+      currency: 'credits',
+      type: 'DAILY_SALARY',
+      description: 'Daily player and staff salary at 00:00 MSK',
+      playerSalary: grossPlayerSalary,
+      staffSalary,
+      amountDue: totalDue,
+      paid,
+      unpaid,
+      periodKey,
+      balanceBefore: before,
+      balanceAfter: before - paid,
+      timestamp: FieldValue.serverTimestamp(),
+    });
     if (event) {
       const eventRef = db.collection(FOUNDATION_COLLECTIONS.events).doc(`${ref.id}_${periodKey}`);
       t.set(eventRef, { userId: ref.id, date: periodKey, event, applied: eventApplied, resolvedAt: null, createdAt: FieldValue.serverTimestamp() });
