@@ -69,7 +69,13 @@ export const FirebaseProvider: React.FC<{ children: ReactNode; firebaseApp: Fire
           // lastSignInTime, so active managers are never retired by mistake.
           const activity = await recordUserActivityAction(idToken);
           if (sequence !== authChangeSequence || auth.currentUser?.uid !== user.uid) return;
-          if (activity?.error === 'ACCOUNT_DISABLED') {
+          const terminalActivityError = [
+            'ACCOUNT_DISABLED',
+            'ACCOUNT_RETIRING',
+            'AUTH_TOKEN_REVOKED',
+            'AUTH_TOKEN_INVALID',
+          ].includes(String(activity?.error || ''));
+          if (terminalActivityError) {
             try { await signOut(auth); } catch { /* Auth listener settles state. */ }
             return;
           }
