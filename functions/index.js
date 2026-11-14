@@ -117,6 +117,9 @@ exports.initializeClub = functions.region('us-central1').https.onCall(async (dat
       // Randomly select one free slot from the complete active-season D1-D4 pool.
       const slotDoc = freeSlots[Math.floor(Math.random() * freeSlots.length)];
       const slot = slotDoc.data();
+      const targetGeneration = Math.max(0, Number(slot.occupancyGeneration) || 0) + 1;
+      const historyRef = db.collection('league_slot_history_v1')
+        .doc(`${slotDoc.id}_G${targetGeneration}`);
       console.log('[INIT] SLOT FOUND:', slotDoc.id, 'Division:', slot.division, 'Group:', slot.group, 'Rank:', slot.rank);
 
       // Р’Р°Р»РёРґР°С†РёСЏ СЃР»РѕС‚Р°
@@ -167,7 +170,11 @@ exports.initializeClub = functions.region('us-central1').https.onCall(async (dat
         .where('groupId', '==', Number(slot.group))
         .where('version', '==', 140);
       const matchesSnap = await t.get(matchesQuery);
+      const historySnap = await t.get(historyRef);
 
+      if (historySnap.exists) {
+        throw new functions.https.HttpsError('failed-precondition', 'SLOT_HISTORY_EVENT_EXISTS');
+      }
       if (matchesSnap.size !== 56) {
         console.error('[INIT] WORLD INCOMPLETE: expected 56 matches, got', matchesSnap.size);
         throw new functions.https.HttpsError('failed-precondition', 'WORLD_NOT_READY');
@@ -200,7 +207,7 @@ exports.initializeClub = functions.region('us-central1').https.onCall(async (dat
       t.update(slotDoc.ref, {
         status: 'OCCUPIED',
         occupantId: userId,
-        occupancyGeneration: Math.max(0, Number(slot.occupancyGeneration) || 0) + 1,
+        occupancyGeneration: targetGeneration,
         lastOccupantId: botId,
         lastTransitionReason: 'NEW_REGISTRATION',
         lastTransitionAt: serverTimestamp(),
@@ -209,6 +216,28 @@ exports.initializeClub = functions.region('us-central1').https.onCall(async (dat
 
       // The standings row belongs to the slot's season participation. Transfer
       // its identity to the new owner while preserving every accumulated result.
+      t.create(historyRef, {
+        slotId: slotDoc.id,
+        season: seasonNum,
+        leagueId,
+        division: Number(slot.division),
+        group: Number(slot.group),
+        rank: Number(slot.rank),
+        previousGeneration: targetGeneration - 1,
+        generation: targetGeneration,
+        previousOccupantType: 'BOT',
+        previousOccupantId: botId,
+        previousOwnerUid: null,
+        previousClubId: botId,
+        newOccupantType: 'USER',
+        newOccupantId: userId,
+        newOwnerUid: userId,
+        newClubId: userId,
+        reason: 'NEW_REGISTRATION',
+        operationId: userId,
+        createdAt: serverTimestamp()
+      });
+
       t.update(tableRef, {
         stats: standingTransfer.stats,
         updatedAt: serverTimestamp()
