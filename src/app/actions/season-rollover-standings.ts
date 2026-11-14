@@ -297,9 +297,12 @@ export function inspectGroupReconciliation(
   const sourceByRank = collectSourceRowsByRank(sourceStats, teamsPerGroup);
   const { allIdsByRank, activeByRank, activeConflicts } = collectFixtureIdentityMaps(fixtures, teamsPerGroup);
   const slotByRank = new Map<number, any>();
+  const duplicateSlotRanks = new Set<number>();
   for (const slot of slots || []) {
     const rank = Number(slot?.rank);
-    if (Number.isInteger(rank) && rank >= 1 && rank <= teamsPerGroup) slotByRank.set(rank, slot);
+    if (!Number.isInteger(rank) || rank < 1 || rank > teamsPerGroup) continue;
+    if (slotByRank.has(rank)) duplicateSlotRanks.add(rank);
+    slotByRank.set(rank, slot);
   }
 
   const sourceEntries = Object.entries(sourceStats || {}).map(([key, row]) => ({
@@ -405,7 +408,8 @@ export function inspectGroupReconciliation(
   const reasons: string[] = [];
   if (!completeFixtures) reasons.push('INCOMPLETE_OR_AMBIGUOUS_FIXTURES');
   if (staleRows.size) reasons.push('STALE_STANDINGS_ROWS');
-  if (slots.length !== teamsPerGroup) reasons.push('INCOMPLETE_SLOT_SET');
+  if (slots.length !== teamsPerGroup || slotByRank.size !== teamsPerGroup) reasons.push('INCOMPLETE_SLOT_SET');
+  if (duplicateSlotRanks.size) reasons.push('DUPLICATE_SLOT_RANKS');
   if (new Set(sourceIds).size !== sourceIds.length) reasons.push('SOURCE_DUPLICATE_ID');
   if (new Set(sourceRanks).size !== sourceRanks.length) reasons.push('SOURCE_DUPLICATE_RANK');
   if (activeConflicts.size) reasons.push('CURRENT_FIXTURE_PARTICIPANT_CONFLICT');
@@ -420,8 +424,9 @@ export function inspectGroupReconciliation(
   }
 
   return {
-    ready: completeFixtures && slots.length === teamsPerGroup && slotConflicts.length === 0 &&
-      staleRows.size === 0 && reasons.length === 0,
+    ready: completeFixtures && slots.length === teamsPerGroup &&
+      slotByRank.size === teamsPerGroup && duplicateSlotRanks.size === 0 &&
+      slotConflicts.length === 0 && staleRows.size === 0 && reasons.length === 0,
     completeFixtures,
     fixtureStructureComplete,
     standings,
@@ -446,7 +451,9 @@ export function calculateGroupStandings(
   const slotByRank = new Map<number, any>();
   for (const slot of slots || []) {
     const rank = Number(slot?.rank);
-    if (Number.isInteger(rank) && rank >= 1 && rank <= teamsPerGroup) slotByRank.set(rank, slot);
+    if (!Number.isInteger(rank) || rank < 1 || rank > teamsPerGroup) continue;
+    if (slotByRank.has(rank)) throw new Error('DUPLICATE_SLOT_RANK');
+    slotByRank.set(rank, slot);
   }
 
   const rowsByRank = new Map<number, TeamRow>();
