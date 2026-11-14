@@ -193,6 +193,11 @@ async function finishTechnically(db: any, season: number, round: number, pairing
         status: 'finished',
         technicalDecision: true,
         technicalDecisionReason: 'Completed cup knockout draw resolved by deterministic seed tie-break',
+        reportStatus: existing.reportStatus === 'viewed' ? 'viewed' : 'new',
+        seen: existing.seen === true,
+        finishedAt: existing.finishedAt || FieldValue.serverTimestamp(),
+        resolvedAt: existing.resolvedAt || FieldValue.serverTimestamp(),
+        playedAt: existing.playedAt || FieldValue.serverTimestamp(),
         updatedAt: FieldValue.serverTimestamp(),
       }, { merge: true });
       return true;
