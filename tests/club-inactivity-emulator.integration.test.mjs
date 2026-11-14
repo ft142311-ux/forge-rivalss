@@ -7,10 +7,30 @@ import { getFirestore } from 'firebase-admin/firestore';
 import { getAuth } from 'firebase-admin/auth';
 
 const require = createRequire(import.meta.url);
-const { retireInactiveClub } = require('../functions/club-inactivity-sweep.js');
+const { buildBotClub, isValidBotClub, retireInactiveClub } = require('../functions/club-inactivity-sweep.js');
 const { recordUserActivityUnlessRetiring } = require('../functions/club-activity-fence.js');
 const emulatorHost = process.env.FIRESTORE_EMULATOR_HOST;
 const projectId = process.env.GCLOUD_PROJECT || 'demo-forge-rivals';
+
+test('bot club validator accepts the canonical five-player roster and rejects corruption', () => {
+  const botId = 'BOT_ALPHA_L2_G1_R3';
+  const bot = buildBotClub(botId, 'Test Bot');
+  assert.equal(isValidBotClub(bot, botId), true);
+
+  const missingLineup = structuredClone(bot);
+  delete missingLineup.lineup.support;
+  assert.equal(isValidBotClub(missingLineup, botId), false);
+
+  const duplicatePlayer = structuredClone(bot);
+  duplicatePlayer.ownedPlayers[4].id = duplicatePlayer.ownedPlayers[0].id;
+  assert.equal(isValidBotClub(duplicatePlayer, botId), false);
+
+  const invalidRating = structuredClone(bot);
+  invalidRating.ownedPlayers[0].overallRating = 0;
+  assert.equal(isValidBotClub(invalidRating, botId), false);
+
+  assert.equal(isValidBotClub({ ...bot, id: 'BOT_OTHER' }, botId), false);
+});
 
 test('login activity handshake is blocked once retirement has been claimed', {
   skip: !emulatorHost,
@@ -268,7 +288,10 @@ test('inactive club replacement is atomic and preserves completed match results'
   assert.equal(revokedTokenCalls, 1);
   assert.equal((await playerRef.get()).exists, false);
   assert.equal((await pendingRef.get()).exists, false);
-  assert.equal((await archiveRef.get()).get('replacedByBotId'), botId);
+  const archivedClub = (await archiveRef.get()).data();
+  assert.equal(archivedClub.replacedByBotId, botId);
+  assert.equal(archivedClub.lastSignInAt, lastSignInTime);
+  assert.ok(Number.isFinite(Date.parse(archivedClub.lastActiveAt)));
   const releasedSlot = await slotRef.get();
   assert.equal(releasedSlot.get('status'), 'FREE');
   assert.equal(releasedSlot.get('occupantId'), null);
