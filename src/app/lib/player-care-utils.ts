@@ -1,5 +1,31 @@
 export type PlayerCareMode = 'energy' | 'form';
 
+export type PlayerCareOperation = {
+  currency: 'credits' | 'crystals';
+  amount: number;
+  operationType: string;
+  targetId: string;
+};
+
+/**
+ * Validates that a reused idempotency key represents the same purchase.
+ * Legacy receipts did not store operationType/targetId, so they can only
+ * be matched by their persisted currency and amount.
+ */
+export function isSamePlayerCareOperation(
+  receipt: Record<string, any>,
+  expected: PlayerCareOperation,
+): boolean {
+  if (receipt.operationType == null && receipt.targetId == null) {
+    return receipt.currency === expected.currency && Number(receipt.amount) === expected.amount;
+  }
+
+  return receipt.currency === expected.currency
+    && Number(receipt.amount) === expected.amount
+    && receipt.operationType === expected.operationType
+    && receipt.targetId === expected.targetId;
+}
+
 function finiteNumber(value: unknown, fallback = 0): number {
   const number = Number(value);
   return Number.isFinite(number) ? number : fallback;
