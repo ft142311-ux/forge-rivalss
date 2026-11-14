@@ -255,7 +255,7 @@ export async function changeClubNameAction(idToken: string, name: string) {
       if (crystals < 100) throw new Error('INSUFFICIENT_FUNDS');
       t.update(ref, { crystals: crystals - 100, clubName: clean, updatedAt: FieldValue.serverTimestamp() });
       const tx = db.collection('economy_transactions').doc();
-      t.set(tx, { userId: uid, amount: -100, currency: 'crystals', type: 'CLUB_RENAME', referenceId: clean, description: `Rename club to ${clean}`, timestamp: FieldValue.serverTimestamp() });
+      t.set(tx, { userId: uid, amount: -100, currency: 'crystals', type: 'CLUB_RENAME', referenceId: clean, description: `Rename club to ${clean}`, balanceBefore: crystals, balanceAfter: crystals - 100, timestamp: FieldValue.serverTimestamp() });
       return { success: true, clubName: clean, crystals: crystals - 100 };
     });
   } catch (e) {
@@ -280,7 +280,7 @@ export async function changeClubCountryAction(idToken: string, country: unknown)
       if (crystals < 100) throw new Error('INSUFFICIENT_FUNDS');
       t.update(ref, { crystals: crystals - 100, country: parsed.name, countryCode: parsed.code, countryFlag: parsed.flag, updatedAt: FieldValue.serverTimestamp() });
       const tx = db.collection('economy_transactions').doc();
-      t.set(tx, { userId: uid, amount: -100, currency: 'crystals', type: 'CLUB_COUNTRY_CHANGE', referenceId: parsed.code, description: `Change club country to ${parsed.name}`, timestamp: FieldValue.serverTimestamp() });
+      t.set(tx, { userId: uid, amount: -100, currency: 'crystals', type: 'CLUB_COUNTRY_CHANGE', referenceId: parsed.code, description: `Change club country to ${parsed.name}`, balanceBefore: crystals, balanceAfter: crystals - 100, timestamp: FieldValue.serverTimestamp() });
       return { success: true, country: parsed.name, crystals: crystals - 100 };
     });
   } catch (e) {
