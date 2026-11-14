@@ -120,7 +120,6 @@ exports.initializeClub = functions.region('us-central1').https.onCall(async (dat
       const targetGeneration = Math.max(0, Number(slot.occupancyGeneration) || 0) + 1;
       const historyRef = db.collection('league_slot_history_v1')
         .doc(`${slotDoc.id}_G${targetGeneration}`);
-      const botPlayerRef = db.collection('players_v14').doc(botId);
       console.log('[INIT] SLOT FOUND:', slotDoc.id, 'Division:', slot.division, 'Group:', slot.group, 'Rank:', slot.rank);
 
       // Р’Р°Р»РёРґР°С†РёСЏ СЃР»РѕС‚Р°
@@ -157,6 +156,7 @@ exports.initializeClub = functions.region('us-central1').https.onCall(async (dat
         console.error('[INIT] BOT FAILED: No bot at rank', slot.rank);
         throw new functions.https.HttpsError('failed-precondition', 'BOT_NOT_FOUND_IN_SLOT');
       }
+      const botPlayerRef = db.collection('players_v14').doc(botId);
       console.log('[INIT] BOT FOUND:', botId);
       const botRowsAtRank = Object.entries(stats).filter(([, team]) => Number(team?.rank) === Number(slot.rank));
       if (botRowsAtRank.length !== 1 || botRowsAtRank[0][0] !== botId) {
