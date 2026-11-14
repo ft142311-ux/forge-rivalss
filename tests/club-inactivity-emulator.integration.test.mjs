@@ -82,6 +82,13 @@ test('login activity handshake is blocked once retirement has been claimed', {
   });
   assert.equal(conflictingWorker.action, 'BLOCKED_PENDING_RETIREMENT_ACTIVITY_CONFLICT');
   assert.equal((await pendingRef.get()).get('phase'), 'REVIEW_REQUIRED');
+  const skippedReview = await retireInactiveClub({
+    db,
+    auth: authWithStaleMetadata,
+    userRecord: staleAuthRecord,
+    now,
+  });
+  assert.equal(skippedReview.action, 'SKIPPED_REVIEW_REQUIRED');
 
   const after = await activityRef.get();
   assert.equal(after.get('lastActiveAt')?.toMillis?.(), beforeMillis);
