@@ -3,7 +3,6 @@
 import { getAuth } from 'firebase-admin/auth';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { requireServerActor } from '@/lib/server-auth';
-import { recordUserActivityUnlessRetiring } from '../../../functions/club-activity-fence.js';
 
 /**
  * Records a server-verified app session. The client cannot choose the timestamp
@@ -15,10 +14,7 @@ export async function recordUserActivityAction(idToken: string) {
     const authUser = await getAuth().getUser(actor.uid);
     if (authUser.disabled) return { success: false, error: 'ACCOUNT_DISABLED' };
 
-    const db = getAdminDb();
-    const result = await recordUserActivityUnlessRetiring(db, actor.uid);
-    if (!result.success) return result;
-
+    // requireServerActor performs the transactional activity/retirement fence.
     return { success: true };
   } catch (error: any) {
     const code = String(error?.message || error?.code || 'ACTIVITY_RECORD_FAILED');
