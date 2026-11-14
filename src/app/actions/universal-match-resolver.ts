@@ -64,7 +64,8 @@ export async function resolveUniversalMatchDocument(
       }
     };
 
-    if (match.isFinished === true || match.status === 'finished') {
+    if (match.isFinished === true ||
+        ['finished', 'completed'].includes(String(match.status || '').toLowerCase())) {
       renewRolloverLock();
       // Repair the notification/report flags without re-simulating an already
       // finished match. This is intentionally idempotent.
