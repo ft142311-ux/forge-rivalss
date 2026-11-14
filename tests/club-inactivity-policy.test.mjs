@@ -32,6 +32,13 @@ test('fails closed when last sign-in metadata is missing or malformed', () => {
   }
 });
 
+test('fails closed when Auth sign-in is missing even if an old activity timestamp exists', () => {
+  const oldActivity = NOW - INACTIVITY_WINDOW_MS * 2;
+  const result = resolveClubInactivity(undefined, NOW, undefined, oldActivity);
+  assert.equal(result.eligible, false);
+  assert.equal(result.reason, 'LAST_SIGN_IN_UNKNOWN');
+});
+
 test('fails closed for a future last sign-in timestamp', () => {
   const result = resolveClubInactivity(NOW + 1, NOW);
   assert.equal(result.eligible, false);
