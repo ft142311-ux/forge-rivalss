@@ -220,7 +220,7 @@ test('login activity handshake is blocked once retirement has been claimed', {
   assert.equal((await pendingRef.get()).get('phase'), 'CANCELLED');
 
   const authRecoveryFailure = {
-    ...auth,
+    getUser: (...args) => auth.getUser(...args),
     updateUser: async () => { throw new Error('SIMULATED_AUTH_REENABLE_FAILURE'); },
   };
   await assert.rejects(
