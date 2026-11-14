@@ -120,6 +120,7 @@ exports.initializeClub = functions.region('us-central1').https.onCall(async (dat
       const targetGeneration = Math.max(0, Number(slot.occupancyGeneration) || 0) + 1;
       const historyRef = db.collection('league_slot_history_v1')
         .doc(`${slotDoc.id}_G${targetGeneration}`);
+      const botPlayerRef = db.collection('players_v14').doc(botId);
       console.log('[INIT] SLOT FOUND:', slotDoc.id, 'Division:', slot.division, 'Group:', slot.group, 'Rank:', slot.rank);
 
       // Р’Р°Р»РёРґР°С†РёСЏ СЃР»РѕС‚Р°
@@ -171,6 +172,7 @@ exports.initializeClub = functions.region('us-central1').https.onCall(async (dat
         .where('version', '==', 140);
       const matchesSnap = await t.get(matchesQuery);
       const historySnap = await t.get(historyRef);
+      const botPlayerSnap = await t.get(botPlayerRef);
 
       if (historySnap.exists) {
         throw new functions.https.HttpsError('failed-precondition', 'SLOT_HISTORY_EVENT_EXISTS');
@@ -229,6 +231,7 @@ exports.initializeClub = functions.region('us-central1').https.onCall(async (dat
         previousOccupantId: botId,
         previousOwnerUid: null,
         previousClubId: botId,
+        previousClubSnapshot: botPlayerSnap.exists ? botPlayerSnap.data() : null,
         newOccupantType: 'USER',
         newOccupantId: userId,
         newOwnerUid: userId,
@@ -243,7 +246,6 @@ exports.initializeClub = functions.region('us-central1').https.onCall(async (dat
         updatedAt: serverTimestamp()
       });
 
-      const botPlayerRef = db.collection('players_v14').doc(botId);
       t.delete(botPlayerRef);
 
       // Completed fixtures are historical evidence and remain unchanged.
