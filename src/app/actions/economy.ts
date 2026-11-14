@@ -5,7 +5,7 @@ import { FieldValue, Timestamp } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { z } from 'zod';
 import { getMoscowDateString } from '@/app/lib/time-utils';
-import { getDailyRewardForDay, getPremiumDailyCrystalBonus } from '@/app/lib/daily-reward';
+import { getDailyRewardForDay, getNextDailyRewardDay, getPremiumDailyCrystalBonus } from '@/app/lib/daily-reward';
 import { requireServerActor } from '@/lib/server-auth';
 
 /**
@@ -77,7 +77,7 @@ export async function claimDailyRewardAction(idToken: string) {
       const p = pSnap.data()!;
       if (p.lastRewardClaimDate === today) throw new Error("ALREADY_CLAIMED");
 
-      const rewardDay = (p.rewardDay || 0) % 30 + 1;
+      const rewardDay = getNextDailyRewardDay(p.rewardDay, Boolean(p.lastRewardClaimDate));
       const { credits, crystals: baseCrystals } = getDailyRewardForDay(rewardDay);
       const premiumUntilMs = p.premiumUntil ? new Date(String(p.premiumUntil)).getTime() : 0;
       const premiumBonus = getPremiumDailyCrystalBonus(p.isPremium === true && premiumUntilMs > Date.now());

@@ -22,3 +22,11 @@ test('active premium adds the advertised daily crystal bonus only while active',
   assert.equal(getPremiumDailyCrystalBonus(true), 50);
   assert.equal(getPremiumDailyCrystalBonus(false), 0);
 });
+
+test('daily reward progression treats rewardDay as the last claimed day', async () => {
+  const { getNextDailyRewardDay } = await import('../src/app/lib/daily-reward.ts');
+  assert.equal(getNextDailyRewardDay(1, false), 1);
+  assert.equal(getNextDailyRewardDay(1, true), 2);
+  assert.equal(getNextDailyRewardDay(29, true), 30);
+  assert.equal(getNextDailyRewardDay(30, true), 1);
+});

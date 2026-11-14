@@ -14,3 +14,11 @@ export function getDailyRewardForDay(day: number): DailyReward {
 export function getPremiumDailyCrystalBonus(isPremiumActive: boolean): number {
   return isPremiumActive ? 50 : 0;
 }
+
+/** rewardDay stores the last claimed day; the UI and next claim need the following day. */
+export function getNextDailyRewardDay(lastClaimedDay: number | null | undefined, hasClaimedBefore: boolean): number {
+  if (!hasClaimedBefore) return 1;
+  const previousDay = Number(lastClaimedDay);
+  const safePreviousDay = Number.isInteger(previousDay) && previousDay >= 0 ? previousDay : 0;
+  return (safePreviousDay % 30) + 1;
+}

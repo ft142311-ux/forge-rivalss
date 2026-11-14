@@ -3,7 +3,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useGameState } from '@/app/lib/store';
 import { getMoscowDateString } from '@/app/lib/time-utils';
-import { getDailyRewardForDay } from '@/app/lib/daily-reward';
+import { getDailyRewardForDay, getNextDailyRewardDay } from '@/app/lib/daily-reward';
 import { 
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter 
 } from '@/components/ui/dialog';
@@ -35,7 +35,8 @@ export function DailyRewardManager() {
     [],
   );
 
-  const currentDayReward = getDailyRewardForDay(rewardDay);
+  const nextRewardDay = getNextDailyRewardDay(rewardDay, Boolean(lastRewardClaimDate));
+  const currentDayReward = getDailyRewardForDay(nextRewardDay);
 
   const handleClaim = () => {
     claimReward();
@@ -73,9 +74,9 @@ export function DailyRewardManager() {
         <div className="flex-1 p-3 overflow-y-auto scrollbar-hide">
           <div className="grid grid-cols-5 gap-1.5">
             {calendarRewards.map((reward) => {
-              const isClaimed = reward.day < rewardDay;
-              const isToday = reward.day === rewardDay;
-              const isUpcoming = reward.day > rewardDay;
+              const isClaimed = reward.day < nextRewardDay;
+              const isToday = reward.day === nextRewardDay;
+              const isUpcoming = reward.day > nextRewardDay;
 
               return (
                 <div 
@@ -126,7 +127,7 @@ export function DailyRewardManager() {
               <div className="flex items-center gap-3">
                 <div className="p-1.5 rounded-lg bg-primary/20"><Sparkles className="w-4 h-4 text-primary" /></div>
                 <div>
-                  <p className="text-[7px] uppercase font-black text-muted-foreground">{t.today} (День {rewardDay})</p>
+                  <p className="text-[7px] uppercase font-black text-muted-foreground">{t.today} (День {nextRewardDay})</p>
                   <p className="text-[11px] font-bold text-primary">{currentDayReward.credits.toLocaleString()} € + {currentDayReward.crystals} Gems</p>
                 </div>
               </div>
