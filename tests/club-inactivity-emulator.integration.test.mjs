@@ -138,3 +138,51 @@ test('inactive club replacement is atomic and preserves completed match results'
   assert.equal(futureAway.awayId, botId);
   assert.equal(futureAway.awayName, 'Bot01200103');
 });
+
+
+test('a pending retirement is cancelled and Auth is re-enabled when recent activity is recovered', {
+  skip: !emulatorHost,
+}, async (t) => {
+  assert.match(emulatorHost, /^(127[.]0[.]0[.]1|localhost):[0-9]+$/);
+  const app = initializeApp({ projectId }, `inactive-recovery-test-${randomUUID()}`);
+  const db = getFirestore(app);
+  const uid = `inactive-recovery-${randomUUID()}`;
+  const pendingRef = db.collection('inactive_club_retirements_v1').doc(uid);
+  const activityRef = db.collection('user_activity_v1').doc(uid);
+  const now = new Date('2026-11-14T12:00:00.000Z');
+  const lastSignInTime = new Date(now.getTime() - 120 * 24 * 60 * 60 * 1000).toISOString();
+
+  t.after(async () => {
+    await pendingRef.delete().catch(() => undefined);
+    await activityRef.delete().catch(() => undefined);
+    await deleteApp(app);
+  });
+
+  await pendingRef.set({
+    uid,
+    phase: 'PENDING_AUTH_DISABLE',
+    requestedAt: now,
+  });
+  await activityRef.set({
+    uid,
+    lastActiveAt: new Date(now.getTime() - 24 * 60 * 60 * 1000),
+  });
+
+  let disabled = true;
+  const auth = {
+    getUser: async () => ({ uid, disabled, metadata: { lastSignInTime } }),
+    updateUser: async (_uid, patch) => { disabled = patch.disabled; return { uid, disabled }; },
+    revokeRefreshTokens: async () => undefined,
+  };
+
+  const result = await retireInactiveClub({
+    db,
+    auth,
+    userRecord: { uid, disabled: true, metadata: { lastSignInTime } },
+    now,
+  });
+
+  assert.equal(result.action, 'CANCELLED_PENDING_RETIREMENT');
+  assert.equal(disabled, false);
+  assert.equal((await pendingRef.get()).exists, false);
+});
