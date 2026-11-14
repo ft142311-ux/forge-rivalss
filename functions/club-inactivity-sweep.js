@@ -90,6 +90,17 @@ async function retireInactiveClub({ db, auth, userRecord, now = new Date() }) {
     // The transactional claim below prevents fresh activity from creating a
     // new marker in the first place; legacy/conflicting markers fail closed.
     if (pendingSnap.exists) {
+      await db.runTransaction(async (transaction) => {
+        const pending = await transaction.get(pendingRef);
+        if (pending.exists && pending.get('phase') === 'PENDING_AUTH_DISABLE') {
+          transaction.update(pendingRef, {
+            phase: 'REVIEW_REQUIRED',
+            lastErrorCode: 'PENDING_RETIREMENT_ACTIVITY_CONFLICT',
+            reviewRequiredAt: now,
+            updatedAt: now,
+          });
+        }
+      });
       return { action: 'BLOCKED_PENDING_RETIREMENT_ACTIVITY_CONFLICT', reason: eligibility.reason };
     }
     return { action: 'SKIPPED_NOT_INACTIVE', reason: eligibility.reason };
