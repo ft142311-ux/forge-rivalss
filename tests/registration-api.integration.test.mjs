@@ -180,13 +180,17 @@ test('registration HTTP API enforces its boundary and safely initializes a club'
           awayId,
           homeName: homeRank === 8 ? 'Test Bot' : `Test Team ${homeRank}`,
           awayName: awayRank === 8 ? 'Test Bot' : `Test Team ${awayRank}`,
+          homeLogo: homeRank === 8 ? 'bot-logo' : null,
+          awayLogo: awayRank === 8 ? 'bot-logo' : null,
           homeRank,
           awayRank,
           isFinished: homeRank === 8 && awayRank === 1,
           status: homeRank === 8 && awayRank === 1 ? 'finished' : 'scheduled',
           startTime: homeRank === 8 && awayRank === 1
             ? '2026-10-01T12:00:00.000Z'
-            : new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+            : homeRank === 1 && awayRank === 2
+              ? '2020-01-01T00:00:00.000Z'
+              : new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
           scoreA: homeRank === 8 && awayRank === 1 ? 2 : 0,
           scoreB: homeRank === 8 && awayRank === 1 ? 1 : 0,
         });
@@ -261,8 +265,15 @@ test('registration HTTP API enforces its boundary and safely initializes a club'
     assert.ok(historicalBotMatch);
     assert.equal(historicalBotMatch.get('status'), 'finished');
     assert.equal(historicalBotMatch.get('homeId'), botId);
+    assert.equal(historicalBotMatch.get('homeLogo'), 'bot-logo');
     assert.equal(historicalBotMatch.get('scoreA'), 2);
     assert.equal(historicalBotMatch.get('scoreB'), 1);
+    const futureBotFixture = matches.docs.find((doc) =>
+      doc.get('homeRank') === 8 && doc.get('awayRank') === 2
+    );
+    assert.ok(futureBotFixture);
+    assert.equal(futureBotFixture.get('homeId'), uid);
+    assert.equal(futureBotFixture.get('homeLogo'), null);
     assert.equal(matches.docs.filter((doc) =>
       doc.get('homeId') === botId || doc.get('awayId') === botId
     ).length, 1);
