@@ -116,23 +116,56 @@ async function retireInactiveClub({ db, auth, userRecord, now = new Date() }) {
     activitySnap.exists ? activitySnap.get('lastActiveAt') : null
   );
   if (!eligibility.eligible) {
-    // Once a retirement marker exists, it is a committed account fence.
-    // Never let a second worker cancel or delete another worker's operation.
-    // The transactional claim below prevents fresh activity from creating a
-    // new marker in the first place; legacy/conflicting markers fail closed.
-    if (pendingSnap.exists) {
-      await db.runTransaction(async (transaction) => {
+    if (pendingSnap.exists && pendingSnap.get('phase') === 'PENDING_AUTH_DISABLE') {
+      // A sign-in may have completed immediately before the Firestore claim.
+      // Once the worker lease expires, safely cancel that uncommitted claim so
+      // the user is not locked out by a crash between the recheck and cleanup.
+      const cancellation = await db.runTransaction(async (transaction) => {
         const pending = await transaction.get(pendingRef);
-        if (pending.exists && pending.get('phase') === 'PENDING_AUTH_DISABLE') {
+        if (!pending.exists) return 'NO_PENDING';
+        const phase = String(pending.get('phase') || '');
+        if (phase === 'REVIEW_REQUIRED') return 'REVIEW_REQUIRED';
+        if (phase === 'CANCELLED') return 'CANCELLED';
+        if (phase !== 'PENDING_AUTH_DISABLE') {
           transaction.update(pendingRef, {
             phase: 'REVIEW_REQUIRED',
-            lastErrorCode: 'PENDING_RETIREMENT_ACTIVITY_CONFLICT',
+            lastErrorCode: 'UNKNOWN_RETIREMENT_PHASE',
             reviewRequiredAt: now,
             updatedAt: now,
           });
+          return 'REVIEW_REQUIRED';
         }
+        const leaseUntilMs = timestampToMillis(pending.get('leaseUntil'));
+        if (Number.isFinite(leaseUntilMs) && leaseUntilMs > now.getTime()) {
+          return 'LEASE_ACTIVE';
+        }
+        transaction.update(pendingRef, {
+          phase: 'CANCELLED',
+          cancellationReason: 'RECENT_ACTIVITY_BEFORE_AUTH_DISABLE',
+          leaseOwner: null,
+          leaseUntil: null,
+          updatedAt: now,
+        });
+        return 'CANCELLED';
       });
-      return { action: 'BLOCKED_PENDING_RETIREMENT_ACTIVITY_CONFLICT', reason: eligibility.reason };
+
+      if (cancellation === 'LEASE_ACTIVE') {
+        return { action: 'SKIPPED_RETIREMENT_IN_PROGRESS' };
+      }
+      if (cancellation === 'REVIEW_REQUIRED') {
+        return { action: 'SKIPPED_REVIEW_REQUIRED' };
+      }
+      if (cancellation === 'CANCELLED') {
+        const currentAuthRecord = await auth.getUser(uid);
+        if (currentAuthRecord.disabled) await auth.updateUser(uid, { disabled: false });
+        await db.runTransaction(async (transaction) => {
+          const pending = await transaction.get(pendingRef);
+          if (pending.exists && pending.get('phase') === 'CANCELLED') {
+            transaction.delete(pendingRef);
+          }
+        });
+        return { action: 'CANCELLED_PENDING_CLEANUP' };
+      }
     }
     return { action: 'SKIPPED_NOT_INACTIVE', reason: eligibility.reason };
   }
@@ -581,6 +614,7 @@ async function retireInactiveClub({ db, auth, userRecord, now = new Date() }) {
 async function runClubInactivitySweep({ db, auth, now = new Date(), pageSize = BATCH_SIZE }) {
   const summary = {
     scannedAuthUsers: 0,
+    pendingOperationsScanned: 0,
     inactiveCandidates: 0,
     retired: 0,
     deferred: 0,
@@ -590,22 +624,60 @@ async function runClubInactivitySweep({ db, auth, now = new Date(), pageSize = B
     skipped: 0,
     errors: [],
   };
+  const processedUids = new Set();
+  const recordResult = (result) => {
+    if (result.action === 'RETIRED_AND_REPLACED' || result.action === 'ALREADY_RETIRED') summary.retired++;
+    else if (result.action.startsWith('DEFERRED')) summary.deferred++;
+    else if (result.action === 'SKIPPED_RETIREMENT_IN_PROGRESS') summary.inProgress++;
+    else if (result.action === 'CANCELLED_PENDING_CLEANUP') summary.recoveredCancellations++;
+    else if (result.action === 'SKIPPED_REVIEW_REQUIRED' || result.action.startsWith('BLOCKED_')) summary.reviewRequired++;
+    else summary.skipped++;
+  };
+
+  // Resume durable operations before discovering new candidates. A pending
+  // claim must be recovered even if Auth metadata became recent during a
+  // login/retirement race; otherwise the login fence could remain indefinitely.
+  const pendingCollection = db.collection('inactive_club_retirements_v1');
+  let pendingCursor = null;
+  while (true) {
+    let query = pendingCollection.orderBy('__name__').limit(pageSize);
+    if (pendingCursor) query = query.startAfter(pendingCursor);
+    const pendingPage = await query.get();
+    if (pendingPage.empty) break;
+
+    for (const pendingDoc of pendingPage.docs) {
+      const uid = pendingDoc.id;
+      processedUids.add(uid);
+      summary.pendingOperationsScanned++;
+      if (pendingDoc.get('phase') === 'REVIEW_REQUIRED') {
+        summary.reviewRequired++;
+        continue;
+      }
+      try {
+        const userRecord = await auth.getUser(uid);
+        const result = await retireInactiveClub({ db, auth, userRecord, now });
+        recordResult(result);
+      } catch (error) {
+        summary.errors.push({ uid, code: String(error && (error.code || error.message) || 'UNKNOWN').slice(0, 120) });
+      }
+    }
+
+    pendingCursor = pendingPage.docs[pendingPage.docs.length - 1];
+    if (pendingPage.size < pageSize) break;
+  }
+
   let pageToken;
   do {
     const page = await auth.listUsers(pageSize, pageToken);
     for (const userRecord of page.users) {
       summary.scannedAuthUsers++;
+      if (processedUids.has(userRecord.uid)) continue;
       const eligibility = resolveClubInactivity(userRecord.metadata && userRecord.metadata.lastSignInTime, now.getTime());
       if (!eligibility.eligible) continue;
       summary.inactiveCandidates++;
       try {
         const result = await retireInactiveClub({ db, auth, userRecord, now });
-        if (result.action === 'RETIRED_AND_REPLACED' || result.action === 'ALREADY_RETIRED') summary.retired++;
-        else if (result.action.startsWith('DEFERRED')) summary.deferred++;
-        else if (result.action === 'SKIPPED_RETIREMENT_IN_PROGRESS') summary.inProgress++;
-        else if (result.action === 'CANCELLED_PENDING_CLEANUP') summary.recoveredCancellations++;
-        else if (result.action === 'SKIPPED_REVIEW_REQUIRED' || result.action.startsWith('BLOCKED_')) summary.reviewRequired++;
-        else summary.skipped++;
+        recordResult(result);
       } catch (error) {
         summary.errors.push({ uid: userRecord.uid, code: String(error && (error.code || error.message) || 'UNKNOWN').slice(0, 120) });
       }
