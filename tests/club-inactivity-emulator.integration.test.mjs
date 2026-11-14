@@ -212,6 +212,24 @@ test('login activity handshake is blocked once retirement has been claimed', {
   const cancelledFence = await recordUserActivityUnlessRetiring(db, uid);
   assert.deepEqual(cancelledFence, { success: false, error: 'ACCOUNT_RETIRING' });
   assert.equal((await pendingRef.get()).get('phase'), 'CANCELLED');
+
+  const authRecoveryFailure = {
+    ...auth,
+    updateUser: async () => { throw new Error('SIMULATED_AUTH_REENABLE_FAILURE'); },
+  };
+  await assert.rejects(
+    retireInactiveClub({
+      db,
+      auth: authRecoveryFailure,
+      userRecord: { ...authUser, disabled: true, metadata: authUser.metadata },
+      now,
+    }),
+    /SIMULATED_AUTH_REENABLE_FAILURE/,
+  );
+  assert.equal((await pendingRef.get()).get('phase'), 'CANCELLED');
+  const stillFenced = await recordUserActivityUnlessRetiring(db, uid);
+  assert.deepEqual(stillFenced, { success: false, error: 'ACCOUNT_RETIRING' });
+
   const cancelledRecovery = await retireInactiveClub({
     db,
     auth,
