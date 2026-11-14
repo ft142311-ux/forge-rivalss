@@ -133,6 +133,42 @@ async function recoverCancelledRetirement({ db, auth, uid, pendingRef, now }) {
 }
 
 /**
+ * Fail closed when a durable retirement reaches an inconsistent preflight
+ * state. Never overwrite an active worker's lease; ambiguous expired work is
+ * moved to manual review instead of leaving an inaccessible account in a
+ * permanently pending state.
+ */
+async function markPendingReviewRequired({ db, pendingRef, now, code }) {
+  return db.runTransaction(async (transaction) => {
+    const pending = await transaction.get(pendingRef);
+    if (!pending.exists) return { marked: false };
+    const phase = String(pending.get('phase') || '');
+    if (phase === 'REVIEW_REQUIRED') return { marked: true };
+    if (phase === 'CANCELLED') return { marked: false, cancelled: true };
+    if (phase === 'PENDING_AUTH_DISABLE') {
+      const leaseUntilMs = timestampToMillis(pending.get('leaseUntil'));
+      if (Number.isFinite(leaseUntilMs) && leaseUntilMs > now.getTime()) {
+        return { marked: false, inProgress: true };
+      }
+    }
+    transaction.update(pendingRef, {
+      phase: 'REVIEW_REQUIRED',
+      lastErrorCode: code,
+      reviewRequiredAt: now,
+      updatedAt: now,
+    });
+    return { marked: true };
+  });
+}
+
+async function preflightRetirementResult({ db, pendingRef, now, action, code }) {
+  const review = await markPendingReviewRequired({ db, pendingRef, now, code });
+  if (review.inProgress) return { action: 'SKIPPED_RETIREMENT_IN_PROGRESS' };
+  if (review.marked) return { action: 'SKIPPED_REVIEW_REQUIRED', reason: code };
+  return { action };
+}
+
+/**
  * Replaces one inactive human club with its deterministic bot identity.
  * Auth is disabled before the transaction, and all Firestore mutations are
  * committed atomically. A retry can safely finish a previously interrupted
@@ -232,26 +268,40 @@ async function retireInactiveClub({ db, auth, userRecord, now = new Date() }) {
 
   const playerRef = db.collection('players_v14').doc(uid);
   const playerSnap = await playerRef.get();
-  if (!playerSnap.exists) return { action: 'SKIPPED_NO_ACTIVE_CLUB' };
+  if (!playerSnap.exists) {
+    return preflightRetirementResult({
+      db, pendingRef, now, action: 'SKIPPED_NO_ACTIVE_CLUB', code: 'PREFLIGHT_PLAYER_MISSING',
+    });
+  }
   const player = playerSnap.data() || {};
 
   // The active season config and league slot are authoritative. A stale
   // lastProcessedSeason field must never make retirement target an archived slot.
   const configRef = db.collection('system_v1').doc('season_config');
   const configSnap = await configRef.get();
-  if (!configSnap.exists) return { action: 'SKIPPED_SEASON_CONFIG_MISSING' };
+  if (!configSnap.exists) {
+    return preflightRetirementResult({
+      db, pendingRef, now, action: 'SKIPPED_SEASON_CONFIG_MISSING', code: 'PREFLIGHT_SEASON_CONFIG_MISSING',
+    });
+  }
   const config = configSnap.data() || {};
   const season = Number(config.activeSeasonNumber);
   if (!Number.isSafeInteger(season) || season < 1 || config.worldReady !== true ||
       !['REGULAR_SEASON', 'ACTIVE'].includes(String(config.phase || ''))) {
-    return { action: 'SKIPPED_SEASON_NOT_ACTIVE' };
+    return preflightRetirementResult({
+      db, pendingRef, now, action: 'SKIPPED_SEASON_NOT_ACTIVE', code: 'PREFLIGHT_SEASON_NOT_ACTIVE',
+    });
   }
 
   const slotQuery = db.collection('league_slots_v1')
     .where('season', '==', season)
     .where('occupantId', '==', uid);
   const preflightSlots = await slotQuery.get();
-  if (preflightSlots.size !== 1) return { action: 'SKIPPED_NO_UNIQUE_ACTIVE_SLOT' };
+  if (preflightSlots.size !== 1) {
+    return preflightRetirementResult({
+      db, pendingRef, now, action: 'SKIPPED_NO_UNIQUE_ACTIVE_SLOT', code: 'PREFLIGHT_SLOT_NOT_UNIQUE',
+    });
+  }
   const expectedSlotId = preflightSlots.docs[0].id;
   const preflightSlot = preflightSlots.docs[0].data() || {};
   const expectedGeneration = Math.max(0, Number(preflightSlot.occupancyGeneration) || 0);
@@ -267,7 +317,9 @@ async function retireInactiveClub({ db, auth, userRecord, now = new Date() }) {
       Number(player.leagueLevel) !== division ||
       Number(player.groupId) !== group ||
       Number(player.rank) !== rank) {
-    return { action: 'SKIPPED_INVALID_CLUB_COORDINATES' };
+    return preflightRetirementResult({
+      db, pendingRef, now, action: 'SKIPPED_INVALID_CLUB_COORDINATES', code: 'PREFLIGHT_CLUB_COORDINATES_INVALID',
+    });
   }
 
   // The durable pending marker is also a lease. Only one worker may advance
@@ -700,7 +752,15 @@ async function runClubInactivitySweep({ db, auth, now = new Date(), pageSize = B
         const result = await retireInactiveClub({ db, auth, userRecord, now });
         recordResult(result);
       } catch (error) {
-        summary.errors.push({ uid, code: String(error && (error.code || error.message) || 'UNKNOWN').slice(0, 120) });
+        const errorCode = String(error && (error.code || error.message) || 'UNKNOWN').slice(0, 120);
+        if (String(error && error.code || '').includes('user-not-found')) {
+          const pendingRef = pendingCollection.doc(uid);
+          await markPendingReviewRequired({
+            db, pendingRef, now, code: 'AUTH_USER_MISSING_DURING_RETIREMENT_RECOVERY',
+          }).catch(() => undefined);
+          summary.reviewRequired++;
+        }
+        summary.errors.push({ uid, code: errorCode });
       }
     }
 
