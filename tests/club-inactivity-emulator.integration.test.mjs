@@ -511,6 +511,7 @@ test('a delayed cancellation cleanup cannot delete a newer retirement marker', {
   const firstStarted = new Promise((resolve) => { signalFirstStarted = resolve; });
   const firstGate = new Promise((resolve) => { releaseFirst = resolve; });
   let authReads = 0;
+  let authUpdates = 0;
   const auth = {
     getUser: async () => {
       authReads++;
@@ -520,21 +521,30 @@ test('a delayed cancellation cleanup cannot delete a newer retirement marker', {
       }
       return { uid, disabled: true };
     },
-    updateUser: async () => ({ uid, disabled: false }),
+    updateUser: async () => {
+      authUpdates++;
+      return { uid, disabled: false };
+    },
   };
 
   const delayedRecovery = recoverCancelledRetirement({ db, auth, uid, pendingRef, now });
   await firstStarted;
 
-  const completedRecovery = await recoverCancelledRetirement({ db, auth, uid, pendingRef, now });
+  // A second worker may take over only after the first cleanup lease expires.
+  const takeoverNow = new Date(now.getTime() + 11 * 60 * 1000);
+  const completedRecovery = await recoverCancelledRetirement({
+    db, auth, uid, pendingRef, now: takeoverNow,
+  });
   assert.equal(completedRecovery, true);
   assert.equal((await pendingRef.get()).exists, false);
+  assert.equal(authUpdates, 1);
 
   await pendingRef.set({ uid, phase: 'CANCELLED', cancellationReason: 'NEWER_OPERATION' });
   releaseFirst();
   const staleRecovery = await delayedRecovery;
 
   assert.equal(staleRecovery, false);
+  assert.equal(authUpdates, 1, 'stale cleanup must not re-enable Auth after losing its lease');
   const remaining = await pendingRef.get();
   assert.equal(remaining.exists, true);
   assert.equal(remaining.get('cancellationReason'), 'NEWER_OPERATION');
