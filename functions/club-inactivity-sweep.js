@@ -91,15 +91,37 @@ async function retireInactiveClub({ db, auth, userRecord, now = new Date() }) {
   if (!playerSnap.exists) return { action: 'SKIPPED_NO_ACTIVE_CLUB' };
   const player = playerSnap.data() || {};
 
-  const season = Number(player.lastProcessedSeason || player.activeSeasonNumber || 0);
-  const division = Number(player.leagueLevel);
-  const group = Number(player.groupId);
-  const rank = Number(player.rank);
-  if (!Number.isSafeInteger(season) || season < 1 ||
+  // The active season config and league slot are authoritative. A stale
+  // lastProcessedSeason field must never make retirement target an archived slot.
+  const configRef = db.collection('system_v1').doc('season_config');
+  const configSnap = await configRef.get();
+  if (!configSnap.exists) return { action: 'SKIPPED_SEASON_CONFIG_MISSING' };
+  const config = configSnap.data() || {};
+  const season = Number(config.activeSeasonNumber);
+  if (!Number.isSafeInteger(season) || season < 1 || config.worldReady !== true ||
+      !['REGULAR_SEASON', 'ACTIVE'].includes(String(config.phase || ''))) {
+    return { action: 'SKIPPED_SEASON_NOT_ACTIVE' };
+  }
+
+  const slotQuery = db.collection('league_slots_v1')
+    .where('season', '==', season)
+    .where('occupantId', '==', uid);
+  const preflightSlots = await slotQuery.get();
+  if (preflightSlots.size !== 1) return { action: 'SKIPPED_NO_UNIQUE_ACTIVE_SLOT' };
+  const expectedSlotId = preflightSlots.docs[0].id;
+  const preflightSlot = preflightSlots.docs[0].data() || {};
+  const division = Number(preflightSlot.division);
+  const group = Number(preflightSlot.group);
+  const rank = Number(preflightSlot.rank);
+
+  if (preflightSlot.status !== 'OCCUPIED' || preflightSlot.occupantId !== uid ||
       !Number.isInteger(division) || division < 1 || division > 4 ||
       !Number.isInteger(group) || group < 1 || group > Math.pow(2, division - 1) ||
       !Number.isInteger(rank) || rank < 1 || rank > 8 ||
-      player.selectedLeagueId !== LEAGUE_ID) {
+      player.selectedLeagueId !== LEAGUE_ID ||
+      Number(player.leagueLevel) !== division ||
+      Number(player.groupId) !== group ||
+      Number(player.rank) !== rank) {
     return { action: 'SKIPPED_INVALID_CLUB_COORDINATES' };
   }
 
@@ -136,9 +158,6 @@ async function retireInactiveClub({ db, auth, userRecord, now = new Date() }) {
     return { action: 'SKIPPED_ACTIVITY_RACE', reason: postDisableEligibility.reason };
   }
 
-  const slotQuery = db.collection('league_slots_v1')
-    .where('season', '==', season)
-    .where('occupantId', '==', uid);
   const tableRef = db.collection('league_tables_v2')
     .doc(`table_v140_S${season}_L${LEAGUE_ID}_V${division}_G${group}`);
   const botId = `BOT_${LEAGUE_ID}_L${division}_G${group}_R${rank}`;
@@ -152,7 +171,7 @@ async function retireInactiveClub({ db, auth, userRecord, now = new Date() }) {
     .where('version', '==', 140);
 
   const result = await db.runTransaction(async (transaction) => {
-    const [freshPlayer, slots, table, bot, archive, matches, pending, latestActivity] = await Promise.all([
+    const [freshPlayer, slots, table, bot, archive, matches, pending, latestActivity, activeConfig] = await Promise.all([
       transaction.get(playerRef),
       transaction.get(slotQuery),
       transaction.get(tableRef),
@@ -161,6 +180,7 @@ async function retireInactiveClub({ db, auth, userRecord, now = new Date() }) {
       transaction.get(matchesQuery),
       transaction.get(pendingRef),
       transaction.get(activityRef),
+      transaction.get(configRef),
     ]);
 
     if (archive.exists && !freshPlayer.exists) {
@@ -171,6 +191,14 @@ async function retireInactiveClub({ db, auth, userRecord, now = new Date() }) {
       return { action: 'BLOCKED_ARCHIVE_COLLISION' };
     }
     if (!pending.exists) return { action: 'BLOCKED_RETIREMENT_MARKER_MISSING' };
+
+    const currentConfig = activeConfig.exists ? activeConfig.data() || {} : {};
+    if (!activeConfig.exists ||
+        Number(currentConfig.activeSeasonNumber) !== season ||
+        currentConfig.worldReady !== true ||
+        !['REGULAR_SEASON', 'ACTIVE'].includes(String(currentConfig.phase || ''))) {
+      return { action: 'BLOCKED_SEASON_CHANGED' };
+    }
 
     // Re-check activity inside the same transaction that changes the slot.
     // A concurrent verified session write conflicts with this read and forces
@@ -192,10 +220,10 @@ async function retireInactiveClub({ db, auth, userRecord, now = new Date() }) {
     const fresh = freshPlayer.data() || {};
     const slotDoc = slots.docs[0];
     const slot = slotDoc.data() || {};
+    if (slotDoc.id !== expectedSlotId) return { action: 'BLOCKED_OWNERSHIP_CHANGED' };
     const tableData = table.data() || {};
     const stats = tableData.stats && typeof tableData.stats === 'object' ? tableData.stats : {};
     if (fresh.selectedLeagueId !== LEAGUE_ID ||
-        Number(fresh.lastProcessedSeason || fresh.activeSeasonNumber || 0) !== season ||
         Number(fresh.leagueLevel) !== division || Number(fresh.groupId) !== group || Number(fresh.rank) !== rank ||
         slot.status !== 'OCCUPIED' || slot.occupantId !== uid ||
         Number(slot.division) !== division || Number(slot.group) !== group || Number(slot.rank) !== rank ||
