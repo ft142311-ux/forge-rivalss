@@ -262,8 +262,8 @@ async function retireInactiveClub({ db, auth, userRecord, now = new Date() }) {
       if (match.homeId !== uid && match.awayId !== uid) continue;
 
       const status = String(match.status || '').toLowerCase();
-      if (match.isProcessing === true ||
-          ['in_progress', 'in-progress', 'processing', 'resolving'].includes(status)) {
+      if (match.isProcessing === true || match.startedAt || match.processingStartedAt ||
+          ['in_progress', 'in-progress', 'processing', 'resolving', 'running', 'live'].includes(status)) {
         return { action: 'DEFERRED_MATCH_PROCESSING', matchId: matchDoc.id };
       }
       const startValue = match.startTime ?? match.scheduledStartAt;
