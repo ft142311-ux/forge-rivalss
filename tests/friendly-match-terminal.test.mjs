@@ -5,9 +5,9 @@ import { readFileSync } from 'node:fs';
 const source = readFileSync(new URL('../src/app/actions/friendly-matchmaking.ts', import.meta.url), 'utf8');
 
 test('friendly match terminal predicate recognizes finished, completed, and isFinished records', () => {
-  assert.match(source, /function isFriendlyMatchTerminal\\(match: any\\): boolean/);
-  assert.match(source, /match\\?\\.isFinished === true/);
-  assert.match(source, /\\['finished', 'completed'\\]\\.includes\\(String\\(match\\?\\.status \\|\\| ''\\)\\.toLowerCase\\(\\)\\)/);
+  assert.match(source, /function isFriendlyMatchTerminal\(match: any\): boolean/);
+  assert.match(source, /match\?\.isFinished === true/);
+  assert.match(source, /\['finished', 'completed'\]\.includes\(String\(match\?\.status \|\| ''\)\.toLowerCase\(\)\)/);
 });
 
 test('friendly resolver checks terminal state inside its transaction before simulation', () => {
@@ -23,7 +23,7 @@ test('friendly resolver checks terminal state inside its transaction before simu
 });
 
 test('friendly entry points reuse the same terminal predicate before attempting resolution', () => {
-  assert.match(source, /reportSnap\\.exists && isFriendlyMatchTerminal\\(reportSnap\\.data\\(\\) \\|\\| \\{\\}\\)/);
-  assert.match(source, /if \\(isFriendlyMatchTerminal\\(match\\)\\) return \\{ success: true, started: false, finished: true, matchId \\}/);
-  assert.match(source, /isFriendlyMatchTerminal\\(match\\) \\|\\| !scheduledAtMs/);
+  assert.match(source, /reportSnap\.exists && isFriendlyMatchTerminal\(reportSnap\.data\(\) \|\| \{\}\)/);
+  assert.match(source, /if \(isFriendlyMatchTerminal\(match\)\) return \{ success: true, started: false, finished: true, matchId \}/);
+  assert.match(source, /isFriendlyMatchTerminal\(match\) \|\| !scheduledAtMs/);
 });
