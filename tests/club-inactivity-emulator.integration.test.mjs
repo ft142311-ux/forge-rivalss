@@ -20,11 +20,30 @@ test('login activity handshake is blocked once retirement has been claimed', {
   const app = initializeApp({ projectId: testProjectId }, `activity-fence-test-${randomUUID()}`);
   const db = getFirestore(app);
   const auth = getAuth(app);
-  const authUser = await auth.createUser({
-    email: `activity-fence-${randomUUID()}@example.test`,
-    password: 'TestPassword123!',
-  });
+  const email = `activity-fence-${randomUUID()}@example.test`;
+  const password = 'TestPassword123!';
+  const authUser = await auth.createUser({ email, password });
   const uid = authUser.uid;
+
+  const authHost = process.env.FIREBASE_AUTH_EMULATOR_HOST;
+  assert.ok(authHost, 'Auth Emulator must be enabled for this integration test');
+  const signInUrl = `http://${authHost}/identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=fake-api-key`;
+  const initialLogin = await fetch(signInUrl, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ email, password, returnSecureToken: true }),
+  });
+  assert.equal(initialLogin.status, 200, 'password login works before account retirement');
+  await auth.updateUser(uid, { disabled: true });
+  const disabledLogin = await fetch(signInUrl, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ email, password, returnSecureToken: true }),
+  });
+  assert.equal(disabledLogin.status, 400, 'password login is rejected for disabled accounts');
+  const disabledLoginBody = await disabledLogin.json();
+  assert.match(String(disabledLoginBody.error?.message || ''), /USER_DISABLED/);
+  await auth.updateUser(uid, { disabled: false });
   const pendingRef = db.collection('inactive_club_retirements_v1').doc(uid);
   const retiredRef = db.collection('inactive_clubs_v1').doc(uid);
   const activityRef = db.collection('user_activity_v1').doc(uid);
