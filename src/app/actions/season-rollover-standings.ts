@@ -166,7 +166,7 @@ export function buildCanonicalSlotRepairs(
   if (slotByRank.size !== teamsPerGroup) return null;
 
   const sourceByRank = collectSourceRowsByRank(sourceStats, teamsPerGroup);
-  const { activeByRank, activeConflicts } = collectFixtureIdentityMaps(fixtures, teamsPerGroup);
+  const { allIdsByRank, activeByRank, activeConflicts } = collectFixtureIdentityMaps(fixtures, teamsPerGroup);
   if (activeConflicts.size) return null;
 
   const repairs: CanonicalSlotRepair[] = [];
@@ -190,6 +190,11 @@ export function buildCanonicalSlotRepairs(
       if (entries.length && !botEntry) return null;
       if (activeId && !activeId.startsWith('BOT_')) return null;
       if (botEntry && activeId && botEntry.id !== activeId) return null;
+      const historicalIds = allIdsByRank.get(rank);
+      const historicalBotId = historicalIds?.size === 1 && [...historicalIds][0].startsWith('BOT_')
+        ? [...historicalIds][0]
+        : null;
+      if (!botEntry && !activeId && !historicalBotId) return null;
       repairs.push({ rank, occupantId: null, status: 'FREE' });
       continue;
     }
