@@ -105,6 +105,7 @@ test('transferring a bot standings row preserves every accumulated season statis
 
 test('registration match plan leaves completed fixtures unchanged and rewrites only future fixtures', () => {
   const matches = createRoundRobin();
+  for (const match of matches) match.startTime = '2026-11-15T12:00:00.000Z';
   const completed = matches.find(match => match.homeRank === 3 && match.awayRank === 1);
   completed.status = 'finished';
   completed.isFinished = true;
@@ -126,20 +127,42 @@ test('registration match plan leaves completed fixtures unchanged and rewrites o
   assert.equal(result.updates.find(update => update.matchId === future.id).patch.homeLogo, null);
 });
 
-test('registration is deferred while a future fixture is already processing', () => {
+test('registration is deferred while a future fixture for this slot is already processing', () => {
   const matches = createRoundRobin();
-  matches[0].isProcessing = true;
+  for (const match of matches) match.startTime = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+  const target = matches.find(match => match.homeId === 'bot-3' || match.awayId === 'bot-3');
+  target.isProcessing = true;
   const result = buildRegistrationMatchPlan(matches, 'bot-3', 'user-b', 'New Club', Date.now());
   assert.equal(result.ok, false);
   assert.equal(result.reason, 'SLOT_MATCH_IN_PROGRESS');
 });
 
-test('registration is deferred when an unfinished fixture is already due', () => {
+test('registration is deferred when an unfinished fixture for this slot is already due', () => {
   const matches = createRoundRobin();
-  matches[0].startTime = '2020-01-01T00:00:00.000Z';
+  for (const match of matches) match.startTime = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+  const target = matches.find(match => match.homeId === 'bot-3' || match.awayId === 'bot-3');
+  target.startTime = '2020-01-01T00:00:00.000Z';
   const result = buildRegistrationMatchPlan(matches, 'bot-3', 'user-b', 'New Club', Date.now());
   assert.equal(result.ok, false);
   assert.equal(result.reason, 'SLOT_MATCH_DUE');
+});
+
+test('a due fixture for unrelated teams does not block this slot registration', () => {
+  const matches = createRoundRobin();
+  for (const match of matches) match.startTime = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+  matches[0].startTime = '2020-01-01T00:00:00.000Z';
+  const result = buildRegistrationMatchPlan(matches, 'bot-3', 'user-b', 'New Club', Date.now());
+  assert.equal(result.ok, true);
+});
+
+test('registration fails closed when a target fixture has no trustworthy start time', () => {
+  const matches = createRoundRobin();
+  for (const match of matches) match.startTime = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+  const target = matches.find(match => match.homeId === 'bot-3' || match.awayId === 'bot-3');
+  delete target.startTime;
+  const result = buildRegistrationMatchPlan(matches, 'bot-3', 'user-b', 'New Club', Date.now());
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'SLOT_MATCH_TIME_UNKNOWN');
 });
 
 test('starting squad contains ten players with the expected role distribution', () => {
