@@ -4,6 +4,14 @@ import test from 'node:test';
 
 const rules = readFileSync(new URL('../firestore.rules', import.meta.url), 'utf8');
 
+test('retiring and retired accounts fail the shared Firestore signed-in gate', () => {
+  const signedInRule = rules.match(/function signedIn\\(\\)\\s*\\{([\\s\\S]*?)\\n    \\}/);
+  assert.ok(signedInRule, 'shared signed-in rule exists');
+  assert.match(signedInRule[1], /inactive_club_retirements_v1/);
+  assert.match(signedInRule[1], /inactive_clubs_v1/);
+  assert.match(signedInRule[1], /!exists\\(/);
+});
+
 test('global chat Premium flag must match the authenticated manager profile', () => {
   const chatRule = rules.match(/match \/global_chat_v2\/{msgId}\s*\{([\s\S]*?)\n    \}/);
   assert.ok(chatRule, 'global chat rule exists');
