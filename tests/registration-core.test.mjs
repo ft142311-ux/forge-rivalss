@@ -30,7 +30,7 @@ function createRoundRobin(botRank = 3, botId = 'bot-3') {
 
 test('registration accepts only a free slot in the active season and supported divisions', () => {
   assert.equal(isEligibleRegistrationSlot({
-    status: 'FREE', season: 4, division: 4,
+    status: 'FREE', season: 4, division: 4, group: 8, rank: 8,
   }, 4), true);
   assert.equal(isEligibleRegistrationSlot({
     status: 'OCCUPIED', season: 4, division: 4,
