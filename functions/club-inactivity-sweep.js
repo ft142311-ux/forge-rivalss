@@ -433,7 +433,6 @@ async function retireInactiveClub({ db, auth, userRecord, now = new Date() }) {
     'BLOCKED_TABLE_IDENTITY_CONFLICT',
     'BLOCKED_BOT_ID_COLLISION',
     'BLOCKED_INTEGRITY_CHECK',
-    'BLOCKED_STALE_RETIREMENT_WORKER',
   ].includes(result.action)) {
     await db.runTransaction(async (transaction) => {
       const pending = await transaction.get(pendingRef);
