@@ -31,6 +31,7 @@ test('inactive club replacement is atomic and preserves completed match results'
   const tableRef = db.collection('league_tables_v2').doc(`table_v140_S${season}_LALPHA_V${division}_G${group}`);
   const archiveRef = db.collection('inactive_clubs_v1').doc(uid);
   const pendingRef = db.collection('inactive_club_retirements_v1').doc(uid);
+  const configRef = db.collection('system_v1').doc('season_config');
   const matchRefs = [];
   const botRef = db.collection('players_v14').doc(botId);
 
@@ -41,15 +42,21 @@ test('inactive club replacement is atomic and preserves completed match results'
     await archiveRef.delete().catch(() => undefined);
     await pendingRef.delete().catch(() => undefined);
     await botRef.delete().catch(() => undefined);
+    await configRef.delete().catch(() => undefined);
     for (const ref of matchRefs) await ref.delete().catch(() => undefined);
     await deleteApp(app);
   });
 
   const player = {
     id: uid, clubName: 'Inactive Test Club', selectedLeagueId: 'ALPHA',
-    lastProcessedSeason: season, leagueLevel: division, groupId: group, rank,
+    lastProcessedSeason: season - 1, leagueLevel: division, groupId: group, rank,
     ownedPlayers: [{ id: 'test-player' }],
   };
+  await configRef.set({
+    activeSeasonNumber: season,
+    phase: 'REGULAR_SEASON',
+    worldReady: true,
+  });
   await playerRef.set(player);
   await slotRef.set({
     season, leagueId: 'ALPHA', division, group, rank,
