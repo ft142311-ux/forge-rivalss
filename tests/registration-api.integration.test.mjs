@@ -426,45 +426,69 @@ test('registration HTTP API enforces its boundary and safely initializes a club'
     assert.equal(botStanding.points, 9);
     assert.equal((await replacementBotRef.get()).get('ownedPlayers').length, 5);
 
-    const replacementEmail = `replacement-${runId}@example.test`;
-    const replacementPassword = `Replacement-${randomUUID()}-Bb2!`;
-    const replacementUser = await auth.createUser({
-      email: replacementEmail,
-      password: replacementPassword,
-      emailVerified: true,
-    });
-    replacementUid = replacementUser.uid;
-    replacementPlayerRef = db.collection('players_v14').doc(replacementUid);
-    replacementActivityRef = db.collection('user_activity_v1').doc(replacementUid);
-    replacementAuditQuery = db.collection('security_audit_v1').where('actorUid', '==', replacementUid);
-
-    const replacementLogin = await fetch(
-      `http://${authHost}/identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=fake-api-key`,
-      {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          email: replacementEmail,
-          password: replacementPassword,
-          returnSecureToken: true,
-        }),
-      },
-    );
-    assert.equal(replacementLogin.status, 200);
-    const replacementTokens = await replacementLogin.json();
-    const replacementResponse = await POST(new Request('http://localhost/api/registration/initialize', {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        authorization: `Bearer ${replacementTokens.idToken}`,
-      },
-      body: JSON.stringify({ clubName: 'Replacement Club' }),
+    // Race two genuinely independent accounts for the single released slot.
+    // Exactly one transaction may win; the loser must not create a player,
+    // standings row, history event, audit event, or increment global totals.
+    const contenders = await Promise.all([1, 2].map(async (number) => {
+      const email = `replacement-${number}-${runId}@example.test`;
+      const password = `Replacement-${randomUUID()}-Bb2!`;
+      const user = await auth.createUser({ email, password, emailVerified: true });
+      const login = await fetch(
+        `http://${authHost}/identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=fake-api-key`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ email, password, returnSecureToken: true }),
+        },
+      );
+      assert.equal(login.status, 200);
+      const tokens = await login.json();
+      return { uid: user.uid, email, password, idToken: tokens.idToken };
     }));
-    const replacementBody = await replacementResponse.json();
-    assert.equal(replacementResponse.status, 200, JSON.stringify(replacementBody));
-    assert.equal(replacementBody.success, true);
-    assert.equal(replacementBody.alreadyInitialized, false);
-    assert.equal(replacementBody.rank, 8);
+    const contenderPlayerRefs = contenders.map(({ uid }) => db.collection('players_v14').doc(uid));
+    const contenderActivityRefs = contenders.map(({ uid }) => db.collection('user_activity_v1').doc(uid));
+    const contenderAuditQueries = contenders.map(({ uid }) =>
+      db.collection('security_audit_v1').where('actorUid', '==', uid)
+    );
+    const contenderResponses = await Promise.all(contenders.map(({ idToken }) =>
+      POST(new Request('http://localhost/api/registration/initialize', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${idToken}`,
+        },
+        body: JSON.stringify({ clubName: 'Replacement Club' }),
+      }))
+    ));
+    const contenderBodies = await Promise.all(contenderResponses.map((response) => response.json()));
+    const winners = contenderResponses
+      .map((response, index) => ({ response, body: contenderBodies[index], contender: contenders[index] }))
+      .filter((entry) => entry.response.status === 200);
+    const losers = contenderResponses
+      .map((response, index) => ({ response, body: contenderBodies[index], contender: contenders[index] }))
+      .filter((entry) => entry.response.status !== 200);
+    assert.equal(winners.length, 1, JSON.stringify(contenderBodies));
+    assert.equal(losers.length, 1, JSON.stringify(contenderBodies));
+    assert.equal(winners[0].body.success, true);
+    assert.equal(winners[0].body.alreadyInitialized, false);
+    assert.equal(winners[0].body.rank, 8);
+    assert.equal(losers[0].response.status, 409);
+    assert.equal(losers[0].body.error, 'NO_FREE_SLOTS_IN_LEAGUE');
+
+    replacementUid = winners[0].contender.uid;
+    replacementPlayerRef = contenderPlayerRefs[contenders.findIndex(({ uid }) => uid === replacementUid)];
+    replacementActivityRef = contenderActivityRefs[contenders.findIndex(({ uid }) => uid === replacementUid)];
+    replacementAuditQuery = contenderAuditQueries[contenders.findIndex(({ uid }) => uid === replacementUid)];
+    for (const contender of contenders) {
+      if (contender.uid !== replacementUid) await auth.deleteUser(contender.uid);
+    }
+    const losingUid = losers[0].contender.uid;
+    assert.equal((await db.collection('players_v14').doc(losingUid).get()).exists, false);
+    assert.equal((await db.collection('user_activity_v1').doc(losingUid).get()).exists, false);
+    assert.equal((await db.collection('security_audit_v1').where('actorUid', '==', losingUid).get()).size, 0);
+    assert.equal((await db.collection('players_v14').doc(replacementUid).get()).exists, true);
+    assert.equal((await db.collection('security_audit_v1').where('actorUid', '==', replacementUid).get()).size, 1);
+    assert.equal((await statsRef.get()).get('totalPlayers'), 1002);
 
     const reclaimedSlot = (await db.collection('league_slots_v1').doc(targetSlotId).get()).data();
     assert.equal(reclaimedSlot.status, 'OCCUPIED');
