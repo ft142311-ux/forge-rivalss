@@ -74,6 +74,15 @@ test('login activity handshake is blocked once retirement has been claimed', {
   const blocked = await recordUserActivityUnlessRetiring(db, uid);
   assert.deepEqual(blocked, { success: false, error: 'ACCOUNT_RETIRING' });
 
+  const conflictingWorker = await retireInactiveClub({
+    db,
+    auth: authWithStaleMetadata,
+    userRecord: staleAuthRecord,
+    now,
+  });
+  assert.equal(conflictingWorker.action, 'BLOCKED_PENDING_RETIREMENT_ACTIVITY_CONFLICT');
+  assert.equal((await pendingRef.get()).exists, true);
+
   const after = await activityRef.get();
   assert.equal(after.get('lastActiveAt')?.toMillis?.(), beforeMillis);
 
