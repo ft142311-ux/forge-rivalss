@@ -343,7 +343,11 @@ export function inspectGroupReconciliation(
     }
 
     const hasBotSource = entries.some(entry => entry.row?.isBot === true || entry.id.startsWith('BOT_'));
+    const slotHasCurrentIdentity = (status === 'OCCUPIED' && Boolean(slotId)) ||
+      status === 'FREE' || (!status && Boolean(slotId));
     if ((!expectedId && (historicalIds.size > 1 || entries.length > 1)) ||
+        (!slotHasCurrentIdentity && !activeId && historicalIds.size > 1) ||
+        (!slotHasCurrentIdentity && !activeId && entries.length > 1 && historicalIds.size > 1) ||
         (status === 'FREE' && !hasBotSource && !(activeId?.startsWith('BOT_')) &&
           !(historicalIds.size === 1 && [...historicalIds][0].startsWith('BOT_')))) {
       unresolvedRanks.push(rank);
@@ -468,6 +472,7 @@ export function calculateGroupStandings(
       const id = [...historicalIds][0];
       selected = entries.find(entry => entry.id === id) || { key: id, id, row: { id, isBot: id.startsWith('BOT_') } };
     } else if (entries.length > 1) {
+      if (historicalIds.size > 1) throw new Error(`CURRENT_SLOT_OWNER_UNRESOLVED_R${rank}`);
       selected = entries[0];
     }
 
