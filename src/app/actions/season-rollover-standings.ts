@@ -166,7 +166,7 @@ export function buildCanonicalSlotRepairs(
   if (slotByRank.size !== teamsPerGroup) return null;
 
   const sourceByRank = collectSourceRowsByRank(sourceStats, teamsPerGroup);
-  const { allIdsByRank, activeByRank, activeConflicts } = collectFixtureIdentityMaps(fixtures, teamsPerGroup);
+  const { activeByRank, activeConflicts } = collectFixtureIdentityMaps(fixtures, teamsPerGroup);
   if (activeConflicts.size) return null;
 
   const repairs: CanonicalSlotRepair[] = [];
@@ -176,56 +176,49 @@ export function buildCanonicalSlotRepairs(
     const slotId = String(slot.occupantId || '');
     const entries = sourceByRank.get(rank) || [];
     const activeId = activeByRank.get(rank);
-    let selected = null as { key: string; id: string; row: any } | null;
 
     if (status === 'OCCUPIED' && slotId) {
-      selected = entries.find(entry => entry.id === slotId) || null;
-    } else if (status === 'FREE' && !slotId) {
-      selected = entries.find(entry => entry.row?.isBot === true || entry.id.startsWith('BOT_')) || null;
-    } else if (!status && slotId) {
-      selected = entries.find(entry => entry.id === slotId) || null;
-    }
-
-    if (!selected && activeId) {
-      selected = entries.find(entry => entry.id === activeId) ||
-        { key: activeId, id: activeId, row: { isBot: activeId.startsWith('BOT_') } };
-    }
-    if (!selected && entries.length === 1) selected = entries[0];
-    if (!selected && entries.length > 1) return null;
-
-    if (selected) {
-      if (activeId && activeId !== selected.id) return null;
-      const isBot = selected.row?.isBot === true || selected.id.startsWith('BOT_');
-      repairs.push({
-        rank,
-        occupantId: isBot ? null : selected.id,
-        status: isBot ? 'FREE' : 'OCCUPIED',
-      });
-      continue;
-    }
-
-    // With no table row or unfinished fixture, a valid current slot is safer
-    // than inferring ownership from old completed match participants.
-    if (status === 'OCCUPIED' && slotId) {
+      const matching = entries.find(entry => entry.id === slotId);
+      if (entries.length && (!matching || matching.row?.isBot === true)) return null;
+      if (activeId && activeId !== slotId) return null;
       repairs.push({ rank, occupantId: slotId, status: 'OCCUPIED' });
       continue;
     }
+
     if (status === 'FREE' && !slotId) {
+      const botEntry = entries.find(entry => entry.row?.isBot === true || entry.id.startsWith('BOT_'));
+      if (entries.length && !botEntry) return null;
+      if (activeId && !activeId.startsWith('BOT_')) return null;
+      if (botEntry && activeId && botEntry.id !== activeId) return null;
       repairs.push({ rank, occupantId: null, status: 'FREE' });
       continue;
     }
+
     if (!status && slotId) {
+      const matching = entries.find(entry => entry.id === slotId);
+      if (entries.length && (!matching || matching.row?.isBot === true)) return null;
+      if (activeId && activeId !== slotId) return null;
       repairs.push({ rank, occupantId: slotId, status: 'OCCUPIED' });
       continue;
     }
 
-    const historicalIds = allIdsByRank.get(rank);
-    if (historicalIds?.size === 1) {
-      const id = [...historicalIds][0];
-      const isBot = id.startsWith('BOT_');
-      repairs.push({ rank, occupantId: isBot ? null : id, status: isBot ? 'FREE' : 'OCCUPIED' });
-      continue;
+    if (!status && !slotId) {
+      if (entries.length > 1) return null;
+      const entry = entries[0];
+      const currentId = entry?.id || activeId;
+      if (currentId) {
+        const isBot = entry?.row?.isBot === true || currentId.startsWith('BOT_');
+        if (activeId && activeId !== currentId) return null;
+        repairs.push({
+          rank,
+          occupantId: isBot ? null : currentId,
+          status: isBot ? 'FREE' : 'OCCUPIED',
+        });
+        continue;
+      }
+      return null;
     }
+
     return null;
   }
   return repairs;
