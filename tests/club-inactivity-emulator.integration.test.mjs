@@ -81,7 +81,7 @@ test('login activity handshake is blocked once retirement has been claimed', {
     now,
   });
   assert.equal(conflictingWorker.action, 'BLOCKED_PENDING_RETIREMENT_ACTIVITY_CONFLICT');
-  assert.equal((await pendingRef.get()).exists, true);
+  assert.equal((await pendingRef.get()).get('phase'), 'REVIEW_REQUIRED');
 
   const after = await activityRef.get();
   assert.equal(after.get('lastActiveAt')?.toMillis?.(), beforeMillis);
@@ -276,5 +276,5 @@ test('a pending retirement with conflicting activity is blocked for manual revie
 
   assert.equal(result.action, 'BLOCKED_PENDING_RETIREMENT_ACTIVITY_CONFLICT');
   assert.equal(disabled, true);
-  assert.equal((await pendingRef.get()).exists, true);
+  assert.equal((await pendingRef.get()).get('phase'), 'REVIEW_REQUIRED');
 });
