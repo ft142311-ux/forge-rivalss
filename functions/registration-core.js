@@ -194,10 +194,12 @@ function buildRegistrationMatchPlan(matches, botId, userId, clubName, nowMs = Da
     if (match.homeId === botId) {
       patch.homeId = userId;
       patch.homeName = clubName;
+      patch.homeLogo = null;
     }
     if (match.awayId === botId) {
       patch.awayId = userId;
       patch.awayName = clubName;
+      patch.awayLogo = null;
     }
     if (Object.keys(patch).length) {
       updates.push({ matchId: match.id || null, patch });
