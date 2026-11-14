@@ -11,7 +11,7 @@ test('league settlement claims a per-attempt processing token transactionally', 
   assert.ok(resolver.includes('const processingToken = randomUUID();'));
   assert.ok(resolver.includes('const claimed = await db.runTransaction'));
   assert.ok(resolver.includes('processingToken,'));
-  assert.ok(resolver.includes("current.status || '').toLowerCase() === 'finished'"));
+  assert.ok(resolver.includes("['finished', 'completed'].includes(String(current.status || '').toLowerCase())"));
   assert.ok(resolver.includes('if (!stale) return false;'));
 });
 
