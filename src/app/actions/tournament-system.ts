@@ -449,6 +449,14 @@ async function resolveTournamentMatch(db: any, tournamentId: string, matchId: st
       if (!fresh.exists || freshData.status !== 'processing' || freshData.processingToken !== processingToken) return false;
       const groupRef = m.stage === 'groups' ? tournamentRef.collection('groups').doc(m.groupId) : null;
       const groupSnap = groupRef ? await t.get(groupRef) : null;
+      const groupRows = groupSnap?.exists && Array.isArray(groupSnap.data()?.teams)
+        ? [...groupSnap.data().teams]
+        : [];
+      const homeRow = groupRows.find((row: any) => row.id === home.id);
+      const awayRow = groupRows.find((row: any) => row.id === away.id);
+      if (m.stage === 'groups' && (!groupSnap?.exists || !homeRow || !awayRow || home.id === away.id)) {
+        throw new Error('TOURNAMENT_GROUP_STANDINGS_INTEGRITY_FAILED');
+      }
 
       const finishedAt = FieldValue.serverTimestamp();
       const winnerName = winnerId === home.id ? home.name : winnerId === away.id ? away.name : null;
@@ -497,29 +505,30 @@ async function resolveTournamentMatch(db: any, tournamentId: string, matchId: st
       }, { merge: true });
 
       if (m.stage === 'groups' && groupRef && groupSnap) {
-        if (groupSnap.exists) {
-          const group = groupSnap.data() || {};
-          const rows = Array.isArray(group.teams) ? [...group.teams] : [];
-          const homeRow = rows.find((r: any) => r.id === home.id);
-          const awayRow = rows.find((r: any) => r.id === away.id);
-          if (homeRow && awayRow) {
-            homeRow.played += 1; awayRow.played += 1;
-            homeRow.for += homeScore; homeRow.against += awayScore;
-            awayRow.for += awayScore; awayRow.against += homeScore;
-            homeRow.diff = homeRow.for - homeRow.against;
-            awayRow.diff = awayRow.for - awayRow.against;
-            if (homeScore === awayScore) {
-              homeRow.draws += 1; awayRow.draws += 1;
-              homeRow.points += POINTS_DRAW; awayRow.points += POINTS_DRAW;
-            } else if (winnerId === home.id) {
-              homeRow.wins += 1; homeRow.points += POINTS_WIN; awayRow.losses += 1;
-            } else {
-              awayRow.wins += 1; awayRow.points += POINTS_WIN; homeRow.losses += 1;
-            }
-            rows.sort((a: any, b: any) => b.points - a.points || b.diff - a.diff || b.wins - a.wins || a.name.localeCompare(b.name));
-            t.update(groupRef, { teams: rows, updatedAt: FieldValue.serverTimestamp() });
-          }
+        homeRow.played = Number(homeRow.played || 0) + 1;
+        awayRow.played = Number(awayRow.played || 0) + 1;
+        homeRow.for = Number(homeRow.for || 0) + homeScore;
+        homeRow.against = Number(homeRow.against || 0) + awayScore;
+        awayRow.for = Number(awayRow.for || 0) + awayScore;
+        awayRow.against = Number(awayRow.against || 0) + homeScore;
+        homeRow.diff = homeRow.for - homeRow.against;
+        awayRow.diff = awayRow.for - awayRow.against;
+        if (homeScore === awayScore) {
+          homeRow.draws = Number(homeRow.draws || 0) + 1;
+          awayRow.draws = Number(awayRow.draws || 0) + 1;
+          homeRow.points = Number(homeRow.points || 0) + POINTS_DRAW;
+          awayRow.points = Number(awayRow.points || 0) + POINTS_DRAW;
+        } else if (winnerId === home.id) {
+          homeRow.wins = Number(homeRow.wins || 0) + 1;
+          homeRow.points = Number(homeRow.points || 0) + POINTS_WIN;
+          awayRow.losses = Number(awayRow.losses || 0) + 1;
+        } else {
+          awayRow.wins = Number(awayRow.wins || 0) + 1;
+          awayRow.points = Number(awayRow.points || 0) + POINTS_WIN;
+          homeRow.losses = Number(homeRow.losses || 0) + 1;
         }
+        groupRows.sort((a: any, b: any) => b.points - a.points || b.diff - a.diff || b.wins - a.wins || a.name.localeCompare(b.name));
+        t.update(groupRef, { teams: groupRows, updatedAt: FieldValue.serverTimestamp() });
       }
       return true;
     });
@@ -553,7 +562,10 @@ async function stageMatchesDone(tournamentRef: any, stage: string, expectedCount
   const ids = new Set<string>();
   for (const doc of snap.docs) {
     const match = doc.data() || {};
-    if (match.status !== 'finished' || !match.winnerId || !match.homeId || !match.awayId) return false;
+    if (match.status !== 'finished' || !match.homeId || !match.awayId) return false;
+    // Group BO2 fixtures may legitimately end in a draw; knockout fixtures need a winner.
+    if (stage !== 'groups' && !match.winnerId) return false;
+    if (match.winnerId && ![match.homeId, match.awayId].includes(match.winnerId)) return false;
     if (match.homeId === match.awayId) return false;
     const key = `${match.stage}:${match.index ?? doc.id}`;
     if (ids.has(key)) return false;
