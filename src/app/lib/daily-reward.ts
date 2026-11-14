@@ -9,3 +9,8 @@ export function getDailyRewardForDay(day: number): DailyReward {
     crystals: 10 + (safeDay % 7 === 0 ? 50 : 0),
   };
 }
+
+/** Premium grants an additional 50 crystals on every successful daily claim. */
+export function getPremiumDailyCrystalBonus(isPremiumActive: boolean): number {
+  return isPremiumActive ? 50 : 0;
+}
