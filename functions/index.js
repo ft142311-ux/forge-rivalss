@@ -1,6 +1,6 @@
 const functions = require('firebase-functions');
 const admin = require('firebase-admin');
-const { isEligibleRegistrationSlot, validateRegistrationSchedule, generateStartingSquad } = require('./registration-core');
+const { isEligibleRegistrationSlot, validateRegistrationSchedule, generateStartingSquad, buildRegistrationMatchPlan, transferBotStandingToUser } = require('./registration-core');
 
 /**
  * @fileOverview Р•РґРёРЅРѕРµ СЃРµСЂРІРµСЂРЅРѕРµ СЏРґСЂРѕ СЂРµРіРёСЃС‚СЂР°С†РёРё v165.
@@ -173,53 +173,55 @@ exports.initializeClub = functions.region('us-central1').https.onCall(async (dat
         throw new functions.https.HttpsError('failed-precondition', 'WORLD_NOT_READY');
       }
 
-      if (!validateRegistrationSchedule(matchesSnap.docs.map(doc => doc.data() || {}), Number(slot.rank), botId)) {
+      if (!validateRegistrationSchedule(matchesSnap.docs.map(doc => ({ ...(doc.data() || {}), id: doc.id })), Number(slot.rank), botId)) {
         console.error('[INIT] WORLD INCONSISTENT: fixture participant does not match rank slot', { tableId, rank: slot.rank });
         throw new functions.https.HttpsError('failed-precondition', 'LEAGUE_SCHEDULE_SLOT_CONFLICT');
+      }
+
+      const matchPlan = buildRegistrationMatchPlan(
+        matchesSnap.docs.map(doc => ({ ...(doc.data() || {}), id: doc.id })),
+        botId,
+        userId,
+        clubName,
+        Date.now()
+      );
+      if (!matchPlan.ok) {
+        throw new functions.https.HttpsError('failed-precondition', matchPlan.reason);
+      }
+
+      const standingTransfer = transferBotStandingToUser(stats, botId, userId, clubName, Number(slot.rank));
+      if (!standingTransfer.ok) {
+        throw new functions.https.HttpsError('failed-precondition', standingTransfer.reason);
       }
 
       // --- 2. Р’РЎР• Р—РђРџРРЎР (WRITES) ---
       console.log('[INIT] Transaction: Proceeding to WRITES');
 
-      t.update(slotDoc.ref, { 
-        status: 'OCCUPIED', 
-        occupantId: userId, 
-        updatedAt: serverTimestamp() 
+      t.update(slotDoc.ref, {
+        status: 'OCCUPIED',
+        occupantId: userId,
+        occupancyGeneration: Math.max(0, Number(slot.occupancyGeneration) || 0) + 1,
+        lastOccupantId: botId,
+        lastTransitionReason: 'NEW_REGISTRATION',
+        lastTransitionAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
       });
 
-      const newStats = { ...stats };
-      delete newStats[botId];
-      newStats[userId] = { 
-        id: userId, name: clubName, rank: slot.rank, 
-        matchesPlayed: 0, wins: 0, draws: 0, losses: 0, points: 0, diff: 0, 
-        isBot: false 
-      };
-      t.update(tableRef, { 
-        stats: newStats, 
-        updatedAt: serverTimestamp() 
+      // The standings row belongs to the slot's season participation. Transfer
+      // its identity to the new owner while preserving every accumulated result.
+      t.update(tableRef, {
+        stats: standingTransfer.stats,
+        updatedAt: serverTimestamp()
       });
 
-      // Stage 3A.8: the bot is a real players_v14 club. Once its slot is
-      // claimed, remove the bot profile so no orphaned bot club remains.
       const botPlayerRef = db.collection('players_v14').doc(botId);
       t.delete(botPlayerRef);
 
-      // Replace the claimed BOT in all 56 prebuilt matches. Match document IDs
-      // remain rank-based, so the calendar itself is not regenerated.
-      for (const matchDoc of matchesSnap.docs) {
-        const match = matchDoc.data() || {};
-        const patch = {};
-        if (match.homeId === botId) {
-          patch.homeId = userId;
-          patch.homeName = clubName;
-        }
-        if (match.awayId === botId) {
-          patch.awayId = userId;
-          patch.awayName = clubName;
-        }
-        if (Object.keys(patch).length) {
-          t.update(matchDoc.ref, patch);
-        }
+      // Completed fixtures are historical evidence and remain unchanged.
+      // Only future fixtures are rebound to the newly provisioned club.
+      for (const update of matchPlan.updates) {
+        const matchDoc = matchesSnap.docs.find(doc => doc.id === update.matchId);
+        if (matchDoc) t.update(matchDoc.ref, update.patch);
       }
 
       const totalPlayers = (globalStatsSnap.exists ? (globalStatsSnap.data().totalPlayers || 1000) : 1000) + 1;
