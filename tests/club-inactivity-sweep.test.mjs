@@ -26,5 +26,6 @@ test('replacement bot has a deterministic five-player roster with valid pro stat
 test('completed fixtures are identified and never eligible for participant rewrites', () => {
   assert.equal(isFinished({ isFinished: true, status: 'scheduled' }), true);
   assert.equal(isFinished({ status: 'FINISHED' }), true);
+  assert.equal(isFinished({ status: 'COMPLETED' }), true);
   assert.equal(isFinished({ isFinished: false, status: 'scheduled' }), false);
 });
