@@ -712,4 +712,12 @@ async function runClubInactivitySweep({ db, auth, now = new Date(), pageSize = B
   return summary;
 }
 
-module.exports = { buildBotClub, botIdFor, isFinished, isValidBotClub, retireInactiveClub, runClubInactivitySweep };
+module.exports = {
+  buildBotClub,
+  botIdFor,
+  isFinished,
+  isValidBotClub,
+  recoverCancelledRetirement,
+  retireInactiveClub,
+  runClubInactivitySweep,
+};
