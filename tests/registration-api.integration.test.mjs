@@ -99,6 +99,7 @@ test('registration HTTP API enforces its boundary and safely initializes a club'
     let retirementHistoryRef;
     const botPlayerRef = db.collection('players_v14').doc(botId);
     let replacementUid = null;
+    let replacementPlayerRef = null;
     let replacementActivityRef = null;
     let replacementAuditQuery = null;
 
@@ -118,6 +119,7 @@ test('registration HTTP API enforces its boundary and safely initializes a club'
         pendingRef,
         replacementBotRef,
         ...(retirementHistoryRef ? [retirementHistoryRef] : []),
+        ...(replacementPlayerRef ? [replacementPlayerRef] : []),
         ...(replacementActivityRef ? [replacementActivityRef] : []),
         ...(replacementAuditQuery ? (await replacementAuditQuery.get()).docs.map((doc) => doc.ref) : []),
         botPlayerRef,
@@ -128,6 +130,7 @@ test('registration HTTP API enforces its boundary and safely initializes a club'
         await batch.commit();
       }
       await auth.deleteUser(uid).catch(() => undefined);
+      if (replacementUid) await auth.deleteUser(replacementUid).catch(() => undefined);
       await deleteApp(app);
     });
 
@@ -341,6 +344,9 @@ test('registration HTTP API enforces its boundary and safely initializes a club'
     const completedMatchRef = db.collection('matches_v2').doc(`${runId}-match-8-1`);
     const completedMatchBefore = (await completedMatchRef.get()).data();
     const inactiveSince = new Date(Date.now() - 91 * 24 * 60 * 60 * 1000).toISOString();
+    // The registration handshake records a fresh activity timestamp; age it
+    // beyond the retirement threshold to model a genuinely abandoned account.
+    await activityRef.set({ uid, lastActiveAt: inactiveSince });
     const actualAuthRecord = await auth.getUser(uid);
     const retirementAuth = {
       getUser: async (targetUid) => {
@@ -418,6 +424,7 @@ test('registration HTTP API enforces its boundary and safely initializes a club'
       emailVerified: true,
     });
     replacementUid = replacementUser.uid;
+    replacementPlayerRef = db.collection('players_v14').doc(replacementUid);
     replacementActivityRef = db.collection('user_activity_v1').doc(replacementUid);
     replacementAuditQuery = db.collection('security_audit_v1').where('actorUid', '==', replacementUid);
 
