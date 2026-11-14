@@ -71,6 +71,9 @@ async function retireInactiveClub({ db, auth, userRecord, now = new Date() }) {
 
   const pendingRef = db.collection('inactive_club_retirements_v1').doc(uid);
   const pendingSnap = await pendingRef.get();
+  if (pendingSnap.exists && pendingSnap.get('phase') === 'REVIEW_REQUIRED') {
+    return { action: 'SKIPPED_REVIEW_REQUIRED' };
+  }
   // Refresh Auth metadata immediately before making the eligibility decision.
   const latestAuthRecord = await auth.getUser(uid);
   if (latestAuthRecord.disabled && !pendingSnap.exists) {
