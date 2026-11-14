@@ -1010,11 +1010,37 @@ export async function runTransferMarketExpirySweep() {
           const commission = isSystemSeller ? 0 : Math.floor(price * 0.05);
           const sellerIncome = price - commission;
           tx.update(buyerRef!, { ...(hasValidEscrow ? {} : { [currency]: buyerBalance - price }), [playerArrayKey]: buyerPlayers, updatedAt: FieldValue.serverTimestamp() });
+          if (!hasValidEscrow) {
+            tx.set(db.collection('economy_transactions').doc(`auction_settlement_${candidate.id}_buyer`), {
+              userId: bidderId,
+              amount: -price,
+              currency,
+              type: 'SPECIAL_AUCTION_SETTLEMENT_DEBIT',
+              referenceId: candidate.id,
+              description: 'Auction settlement debit (legacy listing without valid escrow)',
+              balanceBefore: buyerBalance,
+              balanceAfter: buyerBalance - price,
+              timestamp: FieldValue.serverTimestamp(),
+            });
+          }
           if (sellerRef) {
+            const sellerBefore = normalizeAuctionBalance(seller[currency]);
+            const sellerAfter = sellerBefore + sellerIncome;
             tx.update(sellerRef, {
-              [currency]: normalizeAuctionBalance(seller[currency]) + sellerIncome,
+              [currency]: sellerAfter,
               [playerArrayKey]: sellerPlayers,
               updatedAt: FieldValue.serverTimestamp(),
+            });
+            tx.set(db.collection('economy_transactions').doc(`auction_settlement_${candidate.id}_seller`), {
+              userId: sellerId,
+              amount: sellerIncome,
+              currency,
+              type: 'SPECIAL_AUCTION_SETTLEMENT_CREDIT',
+              referenceId: candidate.id,
+              description: 'Auction sale proceeds after commission',
+              balanceBefore: sellerBefore,
+              balanceAfter: sellerAfter,
+              timestamp: FieldValue.serverTimestamp(),
             });
           }
           tx.set(transferRef, {
@@ -1033,11 +1059,12 @@ export async function runTransferMarketExpirySweep() {
           tx.update(sellerRef, { [playerArrayKey]: sellerPlayers, updatedAt: FieldValue.serverTimestamp() });
         }
         if (buyerRef && buyerSnap?.exists && hasValidEscrow) {
+          const refundedBalance = buyerBalance + escrowedAmount;
           tx.update(buyerRef, {
-            [currency]: buyerBalance + escrowedAmount,
+            [currency]: refundedBalance,
             updatedAt: FieldValue.serverTimestamp(),
           });
-          const refundRef = db.collection('economy_transactions').doc();
+          const refundRef = db.collection('economy_transactions').doc(`auction_settlement_${candidate.id}_refund`);
           tx.set(refundRef, {
             userId: bidderId,
             amount: escrowedAmount,
@@ -1045,6 +1072,8 @@ export async function runTransferMarketExpirySweep() {
             type: 'SPECIAL_AUCTION_SETTLEMENT_REFUND',
             referenceId: candidate.id,
             description: 'Refund for an auction that could not be settled',
+            balanceBefore: buyerBalance,
+            balanceAfter: refundedBalance,
             timestamp: FieldValue.serverTimestamp(),
           });
         }

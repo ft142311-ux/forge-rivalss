@@ -149,6 +149,8 @@ async function placeSpecialMarketBid(
       type: 'SPECIAL_AUCTION_BID_ESCROW',
       referenceId: marketId,
       description: `Escrow for ${marketKind} market bid`,
+      balanceBefore: bidderBalance,
+      balanceAfter: bidderBalance - chargeAmount,
       timestamp: FieldValue.serverTimestamp(),
     });
 
@@ -165,6 +167,8 @@ async function placeSpecialMarketBid(
         type: 'SPECIAL_AUCTION_OUTBID_REFUND',
         referenceId: marketId,
         description: `Refund after being outbid in ${marketKind} market`,
+        balanceBefore: money(previousBidder[currency]),
+        balanceAfter: money(previousBidder[currency]) + refundAmount,
         timestamp: FieldValue.serverTimestamp(),
       });
     }
