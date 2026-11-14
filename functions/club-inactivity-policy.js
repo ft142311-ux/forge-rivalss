@@ -19,14 +19,18 @@ function toTimestampMs(value) {
 }
 
 function resolveClubInactivity(lastSignInAt, nowMs = Date.now(), inactivityWindowMs = INACTIVITY_WINDOW_MS, lastActiveAt = null) {
-  const timestamps = [toTimestampMs(lastSignInAt), toTimestampMs(lastActiveAt)]
-    .filter(Number.isFinite);
-  const lastSignInMs = timestamps.length ? Math.max(...timestamps) : NaN;
-
-  if (!Number.isFinite(lastSignInMs) || !Number.isFinite(nowMs) ||
+  const authSignInMs = toTimestampMs(lastSignInAt);
+  if (!Number.isFinite(authSignInMs) || !Number.isFinite(nowMs) ||
       !Number.isFinite(inactivityWindowMs) || inactivityWindowMs <= 0) {
     return { eligible: false, reason: 'LAST_SIGN_IN_UNKNOWN' };
   }
+
+  // A verified in-app session may be newer than the Auth sign-in metadata.
+  // It can postpone retirement, but it cannot replace missing Auth evidence.
+  const appActivityMs = toTimestampMs(lastActiveAt);
+  const lastSignInMs = Number.isFinite(appActivityMs)
+    ? Math.max(authSignInMs, appActivityMs)
+    : authSignInMs;
 
   if (lastSignInMs > nowMs) {
     return { eligible: false, reason: 'LAST_SIGN_IN_IN_FUTURE' };
