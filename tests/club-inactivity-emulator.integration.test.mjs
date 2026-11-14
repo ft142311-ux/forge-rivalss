@@ -126,6 +126,19 @@ test('login activity handshake is blocked once retirement has been claimed', {
     body: JSON.stringify({ email, password, returnSecureToken: true }),
   });
   assert.equal(initialLogin.status, 200, 'password login works before account retirement');
+  const initialTokens = await initialLogin.json();
+  assert.ok(initialTokens.idToken, 'initial login returns an ID token');
+  assert.ok(initialTokens.refreshToken, 'initial login returns a refresh token');
+
+  const refreshUrl = `http://${authHost}/securetoken.googleapis.com/v1/token?key=fake-api-key`;
+  const refreshSession = async (refreshToken) => fetch(refreshUrl, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: refreshToken }),
+  });
+  const refreshBeforeRevocation = await refreshSession(initialTokens.refreshToken);
+  assert.equal(refreshBeforeRevocation.status, 200, 'refresh token works before retirement');
+
   await auth.updateUser(uid, { disabled: true });
   const disabledLogin = await fetch(signInUrl, {
     method: 'POST',
@@ -135,6 +148,18 @@ test('login activity handshake is blocked once retirement has been claimed', {
   assert.equal(disabledLogin.status, 400, 'password login is rejected for disabled accounts');
   const disabledLoginBody = await disabledLogin.json();
   assert.match(String(disabledLoginBody.error?.message || ''), /USER_DISABLED/);
+
+  await auth.revokeRefreshTokens(uid);
+  const revokedRefresh = await refreshSession(initialTokens.refreshToken);
+  assert.equal(revokedRefresh.status, 400, 'previous refresh token is rejected after revocation');
+  const revokedRefreshBody = await revokedRefresh.json();
+  assert.ok(
+    /TOKEN_EXPIRED|INVALID_GRANT|USER_DISABLED|TOKEN_REVOKED/i.test(
+      String(revokedRefreshBody.error?.message || revokedRefreshBody.error || ''),
+    ),
+    `expected a revoked/expired refresh-token error, received: ${JSON.stringify(revokedRefreshBody)}`,
+  );
+
   await auth.updateUser(uid, { disabled: false });
   const pendingRef = db.collection('inactive_club_retirements_v1').doc(uid);
   const retiredRef = db.collection('inactive_clubs_v1').doc(uid);
