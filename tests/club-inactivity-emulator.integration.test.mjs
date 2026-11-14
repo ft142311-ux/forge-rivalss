@@ -335,6 +335,24 @@ test('inactive club replacement is atomic and preserves completed match results'
   assert.equal(disabled, false);
   await pendingRef.delete();
 
+  let authReads = 0;
+  const recentSignInTime = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
+  const loginRaceAuth = {
+    ...auth,
+    getUser: async () => {
+      authReads++;
+      return {
+        uid,
+        disabled,
+        metadata: { lastSignInTime: authReads === 1 ? lastSignInTime : recentSignInTime },
+      };
+    },
+  };
+  const loginRace = await retireInactiveClub({ db, auth: loginRaceAuth, userRecord, now });
+  assert.equal(loginRace.action, 'SKIPPED_ACTIVITY_RACE');
+  assert.equal(disabled, false);
+  assert.equal((await pendingRef.get()).exists, false);
+
   await pendingRef.set({
     uid,
     phase: 'PENDING_AUTH_DISABLE',
