@@ -1,7 +1,6 @@
 'use server';
 
 import { getAuth } from 'firebase-admin/auth';
-import { getAdminDb } from '@/lib/firebase-admin';
 import { requireServerActor } from '@/lib/server-auth';
 
 /**
