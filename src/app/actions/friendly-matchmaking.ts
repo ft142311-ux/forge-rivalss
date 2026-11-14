@@ -15,6 +15,11 @@ import { timestampToMillis } from '@/app/lib/timestamp-utils';
 const LOBBY_TTL_MS = 5 * 60 * 1000;
 const MATCH_DELAY_MS = 5 * 60 * 1000;
 
+function isFriendlyMatchTerminal(match: any): boolean {
+  return match?.isFinished === true ||
+    ['finished', 'completed'].includes(String(match?.status || '').toLowerCase());
+}
+
 /** Server-side availability guard: never rely on client-only busy checks. */
 async function assertFriendlyAvailabilityInTransaction(t: any, db: Firestore, uid: string) {
   const [basketSnap, hostedSnap, challengedSnap] = await Promise.all([
@@ -267,7 +272,7 @@ async function resolveFriendlyMatchDocument(matchId: string, collectionName: 'fr
 
     const matchType = String(match.matchType || 'friendly').toLowerCase();
 
-    if (match.status === 'finished') {
+    if (isFriendlyMatchTerminal(match)) {
       if (matchType === 'basket') {
         const [hostQueue, challengerQueue] = await Promise.all([
           t.get(db.collection('cw_basket_v2').doc(String(match.hostId))),
@@ -402,7 +407,7 @@ export async function ensureFriendlyMatchReportAction(idToken: string, matchId: 
 
   // If the canonical report already exists, do not simulate again.
   const reportSnap = await matchRef.get();
-  if (reportSnap.exists && reportSnap.data()?.isFinished === true) {
+  if (reportSnap.exists && isFriendlyMatchTerminal(reportSnap.data() || {})) {
     return { success: true, finished: true, alreadyResolved: true, matchId };
   }
 
@@ -420,7 +425,7 @@ export async function startFriendlyMatchAction(idToken: string, matchId: string)
   if (!snap.exists) throw new Error('FRIENDLY_MATCH_NOT_FOUND');
   const match = snap.data() || {};
   if (match.hostId !== uid && match.challengerId !== uid) throw new Error('FORBIDDEN');
-  if (match.status === 'finished') return { success: true, started: false, finished: true, matchId };
+  if (isFriendlyMatchTerminal(match)) return { success: true, started: false, finished: true, matchId };
 
   const scheduledAtMs = timestampToMillis(match.scheduledStartAt);
   if (!scheduledAtMs || scheduledAtMs > now) {
@@ -476,7 +481,7 @@ export async function resolveDueFriendlyMatchesForUserAction(idToken: string, ma
     const match = snap.data() || {};
     if (match.hostId !== uid && match.challengerId !== uid) throw new Error('FORBIDDEN');
     const scheduledAtMs = timestampToMillis(match.scheduledStartAt);
-    if (match.status === 'finished' || !scheduledAtMs || scheduledAtMs > Date.now()) {
+    if (isFriendlyMatchTerminal(match) || !scheduledAtMs || scheduledAtMs > Date.now()) {
       return { success: true, resolved: 0, matchId };
     }
     const result = await resolveFriendlyMatchDocument(matchId, collectionName);
