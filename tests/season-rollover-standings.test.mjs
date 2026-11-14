@@ -30,53 +30,86 @@ function completeFixtures() {
   return fixtures;
 }
 
-test('D1-G1 final places follow match participants and exclude the stale BOT R5 table row', () => {
+test('final standings keep the current slot owner and aggregate results by rank', () => {
   const stats = {};
   for (let rank = 1; rank <= 8; rank++) {
-    const id = `BOT_ALPHA_L1_G1_R${rank}`;
-    stats[id] = { id, name: rank === 6 ? 'Zulu Six' : id, rank, points: 99 };
+    const id = idsByRank[rank];
+    stats[id] = { id, name: rank === 6 ? 'Zulu Six' : id, rank, points: 99, isBot: id.startsWith('BOT_') };
   }
-  stats['LZJW7Nz5Gf75u6dtvIJle6arp2Ba'] = { id: 'LZJW7Nz5Gf75u6dtvIJle6arp2Ba', name: 'Alpha Human', rank: 4, points: 999 };
+  const staleBotId = 'BOT_ALPHA_L1_G1_R5';
+  stats[staleBotId] = { id: staleBotId, name: 'Old Bot', rank: 5, points: 999, isBot: true };
 
+  const slots = Array.from({ length: 8 }, (_, index) => {
+    const rank = index + 1;
+    const id = idsByRank[rank];
+    return id.startsWith('BOT_')
+      ? { rank, status: 'FREE', occupantId: null }
+      : { rank, status: 'OCCUPIED', occupantId: id };
+  });
   const matches = completeFixtures();
 
   assert.equal(hasCompleteCanonicalFixtureSet(matches), true);
-  const standings = calculateGroupStandings(stats, matches);
+  const standings = calculateGroupStandings(stats, matches, 8, slots);
   assert.equal(standings.length, 8);
   assert.deepEqual(
     standings.map(team => team.id).sort(),
-    [
-      'BOT_ALPHA_L1_G1_R1',
-      'BOT_ALPHA_L1_G1_R2',
-      'BOT_ALPHA_L1_G1_R3',
-      'BOT_ALPHA_L1_G1_R4',
-      'BOT_ALPHA_L1_G1_R6',
-      'BOT_ALPHA_L1_G1_R7',
-      'BOT_ALPHA_L1_G1_R8',
-      'LZJW7Nz5Gf75u6dtvIJle6arp2Ba',
-    ].sort(),
+    Object.values(idsByRank).sort(),
   );
   assert.deepEqual(standings.map(team => team.rank).sort((a, b) => a - b), [1, 2, 3, 4, 5, 6, 7, 8]);
   assert.equal(new Set(standings.map(team => team.id)).size, 8);
   const byId = new Map(standings.map(team => [team.id, team]));
-  assert.equal(byId.get('LZJW7Nz5Gf75u6dtvIJle6arp2Ba').rank, 5);
-  assert.equal(byId.get('LZJW7Nz5Gf75u6dtvIJle6arp2Ba').rank, 5);
-  assert.equal(byId.get('LZJW7Nz5Gf75u6dtvIJle6arp2Ba').matchesPlayed, 14);
+  assert.equal(byId.get(idsByRank[5]).rank, 5);
+  assert.equal(byId.get(idsByRank[5]).matchesPlayed, 14);
   assert.equal(byId.get('BOT_ALPHA_L1_G1_R4').matchesPlayed, 14);
-  assert.equal(byId.get('BOT_ALPHA_L1_G1_R5'), undefined);
+  assert.equal(byId.get(staleBotId), undefined);
 });
 
-test('incomplete fixtures preserve source participants instead of deleting them', () => {
+test('completed results from several previous owners are aggregated into the current slot owner', () => {
+  const stats = Object.fromEntries(Object.entries(idsByRank).map(([rank, id]) => [id, {
+    id, name: id, rank: Number(rank), isBot: id.startsWith('BOT_'),
+  }]));
+  const currentOwner = idsByRank[5];
+  const oldOwners = ['BOT_ALPHA_L1_G1_R5', 'OLD_USER_R5'];
+  const fixtures = completeFixtures();
+  let replaced = 0;
+  for (const fixture of fixtures) {
+    if (fixture.homeRank === 5 || fixture.awayRank === 5) {
+      const oldId = oldOwners[replaced % oldOwners.length];
+      if (fixture.homeRank === 5) fixture.homeId = oldId;
+      else fixture.awayId = oldId;
+      replaced++;
+    }
+  }
+  const slots = Array.from({ length: 8 }, (_, index) => {
+    const rank = index + 1;
+    const id = idsByRank[rank];
+    return id.startsWith('BOT_')
+      ? { rank, status: 'FREE', occupantId: null }
+      : { rank, status: 'OCCUPIED', occupantId: id };
+  });
+
+  assert.equal(hasCanonicalFixtureStructure(fixtures), true);
+  const inspection = inspectGroupReconciliation(stats, fixtures, slots);
+  assert.equal(inspection.ready, true);
+  assert.equal(inspection.staleRows.length, 0);
+  const standings = calculateGroupStandings(stats, fixtures, 8, slots);
+  const currentRow = standings.find(row => row.id === currentOwner);
+  assert.ok(currentRow);
+  assert.equal(currentRow.matchesPlayed, 14);
+  assert.equal(standings.some(row => oldOwners.includes(row.id)), false);
+});
+
+test('incomplete standings keep the current slot identity while aggregating saved results by rank', () => {
   const stats = {
-    OLD_TEAM: { id: 'OLD_TEAM', rank: 5, points: 7 },
+    NEW_TEAM: { id: 'NEW_TEAM', rank: 5, points: 7 },
     OTHER_TEAM: { id: 'OTHER_TEAM', rank: 4, points: 3 },
   };
   const fixtures = [{ homeId: 'OTHER_TEAM', homeRank: 4, awayId: 'NEW_TEAM', awayRank: 5, scoreA: 2, scoreB: 1 }];
 
   assert.equal(hasCompleteCanonicalFixtureSet(fixtures), false);
   const standings = calculateGroupStandings(stats, fixtures);
-  assert.equal(standings.some(team => team.id === 'OLD_TEAM'), true);
   assert.equal(standings.some(team => team.id === 'NEW_TEAM'), true);
+  assert.equal(standings.some(team => team.id === 'OLD_TEAM'), false);
 });
 
 test('active-season standings rebuild uses saved results while the remaining canonical fixtures are pending', () => {
@@ -152,7 +185,13 @@ test('stale standings rows block rollover instead of being silently promoted', (
   const inspection = inspectGroupReconciliation({
     ...Object.fromEntries(Object.values(idsByRank).map((id, index) => [id, { id, rank: index + 1 }])),
     STALE_TEAM: { id: 'STALE_TEAM', rank: 8 },
-  }, completeFixtures(), Array.from({ length: 8 }, (_, index) => ({ rank: index + 1, occupantId: idsByRank[index + 1] })));
+  }, completeFixtures(), Array.from({ length: 8 }, (_, index) => {
+    const rank = index + 1;
+    const id = idsByRank[rank];
+    return id.startsWith('BOT_')
+      ? { rank, status: 'FREE', occupantId: null }
+      : { rank, status: 'OCCUPIED', occupantId: id };
+  }));
   assert.equal(inspection.reasons.includes('STALE_STANDINGS_ROWS'), true);
   const result = evaluateRolloverPreflight([{ group: 'D1-G1', ...inspection }]);
   assert.equal(result.ready, false);
@@ -179,7 +218,10 @@ test('reports slot/fixture mismatch without changing the slot projection', () =>
     occupantId: index + 1 === 4 ? idsByRank[5] : null,
   }));
   const before = structuredClone(slots);
-  const inspection = inspectGroupReconciliation({}, fixtures, slots);
+  const currentStats = Object.fromEntries(Object.entries(idsByRank).map(([rank, id]) => [id, {
+    id, rank: Number(rank), isBot: id.startsWith('BOT_'),
+  }]));
+  const inspection = inspectGroupReconciliation(currentStats, fixtures, slots);
   assert.equal(inspection.ready, false);
   assert.equal(inspection.reasons.includes('SLOT_FIXTURE_PARTICIPANT_MISMATCH'), true);
   assert.ok(inspection.slotConflicts.some(conflict => conflict.rank === 4));
@@ -187,7 +229,10 @@ test('reports slot/fixture mismatch without changing the slot projection', () =>
 });
 
 test('rollover preflight explicitly refuses a slot/fixture conflict', () => {
-  const inspection = inspectGroupReconciliation({}, completeFixtures(), [
+  const currentStats = Object.fromEntries(Object.entries(idsByRank).map(([rank, id]) => [id, {
+    id, rank: Number(rank), isBot: id.startsWith('BOT_'),
+  }]));
+  const inspection = inspectGroupReconciliation(currentStats, completeFixtures(), [
     { rank: 4, status: 'OCCUPIED', occupantId: idsByRank[5] },
   ]);
   const result = evaluateRolloverPreflight([{ group: 'D1-G1', ...inspection }]);
