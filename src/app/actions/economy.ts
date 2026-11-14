@@ -3,7 +3,6 @@
 
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
-import { z } from 'zod';
 import { getMoscowDateString } from '@/app/lib/time-utils';
 import { getDailyRewardForDay, getNextDailyRewardDay, getPremiumDailyCrystalBonus } from '@/app/lib/daily-reward';
 import { requireServerActor } from '@/lib/server-auth';
@@ -12,52 +11,6 @@ import { requireServerActor } from '@/lib/server-auth';
  * @fileOverview Защищенный слой экономики.
  * Все изменения баланса проходят через этот модуль.
  */
-
-const TransactionSchema = z.object({
-  userId: z.string(),
-  amount: z.number(),
-  currency: z.enum(['credits', 'crystals']),
-  type: z.string(),
-  referenceId: z.string().optional(),
-  description: z.string().optional()
-});
-
-/**
- * Внутренняя функция для применения транзакции.
- * НЕ ЭКСПОРТИРУЕТСЯ наружу для прямого вызова клиентом.
- */
-async function applyTransaction(params: z.infer<typeof TransactionSchema>) {
-  const db = getAdminDb();
-  const playerRef = db.collection('players_v14').doc(params.userId);
-
-  return await db.runTransaction(async (t) => {
-    const pSnap = await t.get(playerRef);
-    if (!pSnap.exists) throw new Error("PLAYER_NOT_FOUND");
-
-    const pData = pSnap.data()!;
-    const currentBalance = Number(pData[params.currency] || 0);
-    const newBalance = currentBalance + params.amount;
-
-    if (newBalance < 0) throw new Error("INSUFFICIENT_FUNDS");
-
-    // 1. Обновляем баланс
-    t.update(playerRef, {
-      [params.currency]: newBalance,
-      updatedAt: FieldValue.serverTimestamp()
-    });
-
-    // 2. Логируем в реестр (Audit Log)
-    const logRef = db.collection('economy_transactions').doc();
-    t.set(logRef, {
-      ...params,
-      balanceBefore: currentBalance,
-      balanceAfter: newBalance,
-      timestamp: FieldValue.serverTimestamp()
-    });
-
-    return { success: true, newBalance };
-  });
-}
 
 /**
  * Публичный экшн для получения ежедневной награды.
@@ -109,15 +62,43 @@ export async function claimDailyRewardAction(idToken: string) {
  */
 export async function purchasePremiumAction(idToken: string) {
   try {
-    const { uid: userId } = await requireServerActor(idToken);
-    return await applyTransaction({
-      userId,
-      amount: -5000,
-      currency: 'crystals',
-      type: 'PREMIUM_PURCHASE',
-      description: '30 Days Elite Status'
+    const { uid } = await requireServerActor(idToken);
+    const db = getAdminDb();
+    return await db.runTransaction(async (t) => {
+      const playerRef = db.collection('players_v14').doc(uid);
+      const playerSnap = await t.get(playerRef);
+      if (!playerSnap.exists) throw new Error('PLAYER_NOT_FOUND');
+      const player = playerSnap.data() || {};
+      const now = Date.now();
+      const currentUntil = player.premiumUntil ? new Date(String(player.premiumUntil)).getTime() : 0;
+      if (player.isPremium === true && currentUntil > now) throw new Error('PREMIUM_ALREADY_ACTIVE');
+
+      const cost = 5000;
+      const crystals = Number(player.crystals || 0);
+      if (crystals < cost) throw new Error('INSUFFICIENT_FUNDS');
+      const premiumUntil = new Date(now + 30 * 24 * 60 * 60 * 1000).toISOString();
+
+      t.update(playerRef, {
+        crystals: crystals - cost,
+        isPremium: true,
+        premiumUntil,
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+      const ledgerRef = db.collection('economy_transactions').doc();
+      t.set(ledgerRef, {
+        userId: uid,
+        amount: -cost,
+        currency: 'crystals',
+        type: 'PREMIUM_PURCHASE',
+        referenceId: 'premium_30d',
+        description: '30 Days Elite Status',
+        balanceBefore: crystals,
+        balanceAfter: crystals - cost,
+        timestamp: FieldValue.serverTimestamp(),
+      });
+      return { success: true, premiumUntil, crystals: crystals - cost };
     });
   } catch (e: any) {
-    return { success: false, error: e.message };
+    return { success: false, error: e?.message || 'PREMIUM_PURCHASE_FAILED' };
   }
 }
