@@ -769,6 +769,7 @@ export async function prepareSeasonRollover(db: any, sourceSeason: number, targe
           return Number(slot.division || slot.level || 0) === level && Number(slot.group || 0) === group;
         });
         const slotData = slotDocs.map((doc: any) => doc.data() || {});
+        const currentStats = tableDoc?.data()?.stats || {};
         const slotRepairs = buildCanonicalSlotRepairs(fixtures, slotData, TEAMS_PER_GROUP, currentStats);
         if (!tableDoc || !hasCanonicalFixtureStructure(fixtures, TEAMS_PER_GROUP) || !slotRepairs) {
           return { ready: false, reason: 'SEASON_RECOVERY_UNSAFE_GROUP', sourceSeason, targetSeason, group: key, writesStarted: false };
@@ -778,8 +779,7 @@ export async function prepareSeasonRollover(db: any, sourceSeason: number, targe
           if (!slotDoc) throw new Error(`Missing slot document for ${key} rank ${repair.rank}`);
           return { ref: slotDoc.ref, ...repair };
         });
-        const currentStats = tableDoc.data()?.stats || {};
-        const rebuiltStats = calculateGroupStandings(currentStats, fixtures, TEAMS_PER_GROUP);
+        const rebuiltStats = calculateGroupStandings(currentStats, fixtures, TEAMS_PER_GROUP, slotData);
         const statsProjection = hasCompleteCanonicalFixtureSet(fixtures, TEAMS_PER_GROUP) && rebuiltStats.length === TEAMS_PER_GROUP
           ? Object.fromEntries(rebuiltStats.map((row: any, index: number) => {
               const id = String(row.id);
