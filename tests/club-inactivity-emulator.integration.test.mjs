@@ -479,6 +479,8 @@ test('a pending retirement with recent activity is safely cancelled and Auth acc
   await pendingRef.set({
     uid,
     phase: 'PENDING_AUTH_DISABLE',
+    leaseOwner: 'active-retirement-worker',
+    leaseUntil: new Date(now.getTime() + 5 * 60 * 1000),
     requestedAt: now,
   });
   await activityRef.set({
@@ -493,11 +495,17 @@ test('a pending retirement with recent activity is safely cancelled and Auth acc
     revokeRefreshTokens: async () => undefined,
   };
 
+  const userRecord = { uid, disabled: true, metadata: { lastSignInTime } };
+  const activeLease = await retireInactiveClub({ db, auth, userRecord, now });
+  assert.equal(activeLease.action, 'SKIPPED_RETIREMENT_IN_PROGRESS');
+  assert.equal(disabled, true);
+  assert.equal((await pendingRef.get()).get('phase'), 'PENDING_AUTH_DISABLE');
+
   const result = await retireInactiveClub({
     db,
     auth,
-    userRecord: { uid, disabled: true, metadata: { lastSignInTime } },
-    now,
+    userRecord,
+    now: new Date(now.getTime() + 6 * 60 * 1000),
   });
 
   assert.equal(result.action, 'CANCELLED_PENDING_CLEANUP');
