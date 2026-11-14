@@ -5,6 +5,7 @@ import { recordUserActivityUnlessRetiring } from '../../functions/club-activity-
 export interface ServerActor {
   uid: string;
   isAdmin: boolean;
+  email: string | null;
 }
 
 /**
@@ -25,7 +26,11 @@ export async function requireServerActor(idToken: string): Promise<ServerActor> 
     const decoded = await getAuth().verifyIdToken(idToken, true);
     const activity = await recordUserActivityUnlessRetiring(db, decoded.uid);
     if (!activity.success) throw new Error(activity.error);
-    return { uid: decoded.uid, isAdmin: decoded.admin === true };
+    return {
+      uid: decoded.uid,
+      isAdmin: decoded.admin === true,
+      email: typeof decoded.email === 'string' ? decoded.email : null,
+    };
   } catch (error: any) {
     const code = String(error?.code || '').toLowerCase();
     const message = String(error?.message || '').toLowerCase();
