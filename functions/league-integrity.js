@@ -2,11 +2,22 @@
 
 /** New clubs may claim any unoccupied D1-D4 slot in the active season. */
 function isEligibleRegistrationSlot(slot, seasonNum) {
-  return Boolean(slot) &&
-    slot.status === 'FREE' &&
+  if (!slot || typeof slot !== 'object' || Array.isArray(slot)) return false;
+
+  const season = Number(seasonNum);
+  const slotSeason = Number(slot.season);
+  const division = Number(slot.division);
+  const group = Number(slot.group);
+  const rank = Number(slot.rank);
+  const groupsInDivision = new Map([[1, 1], [2, 2], [3, 4], [4, 8]]);
+
+  return slot.status === 'FREE' &&
     !slot.occupantId &&
-    Number(slot.season) === Number(seasonNum) &&
-    Number.isInteger(Number(slot.division)) && Number(slot.division) >= 1 && Number(slot.division) <= 4;
+    Number.isInteger(season) && season > 0 &&
+    Number.isInteger(slotSeason) && slotSeason === season &&
+    Number.isInteger(division) && groupsInDivision.has(division) &&
+    Number.isInteger(group) && group >= 1 && group <= groupsInDivision.get(division) &&
+    Number.isInteger(rank) && rank >= 1 && rank <= 8;
 }
 
 /** Validate the immutable rank-based round robin before registration mutates it. */
