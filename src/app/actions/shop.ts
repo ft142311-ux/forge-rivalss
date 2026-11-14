@@ -118,28 +118,44 @@ export async function purchasePremiumShopAction(idToken: string) {
  * fully testable. In production we create a pending order instead; a payment
  * provider/webhook must mark it paid before crystals are granted.
  */
-export async function purchaseDiamondPackAction(idToken: string, amount: number) {
+export async function purchaseDiamondPackAction(idToken: string, amount: number, operationId: string) {
   try {
     const { uid } = await requireServerActor(idToken);
     const pack = DIAMOND_PACKS[Number(amount)];
     if (!pack) throw new Error('INVALID_DIAMOND_PACK');
+    const normalizedOperationId = String(operationId || '').trim();
+    if (!/^[a-zA-Z0-9_-]{16,80}$/.test(normalizedOperationId)) throw new Error('INVALID_OPERATION_ID');
     const db = getAdminDb();
+    const receiptRef = db.collection('shop_operation_receipts').doc(`${uid}_diamond_${normalizedOperationId}`);
     const isEmulator = Boolean(process.env.FIRESTORE_EMULATOR_HOST || process.env.FIREBASE_AUTH_EMULATOR_HOST);
 
     if (!isEmulator) {
-      const orderRef = db.collection('shop_orders').doc();
-      await orderRef.set({
-        userId: uid,
-        productId: pack.productId,
-        amount: Number(amount),
-        price: pack.price,
-        status: 'pending_payment',
-        createdAt: FieldValue.serverTimestamp(),
+      return await db.runTransaction(async (t) => {
+        const receiptSnap = await t.get(receiptRef);
+        if (receiptSnap.exists) return receiptSnap.data()?.result;
+        const orderRef = db.collection('shop_orders').doc();
+        const result = { success: true, pending: true, orderId: orderRef.id };
+        t.create(orderRef, {
+          userId: uid,
+          productId: pack.productId,
+          amount: Number(amount),
+          price: pack.price,
+          status: 'pending_payment',
+          createdAt: FieldValue.serverTimestamp(),
+        });
+        t.create(receiptRef, {
+          userId: uid,
+          operation: 'DIAMOND_PACK_ORDER',
+          result,
+          createdAt: FieldValue.serverTimestamp(),
+        });
+        return result;
       });
-      return { success: true, pending: true, orderId: orderRef.id };
     }
 
     return await db.runTransaction(async (t) => {
+      const receiptSnap = await t.get(receiptRef);
+      if (receiptSnap.exists) return receiptSnap.data()?.result;
       const ref = db.collection('players_v14').doc(uid);
       const snap = await t.get(ref);
       if (!snap.exists) throw new Error('PLAYER_NOT_FOUND');
@@ -159,7 +175,14 @@ export async function purchaseDiamondPackAction(idToken: string, amount: number)
         balanceAfter: after,
         timestamp: FieldValue.serverTimestamp(),
       });
-      return { success: true, pending: false, crystals: after };
+      const result = { success: true, pending: false, crystals: after };
+      t.create(receiptRef, {
+        userId: uid,
+        operation: 'DIAMOND_PACK_TEST_PURCHASE',
+        result,
+        createdAt: FieldValue.serverTimestamp(),
+      });
+      return result;
     });
   } catch (e) {
     return { success: false, error: errorMessage(e) };

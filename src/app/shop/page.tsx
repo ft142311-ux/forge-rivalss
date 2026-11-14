@@ -39,6 +39,23 @@ import {
   createShopPlayerAction,
 } from '@/app/actions/shop';
 
+const DIAMOND_OPERATION_PREFIX = 'forge-rivals:shop-operation:diamonds';
+
+function getPendingDiamondOperationId(userId: string, amount: number): string {
+  const key = `${DIAMOND_OPERATION_PREFIX}:${userId}:${amount}`;
+  const existing = window.localStorage.getItem(key);
+  if (existing) return existing;
+  const operationId = typeof crypto !== 'undefined' && 'randomUUID' in crypto
+    ? crypto.randomUUID().replace(/-/g, '')
+    : `${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`;
+  window.localStorage.setItem(key, operationId);
+  return operationId;
+}
+
+function clearPendingDiamondOperationId(userId: string, amount: number): void {
+  window.localStorage.removeItem(`${DIAMOND_OPERATION_PREFIX}:${userId}:${amount}`);
+}
+
 const EXCHANGE_OPERATION_PREFIX = 'forge-rivals:shop-operation:exchange';
 
 function getPendingExchangeOperationId(userId: string, amount: number): string {
@@ -316,8 +333,13 @@ export default function ShopPage() {
   const handleBuyDiamonds = async (amount: number) => {
     try {
       setIsProcessing(true);
-      const res = await purchaseDiamondPackAction(await getToken(), amount);
-      if ('error' in res && res.error) throw new Error(res.error || 'DIAMOND_PURCHASE_FAILED');
+      const operationId = getPendingDiamondOperationId(user?.uid || 'unknown', amount);
+      const res = await purchaseDiamondPackAction(await getToken(), amount, operationId);
+      if (!res.success) {
+        clearPendingDiamondOperationId(user?.uid || 'unknown', amount);
+        throw new Error(res.error || 'DIAMOND_PURCHASE_FAILED');
+      }
+      clearPendingDiamondOperationId(user?.uid || 'unknown', amount);
       toast({
         title: res.pending
           ? (language === 'ru' ? 'Заказ создан. Ожидается подтверждение платежа.' : 'Order created. Payment confirmation required.')
