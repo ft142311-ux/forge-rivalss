@@ -42,3 +42,14 @@ test('league worker scans all active-season fixtures and rebuilds standings befo
   assert.ok(resolver.includes('const standingsBeforeResolve = await rebuildLeagueTablesFromFinishedMatches(db, currentSeason)'));
   assert.ok(resolver.includes('const standingsSync = await rebuildLeagueTablesFromFinishedMatches(db, currentSeason)'));
 });
+test('league match claims and settlement are fenced against rollover and active-season changes', () => {
+  assert.ok(source.includes("import { isSeasonRolloverLockStale, SEASON_ROLLOVER_LOCK_ID } from './season-rollover-lock'")); 
+  assert.ok(resolver.includes('tx.get(configRef)'));
+  assert.ok(resolver.includes('tx.get(rolloverLockRef)'));
+  assert.ok(resolver.includes("reason: 'SEASON_ROLLOVER_IN_PROGRESS'"));
+  assert.ok(resolver.includes("throw new Error('MATCH_ROLLOVER_IN_PROGRESS')"));
+  assert.ok(resolver.includes('Number(freshConfig.activeSeasonNumber || 0) !== currentSeason'));
+  assert.ok(resolver.includes('Number(settlementConfig.activeSeasonNumber || 0) !== currentSeason'));
+  assert.ok(resolver.includes('freshLifecycle.leagueMatchesPaused'));
+  assert.ok(resolver.includes('settlementLifecycle.leagueMatchesPaused'));
+});
