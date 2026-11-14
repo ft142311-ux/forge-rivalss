@@ -176,23 +176,26 @@ function buildRegistrationMatchPlan(matches, botId, userId, clubName, nowMs = Da
   for (const match of matches) {
     if (isCompletedMatch(match)) continue;
 
-    const status = String(match && match.status || '').toLowerCase();
-    if (match && match.isProcessing === true ||
+    const involvesBot = match && (match.homeId === botId || match.awayId === botId);
+    if (!involvesBot) continue;
+
+    const status = String(match.status || '').toLowerCase();
+    if (match.isProcessing === true ||
         ['in_progress', 'in-progress', 'processing', 'resolving'].includes(status)) {
-      return { ok: false, reason: 'SLOT_MATCH_IN_PROGRESS', matchId: match && match.id, updates: [] };
+      return { ok: false, reason: 'SLOT_MATCH_IN_PROGRESS', matchId: match.id, updates: [] };
     }
 
-    const startMs = timestampToMillis(match && (match.startTime || match.scheduledStartAt));
+    const startMs = timestampToMillis(match.startTime || match.scheduledStartAt);
     if (Number.isFinite(startMs) && startMs <= nowMs) {
-      return { ok: false, reason: 'SLOT_MATCH_DUE', matchId: match && match.id, updates: [] };
+      return { ok: false, reason: 'SLOT_MATCH_DUE', matchId: match.id, updates: [] };
     }
 
     const patch = {};
-    if (match && match.homeId === botId) {
+    if (match.homeId === botId) {
       patch.homeId = userId;
       patch.homeName = clubName;
     }
-    if (match && match.awayId === botId) {
+    if (match.awayId === botId) {
       patch.awayId = userId;
       patch.awayName = clubName;
     }
