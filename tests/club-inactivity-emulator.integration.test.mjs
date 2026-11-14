@@ -100,7 +100,11 @@ test('inactive club replacement is atomic and preserves completed match results'
   assert.equal((await playerRef.get()).exists, false);
   assert.equal((await pendingRef.get()).exists, false);
   assert.equal((await archiveRef.get()).get('replacedByBotId'), botId);
-  assert.equal((await slotRef.get()).get('occupantId'), botId);
+  const releasedSlot = await slotRef.get();
+  assert.equal(releasedSlot.get('status'), 'FREE');
+  assert.equal(releasedSlot.get('occupantId'), null);
+  assert.equal(releasedSlot.get('occupancyGeneration'), 1);
+  assert.equal(releasedSlot.get('lastOccupantId'), uid);
 
   const table = (await tableRef.get()).data();
   assert.equal(table.stats[botId].isBot, true);
