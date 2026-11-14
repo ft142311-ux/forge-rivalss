@@ -20,10 +20,12 @@ test('login activity handshake is blocked once retirement has been claimed', {
   const db = getFirestore(app);
   const uid = `activity-test-${randomUUID()}`;
   const pendingRef = db.collection('inactive_club_retirements_v1').doc(uid);
+  const retiredRef = db.collection('inactive_clubs_v1').doc(uid);
   const activityRef = db.collection('user_activity_v1').doc(uid);
 
   t.after(async () => {
     await pendingRef.delete().catch(() => undefined);
+    await retiredRef.delete().catch(() => undefined);
     await activityRef.delete().catch(() => undefined);
     await deleteApp(app);
   });
@@ -41,6 +43,11 @@ test('login activity handshake is blocked once retirement has been claimed', {
 
   const after = await activityRef.get();
   assert.equal(after.get('lastActiveAt')?.toMillis?.(), beforeMillis);
+
+  await pendingRef.delete();
+  await retiredRef.set({ uid, retiredAt: new Date() });
+  const permanentlyBlocked = await recordUserActivityUnlessRetiring(db, uid);
+  assert.deepEqual(permanentlyBlocked, { success: false, error: 'ACCOUNT_RETIRED' });
 });
 
 test('inactive club replacement is atomic and preserves completed match results', {
