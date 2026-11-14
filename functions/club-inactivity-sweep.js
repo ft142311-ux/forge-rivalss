@@ -3,6 +3,7 @@
 const { resolveClubInactivity } = require('./club-inactivity-policy');
 const { timestampToMillis } = require('./registration-core');
 const { randomUUID } = require('node:crypto');
+const { FieldPath } = require('firebase-admin/firestore');
 
 const LEAGUE_ID = 'ALPHA';
 const BATCH_SIZE = 1000;
@@ -640,7 +641,7 @@ async function runClubInactivitySweep({ db, auth, now = new Date(), pageSize = B
   const pendingCollection = db.collection('inactive_club_retirements_v1');
   let pendingCursor = null;
   while (true) {
-    let query = pendingCollection.orderBy('__name__').limit(pageSize);
+    let query = pendingCollection.orderBy(FieldPath.documentId()).limit(pageSize);
     if (pendingCursor) query = query.startAfter(pendingCursor);
     const pendingPage = await query.get();
     if (pendingPage.empty) break;
