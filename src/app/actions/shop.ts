@@ -36,7 +36,6 @@ export async function purchaseLicenseAction(idToken: string, requestedTier: numb
     if (!cost) throw new Error('INVALID_LICENSE_TIER');
 
     const db = getAdminDb();
-    const playerId = `shop_${uid}_${randomUUID()}`;
     return await db.runTransaction(async (t) => {
       const ref = db.collection('players_v14').doc(uid);
       const snap = await t.get(ref);
@@ -314,6 +313,7 @@ export async function createShopPlayerAction(
     else if (age < 22) creationCost += 100;
 
     const db = getAdminDb();
+    const playerId = `shop_${uid}_${randomUUID()}`;
     return await db.runTransaction(async (t) => {
       const ref = db.collection('players_v14').doc(uid);
       const snap = await t.get(ref);
