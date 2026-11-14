@@ -7,8 +7,41 @@ import { getFirestore } from 'firebase-admin/firestore';
 
 const require = createRequire(import.meta.url);
 const { retireInactiveClub } = require('../functions/club-inactivity-sweep.js');
+const { recordUserActivityUnlessRetiring } = require('../functions/club-activity-fence.js');
 const emulatorHost = process.env.FIRESTORE_EMULATOR_HOST;
 const projectId = process.env.GCLOUD_PROJECT || 'demo-forge-rivals';
+
+test('login activity handshake is blocked once retirement has been claimed', {
+  skip: !emulatorHost,
+}, async (t) => {
+  assert.match(emulatorHost, /^(127[.]0[.]0[.]1|localhost):[0-9]+$/);
+  const testProjectId = `demo-act-${randomUUID().slice(0, 8)}`;
+  const app = initializeApp({ projectId: testProjectId }, `activity-fence-test-${randomUUID()}`);
+  const db = getFirestore(app);
+  const uid = `activity-test-${randomUUID()}`;
+  const pendingRef = db.collection('inactive_club_retirements_v1').doc(uid);
+  const activityRef = db.collection('user_activity_v1').doc(uid);
+
+  t.after(async () => {
+    await pendingRef.delete().catch(() => undefined);
+    await activityRef.delete().catch(() => undefined);
+    await deleteApp(app);
+  });
+
+  const first = await recordUserActivityUnlessRetiring(db, uid);
+  assert.deepEqual(first, { success: true });
+  const before = await activityRef.get();
+  assert.equal(before.exists, true);
+  const beforeMillis = before.get('lastActiveAt')?.toMillis?.();
+  assert.ok(Number.isFinite(beforeMillis));
+
+  await pendingRef.set({ uid, status: 'CLAIMED', claimedAt: new Date() });
+  const blocked = await recordUserActivityUnlessRetiring(db, uid);
+  assert.deepEqual(blocked, { success: false, error: 'ACCOUNT_RETIRING' });
+
+  const after = await activityRef.get();
+  assert.equal(after.get('lastActiveAt')?.toMillis?.(), beforeMillis);
+});
 
 test('inactive club replacement is atomic and preserves completed match results', {
   skip: !emulatorHost,
