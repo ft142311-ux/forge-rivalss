@@ -10,7 +10,7 @@ import { getAuth as getClientAuth, connectAuthEmulator, signInWithEmailAndPasswo
 import { getFirestore as getClientFirestore, connectFirestoreEmulator, doc, getDoc } from 'firebase/firestore';
 
 const require = createRequire(import.meta.url);
-const { buildBotClub, isValidBotClub, retireInactiveClub } = require('../functions/club-inactivity-sweep.js');
+const { buildBotClub, isValidBotClub, retireInactiveClub, runClubInactivitySweep } = require('../functions/club-inactivity-sweep.js');
 const { recordUserActivityUnlessRetiring } = require('../functions/club-activity-fence.js');
 const emulatorHost = process.env.FIRESTORE_EMULATOR_HOST;
 const projectId = process.env.GCLOUD_PROJECT || 'demo-forge-rivals';
@@ -210,6 +210,22 @@ test('login activity handshake is blocked once retirement has been claimed', {
   assert.equal(cancelledRecovery.action, 'CANCELLED_PENDING_CLEANUP');
   assert.equal((await auth.getUser(uid)).disabled, false);
   assert.equal((await pendingRef.get()).exists, false);
+
+  // A pending claim must be resumed even when the Auth sign-in timestamp is
+  // recent; otherwise a crash during race cancellation could leave the login
+  // fence in place forever because the account is not a 90-day candidate.
+  await pendingRef.set({
+    uid,
+    phase: 'PENDING_AUTH_DISABLE',
+    leaseOwner: 'crashed-worker',
+    leaseUntil: new Date(Date.now() - 60 * 1000),
+    attempts: 1,
+  });
+  const sweep = await runClubInactivitySweep({ db, auth, now: new Date() });
+  assert.equal(sweep.pendingOperationsScanned, 1);
+  assert.equal(sweep.recoveredCancellations, 1);
+  assert.equal((await pendingRef.get()).exists, false);
+  assert.equal((await auth.getUser(uid)).disabled, false);
 });
 
 test('inactive club replacement is atomic and preserves completed match results', {
