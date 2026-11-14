@@ -406,7 +406,7 @@ export async function recoverStuckSeason1MatchAction(cronToken: string) {
         String(m.type || 'league').toLowerCase() !== 'league') {
       return { ok: false, code: 'MATCH_IDENTITY_MISMATCH' };
     }
-    if (m.isFinished === true || String(m.status || '').toLowerCase() === 'finished') {
+    if (m.isFinished === true || ['finished', 'completed'].includes(String(m.status || '').toLowerCase())) {
       return { ok: false, code: 'ALREADY_FINISHED' };
     }
     const now = Date.now();
@@ -470,7 +470,7 @@ export async function recoverStuckSeason1MatchAction(cronToken: string) {
       const latestSnap = await tx.get(matchRef);
       if (!latestSnap.exists) throw new Error('MATCH_NOT_FOUND_AT_COMMIT');
       const latest = latestSnap.data() || {};
-      if (latest.isFinished === true || String(latest.status || '').toLowerCase() === 'finished') {
+      if (latest.isFinished === true || ['finished', 'completed'].includes(String(latest.status || '').toLowerCase())) {
         throw new Error('ALREADY_FINISHED_AT_COMMIT');
       }
       if (latest.isProcessing !== true || latest.recoveryAttemptedBy !== recoveryToken) {
@@ -511,7 +511,7 @@ export async function recoverStuckSeason1MatchAction(cronToken: string) {
       const latestSnap = await tx.get(matchRef);
       if (!latestSnap.exists) return;
       const latest = latestSnap.data() || {};
-      if (latest.isFinished === true || String(latest.status || '').toLowerCase() === 'finished') return;
+      if (latest.isFinished === true || ['finished', 'completed'].includes(String(latest.status || '').toLowerCase())) return;
       if (latest.recoveryAttemptedBy !== recoveryToken) return;
       tx.update(matchRef, {
         isProcessing: false,
@@ -578,7 +578,7 @@ export async function resolveDailyMatches() {
     // and other official match types have their own resolver and must never be
     // settled here, otherwise their results could alter league standings.
     if (String(m.type || 'league').toLowerCase() !== 'league') return false;
-    if (m.isFinished === true) return false;
+    if (m.isFinished === true || ['finished', 'completed'].includes(String(m.status || '').toLowerCase())) return false;
 
     const rawStart = m.startTime;
     let startMs = NaN;
@@ -648,7 +648,7 @@ export async function resolveDailyMatches() {
       const current = fresh.data() || {};
       const freshConfig = freshConfigSnap.data() || {};
       const freshRolloverLock = freshRolloverLockSnap.exists ? freshRolloverLockSnap.data() || {} : null;
-      if (current.isFinished === true || String(current.status || '').toLowerCase() === 'finished') return false;
+      if (current.isFinished === true || ['finished', 'completed'].includes(String(current.status || '').toLowerCase())) return false;
       if (String(current.type || 'league').toLowerCase() !== 'league' ||
           Number(current.season) !== currentSeason || Number(current.version) !== 140) return false;
       if (Number(freshConfig.activeSeasonNumber || 0) !== currentSeason || freshConfig.worldReady !== true ||
@@ -717,7 +717,7 @@ export async function resolveDailyMatches() {
         const m = latestSnap.data() || {};
         const settlementConfig = latestConfigSnap.data() || {};
         const settlementRolloverLock = latestRolloverLockSnap.exists ? latestRolloverLockSnap.data() || {} : null;
-        if (m.isFinished === true || String(m.status || '').toLowerCase() === 'finished') return false;
+        if (m.isFinished === true || ['finished', 'completed'].includes(String(m.status || '').toLowerCase())) return false;
         if (m.processingToken !== processingToken || m.isProcessing !== true) {
           throw new Error('MATCH_PROCESSING_LOCK_LOST');
         }
@@ -923,7 +923,7 @@ export async function resolveDailyMatches() {
           const latestSnap = await tx.get(matchDoc.ref);
           if (!latestSnap.exists) return;
           const latest = latestSnap.data() || {};
-          if (latest.isFinished === true || latest.processingToken !== processingToken) return;
+          if (latest.isFinished === true || ['finished', 'completed'].includes(String(latest.status || '').toLowerCase()) || latest.processingToken !== processingToken) return;
           tx.update(matchDoc.ref, {
             isProcessing: false,
             processingStartedAt: FieldValue.delete(),

@@ -53,3 +53,10 @@ test('league match claims and settlement are fenced against rollover and active-
   assert.ok(resolver.includes('freshLifecycle.leagueMatchesPaused'));
   assert.ok(resolver.includes('settlementLifecycle.leagueMatchesPaused'));
 });
+test('completed matches are terminal and cannot be claimed, recovered, or settled again', () => {
+  assert.ok(source.includes("['finished', 'completed'].includes(String(m.status || '').toLowerCase())"));
+  assert.ok(source.includes("['finished', 'completed'].includes(String(current.status || '').toLowerCase())"));
+  assert.ok(source.includes("['finished', 'completed'].includes(String(latest.status || '').toLowerCase())"));
+  assert.ok(resolver.includes("['finished', 'completed'].includes(String(m.status || '').toLowerCase())"));
+  assert.ok(resolver.includes("['finished', 'completed'].includes(String(current.status || '').toLowerCase())"));
+});
