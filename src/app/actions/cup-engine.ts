@@ -172,26 +172,34 @@ async function payCupPrize(db: any, season: number, team: Team | null, place: 'c
 async function finishTechnically(db: any, season: number, round: number, pairing: Pairing, collectionName: 'cup_matches' | 'matches_v2' = 'cup_matches') {
   if (!pairing.home || !pairing.away || !pairing.matchId) return false;
   const ref = db.collection(collectionName).doc(String(pairing.matchId));
-  const snap = await ref.get();
-  const existing: any = snap.data() || {};
-  if (existing.isFinished === true && existing.winnerId) return true;
-  // Deadline fallback only: the stronger seeded team advances if Match Core could not finish in time.
-  const stronger = pairing.home.seed < pairing.away.seed ? pairing.home : pairing.away;
-  const winnerId = stronger.id;
-  const homeWon = winnerId === pairing.home.id;
-  const bestOf = round === ROUND_COUNT ? 3 : 1;
-  const scoreA = bestOf === 3 ? (homeWon ? 2 : 0) : (homeWon ? 1 : 0);
-  const scoreB = bestOf === 3 ? (homeWon ? 0 : 2) : (homeWon ? 0 : 1);
-  await ref.set({
-    id: String(pairing.matchId), type: 'cup', matchType: 'cup', source: 'pyramid-cup', cupId: cupId(season), cupRound: round,
-    homeId: pairing.home.id, awayId: pairing.away.id, homeName: pairing.home.name, awayName: pairing.away.name,
-    bestOf, matchFormat: `BO${bestOf}`, scoreA, scoreB, homeScore: scoreA, awayScore: scoreB,
-    seriesScore: `${scoreA}-${scoreB}`, score: `${scoreA}-${scoreB}`, winner: homeWon ? pairing.home.name : pairing.away.name,
-    winnerId, isFinished: true, status: 'finished', reportStatus: 'new', seen: false, technicalDecision: true,
-    technicalDecisionReason: 'Cup round deadline reached before match core completed',
-    resolvedAt: Timestamp.now(), playedAt: Timestamp.now(), updatedAt: FieldValue.serverTimestamp(), affectsLeagueStandings: false,
-  }, { merge: true });
-  return true;
+  // The fallback races the Universal Match Core worker. Read and write in one
+  // transaction so whichever result commits first becomes authoritative.
+  return db.runTransaction(async (tx: any) => {
+    const snap = await tx.get(ref);
+    if (!snap.exists) return false;
+    const existing: any = snap.data() || {};
+    const terminal = existing.isFinished === true ||
+      ['finished', 'completed'].includes(String(existing.status || '').toLowerCase());
+    if (terminal) return Boolean(existing.winnerId);
+
+    // Deadline fallback only: the stronger seeded team advances if Match Core could not finish in time.
+    const stronger = pairing.home!.seed < pairing.away!.seed ? pairing.home! : pairing.away!;
+    const winnerId = stronger.id;
+    const homeWon = winnerId === pairing.home!.id;
+    const bestOf = round === ROUND_COUNT ? 3 : 1;
+    const scoreA = bestOf === 3 ? (homeWon ? 2 : 0) : (homeWon ? 1 : 0);
+    const scoreB = bestOf === 3 ? (homeWon ? 0 : 2) : (homeWon ? 0 : 1);
+    tx.set(ref, {
+      id: String(pairing.matchId), type: 'cup', matchType: 'cup', source: 'pyramid-cup', cupId: cupId(season), cupRound: round,
+      homeId: pairing.home!.id, awayId: pairing.away!.id, homeName: pairing.home!.name, awayName: pairing.away!.name,
+      bestOf, matchFormat: `BO${bestOf}`, scoreA, scoreB, homeScore: scoreA, awayScore: scoreB,
+      seriesScore: `${scoreA}-${scoreB}`, score: `${scoreA}-${scoreB}`, winner: homeWon ? pairing.home!.name : pairing.away!.name,
+      winnerId, isFinished: true, status: 'finished', reportStatus: 'new', seen: false, technicalDecision: true,
+      technicalDecisionReason: 'Cup round deadline reached before match core completed',
+      resolvedAt: Timestamp.now(), playedAt: Timestamp.now(), updatedAt: FieldValue.serverTimestamp(), affectsLeagueStandings: false,
+    }, { merge: true });
+    return true;
+  });
 }
 
 export async function runPyramidCupCycle() {
