@@ -84,7 +84,17 @@ async function retireInactiveClub({ db, auth, userRecord, now = new Date() }) {
     undefined,
     activitySnap.exists ? activitySnap.get('lastActiveAt') : null
   );
-  if (!eligibility.eligible) return { action: 'SKIPPED_NOT_INACTIVE', reason: eligibility.reason };
+  if (!eligibility.eligible) {
+    // Recover the crash window where a prior pass disabled Auth and then
+    // stopped before the post-disable activity check. Recent verified activity
+    // cancels that pending retirement and restores sign-in access.
+    if (pendingSnap.exists) {
+      if (latestAuthRecord.disabled) await auth.updateUser(uid, { disabled: false });
+      await pendingRef.delete().catch(() => undefined);
+      return { action: 'CANCELLED_PENDING_RETIREMENT', reason: eligibility.reason };
+    }
+    return { action: 'SKIPPED_NOT_INACTIVE', reason: eligibility.reason };
+  }
 
   const playerRef = db.collection('players_v14').doc(uid);
   const playerSnap = await playerRef.get();
