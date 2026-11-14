@@ -120,6 +120,7 @@ async function retireInactiveClub({ db, auth, userRecord, now = new Date() }) {
   if (preflightSlots.size !== 1) return { action: 'SKIPPED_NO_UNIQUE_ACTIVE_SLOT' };
   const expectedSlotId = preflightSlots.docs[0].id;
   const preflightSlot = preflightSlots.docs[0].data() || {};
+  const expectedGeneration = Math.max(0, Number(preflightSlot.occupancyGeneration) || 0);
   const division = Number(preflightSlot.division);
   const group = Number(preflightSlot.group);
   const rank = Number(preflightSlot.rank);
@@ -230,7 +231,10 @@ async function retireInactiveClub({ db, auth, userRecord, now = new Date() }) {
     const fresh = freshPlayer.data() || {};
     const slotDoc = slots.docs[0];
     const slot = slotDoc.data() || {};
-    if (slotDoc.id !== expectedSlotId) return { action: 'BLOCKED_OWNERSHIP_CHANGED' };
+    if (slotDoc.id !== expectedSlotId ||
+        Math.max(0, Number(slot.occupancyGeneration) || 0) !== expectedGeneration) {
+      return { action: 'BLOCKED_OWNERSHIP_CHANGED' };
+    }
     const tableData = table.data() || {};
     const stats = tableData.stats && typeof tableData.stats === 'object' ? tableData.stats : {};
     if (fresh.selectedLeagueId !== LEAGUE_ID ||
