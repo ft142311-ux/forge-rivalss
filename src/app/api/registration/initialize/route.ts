@@ -53,6 +53,9 @@ function mapRegistrationError(error: unknown): { status: number; code: string } 
     BOT_NOT_FOUND_IN_SLOT: { status: 503, code: 'BOT_NOT_FOUND_IN_SLOT' },
     INVALID_LEAGUE_SLOT: { status: 409, code: 'INVALID_LEAGUE_SLOT' },
     NO_FREE_SLOTS_IN_LEAGUE: { status: 409, code: 'NO_FREE_SLOTS_IN_LEAGUE' },
+    SLOT_MATCH_IN_PROGRESS: { status: 409, code: 'SLOT_MATCH_IN_PROGRESS' },
+    SLOT_MATCH_DUE: { status: 409, code: 'SLOT_MATCH_DUE' },
+    NO_UPCOMING_FIXTURES_FOR_SLOT: { status: 409, code: 'NO_UPCOMING_FIXTURES_FOR_SLOT' },
     LEAGUE_TABLE_SLOT_CONFLICT: { status: 503, code: 'LEAGUE_TABLE_SLOT_CONFLICT' },
     LEAGUE_SCHEDULE_SLOT_CONFLICT: { status: 503, code: 'LEAGUE_SCHEDULE_SLOT_CONFLICT' },
   };
@@ -216,43 +219,49 @@ export async function POST(request: NextRequest) {
         throw new Error('LEAGUE_SCHEDULE_SLOT_CONFLICT');
       }
 
-      // All reads are complete. Firestore commits every mutation atomically.
+      const matchPlan = registrationCore.buildRegistrationMatchPlan(
+        matchesSnapshot.docs.map((document) => ({ ...(document.data() || {}), id: document.id })),
+        botId,
+        userId,
+        clubName,
+        Date.now(),
+      );
+      if (!matchPlan.ok) throw new Error(matchPlan.reason);
+
+      const standingTransfer = registrationCore.transferBotStandingToUser(
+        stats,
+        botId,
+        userId,
+        clubName,
+        Number(slot.rank),
+      );
+      if (!standingTransfer.ok) throw new Error(standingTransfer.reason);
+
+      // All reads and safety checks are complete. Firestore commits every mutation atomically.
       transaction.update(slotDocument.ref, {
         status: 'OCCUPIED',
         occupantId: userId,
+        occupancyGeneration: Math.max(0, Number(slot.occupancyGeneration) || 0) + 1,
+        lastOccupantId: botId,
+        lastTransitionReason: 'NEW_REGISTRATION',
+        lastTransitionAt: new Date(),
         updatedAt: new Date(),
       });
 
-      const nextStats = { ...stats };
-      delete nextStats[botId];
-      nextStats[userId] = {
-        id: userId,
-        name: clubName,
-        rank: slot.rank,
-        matchesPlayed: 0,
-        wins: 0,
-        draws: 0,
-        losses: 0,
-        points: 0,
-        diff: 0,
-        isBot: false,
-      };
-      transaction.update(tableRef, { stats: nextStats, updatedAt: new Date() });
+      // The slot owns its season-to-date record. Transfer identity only; do not
+      // reset wins, draws, losses, points, match count, diff or additive fields.
+      transaction.update(tableRef, {
+        stats: standingTransfer.stats,
+        updatedAt: new Date(),
+      });
 
       transaction.delete(db.collection('players_v14').doc(botId));
 
-      for (const matchDocument of matchesSnapshot.docs) {
-        const match = matchDocument.data() || {};
-        const patch: Record<string, string> = {};
-        if (match.homeId === botId) {
-          patch.homeId = userId;
-          patch.homeName = clubName;
-        }
-        if (match.awayId === botId) {
-          patch.awayId = userId;
-          patch.awayName = clubName;
-        }
-        if (Object.keys(patch).length > 0) transaction.update(matchDocument.ref, patch);
+      // Historical completed fixtures remain byte-for-byte unchanged. Only
+      // future, not-yet-due fixtures are rebound to the new club.
+      for (const update of matchPlan.updates) {
+        const matchDocument = matchesSnapshot.docs.find((document) => document.id === update.matchId);
+        if (matchDocument) transaction.update(matchDocument.ref, update.patch);
       }
 
       const totalPlayers =
