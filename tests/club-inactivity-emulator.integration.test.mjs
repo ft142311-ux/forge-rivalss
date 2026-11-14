@@ -16,7 +16,7 @@ test('login activity handshake is blocked once retirement has been claimed', {
   skip: !emulatorHost,
 }, async (t) => {
   assert.match(emulatorHost, /^(127[.]0[.]0[.]1|localhost):[0-9]+$/);
-  const testProjectId = `demo-act-${randomUUID().slice(0, 8)}`;
+  const testProjectId = process.env.GCLOUD_PROJECT || 'demo-forge-rivals';
   const app = initializeApp({ projectId: testProjectId }, `activity-fence-test-${randomUUID()}`);
   const db = getFirestore(app);
   const auth = getAuth(app);
