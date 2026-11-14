@@ -11,4 +11,9 @@ test('trial match scheduler treats finished and completed as terminal in every w
   assert.match(source, /data\?\.isTrial !== true \|\| isTrialMatchTerminal\(data\) \|\| data\?\.isProcessing === true/);
   assert.match(source, /if \(isTrialMatchTerminal\(data\)\) return false/);
   assert.match(source, /!isTrialMatchTerminal\(data\) && data\?\.isProcessing === true/);
+  assert.match(source, /const TRIAL_MATCH_PROCESSING_LEASE_MS = 5 \* 60 \* 1000/);
+  assert.match(source, /const processingToken = randomUUID\(\)/);
+  assert.match(source, /data\?\.processingToken !== processingToken/);
+  assert.match(source, /data\?\.processingToken === processingToken/);
+  assert.match(source, /isTrialMatchProcessingLeaseStale\(data, Date\.now\(\)\)/);
 });
