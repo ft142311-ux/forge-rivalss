@@ -1,6 +1,5 @@
 'use server';
 
-import { getAuth } from 'firebase-admin/auth';
 import { requireServerActor } from '@/lib/server-auth';
 
 /**
@@ -9,11 +8,9 @@ import { requireServerActor } from '@/lib/server-auth';
  */
 export async function recordUserActivityAction(idToken: string) {
   try {
-    const actor = await requireServerActor(idToken);
-    const authUser = await getAuth().getUser(actor.uid);
-    if (authUser.disabled) return { success: false, error: 'ACCOUNT_DISABLED' };
-
-    // requireServerActor performs the transactional activity/retirement fence.
+    await requireServerActor(idToken);
+    // requireServerActor verifies token revocation and performs the transactional
+    // activity/retirement fence for every authenticated server action.
     return { success: true };
   } catch (error: any) {
     const code = String(error?.message || error?.code || 'ACTIVITY_RECORD_FAILED');
