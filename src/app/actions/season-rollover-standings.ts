@@ -177,6 +177,20 @@ export function buildCanonicalSlotRepairs(
     const entries = sourceByRank.get(rank) || [];
     const activeId = activeByRank.get(rank);
 
+    // Unfinished fixtures are the authoritative participant binding for the
+    // next match; unlike completed fixtures, they cannot represent a prior owner.
+    if (activeId) {
+      const matching = entries.find(entry => entry.id === activeId);
+      if (entries.length && !matching) return null;
+      const isBot = matching?.row?.isBot === true || activeId.startsWith('BOT_');
+      repairs.push({
+        rank,
+        occupantId: isBot ? null : activeId,
+        status: isBot ? 'FREE' : 'OCCUPIED',
+      });
+      continue;
+    }
+
     if (status === 'OCCUPIED' && slotId) {
       const matching = entries.find(entry => entry.id === slotId);
       if (entries.length && (!matching || matching.row?.isBot === true)) return null;
@@ -436,7 +450,15 @@ export function calculateGroupStandings(
   }
 
   const rowsByRank = new Map<number, TeamRow>();
-  for (let rank = 1; rank <= teamsPerGroup; rank++) {
+  const ranksToBuild = completeFixtures
+    ? Array.from({ length: teamsPerGroup }, (_, index) => index + 1)
+    : [...new Set([
+        ...sourceByRank.keys(),
+        ...activeByRank.keys(),
+        ...allIdsByRank.keys(),
+        ...slotByRank.keys(),
+      ])].sort((a, b) => a - b);
+  for (const rank of ranksToBuild) {
     const entries = sourceByRank.get(rank) || [];
     const slot = slotByRank.get(rank);
     const status = String(slot?.status || '');
