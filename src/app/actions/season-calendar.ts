@@ -1,15 +1,20 @@
 import 'server-only';
 
 import { FieldValue } from 'firebase-admin/firestore';
+import { commitSeasonActivation } from './season-activation-commit';
 import { prepareSeasonRollover } from './season-rollover';
-import { acquireSeasonCalendarBuildLock, assertSeasonCalendarBuildLock, commitSeasonCalendarPublication, commitSeasonCalendarWrites, releaseSeasonCalendarBuildLock } from './season-rollover-lock';
-import { validateRolloverPlan } from './season-rollover-plan';
+import { acquireSeasonCalendarBuildLock, assertSeasonCalendarBuildLock, commitSeasonCalendarPublication, commitSeasonCalendarWrites, commitSeasonHistoryCleanupWrites, releaseSeasonCalendarBuildLock } from './season-rollover-lock';
+import { buildCarryForwardGroups, buildPromotionRelegationGroups, compareRecoveryRolloverPlans, resolveRecoveryPlacementSource, resolveRolloverPlanPruneIds, validateRolloverPlan } from './season-rollover-plan';
+import { resolveActivatedSkippedHistoryMarker, resolveActivatedSkippedSeasons, resolveHistoryCleanupCompletion, resolvePendingSkippedHistoryMarker, resolvePostActivationRetry, resolveSeasonCatchUpPolicy, type SeasonHistoryState } from './season-history-policy';
 import { evaluateCanonicalDocuments } from './season-canonical';
+import { resolvePreparedSlotRetry, shouldRepairExistingMatchCoordinates } from './season-calendar-retry-policy';
+import { publishRecoveryRolloverDecision } from './season-recovery-publication';
 import { inspectGroupReconciliation } from './season-rollover-standings';
 import { getAdminDb } from '@/lib/firebase-admin';
-import { advanceAtMostOneSeasonBoundary, canPrepareImmediateCatchUpTarget, deriveSeasonDatePlan, evaluateExpiredSeasonArchives, resolveCanonicalSeasonDateWindow, resolveNextSeasonTarget } from './season-boundary';
+import { advanceAtMostOneSeasonBoundary, deriveRecoverySeasonWindow, deriveSeasonDatePlan, resolveCanonicalSeasonDateWindow, resolveNextSeasonTarget, resolveSeasonActivationWindow, resolveSeasonLifecycleWindow } from './season-boundary';
 import { FIRST_SEASON_NEXT_START_ISO } from '@/app/lib/time-utils';
-import { isCompletedSeasonArchive, isRecoveredSeasonArchive, validateSeasonArchiveSnapshot } from './season-archive';
+import { isRolloverPlanPublicationReady } from './season-awards-policy';
+import { buildRecoveredSeasonArchiveSnapshot, isCompletedSeasonArchive, isRecoveredSeasonArchive, resolveArchivePrunePlan, validateSeasonArchiveSnapshot } from './season-archive';
 import { buildBotClub } from './bot-roster';
 import {
   MAX_LEVELS,
@@ -113,7 +118,7 @@ async function inspectCalendarRepairPreflight(db: any, seasonNumber: number) {
     db.collection('league_slots_v1').where('season', '==', seasonNumber).where('leagueId', '==', LEAGUE_ID).get(),
   ]);
   const validation = evaluateCanonicalDocuments({ tables: tablesSnap.docs, slots: slotsSnap.docs, matches: matchesSnap.docs });
-  return { ready: validation.ready, diagnostics: validation.reasons.map(reason => ({ reason })) };
+  return { ready: validation.ready, observedCanonicalMatches: validation.observedCanonicalMatches, diagnostics: validation.reasons.map(reason => ({ reason })) };
 }
 
 async function repairCanonicalSeasonTables(db: any, seasonNumber: number, lease: BuildLease) {
@@ -266,6 +271,407 @@ async function ensureBotClubs(db: any, teams: any[], state: { count: number; set
  * It repairs missing matches and prepares the next season without deleting
  * existing clubs or table data.
  */
+
+type RecoveryPlanResult =
+  | { ready: true; plan: Record<string, any>; skippedSeasons: Array<{ seasonNumber: number; reason: string }>; retainedArchiveSeason: number | null }
+  | { ready: false; reason: string; details?: any };
+
+/**
+ * Inspect every elapsed season without simulating anything. Fully completed
+ * seasons require a verified archive; genuinely incomplete seasons are marked
+ * as skipped. The target plan is derived from the latest verified final table,
+ * or from the active season's original slot placements when no completed
+ * archive exists.
+ */
+async function prepareRecoveryCarryForwardPlan(
+  db: any,
+  activeSeason: number,
+  targetSeason: number,
+  lease: BuildLease,
+): Promise<RecoveryPlanResult> {
+  const states: Record<number, SeasonHistoryState> = {};
+  let latestCompletedArchive: { season: number; standings: Record<string, any[]> } | null = null;
+  let latestRecoveredParticipants: { season: number; groups: Record<string, any[]> } | null = null;
+  let previousRetainedArchiveSeason: number | null = null;
+  const invalidPreviousArchiveSeasons: number[] = [];
+
+  if (activeSeason > 1) {
+    const priorArchivesSnap = await db.collection('league_season_archives_v1').get();
+    for (const archiveDoc of priorArchivesSnap.docs) {
+      const match = /^S(\d+)$/.exec(archiveDoc.id);
+      const seasonNumber = match ? Number(match[1]) : NaN;
+      if (!Number.isSafeInteger(seasonNumber) || seasonNumber < 1 || seasonNumber >= activeSeason) continue;
+      const archive = archiveDoc.data() || {};
+      if (isRecoveredSeasonArchive(archive)) continue;
+      if (!isCompletedSeasonArchive(archive)) {
+        invalidPreviousArchiveSeasons.push(seasonNumber);
+        continue;
+      }
+      const matchesSnap = await archiveDoc.ref.collection('matches').get();
+      const matches = matchesSnap.docs.map((doc: any) => ({ ...doc.data(), matchId: doc.id }));
+      const validation = validateSeasonArchiveSnapshot(archive, matches);
+      if (!validation.valid) invalidPreviousArchiveSeasons.push(seasonNumber);
+      else if (previousRetainedArchiveSeason === null || seasonNumber > previousRetainedArchiveSeason) {
+        previousRetainedArchiveSeason = seasonNumber;
+      }
+    }
+  }
+
+  const inspectCanonicalResults = async (seasonNumber: number) => {
+    const snap = await db.collection('matches_v2')
+      .where('season', '==', seasonNumber)
+      .where('version', '==', 140)
+      .get();
+    const isExcludedCompetition = (m: any) => {
+      const type = String(m.matchType || m.type || m.competitionType || '').toLowerCase();
+      return /(cup|tournament|friendly|scrim|pyramid)/.test(type) || m.isCup === true ||
+        m.isFriendly === true || m.tournamentId || m.cupId ||
+        (m.leagueId && String(m.leagueId) !== LEAGUE_ID);
+    };
+    const invalidLeagueCoordinates = snap.docs.some((doc: any) => {
+      const m = doc.data() || {};
+      if (isExcludedCompetition(m)) return false;
+      const hasLeagueCoordinates = ['level', 'division', 'groupId', 'group', 'homeRank', 'awayRank']
+        .some(field => m[field] !== undefined && m[field] !== null);
+      const matchType = String(m.matchType || m.type || m.competitionType || '').toLowerCase();
+      const explicitlyLeague = matchType === 'league' || String(m.leagueId || '') === LEAGUE_ID;
+      if (!explicitlyLeague && !hasLeagueCoordinates) return false;
+      const level = Number(m.level || m.division || 0);
+      const group = Number(m.groupId || m.group || 0);
+      const homeRank = Number(m.homeRank || 0);
+      const awayRank = Number(m.awayRank || 0);
+      return !(level >= 1 && level <= MAX_LEVELS && group >= 1 && group <= Math.pow(2, level - 1) &&
+        homeRank >= 1 && homeRank <= TEAMS_PER_GROUP && awayRank >= 1 && awayRank <= TEAMS_PER_GROUP &&
+        homeRank !== awayRank);
+    });
+    if (invalidLeagueCoordinates) {
+      return { status: 'integrity_conflict' as const, reason: 'INVALID_CANONICAL_FIXTURE_COORDINATE' };
+    }
+    const canonical = snap.docs.filter((doc: any) => {
+      const m = doc.data() || {};
+      if (isExcludedCompetition(m)) return false;
+      const level = Number(m.level || m.division || 0);
+      const group = Number(m.groupId || m.group || 0);
+      const homeRank = Number(m.homeRank || 0);
+      const awayRank = Number(m.awayRank || 0);
+      return level >= 1 && level <= MAX_LEVELS && group >= 1 && group <= Math.pow(2, level - 1) &&
+        homeRank >= 1 && homeRank <= TEAMS_PER_GROUP && awayRank >= 1 && awayRank <= TEAMS_PER_GROUP &&
+        homeRank !== awayRank;
+    });
+    const fixtures = new Set<string>();
+    const groupCounts = new Map<string, number>();
+    let unfinished = 0;
+    let invalidFinished = 0;
+    for (const doc of canonical) {
+      const m = doc.data() || {};
+      const level = Number(m.level || m.division);
+      const group = Number(m.groupId || m.group);
+      const key = `${level}:${group}:${Number(m.homeRank)}:${Number(m.awayRank)}`;
+      const groupKey = `${level}:${group}`;
+      groupCounts.set(groupKey, (groupCounts.get(groupKey) || 0) + 1);
+      if (fixtures.has(key)) return { status: 'integrity_conflict' as const, reason: 'DUPLICATE_CANONICAL_FIXTURE' };
+      fixtures.add(key);
+      if (m.isFinished !== true) {
+        unfinished++;
+        continue;
+      }
+      const home = Number(m.seriesScore?.home ?? m.scoreA);
+      const away = Number(m.seriesScore?.away ?? m.scoreB);
+      if (String(m.status || '').toLowerCase() !== 'finished' ||
+          !Number.isInteger(home) || !Number.isInteger(away) ||
+          home < 0 || away < 0 || home > 2 || away > 2 || (home === 0 && away === 0)) {
+        invalidFinished++;
+      }
+    }
+    if (canonical.length > TOTAL_GROUPS * 56 || invalidFinished > 0 || [...groupCounts.values()].some(count => count > 56)) {
+      return { status: 'integrity_conflict' as const, reason: invalidFinished ? 'INVALID_FINISHED_RESULT' : 'TOO_MANY_CANONICAL_FIXTURES' };
+    }
+    const finishedMatches = canonical.length - unfinished;
+    if (canonical.length === 0) return { status: 'no_canonical_results' as const, reason: 'NO_CANONICAL_RESULTS', finishedMatches: 0, canonicalMatches: 0 };
+    if (canonical.length === TOTAL_GROUPS * 56 && unfinished === 0 && groupCounts.size === TOTAL_GROUPS && [...groupCounts.values()].every(count => count === 56)) {
+      return { status: 'completed' as const, archiveValid: false, archiveReason: 'COMPLETED_ARCHIVE_REQUIRED', finishedMatches, canonicalMatches: canonical.length };
+    }
+    return { status: 'incomplete' as const, reason: 'SEASON_INCOMPLETE', finishedMatches, canonicalMatches: canonical.length };
+  };
+
+  const persistRecoveredArchive = async (seasonNumber: number, liveState: any) => {
+    const slotsSnap = await db.collection('league_slots_v1')
+      .where('season', '==', seasonNumber)
+      .where('leagueId', '==', LEAGUE_ID)
+      .get();
+    const sourceGroups: Record<string, any[]> = {};
+    for (const slotDoc of slotsSnap.docs) {
+      const slot = slotDoc.data() || {};
+      const level = Number(slot.division || slot.level || 0);
+      const group = Number(slot.group || 0);
+      const rank = Number(slot.rank || 0);
+      if (level < 1 || level > MAX_LEVELS || group < 1 || group > Math.pow(2, level - 1) ||
+          rank < 1 || rank > TEAMS_PER_GROUP) {
+        return { ready: false, reason: 'RECOVERED_ARCHIVE_SLOT_COORDINATES_INVALID', slotId: slotDoc.id };
+      }
+      const key = `D${level}-G${group}`;
+      const status = String(slot.status || '').toUpperCase();
+      const occupantId = String(slot.occupantId || '');
+      const id = status === 'FREE'
+        ? getBotId(LEAGUE_ID, level, group, rank)
+        : status === 'OCCUPIED' ? occupantId : '';
+      if (!id || (status !== 'FREE' && status !== 'OCCUPIED')) {
+        return { ready: false, reason: 'RECOVERED_ARCHIVE_SLOT_IDENTITY_UNTRUSTED', slotId: slotDoc.id, status };
+      }
+      if (!sourceGroups[key]) sourceGroups[key] = [];
+      sourceGroups[key].push({ id, name: status === 'FREE' ? getBotName(level, group, rank) : String(slot.occupantName || id), rank });
+    }
+    const snapshot = buildRecoveredSeasonArchiveSnapshot({
+      sourceSeason: seasonNumber,
+      startingParticipants: sourceGroups,
+      finishedMatches: Number(liveState.finishedMatches || 0),
+      reason: String(liveState.reason || 'SEASON_INCOMPLETE'),
+    });
+    if (!snapshot.ready) return snapshot;
+    const archiveRef = db.collection('league_season_archives_v1').doc(`S${seasonNumber}`);
+    await lease.commit([{ ref: archiveRef, data: snapshot.archive }]);
+    return { ready: true, archive: snapshot.archive };
+  };
+
+  for (let season = activeSeason; season < targetSeason; season++) {
+    const archiveRef = db.collection('league_season_archives_v1').doc(`S${season}`);
+    const archiveSnap = await archiveRef.get();
+    if (archiveSnap.exists) {
+      const archive = archiveSnap.data() || {};
+      if (isCompletedSeasonArchive(archive)) {
+        const matchesSnap = await archiveRef.collection('matches').get();
+        const matches = matchesSnap.docs.map((doc: any) => ({ ...doc.data(), matchId: doc.id }));
+        const validation = validateSeasonArchiveSnapshot(archive, matches);
+        if (!validation.valid) {
+          states[season] = { status: 'integrity_conflict', reason: validation.reasons.join(',') || 'ARCHIVE_INVALID' };
+          continue;
+        }
+        states[season] = { status: 'completed', archiveValid: true };
+        if (!latestCompletedArchive || season > latestCompletedArchive.season) {
+          latestCompletedArchive = { season, standings: archive.standings || {} };
+        }
+        continue;
+      }
+      if (isRecoveredSeasonArchive(archive)) {
+        states[season] = { status: 'incomplete', reason: 'RECOVERED_INCOMPLETE_SEASON' };
+        if (!latestRecoveredParticipants || season > latestRecoveredParticipants.season) {
+          latestRecoveredParticipants = { season, groups: archive.startingParticipants || {} };
+        }
+        continue;
+      }
+      if (archive.status === 'preparing') {
+        const resumed = await prepareSeasonRollover(db, season, season + 1);
+        if (resumed.ready) {
+          const resumedArchiveSnap = await archiveRef.get();
+          const resumedArchive = resumedArchiveSnap.exists ? resumedArchiveSnap.data() || {} : null;
+          const resumedMatchesSnap = resumedArchiveSnap.exists ? await archiveRef.collection('matches').get() : null;
+          const resumedMatches = resumedMatchesSnap
+            ? resumedMatchesSnap.docs.map((doc: any) => ({ ...doc.data(), matchId: doc.id }))
+            : [];
+          const resumedValidation = resumedArchive
+            ? validateSeasonArchiveSnapshot(resumedArchive, resumedMatches)
+            : { valid: false, reasons: ['ARCHIVE_MISSING_AFTER_RESUME'] };
+          if (!resumedArchive || !isCompletedSeasonArchive(resumedArchive) || !resumedValidation.valid) {
+            return { ready: false, reason: 'PREPARING_SEASON_ARCHIVE_RESUME_VALIDATION_FAILED', details: { seasonNumber: season, reasons: resumedValidation.reasons } };
+          }
+          states[season] = { status: 'completed', archiveValid: true };
+          if (!latestCompletedArchive || season > latestCompletedArchive.season) {
+            latestCompletedArchive = { season, standings: resumedArchive.standings || {} };
+          }
+          continue;
+        }
+        const liveState = await inspectCanonicalResults(season);
+        const canSkip = resumed.writesStarted !== true &&
+          ['incomplete', 'no_canonical_results'].includes(String(liveState.status || ''));
+        if (!canSkip) {
+          return { ready: false, reason: 'PREPARING_SEASON_ARCHIVE_RECOVERY_FAILED', details: { seasonNumber: season, rollover: resumed, liveState } };
+        }
+        const recovered = await persistRecoveredArchive(season, liveState);
+        const recoveredArchive = (recovered as any).archive;
+        if (!recovered.ready || !recoveredArchive) {
+          return { ready: false, reason: 'INCOMPLETE_SEASON_RECOVERY_SNAPSHOT_FAILED', details: { seasonNumber: season, recovery: recovered } };
+        }
+        states[season] = { status: 'incomplete', reason: liveState.reason || 'SEASON_INCOMPLETE' };
+        latestRecoveredParticipants = { season, groups: recoveredArchive.startingParticipants };
+        continue;
+      }
+      states[season] = { status: 'integrity_conflict', reason: 'EXISTING_ARCHIVE_NOT_VERIFIABLE' };
+      continue;
+    }
+    const liveState = await inspectCanonicalResults(season);
+    if (liveState.status === 'completed' && liveState.archiveValid === false) {
+      // A genuinely completed season must be archived, not skipped. Reuse the
+      // idempotent canonical rollover path to snapshot results and award prizes.
+      const rollover = await prepareSeasonRollover(db, season, season + 1);
+      if (!rollover.ready) {
+        return { ready: false, reason: 'COMPLETED_SEASON_ARCHIVE_PREPARATION_FAILED', details: { seasonNumber: season, rollover } };
+      }
+      const completedArchiveSnap = await archiveRef.get();
+      const completedArchive = completedArchiveSnap.exists ? completedArchiveSnap.data() || {} : null;
+      const completedMatchesSnap = completedArchiveSnap.exists ? await archiveRef.collection('matches').get() : null;
+      const completedMatches = completedMatchesSnap
+        ? completedMatchesSnap.docs.map((doc: any) => ({ ...doc.data(), matchId: doc.id }))
+        : [];
+      const completedValidation = completedArchive
+        ? validateSeasonArchiveSnapshot(completedArchive, completedMatches)
+        : { valid: false, reasons: ['ARCHIVE_MISSING_AFTER_PREPARATION'] };
+      if (!completedArchive || !isCompletedSeasonArchive(completedArchive) || !completedValidation.valid) {
+        return { ready: false, reason: 'COMPLETED_SEASON_ARCHIVE_VALIDATION_FAILED', details: { seasonNumber: season, reasons: completedValidation.reasons } };
+      }
+      states[season] = { status: 'completed', archiveValid: true };
+      if (!latestCompletedArchive || season > latestCompletedArchive.season) {
+        latestCompletedArchive = { season, standings: completedArchive.standings || {} };
+      }
+    } else if (liveState.status === 'incomplete' || liveState.status === 'no_canonical_results') {
+      const recovered = await persistRecoveredArchive(season, liveState);
+      const recoveredArchive = (recovered as any).archive;
+      if (!recovered.ready || !recoveredArchive) {
+        return { ready: false, reason: 'INCOMPLETE_SEASON_RECOVERY_SNAPSHOT_FAILED', details: { seasonNumber: season, recovery: recovered } };
+      }
+      states[season] = { status: 'incomplete', reason: liveState.reason || 'SEASON_INCOMPLETE' };
+      if (!latestRecoveredParticipants || season > latestRecoveredParticipants.season) {
+        latestRecoveredParticipants = { season, groups: recoveredArchive.startingParticipants };
+      }
+    } else {
+      states[season] = liveState;
+    }
+  }
+
+  const missed = Array.from({ length: Math.max(0, targetSeason - activeSeason) }, (_, index) => activeSeason + index);
+  const policy = resolveSeasonCatchUpPolicy(missed, states);
+  if (!policy.ready) {
+    return { ready: false, reason: policy.reason || 'SEASON_HISTORY_REQUIRES_RECONCILIATION', details: { states, skippedSeasons: policy.skippedSeasons } };
+  }
+  const retainedArchiveSeason = Math.max(
+    Number(policy.retainedArchiveSeason || 0),
+    Number(previousRetainedArchiveSeason || 0),
+  ) || null;
+  if (invalidPreviousArchiveSeasons.length > 0) {
+    return {
+      ready: false,
+      reason: 'PREVIOUS_RETAINED_ARCHIVE_REQUIRES_RECONCILIATION',
+      details: { invalidPreviousArchiveSeasons, retainedArchiveSeason },
+    };
+  }
+
+  let groups: Record<string, any[]>;
+  let placementSource: string;
+  let lastTrustedSeason: number;
+  const placementBaseline = resolveRecoveryPlacementSource(
+    latestCompletedArchive?.season ?? null,
+    latestRecoveredParticipants?.season ?? null,
+  );
+  if (placementBaseline === 'recovered_participants' && latestRecoveredParticipants) {
+    const carried = buildCarryForwardGroups(latestRecoveredParticipants.groups);
+    if (!carried.ready) return { ready: false, reason: carried.reason, details: { group: carried.group } };
+    groups = carried.groups;
+    placementSource = 'recovered_starting_participants';
+    lastTrustedSeason = latestRecoveredParticipants.season;
+  } else if (placementBaseline === 'completed_archive' && latestCompletedArchive) {
+    const promoted = buildPromotionRelegationGroups(latestCompletedArchive.standings);
+    if (!promoted.ready) return { ready: false, reason: promoted.reason, details: { group: promoted.group, count: promoted.count } };
+    groups = promoted.groups;
+    placementSource = 'latest_verified_completed_archive';
+    lastTrustedSeason = latestCompletedArchive.season;
+  } else {
+    const slotsSnap = await db.collection('league_slots_v1')
+      .where('season', '==', activeSeason)
+      .where('leagueId', '==', LEAGUE_ID)
+      .get();
+    const sourceGroups: Record<string, any[]> = {};
+    for (const doc of slotsSnap.docs) {
+      const slot = doc.data() || {};
+      const level = Number(slot.division || slot.level || 0);
+      const group = Number(slot.group || 0);
+      const rank = Number(slot.rank || 0);
+      if (level < 1 || level > MAX_LEVELS || group < 1 || group > Math.pow(2, level - 1) ||
+          rank < 1 || rank > TEAMS_PER_GROUP) {
+        return { ready: false, reason: 'ACTIVE_SEASON_SLOT_COORDINATES_INVALID', details: { slotId: doc.id } };
+      }
+      const key = `D${level}-G${group}`;
+      const status = String(slot.status || '').toUpperCase();
+      const occupantId = String(slot.occupantId || '');
+      const id = status === 'FREE'
+        ? getBotId(LEAGUE_ID, level, group, rank)
+        : status === 'OCCUPIED' ? occupantId : '';
+      if (!id || (status !== 'FREE' && status !== 'OCCUPIED')) {
+        return { ready: false, reason: 'ACTIVE_SEASON_SLOT_IDENTITY_UNTRUSTED', details: { slotId: doc.id, status } };
+      }
+      if (!sourceGroups[key]) sourceGroups[key] = [];
+      sourceGroups[key].push({ id, name: status === 'FREE' ? getBotName(level, group, rank) : String(slot.occupantName || id), rank });
+    }
+    const carried = buildCarryForwardGroups(sourceGroups);
+    if (!carried.ready) return { ready: false, reason: carried.reason, details: { group: carried.group } };
+    groups = carried.groups;
+    placementSource = 'active_season_slot_baseline';
+    lastTrustedSeason = activeSeason;
+  }
+
+  const plan = {
+    sourceSeason: targetSeason - 1,
+    targetSeason,
+    leagueId: LEAGUE_ID,
+    ready: true,
+    mode: 'recovery_carry_forward',
+    skippedSeasons: policy.skippedSeasons,
+    lastTrustedSeason,
+    placementSource,
+    retainedArchiveSeason,
+    promotionRule: placementBaseline === 'completed_archive' ? 'apply_latest_verified_completed_season_once' : 'carry_forward_without_promotion_or_relegation',
+    groups,
+    createdAt: FieldValue.serverTimestamp(),
+  };
+  const planRef = db.collection('league_season_rollovers_v1').doc(`S${targetSeason}`);
+  const publication = await publishRecoveryRolloverDecision({
+    planRef,
+    plan,
+    historyEntries: policy.skippedSeasons.map(skipped => ({
+      seasonNumber: skipped.seasonNumber,
+      reason: skipped.reason,
+      ref: db.collection('league_season_history_v1').doc(`S${skipped.seasonNumber}`),
+    })),
+    targetSeason,
+    batchLimit: BATCH_LIMIT,
+    read: async ref => {
+      const snapshot = await ref.get();
+      return snapshot.exists ? snapshot.data() || {} : null;
+    },
+    commitPlan: async (ref, value) => {
+      await lease.assert();
+      await lease.commit([{ ref, data: value }]);
+    },
+    commitHistory: async writes => {
+      await lease.commit(writes);
+    },
+    comparePlans: compareRecoveryRolloverPlans,
+    resolvePendingMarker: resolvePendingSkippedHistoryMarker,
+    buildPendingMarker: (entry, target) => ({
+      seasonNumber: entry.seasonNumber,
+      status: 'SKIPPED_PENDING_ACTIVATION',
+      reason: entry.reason,
+      targetSeason: target,
+      noResultsFabricated: true,
+      awardsApplied: false,
+      promotionRelegationApplied: false,
+      updatedAt: FieldValue.serverTimestamp(),
+    }),
+  });
+  if (!publication.ready) {
+    return {
+      ready: false,
+      reason: publication.reason,
+      details: publication.details || { targetSeason },
+    };
+  }
+
+  return {
+    ready: true,
+    plan: publication.plan,
+    skippedSeasons: policy.skippedSeasons,
+    retainedArchiveSeason: policy.retainedArchiveSeason,
+  };
+}
+
 async function buildSeasonCalendar(lease: BuildLease, pristineFirstWorld = false) {
   const db = getAdminDb();
   const configRef = db.collection('system_v1').doc('season_config');
@@ -276,39 +682,50 @@ async function buildSeasonCalendar(lease: BuildLease, pristineFirstWorld = false
   // This preserves scores and the existing eight canonical ranks.
   const sourceSeasonNumber = Number(current.activeSeasonNumber || 1);
   const recoveryTarget = Number(current.recoveryTargetSeason || 0);
-  const directRecovery = recoveryTarget === sourceSeasonNumber + 2;
-  const repairedSourceTables = directRecovery ? 0 : await repairCanonicalSeasonTables(db, sourceSeasonNumber, lease);
-
+  const requestedRecoveryTarget = Number(current.nextSeasonNumber || current.preparationTargetSeason || current.preparedSeasonNumber || 0);
+  const directRecovery = recoveryTarget > sourceSeasonNumber + 1 || requestedRecoveryTarget > sourceSeasonNumber + 1;
   const now = new Date();
+  const sourceRepairPreflight = directRecovery || requestedRecoveryTarget <= sourceSeasonNumber
+    ? null
+    : await inspectCalendarRepairPreflight(db, sourceSeasonNumber);
+  const sourceFixturesIncomplete = Boolean(sourceRepairPreflight &&
+    Number(sourceRepairPreflight.observedCanonicalMatches || 0) < TOTAL_GROUPS * 56);
+  const repairedSourceTables = directRecovery || sourceFixturesIncomplete
+    ? 0
+    : await repairCanonicalSeasonTables(db, sourceSeasonNumber, lease);
   let seasonNumber = Number(current.activeSeasonNumber || 1);
-  let seasonStart = current.seasonStart
-    ? new Date(current.seasonStart)
-    : pristineFirstWorld
-      ? now
-      : new Date(FIRST_SEASON_START_ISO);
 
-  if (Number.isNaN(seasonStart.getTime())) {
-    seasonStart = new Date(FIRST_SEASON_START_ISO);
-  }
+  // Resolve the source season with the same canonical-date policy used by the
+  // read-only catch-up gate. A stale persisted boundary must not override the
+  // canonical production timeline during recovery; CLEAN_S1_V1 may retain its
+  // own validated 17-day first-season window.
+  const canonicalSourceStart = sourceSeasonNumber === 1
+    ? new Date(FIRST_SEASON_START_ISO)
+    : addDays(new Date(FIRST_SEASON_NEXT_START_ISO), (sourceSeasonNumber - 2) * TOTAL_CYCLE_DAYS);
+  const canonicalSourceNext = sourceSeasonNumber === 1
+    ? new Date(FIRST_SEASON_NEXT_START_ISO)
+    : addDays(canonicalSourceStart, TOTAL_CYCLE_DAYS);
+  const resolvedSourceWindow = resolveCanonicalSeasonDateWindow({
+    worldGeneration: current.worldGeneration,
+    activeSeasonNumber: sourceSeasonNumber,
+    persistedSeasonStart: current.seasonStart ? new Date(current.seasonStart) : null,
+    persistedNextSeasonStart: current.nextSeasonStart ? new Date(current.nextSeasonStart) : null,
+    canonicalSeasonStart: canonicalSourceStart,
+    canonicalNextSeasonStart: canonicalSourceNext,
+  });
+  let seasonStart = pristineFirstWorld ? now : resolvedSourceWindow.seasonStart;
+  let nextBoundary = pristineFirstWorld
+    ? addDays(seasonStart, TOTAL_CYCLE_DAYS)
+    : resolvedSourceWindow.nextSeasonStart;
 
-  // The persisted nextSeasonStart is the canonical boundary for the transition
-  // currently being recovered. S1 -> S2 was explicitly scheduled for Oct 8,
-  // while later seasons follow TOTAL_CYCLE_DAYS. Do not recalculate that first
-  // boundary as Oct 6 merely because the normal cadence is 15 days.
-  const configuredNextStart = current.nextSeasonStart ? new Date(current.nextSeasonStart) : null;
-  const validConfiguredNextStart = configuredNextStart && Number.isFinite(configuredNextStart.getTime()) && configuredNextStart.getTime() > seasonStart.getTime();
-  let nextBoundary = validConfiguredNextStart
-    ? configuredNextStart!
-    : pristineFirstWorld
-      ? addDays(seasonStart, TOTAL_CYCLE_DAYS)
-      : seasonNumber === 1
-        ? new Date(FIRST_SEASON_NEXT_START_ISO)
-        : addDays(seasonStart, TOTAL_CYCLE_DAYS);
+  // Preserve the source world's actual next boundary before the one-step
+  // scheduler advances its local cursor. Multi-season recovery must derive from
+  // this persisted boundary, including CLEAN_S1_V1's custom first-season span.
+  const sourceNextBoundary = new Date(nextBoundary.getTime());
 
-  // Advance at most one season boundary per invocation. A delayed cron must
-  // never jump S1 -> S3 (or farther) and bypass the S1 -> S2 archive, standings,
-  // and publication gates. Subsequent orchestrator runs can catch up one season
-  // at a time after each target season is fully published.
+  // Normal progression advances one boundary per invocation. A date-derived
+  // recovery target may override this below only after every elapsed season is
+  // classified as completed (and archived) or genuinely incomplete (skipped).
   if (!pristineFirstWorld) {
     const boundaryStep = advanceAtMostOneSeasonBoundary(seasonNumber, seasonStart, nextBoundary, now, TOTAL_CYCLE_DAYS);
     seasonNumber = boundaryStep.seasonNumber;
@@ -317,19 +734,25 @@ async function buildSeasonCalendar(lease: BuildLease, pristineFirstWorld = false
   }
 
   if (directRecovery) {
-    // Recovery is allowed to bypass an unavailable intermediate season only
-    // after its explicit recovered archive and carry-forward plan were written.
-    let sourceTargetStart = new Date(FIRST_SEASON_NEXT_START_ISO);
-    for (let season = 2; season < recoveryTarget; season++) sourceTargetStart = addDays(sourceTargetStart, TOTAL_CYCLE_DAYS);
+    // Recovery is allowed to bypass unavailable intermediate seasons only
+    // after their persisted results have been classified and a verified
+    // carry-forward/placement plan has been prepared. Derive dates from the
+    // source world's real next boundary rather than a hard-coded S1 timestamp.
+    const recoveryWindow = deriveRecoverySeasonWindow(
+      sourceSeasonNumber,
+      sourceNextBoundary,
+      recoveryTarget,
+      TOTAL_CYCLE_DAYS,
+    );
     seasonNumber = recoveryTarget;
-    seasonStart = sourceTargetStart;
-    nextBoundary = addDays(seasonStart, TOTAL_CYCLE_DAYS);
+    seasonStart = recoveryWindow.seasonStart;
+    nextBoundary = recoveryWindow.nextSeasonStart;
   }
 
   const phase = String(current.phase || '').toUpperCase();
   const requestedTarget = Number(current.nextSeasonNumber || current.preparationTargetSeason || 0);
-  const transitionRequested = ['FINALIZING', 'GENERATING_NEXT', 'PREPARING_NEXT_SEASON', 'PREPARATION'].includes(phase) || (phase === 'WORLD_BUILDING' && requestedTarget > Number(current.activeSeasonNumber || 1));
-  if (transitionRequested) {
+  const transitionRequested = ['FINALIZING', 'GENERATING_NEXT', 'PREPARING_NEXT_SEASON', 'PREPARATION', 'PUBLISHED'].includes(phase) || (phase === 'WORLD_BUILDING' && requestedTarget > Number(current.activeSeasonNumber || 1));
+  if (transitionRequested && !directRecovery) {
     // A stale/corrupt target must never jump over an intermediate season.
     // Each season requires its own archive, standings, calendar and publication gates.
     const forcedTarget = resolveNextSeasonTarget(Number(current.activeSeasonNumber || 1), requestedTarget);
@@ -354,72 +777,143 @@ async function buildSeasonCalendar(lease: BuildLease, pristineFirstWorld = false
     String(current.seasonStart || '') !== seasonStart.toISOString();
   const needsRepair = Number(current.calendarRevision || 0) !== CALENDAR_REVISION;
 
-  // Never switch active seasons until the previous season is complete, archived,
-  // and its promotion/relegation plan has been written. This protects standings
-  // and prevents the next season from silently reverting to the initial bot table.
+  // Never build a target world without a verified placement plan. Normal
+  // transitions require a completed archive; recovery plans explicitly mark
+  // incomplete seasons as skipped and carry forward only trusted team identities.
   let rolloverPlan: any = null;
   const activeSeasonBefore = Number(current.activeSeasonNumber || 1);
   if (configSnap.exists && seasonChanged && seasonNumber > activeSeasonBefore) {
     const planSourceSeason = directRecovery ? seasonNumber - 1 : activeSeasonBefore;
     const planSnap = await db.collection('league_season_rollovers_v1').doc(`S${seasonNumber}`).get();
     const savedPlan = planSnap.exists ? planSnap.data() || {} : null;
-    if (savedPlan && validateRolloverPlan(savedPlan, planSourceSeason, seasonNumber).valid && (!directRecovery || savedPlan.mode === 'recovery_carry_forward')) {
+    if (savedPlan && validateRolloverPlan(savedPlan, planSourceSeason, seasonNumber).valid &&
+        isRolloverPlanPublicationReady(savedPlan) &&
+        (!directRecovery || savedPlan.mode === 'recovery_carry_forward')) {
       rolloverPlan = savedPlan;
+    } else if (directRecovery) {
+      const recovery = await prepareRecoveryCarryForwardPlan(db, activeSeasonBefore, seasonNumber, lease);
+      if (!recovery.ready) {
+        return {
+          success: false,
+          seasonNumber: activeSeasonBefore,
+          targetSeasonNumber: seasonNumber,
+          worldReady: false,
+          waitingForSeasonResults: true,
+          rollover: { ready: false, reason: recovery.reason, details: recovery.details },
+          writesStarted: false,
+        };
+      }
+      rolloverPlan = recovery.plan;
     } else {
-      if (directRecovery) return { success: false, seasonNumber: activeSeasonBefore, targetSeasonNumber: seasonNumber, worldReady: false, waitingForSeasonResults: true, rollover: { ready: false, reason: 'RECOVERY_CARRY_FORWARD_PLAN_INVALID' }, writesStarted: false };
       const rollover = await prepareSeasonRollover(db, activeSeasonBefore, seasonNumber);
       if (!rollover.ready) {
-        return {
-          success: false, seasonNumber: activeSeasonBefore,
-          targetSeasonNumber: seasonNumber, worldReady: false,
-          waitingForSeasonResults: true, rollover,
-          repairedSourceTables,
-          createdMatches: 0, repairedMatches: 0,
-          totalExpectedMatches: TOTAL_GROUPS * TEAMS_PER_GROUP * (TEAMS_PER_GROUP - 1),
-          totalExpectedSlots: TOTAL_GROUPS * TEAMS_PER_GROUP,
-        };
+        const canSkipIncompleteSeason = rollover.writesStarted !== true &&
+          ['SEASON_RESULTS_INCOMPLETE', 'SEASON_STANDINGS_PREFLIGHT_FAILED'].includes(String(rollover.reason || ''));
+        if (!canSkipIncompleteSeason) {
+          return {
+            success: false, seasonNumber: activeSeasonBefore,
+            targetSeasonNumber: seasonNumber, worldReady: false,
+            waitingForSeasonResults: true, rollover,
+            repairedSourceTables,
+            createdMatches: 0, repairedMatches: 0,
+            totalExpectedMatches: TOTAL_GROUPS * TEAMS_PER_GROUP * (TEAMS_PER_GROUP - 1),
+            totalExpectedSlots: TOTAL_GROUPS * TEAMS_PER_GROUP,
+          };
+        }
+        const recovery = await prepareRecoveryCarryForwardPlan(db, activeSeasonBefore, seasonNumber, lease);
+        if (!recovery.ready) {
+          return {
+            success: false,
+            seasonNumber: activeSeasonBefore,
+            targetSeasonNumber: seasonNumber,
+            worldReady: false,
+            waitingForSeasonResults: true,
+            rollover: { ready: false, reason: recovery.reason, details: recovery.details, originalRollover: rollover },
+            writesStarted: false,
+          };
+        }
+        rolloverPlan = recovery.plan;
       }
-      const preparedPlanSnap = await db.collection('league_season_rollovers_v1').doc(`S${seasonNumber}`).get();
-      const preparedPlan = preparedPlanSnap.exists ? preparedPlanSnap.data() || {} : null;
-      if (!validateRolloverPlan(preparedPlan, activeSeasonBefore, seasonNumber).valid) {
-        return {
-          success: false, seasonNumber: activeSeasonBefore,
-          targetSeasonNumber: seasonNumber, worldReady: false,
-          waitingForSeasonResults: true,
-          rollover: { ready: false, reason: 'ROLLOVER_PLAN_NOT_PERSISTED', sourceSeason: activeSeasonBefore, targetSeason: seasonNumber },
-          repairedSourceTables,
-          createdMatches: 0, repairedMatches: 0,
-          totalExpectedMatches: TOTAL_GROUPS * TEAMS_PER_GROUP * (TEAMS_PER_GROUP - 1),
-          totalExpectedSlots: TOTAL_GROUPS * TEAMS_PER_GROUP,
-        };
+      if (!rolloverPlan) {
+        const preparedPlanSnap = await db.collection('league_season_rollovers_v1').doc(`S${seasonNumber}`).get();
+        const preparedPlan = preparedPlanSnap.exists ? preparedPlanSnap.data() || {} : null;
+        if (!validateRolloverPlan(preparedPlan, activeSeasonBefore, seasonNumber).valid || !isRolloverPlanPublicationReady(preparedPlan)) {
+          return {
+            success: false, seasonNumber: activeSeasonBefore,
+            targetSeasonNumber: seasonNumber, worldReady: false,
+            waitingForSeasonResults: true,
+            rollover: { ready: false, reason: 'ROLLOVER_PLAN_NOT_PERSISTED', sourceSeason: activeSeasonBefore, targetSeason: seasonNumber },
+            repairedSourceTables,
+            createdMatches: 0, repairedMatches: 0,
+            totalExpectedMatches: TOTAL_GROUPS * TEAMS_PER_GROUP * (TEAMS_PER_GROUP - 1),
+            totalExpectedSlots: TOTAL_GROUPS * TEAMS_PER_GROUP,
+          };
+        }
+        rolloverPlan = preparedPlan;
       }
-      rolloverPlan = preparedPlan;
     }
   } else if (configSnap.exists && current.worldReady !== true && seasonNumber > 1) {
     // Recover an interrupted build. The previous run may already have advanced
     // activeSeasonNumber before all tables/slots/matches were committed.
     const planSnap = await db.collection('league_season_rollovers_v1').doc(`S${seasonNumber}`).get();
     const savedPlan = planSnap.exists ? planSnap.data() || {} : null;
-    if (validateRolloverPlan(savedPlan, seasonNumber - 1, seasonNumber).valid) {
+    if (validateRolloverPlan(savedPlan, seasonNumber - 1, seasonNumber).valid && isRolloverPlanPublicationReady(savedPlan)) {
       rolloverPlan = savedPlan;
     }
   }
 
-  // Registration is allowed only after the complete world is provisioned.
-  // A new/changed season therefore starts in worldReady=false and is flipped
-  // to true only after all 15 groups, 120 slots and 840 matches are present.
+  // Preflight every existing target slot against the immutable rollover placement
+  // before the first target-world write. A retry must never silently evict a
+  // human club or replace a conflicting occupant from a partially built world.
+  if (rolloverPlan) {
+    for (let index = 1; index <= TOTAL_GROUPS; index++) {
+      const { tier, group } = getGroupCoordinates(index);
+      const seededTeams = rolloverPlan.groups?.[`D${tier}-G${group}`];
+      if (!Array.isArray(seededTeams) || seededTeams.length !== TEAMS_PER_GROUP) {
+        return { success: false, action: 'WORLD_BUILDING', worldReady: current.worldReady === true,
+          seasonNumber: activeSeasonBefore, targetSeasonNumber: seasonNumber,
+          reason: 'ROLLOVER_PLAN_GROUP_INVALID', writesStarted: false };
+      }
+      for (let rank = 1; rank <= TEAMS_PER_GROUP; rank++) {
+        const plannedId = String(seededTeams[rank - 1]?.id || '');
+        const slotId = `S${seasonNumber}_L${LEAGUE_ID}_D${tier}_G${group}_R${rank}`;
+        const slotSnap = await db.collection('league_slots_v1').doc(slotId).get();
+        const decision = resolvePreparedSlotRetry(slotSnap.exists ? slotSnap.data() || {} : null, plannedId);
+        if (!decision.ready) {
+          return { success: false, action: 'WORLD_BUILDING', worldReady: current.worldReady === true,
+            seasonNumber: activeSeasonBefore, targetSeasonNumber: seasonNumber,
+            reason: decision.reason, slotId, plannedTeamId: plannedId,
+            existingOccupantId: String((slotSnap.data() || {}).occupantId || ''), writesStarted: false };
+        }
+      }
+    }
+  }
+
+  // The active world remains registration-ready while the next world is built.
+  // Prepared readiness is tracked separately and becomes true only after all
+  // 15 groups, 120 slots and 840 matches pass the canonical gate.
   if (seasonChanged || needsRepair || !configSnap.exists) {
     await lease.commit([{ ref: configRef, data: {
-      // Keep the old season published while the target calendar is building.
-      // The final readiness write below is the only publication point for S2.
-      activeSeasonNumber: seasonNumber > activeSeasonBefore ? activeSeasonBefore : seasonNumber,
-      phase: seasonNumber > activeSeasonBefore
-        ? 'GENERATING_NEXT'
-        : String(current.phase || 'REGULAR_SEASON'),
-      worldReady: false,
-      seasonStart: seasonStart.toISOString(),
-      nextSeasonStart: nextSeasonStart.toISOString(),
-      calendarRevision: CALENDAR_REVISION,
+      // Preserve all active-season fields. These prepared fields describe only
+      // the target calendar and must not disable registration in the active world.
+      ...(seasonNumber > activeSeasonBefore ? {
+        activeSeasonNumber: activeSeasonBefore,
+        phase: 'GENERATING_NEXT',
+        preparedSeasonNumber: seasonNumber,
+        preparedSeasonStart: seasonStart.toISOString(),
+        preparedNextSeasonStart: nextSeasonStart.toISOString(),
+        preparedCalendarRevision: CALENDAR_REVISION,
+        preparedWorldReady: current.preparedWorldReady === true && Number(current.preparedSeasonNumber) === seasonNumber,
+        preparedPublished: current.preparedPublished === true && Number(current.preparedSeasonNumber) === seasonNumber,
+        preparedRecoveryMode: directRecovery || rolloverPlan?.mode === 'recovery_carry_forward',
+      } : {
+        activeSeasonNumber: seasonNumber,
+        phase: String(current.phase || 'REGULAR_SEASON'),
+        worldReady: false,
+        seasonStart: seasonStart.toISOString(),
+        nextSeasonStart: nextSeasonStart.toISOString(),
+        calendarRevision: CALENDAR_REVISION,
+      }),
       rebuildStatus: 'STAGE_3A8_COMPLETE',
       rebuildError: FieldValue.delete(),
       updatedAt: FieldValue.serverTimestamp(),
@@ -488,7 +982,13 @@ async function buildSeasonCalendar(lease: BuildLease, pristineFirstWorld = false
       const placedTeam = Array.isArray(seededTeams) ? seededTeams[rank - 1] : null;
       const placedId = String(placedTeam?.id || '');
       const isHumanClub = Boolean(placedId && !placedId.startsWith('BOT_'));
-      if (!slotSnap.exists || rolloverPlan) {
+      const slotDecision = rolloverPlan
+        ? resolvePreparedSlotRetry(slotSnap.exists ? slotSnap.data() || {} : null, placedId)
+        : { ready: true, action: slotSnap.exists ? 'PRESERVE' : 'CREATE' };
+      if (!slotDecision.ready) {
+        throw new Error(`PREPARED_SLOT_IDENTITY_CONFLICT:${slotId}`);
+      }
+      if (slotDecision.action === 'CREATE' || slotDecision.action === 'PLACE_HUMAN') {
         batch.set(slotRef, {
           season: seasonNumber, leagueId: LEAGUE_ID, division: tier, group, rank,
           status: isHumanClub ? 'OCCUPIED' : 'FREE',
@@ -557,7 +1057,7 @@ async function buildSeasonCalendar(lease: BuildLease, pristineFirstWorld = false
         batch.set(ref, payload, { merge: true });
         repairedMatches++;
         batchCount++;
-      } else if (Number(existing.groupId) !== group || Number(existing.level) !== tier) {
+      } else if (shouldRepairExistingMatchCoordinates(existing, tier, group)) {
         batch.set(ref, { groupId: group, level: tier, calendarRevision: CALENDAR_REVISION }, { merge: true });
         repairedMatches++;
         batchCount++;
@@ -576,18 +1076,31 @@ async function buildSeasonCalendar(lease: BuildLease, pristineFirstWorld = false
   // matches here; this check only decides whether worldReady may be true.
   const readiness = await inspectCanonicalSeason(db, seasonNumber);
   const canonicalReady = readiness.ready;
+  const buildingNextSeason = seasonNumber > activeSeasonBefore;
   if (!canonicalReady) {
-    await lease.commit([{ ref: configRef, data: { worldReady: false, phase: 'WORLD_BUILDING', updatedAt: FieldValue.serverTimestamp() }, options: { merge: true } }]);
+    await lease.commit([{ ref: configRef, data: buildingNextSeason
+      ? { preparedWorldReady: false, preparedPublished: false, phase: 'WORLD_BUILDING', updatedAt: FieldValue.serverTimestamp() }
+      : { worldReady: false, phase: 'WORLD_BUILDING', updatedAt: FieldValue.serverTimestamp() }, options: { merge: true } }]);
     return { success: true, seasonNumber, seasonStart: seasonStart.toISOString(), nextSeasonStart: nextSeasonStart.toISOString(), createdMatches, repairedMatches, repairedSourceTables, totalExpectedMatches: TOTAL_GROUPS * 56, observedCanonicalMatches: readiness.observedCanonicalMatches,
       totalExpectedSlots: TOTAL_GROUPS * TEAMS_PER_GROUP, observedCanonicalSlots: readiness.observedCanonicalSlots,
       observedCanonicalTables: readiness.observedCanonicalTables, worldReady: false, prepared: false };
   }
 
-  // A next-season build is deliberately not a publication. S1 remains active
-  // until publishPreparedSeason() takes the same fenced lock and commits the
-  // final activeSeasonNumber/worldReady barrier.
-  const buildingNextSeason = seasonNumber > activeSeasonBefore;
-  if (!buildingNextSeason) {
+  // A next-season build is neither publication nor activation. The active
+  // season remains available; publication marks the prepared world separately,
+  // and activation switches the active-season fields at the scheduled boundary.
+  if (buildingNextSeason) {
+    await lease.commit([{ ref: configRef, data: {
+      preparedSeasonNumber: seasonNumber,
+      preparedSeasonStart: seasonStart.toISOString(),
+      preparedNextSeasonStart: nextSeasonStart.toISOString(),
+      preparedCalendarRevision: CALENDAR_REVISION,
+      preparedRecoveryMode: directRecovery,
+      preparedWorldReady: true,
+      phase: current.preparedPublished === true && Number(current.preparedSeasonNumber) === seasonNumber ? 'PUBLISHED' : 'GENERATING_NEXT',
+      updatedAt: FieldValue.serverTimestamp(),
+    }, options: { merge: true } }]);
+  } else {
     await lease.commit([{ ref: configRef, data: {
       activeSeasonNumber: seasonNumber,
       phase: current.phase === 'ACTIVE' ? 'ACTIVE' : 'REGULAR_SEASON',
@@ -611,9 +1124,197 @@ async function buildSeasonCalendar(lease: BuildLease, pristineFirstWorld = false
     repairedSourceTables,
     totalExpectedMatches: TOTAL_GROUPS * (TEAMS_PER_GROUP * (TEAMS_PER_GROUP - 1)),
     totalExpectedSlots: TOTAL_GROUPS * TEAMS_PER_GROUP,
-    worldReady: !buildingNextSeason,
+    worldReady: buildingNextSeason ? current.worldReady === true : true,
     prepared: buildingNextSeason,
   };
+}
+
+
+/**
+ * Mark post-activation cleanup complete only if this season still owns the
+ * durable cleanup marker. This prevents a stale worker from clearing a newer
+ * season's pending-cleanup state.
+ */
+async function completeSeasonHistoryCleanup(db: any, targetSeason: number) {
+  const configRef = db.collection('system_v1').doc('season_config');
+  return await db.runTransaction(async (tx: any) => {
+    const configSnap = await tx.get(configRef);
+    const config = configSnap.exists ? configSnap.data() || {} : null;
+    const decision = resolveHistoryCleanupCompletion(config, targetSeason);
+    if (!decision.ready) return decision;
+    if (decision.shouldMarkComplete) {
+      tx.update(configRef, {
+        historyCleanupPending: false,
+        historyCleanupCompletedAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+    }
+    return decision;
+  });
+}
+
+/**
+ * Enforce the rolling one-archive policy only after a season has activated.
+ * Verify the retained archive before deleting anything; delete nested match
+ * documents explicitly because Firestore does not cascade subcollections.
+ */
+async function pruneSeasonHistoryAfterActivation(
+  db: any,
+  targetSeason: number,
+  retainedArchiveSeason: number | null,
+) {
+  const configSnap = await db.collection('system_v1').doc('season_config').get();
+  const activeConfig = configSnap.exists ? configSnap.data() || {} : null;
+  if (!activeConfig || Number(activeConfig.activeSeasonNumber) !== targetSeason || activeConfig.worldReady !== true) {
+    throw new Error('SEASON_HISTORY_CLEANUP_TARGET_NOT_ACTIVE');
+  }
+
+  const activePlanRef = db.collection('league_season_rollovers_v1').doc(`S${targetSeason}`);
+  const activePlanSnap = await activePlanRef.get();
+  const activePlan = activePlanSnap.exists ? activePlanSnap.data() || {} : null;
+  if (!validateRolloverPlan(activePlan, targetSeason - 1, targetSeason).valid || !isRolloverPlanPublicationReady(activePlan)) {
+    throw new Error('ACTIVATED_SEASON_ROLLOVER_PLAN_MISSING_OR_INVALID');
+  }
+
+  // The activation transaction durably records skipped seasons in both the
+  // active rollover plan and season_config. Reapply their final history status
+  // here so every cleanup entry point can recover after any post-activation
+  // interruption, including a crash before the original status-write batches.
+  const configSkipped = resolveActivatedSkippedSeasons(activeConfig.lastRecoverySkippedSeasons, targetSeason);
+  const planSkipped = resolveActivatedSkippedSeasons(activePlan.skippedSeasons, targetSeason);
+  if (!configSkipped.ready || !planSkipped.ready ||
+      JSON.stringify(configSkipped.seasons) !== JSON.stringify(planSkipped.seasons)) {
+    throw new Error('ACTIVATED_SKIPPED_SEASON_MARKERS_INVALID');
+  }
+  const cleanupLock = await acquireSeasonCalendarBuildLock(db, targetSeason - 1, targetSeason);
+  if (!cleanupLock.acquired) throw new Error('SEASON_HISTORY_CLEANUP_LOCKED');
+  try {
+    const skippedHistoryRefs = configSkipped.seasons.map(item => ({
+      item,
+      ref: db.collection('league_season_history_v1').doc(`S${item.seasonNumber}`),
+    }));
+    const skippedHistorySnapshots = await Promise.all(skippedHistoryRefs.map(entry => entry.ref.get()));
+    const skippedHistoryWrites: Array<{ ref: any; data: any; options?: any }> = [];
+    for (let index = 0; index < skippedHistoryRefs.length; index++) {
+      const { item, ref } = skippedHistoryRefs[index];
+      const snapshot = skippedHistorySnapshots[index];
+      const marker = resolveActivatedSkippedHistoryMarker(
+        snapshot.exists ? snapshot.data() || {} : null,
+        { seasonNumber: item.seasonNumber, reason: item.reason, targetSeason },
+      );
+      if (!marker.ready) {
+        throw new Error(`SKIPPED_SEASON_HISTORY_CONFLICT:S${item.seasonNumber}`);
+      }
+      if (marker.shouldWrite) {
+        skippedHistoryWrites.push({
+          ref,
+          data: {
+            seasonNumber: item.seasonNumber,
+            status: 'SKIPPED',
+            reason: item.reason,
+            activatedTargetSeason: targetSeason,
+            activatedAt: FieldValue.serverTimestamp(),
+            noResultsFabricated: true,
+            awardsApplied: false,
+            promotionRelegationApplied: false,
+            updatedAt: FieldValue.serverTimestamp(),
+          },
+          options: { merge: true },
+        });
+      }
+    }
+    for (let offset = 0; offset < skippedHistoryWrites.length; offset += 400) {
+      await commitSeasonHistoryCleanupWrites(
+        db, cleanupLock.ownerId, cleanupLock.token, targetSeason,
+        skippedHistoryWrites.slice(offset, offset + 400),
+      );
+    }
+
+  const [archivesSnap, historySnap, plansSnap] = await Promise.all([
+    db.collection('league_season_archives_v1').get(),
+    db.collection('league_season_history_v1').get(),
+    db.collection('league_season_rollovers_v1').get(),
+  ]);
+  const historyById = new Map<string, any>(historySnap.docs.map((doc: any): [string, any] => [doc.id, doc.data() || {}]));
+  const archiveItems = [];
+  for (const archiveDoc of archivesSnap.docs) {
+    const archive = archiveDoc.data() || {};
+    const pruningForThisTarget = archive.pruneStatus === 'PRUNING' &&
+      Number(archive.pruneTargetSeason) === targetSeason &&
+      Number(archive.pruneRetainedArchiveSeason || 0) === Number(retainedArchiveSeason || 0) &&
+      Number(archive.prunePolicyVersion) === 1;
+    const matchesSnap = pruningForThisTarget
+      ? null
+      : await archiveDoc.ref.collection('matches').get();
+    archiveItems.push({
+      id: archiveDoc.id,
+      ref: archiveDoc.ref,
+      archive,
+      matches: matchesSnap ? matchesSnap.docs.map((doc: any) => ({ ...doc.data(), matchId: doc.id })) : [],
+      historyStatus: String((historyById.get(archiveDoc.id) || {}).status || ''),
+    });
+  }
+  const archivePlan = resolveArchivePrunePlan(
+    archiveItems.map(({ id, archive, matches, historyStatus }) => ({ id, archive, matches, historyStatus })),
+    targetSeason,
+    retainedArchiveSeason,
+  );
+  if (!archivePlan.ready) throw new Error(archivePlan.reason || 'ARCHIVE_PRUNE_PREFLIGHT_FAILED');
+
+  const rolloverPlan = resolveRolloverPlanPruneIds(
+    plansSnap.docs.map((doc: any) => ({ id: doc.id, plan: doc.data() || {} })),
+    targetSeason,
+  );
+  if (!rolloverPlan.ready) throw new Error(rolloverPlan.reason || 'ROLLOVER_PLAN_PRUNE_PREFLIGHT_FAILED');
+
+  // Persist a deletion intent only after every archive and plan passed
+  // validation. A retry can resume child-document deletion after interruption.
+  for (const archiveId of archivePlan.pruneIds) {
+    const item = archiveItems.find(candidate => candidate.id === archiveId)!;
+    if (item.archive.pruneStatus !== 'PRUNING') {
+      await commitSeasonHistoryCleanupWrites(db, cleanupLock.ownerId, cleanupLock.token, targetSeason, [{
+        ref: item.ref,
+        data: {
+          pruneStatus: 'PRUNING',
+          pruneTargetSeason: targetSeason,
+          pruneRetainedArchiveSeason: retainedArchiveSeason,
+          prunePolicyVersion: 1,
+          pruneStartedAt: FieldValue.serverTimestamp(),
+        },
+        options: { merge: true },
+      }]);
+    }
+  }
+
+  let deletedArchives = 0;
+  let deletedArchiveMatches = 0;
+  for (const archiveId of archivePlan.pruneIds) {
+    const item = archiveItems.find(candidate => candidate.id === archiveId)!;
+    const matchesSnap = await item.ref.collection('matches').get();
+    for (let offset = 0; offset < matchesSnap.docs.length; offset += 400) {
+      const chunk = matchesSnap.docs.slice(offset, offset + 400);
+      await commitSeasonHistoryCleanupWrites(db, cleanupLock.ownerId, cleanupLock.token, targetSeason, [], chunk.map((matchDoc: (typeof matchesSnap.docs)[number]) => matchDoc.ref));
+      deletedArchiveMatches += chunk.length;
+    }
+    await commitSeasonHistoryCleanupWrites(db, cleanupLock.ownerId, cleanupLock.token, targetSeason, [], [item.ref]);
+    deletedArchives++;
+  }
+
+  let deletedRolloverPlans = 0;
+  for (let offset = 0; offset < rolloverPlan.pruneIds.length; offset += 400) {
+    const chunk = rolloverPlan.pruneIds.slice(offset, offset + 400);
+    if (chunk.length) await commitSeasonHistoryCleanupWrites(db, cleanupLock.ownerId, cleanupLock.token, targetSeason, [], chunk.map(planId => db.collection('league_season_rollovers_v1').doc(planId)));
+    deletedRolloverPlans += chunk.length;
+  }
+  return {
+    deletedArchives,
+    deletedArchiveMatches,
+    deletedRolloverPlans,
+    retainedArchiveSeason,
+    };
+  } finally {
+    await releaseSeasonCalendarBuildLock(db, cleanupLock.ownerId, cleanupLock.token);
+  }
 }
 
 /** Read-only canonical gate shared by build and the final publication step. */
@@ -631,7 +1332,11 @@ async function inspectCanonicalSeason(db: any, seasonNumber: number) {
   });
 }
 
-/** Publish a previously built next-season calendar under a fresh fenced lease. */
+/**
+ * Publish a fully validated next-season calendar without activating it.
+ * Publication must complete by 16:00 MSK on the offseason day; activation is
+ * a separate transaction at the configured next-season boundary (18:00 MSK).
+ */
 export async function publishPreparedSeason() {
   const db = getAdminDb();
   const configRef = db.collection('system_v1').doc('season_config');
@@ -639,93 +1344,305 @@ export async function publishPreparedSeason() {
   if (!initialSnap.exists) return { success: false, action: 'WORLD_NOT_READY', reason: 'SEASON_CONFIG_MISSING' };
   const initial = initialSnap.data() || {};
   const sourceSeason = Number(initial.activeSeasonNumber || 1);
-  const targetSeason = Number(initial.nextSeasonNumber || initial.preparationTargetSeason || sourceSeason + 1);
-  const scheduledStartMs = initial.seasonStart ? new Date(initial.seasonStart).getTime() : NaN;
-  if (Number.isFinite(scheduledStartMs) && Date.now() < scheduledStartMs) {
-    return { success: false, action: 'WORLD_NOT_READY', reason: 'ACTIVATION_NOT_DUE', sourceSeason, targetSeason, scheduledStart: new Date(scheduledStartMs).toISOString(), writesStarted: false };
-  }
-  const directRecoveryPublication = targetSeason === sourceSeason + 2 && Number(initial.recoveryTargetSeason || 0) === targetSeason;
-  const planSourceSeason = directRecoveryPublication ? targetSeason - 1 : sourceSeason;
-  if (!Number.isSafeInteger(targetSeason) || (targetSeason !== sourceSeason + 1 && !directRecoveryPublication)) {
+  const targetSeason = Number(initial.nextSeasonNumber || initial.preparationTargetSeason || 0);
+  const recoveryMode = initial.preparedRecoveryMode === true;
+  const multiSeasonRecovery = recoveryMode && targetSeason > sourceSeason + 1;
+  if (!Number.isSafeInteger(targetSeason) || (targetSeason !== sourceSeason + 1 && !multiSeasonRecovery)) {
     return { success: false, action: 'WORLD_NOT_READY', reason: 'INVALID_PUBLICATION_TARGET', sourceSeason, targetSeason };
   }
+  if (initial.preparedPublished === true && Number(initial.preparedSeasonNumber) === targetSeason) {
+    const planRef = db.collection('league_season_rollovers_v1').doc(`S${targetSeason}`);
+    const [planSnap, readiness] = await Promise.all([
+      planRef.get(),
+      inspectCanonicalSeason(db, targetSeason),
+    ]);
+    const plan = planSnap.exists ? planSnap.data() || {} : null;
+    const preparedStartMs = new Date(initial.preparedSeasonStart || '').getTime();
+    const preparedNextStartMs = new Date(initial.preparedNextSeasonStart || '').getTime();
+    const validPublishedState = initial.worldReady === true &&
+      initial.preparedWorldReady === true &&
+      String(initial.phase || '') === 'PUBLISHED' &&
+      (multiSeasonRecovery || preparedStartMs === new Date(initial.nextSeasonStart || '').getTime()) &&
+      preparedNextStartMs === preparedStartMs + TOTAL_CYCLE_DAYS * 24 * 60 * 60 * 1000 &&
+      validateRolloverPlan(plan, recoveryMode ? targetSeason - 1 : sourceSeason, targetSeason).valid &&
+      isRolloverPlanPublicationReady(plan) &&
+      readiness.ready;
+    if (!validPublishedState) {
+      return {
+        success: false,
+        action: 'WORLD_BUILDING',
+        reason: 'PUBLISHED_SEASON_INTEGRITY_FAILED',
+        sourceSeason,
+        targetSeason,
+        writesStarted: false,
+        ...readiness,
+      };
+    }
+    return {
+      success: true,
+      action: 'SEASON_ALREADY_PUBLISHED',
+      sourceSeason,
+      targetSeason,
+      worldReady: true,
+      preparedWorldReady: true,
+      published: true,
+      activated: false,
+      ...readiness,
+    };
+  }
+  if (initial.worldReady !== true || initial.preparedWorldReady !== true ||
+      Number(initial.preparedSeasonNumber) !== targetSeason ||
+      !initial.preparedSeasonStart || !initial.preparedNextSeasonStart ||
+      !['GENERATING_NEXT', 'WORLD_BUILDING'].includes(String(initial.phase || ''))) {
+    return { success: false, action: 'WORLD_BUILDING', reason: 'PREPARED_WORLD_NOT_READY', sourceSeason, targetSeason, writesStarted: false };
+  }
 
-  const planSnap = await db.collection('league_season_rollovers_v1').doc(`S${targetSeason}`).get();
+  const preparedStartMs = new Date(initial.preparedSeasonStart).getTime();
+  const preparedNextStartMs = new Date(initial.preparedNextSeasonStart).getTime();
+  let lifecycle: ReturnType<typeof resolveSeasonLifecycleWindow> | null = null;
+  const overdueRecoveryMode = recoveryMode && Date.now() >= preparedStartMs;
+  if (overdueRecoveryMode) {
+    const nowMs = Date.now();
+    if (!Number.isFinite(preparedStartMs) || !Number.isFinite(preparedNextStartMs) ||
+        preparedNextStartMs !== preparedStartMs + TOTAL_CYCLE_DAYS * 24 * 60 * 60 * 1000 ||
+        nowMs < preparedStartMs || nowMs >= preparedNextStartMs) {
+      return { success: false, action: 'WORLD_BUILDING', reason: 'RECOVERY_PUBLICATION_OUTSIDE_TARGET_SEASON_WINDOW', sourceSeason, targetSeason, writesStarted: false };
+    }
+  } else {
+    try {
+      lifecycle = resolveSeasonLifecycleWindow({
+        seasonStart: initial.seasonStart,
+        nextSeasonStart: initial.nextSeasonStart,
+        now: new Date(),
+      });
+    } catch {
+      return { success: false, action: 'WORLD_BUILDING', reason: 'SEASON_LIFECYCLE_WINDOW_INVALID', sourceSeason, targetSeason, writesStarted: false };
+    }
+    const expectedPreparedNextStartMs = lifecycle.activationAt.getTime() + TOTAL_CYCLE_DAYS * 24 * 60 * 60 * 1000;
+    if (preparedStartMs !== lifecycle.activationAt.getTime()) {
+      return { success: false, action: 'WORLD_BUILDING', reason: 'PREPARED_ACTIVATION_DATE_MISMATCH', sourceSeason, targetSeason, writesStarted: false };
+    }
+    if (!Number.isFinite(preparedNextStartMs) || preparedNextStartMs !== expectedPreparedNextStartMs) {
+      return { success: false, action: 'WORLD_BUILDING', reason: 'PREPARED_NEXT_BOUNDARY_MISMATCH', sourceSeason, targetSeason, writesStarted: false };
+    }
+    if (lifecycle.publicationDeadlinePassed || lifecycle.activationDue) {
+      return {
+        success: false,
+        action: 'WORLD_BUILDING',
+        reason: lifecycle.activationDue ? 'PUBLICATION_WINDOW_CLOSED' : 'PUBLICATION_DEADLINE_MISSED',
+        sourceSeason,
+        targetSeason,
+        publicationDeadline: lifecycle.publicationDeadlineAt.toISOString(),
+        activationAt: lifecycle.activationAt.toISOString(),
+        writesStarted: false,
+      };
+    }
+  }
+
+  const planRef = db.collection('league_season_rollovers_v1').doc(`S${targetSeason}`);
+  const planSnap = await planRef.get();
   const plan = planSnap.exists ? planSnap.data() || {} : null;
-  if (!plan || !validateRolloverPlan(plan, planSourceSeason, targetSeason).valid || (directRecoveryPublication && plan.mode !== 'recovery_carry_forward')) {
+  const planSourceSeason = recoveryMode ? targetSeason - 1 : sourceSeason;
+  if (!plan || !validateRolloverPlan(plan, planSourceSeason, targetSeason).valid || !isRolloverPlanPublicationReady(plan)) {
     return { success: false, action: 'ROLLOVER_NOT_READY', sourceSeason, targetSeason, reason: 'ARCHIVE_OR_PLACEMENT_PLAN_NOT_READY' };
+  }
+
+  const readiness = await inspectCanonicalSeason(db, targetSeason);
+  if (!readiness.ready) {
+    return { success: false, action: 'WORLD_BUILDING', sourceSeason, targetSeason, reason: 'CANONICAL_CALENDAR_INCOMPLETE', ...readiness };
   }
 
   const lock = await acquireSeasonCalendarBuildLock(db, sourceSeason, targetSeason);
   if (!lock.acquired) {
-    return { success: false, action: 'WORLD_BUILDING', worldReady: false, sourceSeason, targetSeason, reason: 'SEASON_CALENDAR_BUILD_LOCKED', lockExpiresAtMs: lock.expiresAtMs };
+    return { success: false, action: 'WORLD_BUILDING', worldReady: true, sourceSeason, targetSeason, reason: 'SEASON_CALENDAR_BUILD_LOCKED', lockExpiresAtMs: lock.expiresAtMs };
   }
-  const lease: BuildLease = {
-    assert: async () => { await assertSeasonCalendarBuildLock(db, lock.ownerId, lock.token); },
-    commit: writes => commitSeasonCalendarWrites(db, lock.ownerId, lock.token, writes),
-  };
   try {
-    await lease.assert();
-    const currentSnap = await configRef.get();
-    const current = currentSnap.exists ? currentSnap.data() || {} : {};
-    const currentSource = Number(current.activeSeasonNumber || 1);
-    const currentTarget = Number(current.nextSeasonNumber || current.preparationTargetSeason || currentSource + 1);
-    if (currentSource !== sourceSeason || currentTarget !== targetSeason || current.worldReady === true) {
-      return { success: false, action: 'WORLD_NOT_READY', reason: 'PUBLICATION_STATE_CHANGED', sourceSeason: currentSource, targetSeason: currentTarget, worldReady: current.worldReady === true };
-    }
-    const currentScheduledStartMs = current.seasonStart ? new Date(current.seasonStart).getTime() : NaN;
-    if (Number.isFinite(currentScheduledStartMs) && Date.now() < currentScheduledStartMs) {
-      return { success: false, action: 'WORLD_NOT_READY', reason: 'ACTIVATION_NOT_DUE', sourceSeason: currentSource, targetSeason: currentTarget, scheduledStart: new Date(currentScheduledStartMs).toISOString(), writesStarted: false };
-    }
-    if (!['GENERATING_NEXT', 'WORLD_BUILDING'].includes(String(current.phase || '')) ||
-        Number(current.calendarRevision || 0) !== CALENDAR_REVISION ||
-        Number(current.nextSeasonNumber || 0) !== targetSeason ||
-        Number(current.preparationTargetSeason || 0) !== targetSeason) {
-      return { success: false, action: 'WORLD_NOT_READY', reason: 'PUBLICATION_STATE_CHANGED', sourceSeason: currentSource, targetSeason: currentTarget, worldReady: current.worldReady === true };
-    }
-
-    const latestPlanSnap = await db.collection('league_season_rollovers_v1').doc(`S${targetSeason}`).get();
-    const latestPlan = latestPlanSnap.exists ? latestPlanSnap.data() || {} : null;
-    if (!latestPlan || !validateRolloverPlan(latestPlan, planSourceSeason, targetSeason).valid || (directRecoveryPublication && latestPlan.mode !== 'recovery_carry_forward')) {
-      return { success: false, action: 'ROLLOVER_NOT_READY', sourceSeason, targetSeason, reason: 'ARCHIVE_OR_PLACEMENT_PLAN_NOT_READY' };
-    }
-
-    const readiness = await inspectCanonicalSeason(db, targetSeason);
-    if (!readiness.ready) {
-      return { success: false, action: 'WORLD_BUILDING', sourceSeason, targetSeason, worldReady: false, reason: 'CANONICAL_CALENDAR_INCOMPLETE', ...readiness };
-    }
-
-    await commitSeasonCalendarPublication(
-      db,
-      lock.ownerId,
-      lock.token,
-      {
-        sourceSeason,
-        targetSeason,
-        calendarRevision: CALENDAR_REVISION,
-        phase: String(current.phase || ''),
-        planRef: db.collection('league_season_rollovers_v1').doc(`S${targetSeason}`),
-        validatePlan: (candidate: any) => validateRolloverPlan(candidate, planSourceSeason, targetSeason).valid && (!directRecoveryPublication || candidate.mode === 'recovery_carry_forward'),
-      },
-      {
-        ref: configRef,
-        data: {
-          activeSeasonNumber: targetSeason,
-          phase: current.phase === 'ACTIVE' ? 'ACTIVE' : 'REGULAR_SEASON',
-          worldReady: true,
-          seasonStart: current.seasonStart,
-          nextSeasonStart: current.nextSeasonStart,
-          calendarRevision: CALENDAR_REVISION,
-          recoveryTargetSeason: FieldValue.delete(),
-          updatedAt: FieldValue.serverTimestamp(),
+    try {
+      await commitSeasonCalendarPublication(
+        db,
+        lock.ownerId,
+        lock.token,
+        {
+          sourceSeason,
+          targetSeason,
+          calendarRevision: Number(initial.preparedCalendarRevision || 0),
+          phase: String(initial.phase || ''),
+          planRef,
+          validatePlan: (candidate: any) => validateRolloverPlan(candidate, planSourceSeason, targetSeason).valid && isRolloverPlanPublicationReady(candidate),
+          publicationDeadlineMs: overdueRecoveryMode ? preparedStartMs : lifecycle!.publicationDeadlineAt.getTime(),
+          activationAtMs: overdueRecoveryMode ? preparedStartMs : lifecycle!.activationAt.getTime(),
+          allowOverdueRecovery: overdueRecoveryMode,
+          activationEndAtMs: overdueRecoveryMode ? preparedNextStartMs : undefined,
         },
-        options: { merge: true },
-      },
-    );
-    return { success: true, action: 'SEASON_PUBLISHED', sourceSeason, targetSeason, worldReady: true, ...readiness };
+        {
+          ref: configRef,
+          data: {
+            preparedPublished: true,
+            preparedPublishedAt: FieldValue.serverTimestamp(),
+            phase: 'PUBLISHED',
+            updatedAt: FieldValue.serverTimestamp(),
+          },
+          options: { merge: true },
+        },
+      );
+    } catch (error: any) {
+      if (String(error?.message || '').includes('PUBLICATION_WINDOW_CLOSED')) {
+        return { success: false, action: 'WORLD_BUILDING', reason: 'PUBLICATION_WINDOW_CLOSED', sourceSeason, targetSeason, writesStarted: false };
+      }
+      throw error;
+    }
+    return {
+      success: true,
+      action: 'SEASON_PUBLISHED',
+      sourceSeason,
+      targetSeason,
+      worldReady: true,
+      preparedWorldReady: true,
+      published: true,
+      activated: false,
+      publicationDeadline: overdueRecoveryMode ? new Date(preparedStartMs).toISOString() : lifecycle!.publicationDeadlineAt.toISOString(),
+      activationAt: overdueRecoveryMode ? new Date(preparedStartMs).toISOString() : lifecycle!.activationAt.toISOString(),
+      ...readiness,
+    };
   } finally {
     await releaseSeasonCalendarBuildLock(db, lock.ownerId, lock.token);
   }
+}
+
+/**
+ * Atomically activate a previously published season at/after its scheduled
+ * 18:00 MSK boundary. This never builds or publishes a world.
+ */
+export async function activatePublishedSeason() {
+  const db = getAdminDb();
+  const configRef = db.collection('system_v1').doc('season_config');
+  const initialSnap = await configRef.get();
+  if (!initialSnap.exists) return { success: false, action: 'WORLD_NOT_READY', reason: 'SEASON_CONFIG_MISSING' };
+  const initial = initialSnap.data() || {};
+
+  // The activation transaction may have committed immediately before a
+  // process/cron interruption. On retry, prepared* fields are already deleted;
+  // resume only the pending cleanup for the season that is already active.
+  const activationRetry = resolvePostActivationRetry(initial);
+  if (activationRetry.ready) {
+    let cleanup: any = null;
+    try {
+      cleanup = await pruneSeasonHistoryAfterActivation(db, activationRetry.targetSeason,
+        initial.retainedArchiveSeason !== null && initial.retainedArchiveSeason !== undefined &&
+        Number.isSafeInteger(Number(initial.retainedArchiveSeason))
+          ? Number(initial.retainedArchiveSeason) : null);
+      const completion = await completeSeasonHistoryCleanup(db, activationRetry.targetSeason);
+      if (!completion.ready) throw new Error(completion.reason || 'HISTORY_CLEANUP_COMPLETION_BLOCKED');
+    } catch (error: any) {
+      cleanup = { pending: true, error: String(error?.message || error) };
+    }
+    return {
+      success: true,
+      action: 'SEASON_ALREADY_ACTIVATED',
+      sourceSeason: activationRetry.sourceSeason,
+      targetSeason: activationRetry.targetSeason,
+      worldReady: true,
+      historyCleanup: cleanup,
+      resumedAfterInterruption: true,
+    };
+  }
+
+  const sourceSeason = Number(initial.activeSeasonNumber || 1);
+  const targetSeason = Number(initial.preparedSeasonNumber || initial.nextSeasonNumber || 0);
+  const recoveryMode = initial.preparedRecoveryMode === true;
+  const multiSeasonRecovery = recoveryMode && targetSeason > sourceSeason + 1;
+  if (!Number.isSafeInteger(targetSeason) || (targetSeason !== sourceSeason + 1 && !multiSeasonRecovery)) {
+    return { success: false, action: 'WORLD_NOT_READY', reason: 'INVALID_ACTIVATION_TARGET', sourceSeason, targetSeason };
+  }
+  if (initial.preparedPublished !== true || initial.preparedWorldReady !== true ||
+      Number(initial.preparedSeasonNumber) !== targetSeason || initial.worldReady !== true) {
+    return { success: false, action: 'WORLD_NOT_READY', reason: 'SEASON_NOT_PUBLISHED', sourceSeason, targetSeason, writesStarted: false };
+  }
+
+  const activationAtMs = new Date(initial.preparedSeasonStart || '').getTime();
+  const preparedNextStartMs = new Date(initial.preparedNextSeasonStart || '').getTime();
+  const expectedNextStartMs = activationAtMs + TOTAL_CYCLE_DAYS * 24 * 60 * 60 * 1000;
+  if (!Number.isFinite(activationAtMs) || !Number.isFinite(preparedNextStartMs) || preparedNextStartMs !== expectedNextStartMs) {
+    return { success: false, action: 'WORLD_NOT_READY', reason: 'PREPARED_SEASON_DATES_INVALID', sourceSeason, targetSeason, writesStarted: false };
+  }
+  const activationWindow = resolveSeasonActivationWindow({
+    activationAt: new Date(activationAtMs),
+    nextSeasonStart: new Date(preparedNextStartMs),
+    now: new Date(),
+  });
+  if (!activationWindow.ready) {
+    return {
+      success: false,
+      action: 'WORLD_NOT_READY',
+      reason: activationWindow.reason,
+      sourceSeason,
+      targetSeason,
+      activationAt: activationWindow.activationAt.toISOString(),
+      nextSeasonStart: activationWindow.nextSeasonStart.toISOString(),
+      writesStarted: false,
+    };
+  }
+
+  const planRef = db.collection('league_season_rollovers_v1').doc(`S${targetSeason}`);
+  const readiness = await inspectCanonicalSeason(db, targetSeason);
+  if (!readiness.ready) {
+    return { success: false, action: 'WORLD_NOT_READY', reason: 'CANONICAL_CALENDAR_INCOMPLETE', sourceSeason, targetSeason, ...readiness };
+  }
+
+  const result = await commitSeasonActivation(db, configRef, planRef, {
+    sourceSeason,
+    targetSeason,
+    calendarRevision: CALENDAR_REVISION,
+    activationAtMs,
+    nextSeasonStartMs: preparedNextStartMs,
+    multiSeasonRecovery,
+    recoveryMode,
+    isPlanReady: plan => validateRolloverPlan(plan, recoveryMode ? targetSeason - 1 : sourceSeason, targetSeason).valid &&
+      isRolloverPlanPublicationReady(plan),
+    buildUpdate: (current, plan) => ({
+      activeSeasonNumber: targetSeason,
+      phase: 'REGULAR_SEASON',
+      worldReady: true,
+      seasonStart: current.preparedSeasonStart,
+      nextSeasonStart: current.preparedNextSeasonStart,
+      calendarRevision: Number(current.preparedCalendarRevision || CALENDAR_REVISION),
+      nextSeasonNumber: FieldValue.delete(),
+      preparationTargetSeason: FieldValue.delete(),
+      preparedSeasonNumber: FieldValue.delete(),
+      preparedSeasonStart: FieldValue.delete(),
+      preparedNextSeasonStart: FieldValue.delete(),
+      preparedCalendarRevision: FieldValue.delete(),
+      preparedWorldReady: FieldValue.delete(),
+      preparedPublished: FieldValue.delete(),
+      preparedPublishedAt: FieldValue.delete(),
+      preparedRecoveryMode: FieldValue.delete(),
+      recoveryTargetSeason: FieldValue.delete(),
+      retainedArchiveSeason: recoveryMode ? (plan.retainedArchiveSeason !== null && plan.retainedArchiveSeason !== undefined && Number.isSafeInteger(Number(plan.retainedArchiveSeason)) ? Number(plan.retainedArchiveSeason) : null) : sourceSeason,
+      historyCleanupPending: true,
+      historyCleanupTargetSeason: targetSeason,
+      lastRecoverySkippedSeasons: recoveryMode ? (Array.isArray(plan.skippedSeasons) ? plan.skippedSeasons : []) : FieldValue.delete(),
+      activatedAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+    }),
+  });
+
+  if (result.success !== true) {
+    return { success: false, action: 'WORLD_NOT_READY', reason: result.reason || 'ACTIVATION_BLOCKED', sourceSeason, targetSeason, writesStarted: false };
+  }
+  const activatedPlanSnap = await planRef.get();
+  const activatedPlan = activatedPlanSnap.exists ? activatedPlanSnap.data() || {} : {};
+  const retainedArchiveSeason = recoveryMode
+    ? (activatedPlan.retainedArchiveSeason !== null && activatedPlan.retainedArchiveSeason !== undefined && Number.isSafeInteger(Number(activatedPlan.retainedArchiveSeason)) ? Number(activatedPlan.retainedArchiveSeason) : null)
+    : sourceSeason;
+  let cleanup: any = null;
+  try {
+    cleanup = await pruneSeasonHistoryAfterActivation(db, targetSeason, retainedArchiveSeason);
+    const completion = await completeSeasonHistoryCleanup(db, targetSeason);
+    if (!completion.ready) throw new Error(completion.reason || 'HISTORY_CLEANUP_COMPLETION_BLOCKED');
+  } catch (error: any) {
+    cleanup = { pending: true, error: String(error?.message || error) };
+  }
+  return { success: true, action: 'SEASON_ACTIVATED', sourceSeason, targetSeason, worldReady: true, recoveryMode, historyCleanup: cleanup, activationAt: new Date(activationAtMs).toISOString(), ...readiness };
 }
 
 /**
@@ -736,7 +1653,18 @@ export async function publishPreparedSeason() {
 export async function ensureSeasonCalendar(requestedTargetSeason?: number) {
   const db = getAdminDb();
   const configSnap = await db.collection('system_v1').doc('season_config').get();
-  const config = configSnap.exists ? configSnap.data() || {} : {};
+  let config = configSnap.exists ? configSnap.data() || {} : {};
+  if (config.historyCleanupPending === true) {
+    try {
+      await pruneSeasonHistoryAfterActivation(db, Number(config.historyCleanupTargetSeason || config.activeSeasonNumber || 1),
+        config.retainedArchiveSeason !== null && config.retainedArchiveSeason !== undefined && Number.isSafeInteger(Number(config.retainedArchiveSeason)) ? Number(config.retainedArchiveSeason) : null);
+      const completion = await completeSeasonHistoryCleanup(db, Number(config.historyCleanupTargetSeason || config.activeSeasonNumber || 1));
+      if (!completion.ready) throw new Error(completion.reason || 'HISTORY_CLEANUP_COMPLETION_BLOCKED');
+      config = { ...config, historyCleanupPending: false };
+    } catch (error: any) {
+      return { success: false, worldReady: config.worldReady === true, action: 'WORLD_BUILDING', reason: 'SEASON_HISTORY_CLEANUP_PENDING', cleanupError: String(error?.message || error), writesStarted: true };
+    }
+  }
   const sourceSeason = Number(config.activeSeasonNumber || 1);
   const phase = String(config.phase || '').toUpperCase();
   const configuredNextCandidates = [config.nextSeasonNumber, config.preparationTargetSeason]
@@ -745,7 +1673,7 @@ export async function ensureSeasonCalendar(requestedTargetSeason?: number) {
   const configuredNextTarget = configuredNextCandidates.length ? Math.max(...configuredNextCandidates) : 0;
   const nextStartMs = config.nextSeasonStart ? new Date(config.nextSeasonStart).getTime() : NaN;
   const scheduledBoundaryPassed = Number.isFinite(nextStartMs) && Date.now() >= nextStartMs;
-  const phaseRequestsPreparation = ['FINALIZING', 'GENERATING_NEXT', 'PREPARING_NEXT_SEASON', 'PREPARATION'].includes(phase);
+  const phaseRequestsPreparation = ['FINALIZING', 'GENERATING_NEXT', 'PREPARING_NEXT_SEASON', 'PREPARATION', 'PUBLISHED'].includes(phase);
   const inferredTarget = configuredNextTarget || (phaseRequestsPreparation || scheduledBoundaryPassed ? sourceSeason + 1 : sourceSeason);
   const requestedTarget = Number(requestedTargetSeason || 0);
   let targetSeason = requestedTarget > sourceSeason ? requestedTarget : inferredTarget;
@@ -773,11 +1701,9 @@ export async function ensureSeasonCalendar(requestedTargetSeason?: number) {
     }
   }
 
-  // A delayed cron may find more than one elapsed boundary. Never provision
-  // the first missed season and publish it retroactively. Every elapsed
-  // intermediate season must already have a verified immutable archive before
-  // a direct catch-up can be considered. The current calendar builder only
-  // publishes one adjacent season, so a multi-season gap remains read-only.
+  // A delayed cron may find several elapsed boundaries. Completed seasons are
+  // archived; genuinely incomplete seasons may be skipped. The final target is
+  // always the season currently active according to the canonical date plan.
   if (!pristineFirstWorld && configSnap.exists) {
     const hardcodedSeasonStart = sourceSeason === 1
       ? new Date(FIRST_SEASON_START_ISO)
@@ -811,58 +1737,18 @@ export async function ensureSeasonCalendar(requestedTargetSeason?: number) {
       return { success: false, worldReady: false, action: 'WORLD_BUILDING', reason: 'SEASON_DATE_CONFIG_INVALID', writesStarted: false };
     }
 
-    const explicitRecoveryTarget = Number(config.recoveryTargetSeason || 0);
-    const directRecoveryTarget = explicitRecoveryTarget === datePlan.expectedSeasonNumber && requestedTarget === explicitRecoveryTarget;
     if (datePlan.expectedSeasonNumber > sourceSeason + 1) {
-      const archiveStates: Record<number, { valid: boolean; reason?: string }> = {};
-      for (const missedSeason of datePlan.completedSeasons.filter(season => season > sourceSeason)) {
-        const archiveRef = db.collection('league_season_archives_v1').doc(`S${missedSeason}`);
-        const archiveSnap = await archiveRef.get();
-        if (!archiveSnap.exists) {
-          archiveStates[missedSeason] = { valid: false, reason: 'ARCHIVE_MISSING' };
-          continue;
-        }
-        const archiveData = archiveSnap.data() || {};
-        if (!isCompletedSeasonArchive(archiveData) && !(missedSeason === 2 && isRecoveredSeasonArchive(archiveData))) {
-          archiveStates[missedSeason] = { valid: false, reason: 'ARCHIVE_INVALID' };
-          continue;
-        }
-        const archivedMatchesSnap = await archiveRef.collection('matches').get();
-        const archivedMatches = archivedMatchesSnap.docs.map((doc: any) => ({ ...doc.data(), matchId: doc.id }));
-        const validation = isRecoveredSeasonArchive(archiveData)
-          ? { valid: true, reasons: [] as string[] }
-          : validateSeasonArchiveSnapshot(archiveData, archivedMatches);
-        archiveStates[missedSeason] = validation.valid ? { valid: true } : { valid: false, reason: 'ARCHIVE_INVALID' };
-      }
-    const archiveGate = evaluateExpiredSeasonArchives(datePlan, archiveStates);
-      if (!archiveGate.ready) {
-        return {
-          success: false, worldReady: false, action: 'WORLD_BUILDING',
-          reason: archiveGate.reason,
-          expectedSeasonNumber: datePlan.expectedSeasonNumber,
-          expectedSeasonStart: datePlan.expectedSeasonStart.toISOString(),
-          missedSeasons: archiveGate.missedSeasons,
-          invalidSeasons: archiveGate.invalidSeasons,
-          writesStarted: false,
-        };
-      }
-      if (directRecoveryTarget && archiveGate.ready) targetSeason = explicitRecoveryTarget;
-      else if (!canPrepareImmediateCatchUpTarget(sourceSeason, targetSeason, archiveGate.ready)) return {
-        success: false, worldReady: false, action: 'WORLD_BUILDING',
-        reason: 'SEQUENTIAL_SEASON_CATCH_UP_REQUIRED',
-        expectedSeasonNumber: datePlan.expectedSeasonNumber,
-        expectedSeasonStart: datePlan.expectedSeasonStart.toISOString(),
-        missedSeasons: archiveGate.missedSeasons,
-        writesStarted: false,
-      };
+      targetSeason = datePlan.expectedSeasonNumber;
     }
   }
 
-  const directRecoveryBuild = targetSeason === Number(config.recoveryTargetSeason || 0) && targetSeason > sourceSeason + 1;
+  const directRecoveryBuild = targetSeason > sourceSeason + 1;
   const beforeLockPreflight = pristineFirstWorld || directRecoveryBuild
-    ? { ready: true, diagnostics: [] as any[] }
+    ? { ready: true, observedCanonicalMatches: 0, diagnostics: [] as any[] }
     : await inspectCalendarRepairPreflight(db, sourceSeason);
-  if (!beforeLockPreflight.ready) {
+  const canClassifyIncompleteSource = targetSeason > sourceSeason &&
+    Number(beforeLockPreflight.observedCanonicalMatches || 0) < TOTAL_GROUPS * 56;
+  if (!beforeLockPreflight.ready && !canClassifyIncompleteSource) {
     return { success: false, worldReady: false, action: 'WORLD_BUILDING', reason: 'SEASON_CALENDAR_PREFLIGHT_FAILED', diagnostics: beforeLockPreflight.diagnostics, writesStarted: false };
   }
   const lock = await acquireSeasonCalendarBuildLock(db, sourceSeason, targetSeason);
@@ -883,17 +1769,67 @@ export async function ensureSeasonCalendar(requestedTargetSeason?: number) {
   };
   try {
     const lockedPreflight = pristineFirstWorld || directRecoveryBuild
-      ? { ready: true, diagnostics: [] as any[] }
+      ? { ready: true, observedCanonicalMatches: 0, diagnostics: [] as any[] }
       : await inspectCalendarRepairPreflight(db, sourceSeason);
-    if (!lockedPreflight.ready) {
+    const canClassifyLockedIncompleteSource = targetSeason > sourceSeason &&
+      Number(lockedPreflight.observedCanonicalMatches || 0) < TOTAL_GROUPS * 56;
+    if (!lockedPreflight.ready && !canClassifyLockedIncompleteSource) {
       return { success: false, worldReady: false, action: 'WORLD_BUILDING', reason: 'SEASON_CALENDAR_PREFLIGHT_FAILED', diagnostics: lockedPreflight.diagnostics, writesStarted: false };
     }
+
+    // A published calendar is immutable. Repeated cron runs may verify it,
+    // but must never repair or rewrite its fixtures after publication.
+    const latestConfigSnap = await db.collection('system_v1').doc('season_config').get();
+    const latestConfig = latestConfigSnap.exists ? latestConfigSnap.data() || {} : {};
+    if (latestConfig.preparedPublished === true && Number(latestConfig.preparedSeasonNumber) === targetSeason) {
+      const planRef = db.collection('league_season_rollovers_v1').doc(`S${targetSeason}`);
+      const [planSnap, readiness] = await Promise.all([
+        planRef.get(),
+        inspectCanonicalSeason(db, targetSeason),
+      ]);
+      const planSource = directRecoveryBuild ? targetSeason - 1 : sourceSeason;
+      const plan = planSnap.exists ? planSnap.data() || {} : null;
+      const publishedReady = latestConfig.preparedWorldReady === true &&
+        validateRolloverPlan(plan, planSource, targetSeason).valid &&
+        isRolloverPlanPublicationReady(plan) &&
+        readiness.ready;
+      if (!publishedReady) {
+        return {
+          success: false,
+          action: 'WORLD_BUILDING',
+          worldReady: latestConfig.worldReady === true,
+          seasonNumber: sourceSeason,
+          targetSeasonNumber: targetSeason,
+          reason: 'PUBLISHED_SEASON_INTEGRITY_FAILED',
+          writesStarted: false,
+          ...readiness,
+        };
+      }
+      return {
+        success: true,
+        action: 'SEASON_ALREADY_PUBLISHED',
+        seasonNumber: targetSeason,
+        seasonStart: latestConfig.preparedSeasonStart,
+        nextSeasonStart: latestConfig.preparedNextSeasonStart,
+        worldReady: latestConfig.worldReady === true,
+        prepared: true,
+        published: true,
+        createdMatches: 0,
+        repairedMatches: 0,
+        totalExpectedMatches: TOTAL_GROUPS * 56,
+        totalExpectedSlots: TOTAL_GROUPS * TEAMS_PER_GROUP,
+        ...readiness,
+      };
+    }
+
     if (targetSeason > sourceSeason) {
       await lease.commit([{ ref: db.collection('system_v1').doc('season_config'), data: {
-        phase: 'GENERATING_NEXT',
+        phase: config.preparedPublished === true && Number(config.preparedSeasonNumber) === targetSeason ? 'PUBLISHED' : 'GENERATING_NEXT',
         nextSeasonNumber: targetSeason,
         preparationTargetSeason: targetSeason,
-        worldReady: false,
+        preparedSeasonNumber: targetSeason,
+        ...(directRecoveryBuild ? { recoveryTargetSeason: targetSeason } : {}),
+        preparedWorldReady: config.preparedWorldReady === true && Number(config.preparedSeasonNumber) === targetSeason,
         updatedAt: FieldValue.serverTimestamp(),
       }, options: { merge: true } }]);
     }

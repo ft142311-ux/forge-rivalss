@@ -81,6 +81,7 @@ test('registration HTTP API enforces its boundary and safely initializes a club'
     const uid = user.uid;
     const slotRefs = [];
     const matchRefs = [];
+    const historyRefs = [];
     const auditQuery = db.collection('security_audit_v1').where('actorUid', '==', uid);
     const tableRef = db.collection('league_tables_v2')
       .doc(`table_v140_S${season}_LALPHA_V${division}_G${group}`);
@@ -94,6 +95,7 @@ test('registration HTTP API enforces its boundary and safely initializes a club'
       const cleanupRefs = [
         ...slotRefs,
         ...matchRefs,
+        ...historyRefs,
         ...auditSnapshot.docs.map((doc) => doc.ref),
         tableRef,
         configRef,
@@ -116,6 +118,9 @@ test('registration HTTP API enforces its boundary and safely initializes a club'
       worldReady: true,
     });
     await statsRef.set({ totalPlayers: 1000 });
+    const targetSlotId = `${runId}-slot-${division}-${group}-8`;
+    const historyRef = db.collection('league_slot_history_v1').doc(`${targetSlotId}_G8`);
+    historyRefs.push(historyRef);
 
     const tableStats = {};
     for (let rank = 1; rank <= 8; rank += 1) {
@@ -125,12 +130,12 @@ test('registration HTTP API enforces its boundary and safely initializes a club'
         name: rank === 8 ? 'Test Bot' : `Test Team ${rank}`,
         rank,
         isBot: rank === 8,
-        matchesPlayed: 0,
-        wins: 0,
+        matchesPlayed: rank === 8 ? 4 : 0,
+        wins: rank === 8 ? 3 : 0,
         draws: 0,
-        losses: 0,
-        points: 0,
-        diff: 0,
+        losses: rank === 8 ? 1 : 0,
+        points: rank === 8 ? 9 : 0,
+        diff: rank === 8 ? 5 : 0,
       };
     }
     await tableRef.set({
@@ -140,7 +145,12 @@ test('registration HTTP API enforces its boundary and safely initializes a club'
       group,
       stats: tableStats,
     });
-    await botPlayerRef.set({ id: botId, clubName: 'Test Bot' });
+    await botPlayerRef.set({
+      id: botId,
+      clubName: 'Test Bot',
+      isBot: true,
+      ownedPlayers: Array.from({ length: 5 }, (_, index) => ({ id: `bot-player-${index + 1}` })),
+    });
 
     for (let divisionNumber = 1; divisionNumber <= 4; divisionNumber += 1) {
       const groups = divisionNumber === 1 ? 1 : divisionNumber === 2 ? 2 : divisionNumber === 3 ? 4 : 8;
@@ -157,6 +167,7 @@ test('registration HTTP API enforces its boundary and safely initializes a club'
             rank,
             status: isTarget ? 'FREE' : 'OCCUPIED',
             occupantId: isTarget ? null : `occupied-${divisionNumber}-${groupNumber}-${rank}`,
+            occupancyGeneration: isTarget ? 7 : 0,
           });
         }
       }
@@ -179,8 +190,19 @@ test('registration HTTP API enforces its boundary and safely initializes a club'
           awayId,
           homeName: homeRank === 8 ? 'Test Bot' : `Test Team ${homeRank}`,
           awayName: awayRank === 8 ? 'Test Bot' : `Test Team ${awayRank}`,
+          homeLogo: homeRank === 8 ? 'bot-logo' : null,
+          awayLogo: awayRank === 8 ? 'bot-logo' : null,
           homeRank,
           awayRank,
+          isFinished: homeRank === 8 && awayRank === 1,
+          status: homeRank === 8 && awayRank === 1 ? 'finished' : 'scheduled',
+          startTime: homeRank === 8 && awayRank === 1
+            ? '2026-10-01T12:00:00.000Z'
+            : homeRank === 1 && awayRank === 2
+              ? '2020-01-01T00:00:00.000Z'
+              : new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+          scoreA: homeRank === 8 && awayRank === 1 ? 2 : 0,
+          scoreB: homeRank === 8 && awayRank === 1 ? 1 : 0,
         });
       }
     }
@@ -231,19 +253,48 @@ test('registration HTTP API enforces its boundary and safely initializes a club'
     assert.equal(botPlayer.exists, false);
     assert.equal(table.get(`stats.${uid}.rank`), 8);
     assert.equal(table.get(`stats.${uid}.isBot`), false);
+    assert.equal(table.get(`stats.${uid}.matchesPlayed`), 4);
+    assert.equal(table.get(`stats.${uid}.wins`), 3);
+    assert.equal(table.get(`stats.${uid}.losses`), 1);
+    assert.equal(table.get(`stats.${uid}.points`), 9);
+    assert.equal(table.get(`stats.${uid}.diff`), 5);
     assert.equal(table.get(`stats.${botId}`), undefined);
     const claimedSlot = slotQuery.docs.find((doc) => doc.get('rank') === 8 &&
       doc.get('division') === division && doc.get('group') === group);
     assert.ok(claimedSlot);
     assert.equal(claimedSlot.get('status'), 'OCCUPIED');
     assert.equal(claimedSlot.get('occupantId'), uid);
+    assert.equal(claimedSlot.get('occupancyGeneration'), 8);
+    const history = await historyRef.get();
+    assert.equal(history.exists, true);
+    assert.equal(history.get('reason'), 'NEW_REGISTRATION');
+    assert.equal(history.get('previousOccupantId'), botId);
+    assert.equal(history.get('previousClubSnapshot').clubName, 'Test Bot');
+    assert.equal(history.get('previousClubSnapshot').ownedPlayers.length, 5);
+    assert.equal(history.get('newOccupantId'), uid);
+    assert.equal(history.get('generation'), 8);
     assert.equal(matches.size, 56);
     assert.equal(matches.docs.filter((doc) =>
       doc.get('homeId') === uid || doc.get('awayId') === uid
-    ).length, 14);
-    assert.equal(matches.docs.some((doc) =>
+    ).length, 13);
+    const historicalBotMatch = matches.docs.find((doc) =>
+      doc.get('homeRank') === 8 && doc.get('awayRank') === 1
+    );
+    assert.ok(historicalBotMatch);
+    assert.equal(historicalBotMatch.get('status'), 'finished');
+    assert.equal(historicalBotMatch.get('homeId'), botId);
+    assert.equal(historicalBotMatch.get('homeLogo'), 'bot-logo');
+    assert.equal(historicalBotMatch.get('scoreA'), 2);
+    assert.equal(historicalBotMatch.get('scoreB'), 1);
+    const futureBotFixture = matches.docs.find((doc) =>
+      doc.get('homeRank') === 8 && doc.get('awayRank') === 2
+    );
+    assert.ok(futureBotFixture);
+    assert.equal(futureBotFixture.get('homeId'), uid);
+    assert.equal(futureBotFixture.get('homeLogo'), null);
+    assert.equal(matches.docs.filter((doc) =>
       doc.get('homeId') === botId || doc.get('awayId') === botId
-    ), false);
+    ).length, 1);
     assert.equal(stats.get('totalPlayers'), 1001);
     assert.equal(audit.size, 1);
     assert.equal(audit.docs[0].get('event'), 'CLUB_REGISTRATION_COMPLETED');

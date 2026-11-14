@@ -3,12 +3,12 @@ import 'server-only';
 import { FieldValue } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { getGlobalSeasonInfo } from '@/app/lib/time-utils';
+import { resolveSeasonLifecycleWindow } from './season-boundary';
 import { logger } from '@/app/lib/logger';
-import { ensureSeasonCalendar, publishPreparedSeason } from './season-calendar';
+import { activatePublishedSeason, ensureSeasonCalendar, publishPreparedSeason } from './season-calendar';
 import { runTournamentCycle } from './tournament-system';
 import { resolveDailyMatches } from './autonomous-cycle';
 import { prepareSeasonRollover } from './season-rollover';
-import { runSeasonActivationFlow } from './season-transition-flow';
 import { validateRolloverPlan } from './season-rollover-plan';
 import { isCalendarReady } from './season-calendar-gate';
 
@@ -38,10 +38,30 @@ export async function runSeasonOrchestrator() {
       const sourceSeason = Number(configData.activeSeasonNumber || world.seasonNumber || 1);
       const targetSeason = Number(world.targetSeasonNumber || sourceSeason + 1);
 
-      // A missed scheduled start must not deadlock behind unfinished overdue
-      // fixtures. Settle the configured active season first, then re-run the
-      // rollover preflight. If settlement fails or fixtures remain incomplete,
-      // leave publication blocked and let the next cron retry safely.
+      // Once Day 15 begins, unfinished league fixtures are intentionally
+      // frozen. Never call a catch-up resolver in offseason: keep the rollover
+      // blocked and preserve every original result until an explicit safe
+      // recovery path is approved.
+      const retryInfo = getGlobalSeasonInfo();
+      const retryLifecycle = resolveSeasonLifecycleWindow({
+        seasonStart: configData.seasonStart || retryInfo.currentSeasonStart,
+        nextSeasonStart: configData.nextSeasonStart || retryInfo.nextSeasonStart,
+        now: new Date(),
+      });
+      if (retryLifecycle.leagueMatchesPaused) {
+        return {
+          action: 'WAITING_FOR_SEASON_RESULTS' as const,
+          worldReady: configData.worldReady === true,
+          season: sourceSeason,
+          targetSeason,
+          rollover: world.rollover || { ready: false, reason: 'INCOMPLETE_CANONICAL_FIXTURES' },
+          catchUp: { skipped: true, reason: 'OFFSEASON_LEAGUE_MATCHES_DISABLED', writesStarted: false },
+        };
+      }
+
+      // Before offseason, overdue fixtures may still be settled by the normal
+      // resolver. The rollover itself remains responsible for validating all
+      // 840 canonical results before it creates the promotion/relegation plan.
       catchUp = await resolveDailyMatches();
       if (catchUp?.success !== true) {
         logger.warn('Season rollover blocked because overdue-match settlement failed', catchUp);
@@ -60,22 +80,51 @@ export async function runSeasonOrchestrator() {
         return { action: 'WORLD_BUILDING' as const, worldReady: false, season: world.seasonNumber, rollover: (world as any).rollover, catchUp };
       }
     }
-    // If the scheduled start has passed and the canonical next-season world is
-    // fully prepared, publish it from the regular orchestrator. This makes a
-    // missed activation cron recoverable without bypassing the publication
-    // transaction, rollover plan, canonical readiness gate, or write fence.
-    if (world?.prepared === true && world?.worldReady !== true) {
-      const activationAtMs = world.seasonStart ? new Date(world.seasonStart).getTime() : NaN;
-      if (Number.isFinite(activationAtMs) && Date.now() >= activationAtMs) {
+    // A prepared calendar is not the active season. Publish it by the
+    // offseason deadline, then wait for the exact configured activation boundary.
+    if (world?.prepared === true) {
+      const configSnap = await db.collection('system_v1').doc('season_config').get();
+      const config = configSnap.exists ? configSnap.data() || {} : {};
+      if (config.preparedWorldReady !== true || Number(config.preparedSeasonNumber) !== Number(world.seasonNumber)) {
+        return { action: 'WORLD_BUILDING' as const, worldReady: config.worldReady === true, season: config.activeSeasonNumber, reason: 'PREPARED_WORLD_NOT_READY', calendar: world, catchUp };
+      }
+
+      if (config.preparedPublished !== true) {
         const publication: any = await publishPreparedSeason();
         if (publication?.success !== true) {
           logger.warn('Prepared season is waiting for safe publication', publication);
-          return { action: 'WORLD_BUILDING' as const, worldReady: false, season: world.seasonNumber, publication, calendar: world, catchUp };
+          return { action: 'PUBLICATION_BLOCKED' as const, worldReady: config.worldReady === true, season: config.activeSeasonNumber, publication, calendar: world, catchUp };
         }
-        world = { ...world, success: true, action: 'SEASON_PUBLISHED', worldReady: true, prepared: false, seasonNumber: publication.targetSeason || world.seasonNumber, publication };
-      } else {
-        return { action: 'WORLD_BUILDING' as const, worldReady: false, season: world.seasonNumber, reason: 'ACTIVATION_NOT_DUE', calendar: world, catchUp };
       }
+
+      const activationAtMs = new Date(config.preparedSeasonStart || world.seasonStart || '').getTime();
+      if (!Number.isFinite(activationAtMs) || Date.now() < activationAtMs) {
+        return {
+          action: 'SEASON_PUBLISHED_WAITING_ACTIVATION' as const,
+          worldReady: true,
+          season: Number(config.activeSeasonNumber || world.seasonNumber),
+          targetSeason: Number(config.preparedSeasonNumber),
+          activationAt: Number.isFinite(activationAtMs) ? new Date(activationAtMs).toISOString() : null,
+          calendar: world,
+          catchUp,
+        };
+      }
+
+      const activation: any = await activatePublishedSeason();
+      if (activation?.success !== true) {
+        logger.warn('Published season is waiting for safe activation', activation);
+        return { action: 'ACTIVATION_BLOCKED' as const, worldReady: true, season: Number(config.activeSeasonNumber || world.seasonNumber), activation, calendar: world, catchUp };
+      }
+      world = { ...world, success: true, action: 'SEASON_ACTIVATED', worldReady: true, prepared: false, seasonNumber: activation.targetSeason || world.seasonNumber, activation };
+      // End this scheduler tick at the atomic boundary. Do not immediately run
+      // catch-up settlement or another lifecycle transition against the new world.
+      return {
+        action: 'SEASON_ACTIVATED' as const,
+        worldReady: true,
+        season: world.seasonNumber,
+        activation,
+        calendar: world,
+      };
     }
 
     if (!world?.waitingForSeasonResults && world?.worldReady === true) {
@@ -86,9 +135,9 @@ export async function runSeasonOrchestrator() {
 
     const configRef = db.collection('system_v1').doc('season_config');
 
-    // Finalize results during the offseason itself, not only when the next
-    // calendar date rolls over. The archive/placement plan is the barrier for
-    // advancing to GENERATING_NEXT.
+    // Finalize the 14th-round results as soon as the final fixtures are due,
+    // before Day 15 freezes league simulation. The archive/placement plan is
+    // the barrier for advancing to GENERATING_NEXT.
     const beforeFinalizeSnap = await configRef.get();
     if (beforeFinalizeSnap.exists && (beforeFinalizeSnap.data() || {}).phase === 'FINALIZING') {
       const activeSeason = Number((beforeFinalizeSnap.data() || {}).activeSeasonNumber || world.seasonNumber || 1);
@@ -113,15 +162,21 @@ export async function runSeasonOrchestrator() {
       }
 
       const info = getGlobalSeasonInfo();
-      const configuredSeasonStart = config.seasonStart ? new Date(config.seasonStart) : info.currentSeasonStart;
-      const preparationAtMs = configuredSeasonStart.getTime() + 14 * 24 * 60 * 60 * 1000 - 2 * 60 * 60 * 1000;
       const nowMs = Date.now();
+      const lifecycle = resolveSeasonLifecycleWindow({
+        seasonStart: config.seasonStart || info.currentSeasonStart,
+        nextSeasonStart: config.nextSeasonStart || info.nextSeasonStart,
+        now: new Date(nowMs),
+      });
+      const finalizationAtMs = lifecycle.finalizationAt.getTime();
 
       if (config.phase === 'REGULAR_SEASON' || config.phase === 'ACTIVE') {
-        if (Number.isFinite(preparationAtMs) && nowMs >= preparationAtMs) {
+        if (Number.isFinite(finalizationAtMs) && nowMs >= finalizationAtMs) {
           t.update(configRef, {
             phase: 'FINALIZING',
-            offseasonStartedAt: FieldValue.serverTimestamp(),
+            finalizationStartedAt: FieldValue.serverTimestamp(),
+            offseasonScheduledAt: lifecycle.offseasonStartAt.toISOString(),
+            offseasonStartedAt: lifecycle.offseasonStartAt,
             preparationStartedAt: FieldValue.serverTimestamp(),
             preparationTargetSeason: Number(config.activeSeasonNumber || world.seasonNumber || 1) + 1,
             updatedAt: FieldValue.serverTimestamp(),
@@ -187,7 +242,7 @@ export async function buildNextSeasonWorld() {
     return { success: false, action: 'WORLD_NOT_READY', sourceSeason, targetSeason, reason: 'INVALID_TARGET_SEASON' };
   }
   const phase = String(config.phase || '').toUpperCase();
-  const nextSeasonPreparationPhases = ['FINALIZING', 'GENERATING_NEXT', 'WORLD_BUILDING', 'PREPARING_NEXT_SEASON', 'PREPARATION'];
+  const nextSeasonPreparationPhases = ['FINALIZING', 'GENERATING_NEXT', 'WORLD_BUILDING', 'PREPARING_NEXT_SEASON', 'PREPARATION', 'PUBLISHED'];
   if (targetSeason === sourceSeason + 1 && !nextSeasonPreparationPhases.includes(phase)) {
     return {
       success: false,
@@ -230,29 +285,24 @@ export async function buildNextSeasonWorld() {
  */
 export const generateNextSeasonWorld = buildNextSeasonWorld;
 
-/** Prepare the next season through the canonical calendar path, then verify activation gates. */
+/**
+ * Build and publish the next season ahead of time; activate only when its
+ * scheduled boundary has arrived.
+ */
 export async function activateNextSeason() {
   const db = getAdminDb();
   const configRef = db.collection('system_v1').doc('season_config');
-  return runSeasonActivationFlow({
-    readConfig: async () => {
-      const snap = await configRef.get();
-      return snap.exists ? snap.data() || {} : null;
-    },
-    prepareNextSeason: async (sourceSeason, targetSeason) => {
-      const build: any = await buildNextSeasonWorld();
-      if (Number(build.sourceSeason) !== sourceSeason || Number(build.targetSeason) !== targetSeason) {
-        return { ...build, success: false, action: build.action || 'WORLD_NOT_READY', reason: 'PREPARATION_TARGET_MISMATCH' };
-      }
-      if (build.success !== true || build.world?.prepared !== true) return build;
-      return publishPreparedSeason();
-    },
-    readRollover: async (targetSeason) => {
-      const snap = await db.collection('league_season_rollovers_v1').doc(`S${targetSeason}`).get();
-      const rollover = snap.exists ? snap.data() || {} : null;
-      return validateRolloverPlan(rollover, targetSeason - 1, targetSeason).valid ? rollover : null;
-    },
-  });
+  const snap = await configRef.get();
+  if (!snap.exists) return { success: false, action: 'WORLD_NOT_READY', reason: 'SEASON_CONFIG_MISSING' };
+  const config = snap.data() || {};
+
+  if (config.preparedPublished === true) return activatePublishedSeason();
+
+  const build: any = await buildNextSeasonWorld();
+  if (build?.success !== true || build?.world?.prepared !== true) return build;
+  const publication: any = await publishPreparedSeason();
+  if (publication?.success !== true) return publication;
+  return activatePublishedSeason();
 }
 
 /**

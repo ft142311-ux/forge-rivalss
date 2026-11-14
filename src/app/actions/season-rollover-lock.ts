@@ -19,6 +19,10 @@ type PublicationExpectation = {
   phase: string;
   planRef?: any;
   validatePlan?: (plan: any) => boolean;
+  publicationDeadlineMs: number;
+  activationAtMs: number;
+  allowOverdueRecovery?: boolean;
+  activationEndAtMs?: number;
 };
 
 export function isSeasonRolloverLockStale(lock: any, nowMs: number) {
@@ -39,9 +43,17 @@ async function acquireLease(
   return db.runTransaction(async (tx: any) => {
     const snap = await tx.get(ref);
     const current = snap.exists ? snap.data() || {} : null;
-    const ownedByCaller = current?.ownerId === ownerId && (!options.token || current?.token === options.token);
-    if (current && !ownedByCaller && !isSeasonRolloverLockStale(current, nowMs)) {
-      return { acquired: false, ownerId, lockOwnerId: String(current.ownerId || ''), expiresAtMs: Number(current.expiresAtMs || 0) };
+    const hasLiveLease = Boolean(current) && !isSeasonRolloverLockStale(current, nowMs);
+    // A matching ownerId alone is not proof that this is the same process:
+    // after expiry, an old worker may still be running. Reuse a live lease only
+    // when the caller presents its exact fencing token; every expired lease gets
+    // a fresh token, even when ownerId is accidentally reused.
+    const ownedByCaller = hasLiveLease &&
+      current?.ownerId === ownerId &&
+      Boolean(options.token) &&
+      current?.token === options.token;
+    if (hasLiveLease && !ownedByCaller) {
+      return { acquired: false, ownerId, lockOwnerId: String(current?.ownerId || ''), expiresAtMs: Number(current?.expiresAtMs || 0) };
     }
     const token = ownedByCaller ? String(current.token) : randomUUID();
     tx.set(ref, { ownerId, token, sourceSeason, targetSeason, acquiredAtMs: nowMs, expiresAtMs: nowMs + ttlMs }, { merge: true });
@@ -152,9 +164,14 @@ export async function commitSeasonCalendarWrites(db: LockDb, ownerId: string, to
   await db.runTransaction(async (tx: any) => {
     const snap = await tx.get(ref);
     const current = snap.exists ? snap.data() || {} : null;
-    if (!current || current.ownerId !== ownerId || current.token !== token || isSeasonRolloverLockStale(current, Date.now())) {
+    const nowMs = Date.now();
+    if (!current || current.ownerId !== ownerId || current.token !== token || isSeasonRolloverLockStale(current, nowMs)) {
       throw new Error('SEASON_CALENDAR_BUILD_LOCK_LOST');
     }
+    // Calendar generation may span many bounded write chunks. Renew the lease
+    // in the same transaction as each chunk so a live builder cannot be replaced
+    // while it is still committing work.
+    tx.set(ref, { expiresAtMs: nowMs + SEASON_CALENDAR_BUILD_LOCK_TTL_MS, renewedAtMs: nowMs }, { merge: true });
     for (const write of writes) tx.set(write.ref, write.data, write.options);
   });
 }
@@ -186,16 +203,62 @@ export async function commitSeasonCalendarPublication(
         Number(config.activeSeasonNumber || 1) !== expected.sourceSeason ||
         Number(config.nextSeasonNumber || 0) !== expected.targetSeason ||
         Number(config.preparationTargetSeason || 0) !== expected.targetSeason ||
-        config.worldReady !== false ||
-        Number(config.calendarRevision || 0) !== expected.calendarRevision ||
+        config.worldReady !== true ||
+        config.preparedWorldReady !== true ||
+        Number(config.preparedSeasonNumber || 0) !== expected.targetSeason ||
+        Number(config.preparedCalendarRevision || 0) !== expected.calendarRevision ||
         String(config.phase || '') !== expected.phase) {
       throw new Error('SEASON_CALENDAR_PUBLICATION_STATE_CHANGED');
+    }
+    const nowMs = Date.now();
+    if (expected.allowOverdueRecovery === true) {
+      if (nowMs < expected.activationAtMs || !Number.isFinite(Number(expected.activationEndAtMs)) ||
+          nowMs >= Number(expected.activationEndAtMs)) {
+        throw new Error('SEASON_CALENDAR_PUBLICATION_WINDOW_CLOSED');
+      }
+    } else if (nowMs > expected.publicationDeadlineMs || nowMs >= expected.activationAtMs) {
+      throw new Error('SEASON_CALENDAR_PUBLICATION_WINDOW_CLOSED');
     }
     if (expected.planRef && (!planSnap?.exists || !expected.validatePlan?.(planSnap.data() || {}))) {
       throw new Error('SEASON_CALENDAR_PUBLICATION_PLAN_CHANGED');
     }
     tx.set(write.ref, write.data, write.options);
     return { committed: true };
+  });
+}
+
+/**
+ * Fence post-activation history cleanup against both stale workers and a
+ * concurrent season activation. Every cleanup mutation verifies the live
+ * calendar lease and that the intended season is still the active world.
+ */
+export async function commitSeasonHistoryCleanupWrites(
+  db: LockDb,
+  ownerId: string,
+  token: string,
+  targetSeason: number,
+  writes: LeaseWrite[] = [],
+  deletes: any[] = [],
+) {
+  if (writes.length + deletes.length === 0) return;
+  if (writes.length + deletes.length > 450) throw new Error('SEASON_HISTORY_CLEANUP_CHUNK_TOO_LARGE');
+  const lockRef = db.collection('system_v1').doc(SEASON_CALENDAR_BUILD_LOCK_ID);
+  const configRef = db.collection('system_v1').doc('season_config');
+  await db.runTransaction(async (tx: any) => {
+    const [lockSnap, configSnap] = await Promise.all([tx.get(lockRef), tx.get(configRef)]);
+    const currentLock = lockSnap.exists ? lockSnap.data() || {} : null;
+    const config = configSnap.exists ? configSnap.data() || {} : null;
+    const nowMs = Date.now();
+    if (!currentLock || currentLock.ownerId !== ownerId || currentLock.token !== token ||
+        isSeasonRolloverLockStale(currentLock, nowMs)) {
+      throw new Error('SEASON_CALENDAR_BUILD_LOCK_LOST');
+    }
+    if (!config || Number(config.activeSeasonNumber || 0) !== targetSeason || config.worldReady !== true) {
+      throw new Error('SEASON_HISTORY_CLEANUP_TARGET_CHANGED');
+    }
+    tx.set(lockRef, { expiresAtMs: nowMs + SEASON_CALENDAR_BUILD_LOCK_TTL_MS, renewedAtMs: nowMs }, { merge: true });
+    for (const write of writes) tx.set(write.ref, write.data, write.options);
+    for (const ref of deletes) tx.delete(ref);
   });
 }
 

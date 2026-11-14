@@ -47,7 +47,20 @@ const expected = {
   targetSeason: 2,
   calendarRevision: 4,
   phase: 'GENERATING_NEXT',
+  publicationDeadlineMs: Date.now() + 60_000,
+  activationAtMs: Date.now() + 120_000,
 };
+
+const preparedConfig = () => ({
+  activeSeasonNumber: 1,
+  nextSeasonNumber: 2,
+  preparationTargetSeason: 2,
+  worldReady: true,
+  preparedWorldReady: true,
+  preparedSeasonNumber: 2,
+  preparedCalendarRevision: 4,
+  phase: 'GENERATING_NEXT',
+});
 
 test('publication rejects a concurrent season_config state change', async () => {
   const db = publicationDb({
@@ -91,7 +104,7 @@ test('publication rejects a replaced lock token', async () => {
 test('publication commits only after lock and config checks pass', async () => {
   const db = publicationDb({
     lock: { ownerId: 'owner', token: 'token', expiresAtMs: Date.now() + 60_000 },
-    config: { activeSeasonNumber: 1, nextSeasonNumber: 2, preparationTargetSeason: 2, worldReady: false, calendarRevision: 4, phase: 'GENERATING_NEXT' },
+    config: preparedConfig(),
   });
 
   const result = await commitSeasonCalendarPublication(
@@ -99,18 +112,22 @@ test('publication commits only after lock and config checks pass', async () => {
     'owner',
     'token',
     expected,
-    { ref: { id: 'season_config' }, data: { activeSeasonNumber: 2, worldReady: true } },
+    { ref: { id: 'season_config' }, data: { preparedPublished: true, phase: 'PUBLISHED' }, options: { merge: true } },
   );
 
   assert.equal(result.committed, true);
   assert.equal(db.writes(), 1);
+  assert.equal(db.read('season_config').activeSeasonNumber, 1);
+  assert.equal(db.read('season_config').worldReady, true);
+  assert.equal(db.read('season_config').preparedPublished, true);
+  assert.equal(db.read('season_config').phase, 'PUBLISHED');
 });
 
 test('publication rejects a rollover-plan changed after preliminary validation', async () => {
   const planRef = { id: 'S2' };
   const db = publicationDb({
     lock: { ownerId: 'owner', token: 'token', expiresAtMs: Date.now() + 60_000 },
-    config: { activeSeasonNumber: 1, nextSeasonNumber: 2, preparationTargetSeason: 2, worldReady: false, calendarRevision: 4, phase: 'GENERATING_NEXT' },
+    config: preparedConfig(),
   });
   db.replace('S2', { ready: true, sourceSeason: 1, targetSeason: 2, revision: 1 });
   const preliminaryPlan = db.read('S2');
@@ -123,7 +140,7 @@ test('publication rejects a rollover-plan changed after preliminary validation',
       'owner',
       'token',
       { ...expected, planRef, validatePlan: plan => plan.ready === true && plan.revision === 1 },
-      { ref: { id: 'season_config' }, data: { activeSeasonNumber: 2, worldReady: true } },
+      { ref: { id: 'season_config' }, data: { preparedPublished: true, phase: 'PUBLISHED' }, options: { merge: true } },
     ),
     /SEASON_CALENDAR_PUBLICATION_PLAN_CHANGED/,
   );
@@ -133,7 +150,7 @@ test('publication rejects a rollover-plan changed after preliminary validation',
 test('two complete competing publication attempts allow at most one commit and a repeat is rejected', async () => {
   const db = publicationDb({
     lock: null,
-    config: { activeSeasonNumber: 1, nextSeasonNumber: 2, preparationTargetSeason: 2, worldReady: false, calendarRevision: 4, phase: 'GENERATING_NEXT' },
+    config: preparedConfig(),
   });
   const attempt = async ownerId => {
     const lock = await acquireSeasonCalendarBuildLock(db, 1, 2, { ownerId });
@@ -144,7 +161,7 @@ test('two complete competing publication attempts allow at most one commit and a
         ownerId,
         lock.token,
         expected,
-        { ref: { id: 'season_config' }, data: { activeSeasonNumber: 2, worldReady: true }, options: { merge: true } },
+        { ref: { id: 'season_config' }, data: { preparedPublished: true, phase: 'PUBLISHED' }, options: { merge: true } },
       );
       return true;
     } catch {
@@ -156,8 +173,10 @@ test('two complete competing publication attempts allow at most one commit and a
 
   const results = await Promise.all([attempt('publisher-a'), attempt('publisher-b')]);
   assert.equal(results.filter(Boolean).length, 1);
-  assert.equal(db.read('season_config').activeSeasonNumber, 2);
+  assert.equal(db.read('season_config').activeSeasonNumber, 1);
   assert.equal(db.read('season_config').worldReady, true);
+  assert.equal(db.read('season_config').preparedPublished, true);
+  assert.equal(db.read('season_config').phase, 'PUBLISHED');
   assert.equal(await attempt('publisher-repeat'), false);
-  assert.equal(db.read('season_config').activeSeasonNumber, 2);
+  assert.equal(db.read('season_config').activeSeasonNumber, 1);
 });

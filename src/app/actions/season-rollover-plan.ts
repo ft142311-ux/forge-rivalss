@@ -38,3 +38,203 @@ export function validateRolloverPlan(plan: any, sourceSeason: number, targetSeas
   }
   return { valid: true };
 }
+
+/**
+ * Deterministically apply the league pyramid's promotion/relegation rules.
+ * Input standings must already be final, sorted by rank, and keyed by Dn-Gn.
+ * This helper is pure so the complete 15-group movement can be regression-tested.
+ */
+/**
+ * Select the most recent trustworthy placement baseline during catch-up.
+ * A recovered season's starting participants already include movements from
+ * the preceding completed season, so applying that older promotion twice
+ * would corrupt the pyramid.
+ */
+export function resolveRecoveryPlacementSource(
+  latestCompletedSeason: number | null,
+  latestRecoveredSeason: number | null,
+): 'completed_archive' | 'recovered_participants' | 'active_slots' {
+  if (latestRecoveredSeason !== null &&
+      (latestCompletedSeason === null || latestRecoveredSeason > latestCompletedSeason)) {
+    return 'recovered_participants';
+  }
+  if (latestCompletedSeason !== null) return 'completed_archive';
+  if (latestRecoveredSeason !== null) return 'recovered_participants';
+  return 'active_slots';
+}
+
+export function buildPromotionRelegationGroups(
+  standings: Record<string, any[]>,
+): { ready: true; groups: Record<string, any[]> } | {
+  ready: false;
+  reason: string;
+  group: string;
+  count: number;
+  groups: Record<string, any[]>;
+} {
+  const placements: Record<string, any[]> = {};
+  const get = (level: number, group: number) => standings[`D${level}-G${group}`] || [];
+
+  for (let level = 1; level <= MAX_LEVELS; level++) {
+    for (let group = 1; group <= Math.pow(2, level - 1); group++) {
+      const own = get(level, group);
+      const incoming: any[] = [];
+      if (level > 1) {
+        const parentGroup = Math.ceil(group / 2);
+        const parent = get(level - 1, parentGroup);
+        incoming.push(parent[group % 2 === 1 ? 6 : 7]);
+      }
+      if (level < MAX_LEVELS) {
+        incoming.push(get(level + 1, group * 2 - 1)[0], get(level + 1, group * 2)[0]);
+      }
+
+      let retained: any[];
+      if (level === 1) retained = own.slice(0, 6);
+      else if (level === MAX_LEVELS) retained = own.slice(1, 8);
+      else retained = own.slice(1, 6);
+
+      const unique = new Map<string, any>();
+      for (const team of [...retained, ...incoming]) {
+        if (team?.id) unique.set(String(team.id), team);
+      }
+      const normalized = [...unique.values()].slice(0, TEAMS_PER_GROUP).map((team, index) => ({
+        ...team,
+        id: String(team.id),
+        rank: index + 1,
+        matchesPlayed: 0,
+        wins: 0,
+        draws: 0,
+        losses: 0,
+        points: 0,
+        diff: 0,
+      }));
+      const key = `D${level}-G${group}`;
+      if (normalized.length !== TEAMS_PER_GROUP) {
+        return { ready: false, reason: 'ROLLOVER_GROUP_SIZE_INVALID', group: key, count: normalized.length, groups: placements };
+      }
+      placements[key] = normalized;
+    }
+  }
+
+  return { ready: true, groups: placements };
+}
+
+/**
+ * Build a no-promotion carry-forward plan for recovery across genuinely
+ * incomplete seasons. The caller supplies the last trustworthy team placement
+ * snapshot (not partial match standings). Every group must contain exactly
+ * ranks 1..8, and every team ID must be globally unique.
+ */
+export function buildCarryForwardGroups(
+  sourceGroups: Record<string, any[]>,
+): { ready: true; groups: Record<string, any[]> } | {
+  ready: false;
+  reason: string;
+  group?: string;
+  id?: string;
+} {
+  const groups: Record<string, any[]> = {};
+  const expected = expectedRolloverGroups();
+  const seen = new Set<string>();
+
+  for (const key of expected) {
+    const rows = sourceGroups?.[key];
+    if (!Array.isArray(rows) || rows.length !== TEAMS_PER_GROUP) {
+      return { ready: false, reason: 'CARRY_FORWARD_GROUP_INCOMPLETE', group: key };
+    }
+    const byRank = new Map<number, any>();
+    for (const row of rows) {
+      const id = String(row?.id || '');
+      const rank = Number(row?.rank);
+      if (!id || !Number.isInteger(rank) || rank < 1 || rank > TEAMS_PER_GROUP ||
+          byRank.has(rank) || seen.has(id)) {
+        return { ready: false, reason: 'CARRY_FORWARD_TEAM_OR_RANK_CONFLICT', group: key, id };
+      }
+      byRank.set(rank, row);
+      seen.add(id);
+    }
+    if (byRank.size !== TEAMS_PER_GROUP) {
+      return { ready: false, reason: 'CARRY_FORWARD_RANKS_INCOMPLETE', group: key };
+    }
+    groups[key] = Array.from({ length: TEAMS_PER_GROUP }, (_, index) => {
+      const row = byRank.get(index + 1)!;
+      return {
+        ...row,
+        id: String(row.id),
+        rank: index + 1,
+        matchesPlayed: 0,
+        wins: 0,
+        draws: 0,
+        losses: 0,
+        points: 0,
+        diff: 0,
+      };
+    });
+  }
+
+  if (Object.keys(sourceGroups || {}).some(key => !expected.includes(key))) {
+    return { ready: false, reason: 'CARRY_FORWARD_UNEXPECTED_GROUP' };
+  }
+  return { ready: true, groups };
+}
+
+
+/** Validate plan document identities before pruning obsolete rollover plans. */
+export function resolveRolloverPlanPruneIds(
+  plans: Array<{ id: string; plan: any }>,
+  targetSeason: number,
+) {
+  if (!Number.isSafeInteger(targetSeason) || targetSeason < 2) {
+    return { ready: false as const, reason: 'ROLLOVER_PLAN_PRUNE_TARGET_INVALID', pruneIds: [] as string[] };
+  }
+  let targetFound = false;
+  const pruneIds: string[] = [];
+  for (const item of plans) {
+    const match = /^S([1-9]\d*)$/.exec(String(item.id || ''));
+    const season = match ? Number(match[1]) : NaN;
+    if (!Number.isSafeInteger(season) || season > targetSeason ||
+        !validateRolloverPlan(item.plan, season - 1, season).valid) {
+      return { ready: false as const, reason: 'ROLLOVER_PLAN_PRUNE_IDENTITY_CONFLICT', planId: item.id, pruneIds: [] as string[] };
+    }
+    if (season === targetSeason) targetFound = true;
+    else pruneIds.push(item.id);
+  }
+  if (!targetFound) {
+    return { ready: false as const, reason: 'ACTIVE_ROLLOVER_PLAN_MISSING_FROM_PRUNE_SET', pruneIds: [] as string[] };
+  }
+  return { ready: true as const, reason: null, pruneIds };
+}
+
+
+/**
+ * Recovery retries may republish the same deterministic plan, but must never
+ * replace a previously persisted placement decision with a different one.
+ * Volatile metadata and post-publication award fields are intentionally ignored.
+ */
+function stablePlanValue(value: any): any {
+  if (value === undefined) return null;
+  if (Array.isArray(value)) return value.map(stablePlanValue);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.keys(value).sort().map(key => [key, stablePlanValue(value[key])]));
+  }
+  return value;
+}
+
+export function compareRecoveryRolloverPlans(existing: any, candidate: any) {
+  const sourceSeason = Number(candidate?.sourceSeason);
+  const targetSeason = Number(candidate?.targetSeason);
+  const existingValidation = validateRolloverPlan(existing, sourceSeason, targetSeason);
+  const candidateValidation = validateRolloverPlan(candidate, sourceSeason, targetSeason);
+  if (!existingValidation.valid || !candidateValidation.valid ||
+      existing?.mode !== 'recovery_carry_forward' || candidate?.mode !== 'recovery_carry_forward') {
+    return { same: false as const, reason: 'RECOVERY_ROLLOVER_PLAN_METADATA_CONFLICT' };
+  }
+  const fields = ['leagueId', 'mode', 'sourceSeason', 'targetSeason', 'skippedSeasons',
+    'lastTrustedSeason', 'placementSource', 'retainedArchiveSeason', 'promotionRule', 'groups'];
+  for (const field of fields) {
+    if (JSON.stringify(stablePlanValue(existing[field])) !== JSON.stringify(stablePlanValue(candidate[field]))) {
+      return { same: false as const, reason: 'RECOVERY_ROLLOVER_PLAN_CONTENT_CONFLICT', field };
+    }
+  }
+  return { same: true as const, reason: null };
+}

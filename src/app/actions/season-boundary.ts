@@ -82,6 +82,50 @@ export function resolveCanonicalSeasonDateWindow(input: {
     : { seasonStart: new Date(input.canonicalSeasonStart.getTime()), nextSeasonStart: new Date(input.canonicalNextSeasonStart.getTime()), source: 'CANONICAL' as const };
 }
 
+/**
+ * A deliberately marked clean emulator world may have a generated S1 start.
+ * Accept its persisted S1->S2 boundary only when the canonical 17-day first
+ * season span is intact; production/legacy worlds keep the fixed historical date.
+ */
+export function isValidCleanSeasonOneBoundary(
+  worldGeneration: unknown,
+  activeSeasonNumber: number,
+  seasonStart: string | Date | null | undefined,
+  nextSeasonStart: string | Date | null | undefined,
+) {
+  if (worldGeneration !== 'CLEAN_S1_V1' || activeSeasonNumber !== 1) return false;
+  const startMs = seasonStart instanceof Date ? seasonStart.getTime() : new Date(seasonStart || '').getTime();
+  const nextMs = nextSeasonStart instanceof Date ? nextSeasonStart.getTime() : new Date(nextSeasonStart || '').getTime();
+  return Number.isFinite(startMs) && Number.isFinite(nextMs) &&
+    nextMs - startMs === 17 * 24 * 60 * 60 * 1000;
+}
+
+/**
+ * Derive a multi-season recovery window from the persisted next boundary of
+ * the currently active source season. The first interval may be nonstandard
+ * (for example S1's 17-day span); only subsequent seasons use the cadence.
+ */
+export function deriveRecoverySeasonWindow(
+  sourceSeasonNumber: number,
+  sourceNextBoundary: Date,
+  targetSeasonNumber: number,
+  cadenceDays: number,
+) {
+  const sourceValid = Number.isSafeInteger(sourceSeasonNumber) && sourceSeasonNumber >= 1;
+  const targetValid = Number.isSafeInteger(targetSeasonNumber) && targetSeasonNumber > sourceSeasonNumber;
+  const boundaryMs = sourceNextBoundary instanceof Date ? sourceNextBoundary.getTime() : NaN;
+  const cadenceMs = Number(cadenceDays) * 24 * 60 * 60 * 1000;
+  if (!sourceValid || !targetValid || !Number.isFinite(boundaryMs) ||
+      !Number.isFinite(cadenceMs) || cadenceMs <= 0) {
+    throw new Error('INVALID_RECOVERY_SEASON_WINDOW');
+  }
+  const seasonStartMs = boundaryMs + (targetSeasonNumber - sourceSeasonNumber - 1) * cadenceMs;
+  return {
+    seasonStart: new Date(seasonStartMs),
+    nextSeasonStart: new Date(seasonStartMs + cadenceMs),
+  };
+}
+
 export type SeasonWindow = {
   seasonNumber: number;
   seasonStart: Date;
@@ -164,4 +208,89 @@ export function evaluateExpiredSeasonArchives(
     };
   }
   return { ready: true, reason: null, missedSeasons: missed, invalidSeasons: [], writesStarted: false };
+}
+
+/**
+ * Resolve the season transition window without changing the persisted calendar.
+ * Day 15 starts 14 days after the active season begins (18:00 MSK). The
+ * publication deadline is 22 hours later (16:00 MSK on that offseason day),
+ * while activation remains pinned to the separately persisted next-season
+ * boundary. This intentionally preserves the historical 17-day S1 -> S2 window.
+ */
+export function resolveSeasonLifecycleWindow(input: {
+  seasonStart: Date | string | number | { toDate?: () => Date };
+  nextSeasonStart: Date | string | number | { toDate?: () => Date };
+  now: Date;
+}) {
+  const asDate = (value: unknown): Date => {
+    if (value instanceof Date) return new Date(value.getTime());
+    if (value && typeof value === 'object' && 'toDate' in value && typeof (value as any).toDate === 'function') {
+      const converted = (value as any).toDate();
+      return converted instanceof Date ? new Date(converted.getTime()) : new Date(NaN);
+    }
+    return new Date(value as string | number);
+  };
+  const seasonStart = asDate(input.seasonStart);
+  const nextSeasonStart = asDate(input.nextSeasonStart);
+  const now = input.now instanceof Date ? new Date(input.now.getTime()) : new Date(NaN);
+  const startMs = seasonStart.getTime();
+  const nextMs = nextSeasonStart.getTime();
+  const nowMs = now.getTime();
+  const dayMs = 24 * 60 * 60 * 1000;
+  const durationDays = (nextMs - startMs) / dayMs;
+  if (!Number.isFinite(startMs) || !Number.isFinite(nextMs) || !Number.isFinite(nowMs) ||
+      ![15, 17].includes(durationDays)) {
+    throw new Error('INVALID_SEASON_LIFECYCLE_WINDOW');
+  }
+  const offseasonStartAt = new Date(startMs + 14 * dayMs);
+  const finalizationAt = new Date(offseasonStartAt.getTime() - 2 * 60 * 60 * 1000);
+  const lastRoundStartAt = new Date(startMs + 13 * dayMs);
+  const offseasonDayEndsAt = new Date(offseasonStartAt.getTime() + dayMs);
+  const publicationDeadlineAt = new Date(offseasonStartAt.getTime() + 22 * 60 * 60 * 1000);
+  const activationAt = new Date(nextMs);
+  return {
+    finalizationAt,
+    lastRoundStartAt,
+    offseasonStartAt,
+    offseasonDayEndsAt,
+    publicationDeadlineAt,
+    activationAt,
+    offseasonActive: nowMs >= offseasonStartAt.getTime() && nowMs < nextMs,
+    leagueMatchesPaused: nowMs >= offseasonStartAt.getTime(),
+    publicationDeadlinePassed: nowMs > publicationDeadlineAt.getTime(),
+    activationDue: nowMs >= nextMs,
+  };
+}
+
+/**
+ * An overdue activation may be recovered only while the target season's
+ * scheduled interval is still open. Activating after its next boundary would
+ * make an already-expired season active and can cascade into unsafe catch-up.
+ */
+export function resolveSeasonActivationWindow(input: {
+  activationAt: Date | string | number;
+  nextSeasonStart: Date | string | number;
+  now: Date;
+}) {
+  const activationAt = input.activationAt instanceof Date
+    ? new Date(input.activationAt.getTime())
+    : new Date(input.activationAt);
+  const nextSeasonStart = input.nextSeasonStart instanceof Date
+    ? new Date(input.nextSeasonStart.getTime())
+    : new Date(input.nextSeasonStart);
+  const now = input.now instanceof Date ? new Date(input.now.getTime()) : new Date(NaN);
+  const activationMs = activationAt.getTime();
+  const nextStartMs = nextSeasonStart.getTime();
+  const nowMs = now.getTime();
+  if (!Number.isFinite(activationMs) || !Number.isFinite(nextStartMs) ||
+      !Number.isFinite(nowMs) || nextStartMs <= activationMs) {
+    throw new Error('INVALID_SEASON_ACTIVATION_WINDOW');
+  }
+  if (nowMs < activationMs) {
+    return { ready: false, reason: 'ACTIVATION_NOT_DUE' as const, activationAt, nextSeasonStart };
+  }
+  if (nowMs >= nextStartMs) {
+    return { ready: false, reason: 'ACTIVATION_WINDOW_EXPIRED' as const, activationAt, nextSeasonStart };
+  }
+  return { ready: true, reason: null, activationAt, nextSeasonStart };
 }

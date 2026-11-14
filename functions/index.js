@@ -1,6 +1,7 @@
 const functions = require('firebase-functions');
 const admin = require('firebase-admin');
-const { isEligibleRegistrationSlot, validateRegistrationSchedule, generateStartingSquad } = require('./registration-core');
+const { isEligibleRegistrationSlot, validateRegistrationSchedule, generateStartingSquad, buildRegistrationMatchPlan, transferBotStandingToUser } = require('./registration-core');
+const { recordUserActivityUnlessRetiring } = require('./club-activity-fence');
 
 /**
  * @fileOverview Р•РґРёРЅРѕРµ СЃРµСЂРІРµСЂРЅРѕРµ СЏРґСЂРѕ СЂРµРіРёСЃС‚СЂР°С†РёРё v165.
@@ -27,10 +28,37 @@ exports.initializeClub = functions.region('us-central1').https.onCall(async (dat
   }
 
   const userId = context.auth.uid;
-  const email = context.auth.token.email;
+  const authorization = context.rawRequest?.headers?.authorization ||
+    context.rawRequest?.get?.('Authorization') || '';
+  const tokenMatch = String(authorization).match(/^Bearer\s+([^\s]+)$/i);
+  if (!tokenMatch) {
+    throw new functions.https.HttpsError('unauthenticated', 'AUTHENTICATION_REQUIRED');
+  }
+
+  let decodedToken;
+  try {
+    decodedToken = await admin.auth().verifyIdToken(tokenMatch[1], true);
+  } catch (error) {
+    const authCode = String(error?.code || '').toLowerCase();
+    const authMessage = String(error?.message || '').toLowerCase();
+    const reason = authCode.includes('user-disabled') || authMessage.includes('user disabled')
+      ? 'ACCOUNT_DISABLED'
+      : (authCode.includes('id-token-revoked') ? 'AUTH_TOKEN_REVOKED' : 'AUTH_TOKEN_INVALID');
+    throw new functions.https.HttpsError('unauthenticated', reason);
+  }
+  if (decodedToken.uid !== userId) {
+    throw new functions.https.HttpsError('unauthenticated', 'AUTHENTICATION_REQUIRED');
+  }
+
+  const activityFence = await recordUserActivityUnlessRetiring(db, userId);
+  if (!activityFence.success) {
+    throw new functions.https.HttpsError('permission-denied', activityFence.error);
+  }
+
+  const email = typeof decodedToken.email === 'string' ? decodedToken.email : '';
   const leagueId = 'ALPHA';
   console.log('[INIT] AUTH OK. UID:', userId, 'League:', leagueId);
-  
+
   if (!email) {
     console.error('[INIT] EMAIL FAILED: Missing in token');
     throw new functions.https.HttpsError('failed-precondition', 'EMAIL_REQUIRED');
@@ -117,6 +145,9 @@ exports.initializeClub = functions.region('us-central1').https.onCall(async (dat
       // Randomly select one free slot from the complete active-season D1-D4 pool.
       const slotDoc = freeSlots[Math.floor(Math.random() * freeSlots.length)];
       const slot = slotDoc.data();
+      const targetGeneration = Math.max(0, Number(slot.occupancyGeneration) || 0) + 1;
+      const historyRef = db.collection('league_slot_history_v1')
+        .doc(`${slotDoc.id}_G${targetGeneration}`);
       console.log('[INIT] SLOT FOUND:', slotDoc.id, 'Division:', slot.division, 'Group:', slot.group, 'Rank:', slot.rank);
 
       // Р’Р°Р»РёРґР°С†РёСЏ СЃР»РѕС‚Р°
@@ -153,6 +184,7 @@ exports.initializeClub = functions.region('us-central1').https.onCall(async (dat
         console.error('[INIT] BOT FAILED: No bot at rank', slot.rank);
         throw new functions.https.HttpsError('failed-precondition', 'BOT_NOT_FOUND_IN_SLOT');
       }
+      const botPlayerRef = db.collection('players_v14').doc(botId);
       console.log('[INIT] BOT FOUND:', botId);
       const botRowsAtRank = Object.entries(stats).filter(([, team]) => Number(team?.rank) === Number(slot.rank));
       if (botRowsAtRank.length !== 1 || botRowsAtRank[0][0] !== botId) {
@@ -167,59 +199,88 @@ exports.initializeClub = functions.region('us-central1').https.onCall(async (dat
         .where('groupId', '==', Number(slot.group))
         .where('version', '==', 140);
       const matchesSnap = await t.get(matchesQuery);
+      const historySnap = await t.get(historyRef);
+      const botPlayerSnap = await t.get(botPlayerRef);
 
+      if (historySnap.exists) {
+        throw new functions.https.HttpsError('failed-precondition', 'SLOT_HISTORY_EVENT_EXISTS');
+      }
       if (matchesSnap.size !== 56) {
         console.error('[INIT] WORLD INCOMPLETE: expected 56 matches, got', matchesSnap.size);
         throw new functions.https.HttpsError('failed-precondition', 'WORLD_NOT_READY');
       }
 
-      if (!validateRegistrationSchedule(matchesSnap.docs.map(doc => doc.data() || {}), Number(slot.rank), botId)) {
+      if (!validateRegistrationSchedule(matchesSnap.docs.map(doc => ({ ...(doc.data() || {}), id: doc.id })), Number(slot.rank), botId)) {
         console.error('[INIT] WORLD INCONSISTENT: fixture participant does not match rank slot', { tableId, rank: slot.rank });
         throw new functions.https.HttpsError('failed-precondition', 'LEAGUE_SCHEDULE_SLOT_CONFLICT');
+      }
+
+      const matchPlan = buildRegistrationMatchPlan(
+        matchesSnap.docs.map(doc => ({ ...(doc.data() || {}), id: doc.id })),
+        botId,
+        userId,
+        clubName,
+        Date.now()
+      );
+      if (!matchPlan.ok) {
+        throw new functions.https.HttpsError('failed-precondition', matchPlan.reason);
+      }
+
+      const standingTransfer = transferBotStandingToUser(stats, botId, userId, clubName, Number(slot.rank));
+      if (!standingTransfer.ok) {
+        throw new functions.https.HttpsError('failed-precondition', standingTransfer.reason);
       }
 
       // --- 2. Р’РЎР• Р—РђРџРРЎР (WRITES) ---
       console.log('[INIT] Transaction: Proceeding to WRITES');
 
-      t.update(slotDoc.ref, { 
-        status: 'OCCUPIED', 
-        occupantId: userId, 
-        updatedAt: serverTimestamp() 
+      t.update(slotDoc.ref, {
+        status: 'OCCUPIED',
+        occupantId: userId,
+        occupancyGeneration: targetGeneration,
+        lastOccupantId: botId,
+        lastTransitionReason: 'NEW_REGISTRATION',
+        lastTransitionAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
       });
 
-      const newStats = { ...stats };
-      delete newStats[botId];
-      newStats[userId] = { 
-        id: userId, name: clubName, rank: slot.rank, 
-        matchesPlayed: 0, wins: 0, draws: 0, losses: 0, points: 0, diff: 0, 
-        isBot: false 
-      };
-      t.update(tableRef, { 
-        stats: newStats, 
-        updatedAt: serverTimestamp() 
+      // The standings row belongs to the slot's season participation. Transfer
+      // its identity to the new owner while preserving every accumulated result.
+      t.create(historyRef, {
+        slotId: slotDoc.id,
+        season: seasonNum,
+        leagueId,
+        division: Number(slot.division),
+        group: Number(slot.group),
+        rank: Number(slot.rank),
+        previousGeneration: targetGeneration - 1,
+        generation: targetGeneration,
+        previousOccupantType: 'BOT',
+        previousOccupantId: botId,
+        previousOwnerUid: null,
+        previousClubId: botId,
+        previousClubSnapshot: botPlayerSnap.exists ? botPlayerSnap.data() : null,
+        newOccupantType: 'USER',
+        newOccupantId: userId,
+        newOwnerUid: userId,
+        newClubId: userId,
+        reason: 'NEW_REGISTRATION',
+        operationId: userId,
+        createdAt: serverTimestamp()
       });
 
-      // Stage 3A.8: the bot is a real players_v14 club. Once its slot is
-      // claimed, remove the bot profile so no orphaned bot club remains.
-      const botPlayerRef = db.collection('players_v14').doc(botId);
+      t.update(tableRef, {
+        stats: standingTransfer.stats,
+        updatedAt: serverTimestamp()
+      });
+
       t.delete(botPlayerRef);
 
-      // Replace the claimed BOT in all 56 prebuilt matches. Match document IDs
-      // remain rank-based, so the calendar itself is not regenerated.
-      for (const matchDoc of matchesSnap.docs) {
-        const match = matchDoc.data() || {};
-        const patch = {};
-        if (match.homeId === botId) {
-          patch.homeId = userId;
-          patch.homeName = clubName;
-        }
-        if (match.awayId === botId) {
-          patch.awayId = userId;
-          patch.awayName = clubName;
-        }
-        if (Object.keys(patch).length) {
-          t.update(matchDoc.ref, patch);
-        }
+      // Completed fixtures are historical evidence and remain unchanged.
+      // Only future fixtures are rebound to the newly provisioned club.
+      for (const update of matchPlan.updates) {
+        const matchDoc = matchesSnap.docs.find(doc => doc.id === update.matchId);
+        if (matchDoc) t.update(matchDoc.ref, update.patch);
       }
 
       const totalPlayers = (globalStatsSnap.exists ? (globalStatsSnap.data().totalPlayers || 1000) : 1000) + 1;
@@ -309,3 +370,26 @@ exports.initializeClub = functions.region('us-central1').https.onCall(async (dat
   }
 });
 
+
+
+// Daily cleanup of clubs whose owners have not successfully signed in for 90 days.
+// The task only disables Firebase Auth users after a durable pending marker exists,
+// and replaces the active league club transactionally in Firestore.
+exports.replaceInactiveClubs = functions
+  .region('us-central1')
+  .runWith({ timeoutSeconds: 540, memory: '512MB' })
+  .pubsub.schedule('15 3 * * *')
+  .timeZone('UTC')
+  .onRun(async () => {
+    const { runClubInactivitySweep } = require('./club-inactivity-sweep');
+    const result = await runClubInactivitySweep({
+      db,
+      auth: admin.auth(),
+      now: new Date(),
+    });
+    console.log('[INACTIVE CLUB SWEEP]', JSON.stringify(result));
+    if (result.errors.length > 0) {
+      throw new Error('INACTIVE_CLUB_SWEEP_PARTIAL_FAILURE');
+    }
+    return result;
+  });

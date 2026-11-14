@@ -9,9 +9,10 @@ import {
   acquireSeasonCalendarBuildLock,
   assertSeasonCalendarBuildLock,
   commitSeasonCalendarWrites,
+  commitSeasonHistoryCleanupWrites,
   releaseSeasonCalendarBuildLock,
 } from '../src/app/actions/season-rollover-lock.ts';
-import { validateRolloverPlan, expectedRolloverGroups } from '../src/app/actions/season-rollover-plan.ts';
+import { buildPromotionRelegationGroups, validateRolloverPlan, expectedRolloverGroups } from '../src/app/actions/season-rollover-plan.ts';
 import { cronResultStatus } from '../src/app/api/cron/cron-result.ts';
 import { calendarBlockedResult, isCalendarReady } from '../src/app/actions/season-calendar-gate.ts';
 
@@ -116,6 +117,73 @@ test('incomplete and duplicate-slot plans are rejected; full plan is reusable', 
   assert.equal(validateRolloverPlan(plan, 1, 2).valid, true);
 });
 
+test('promotion and relegation move the correct teams through all four divisions', () => {
+  const standings = {};
+  for (const group of expectedRolloverGroups()) {
+    standings[group] = Array.from({ length: 8 }, (_, index) => ({
+      id: `${group}-R${index + 1}`,
+      rank: index + 1,
+      matchesPlayed: 14,
+      points: 42 - index,
+      wins: 14 - index,
+      draws: 0,
+      losses: index,
+      diff: 20 - index,
+    }));
+  }
+
+  const result = buildPromotionRelegationGroups(standings);
+  assert.equal(result.ready, true);
+  assert.equal(Object.keys(result.groups).length, 15);
+  assert.equal(validateRolloverPlan({
+    sourceSeason: 1,
+    targetSeason: 2,
+    ready: true,
+    groups: result.groups,
+  }, 1, 2).valid, true);
+
+  const ids = key => result.groups[key].map(team => team.id);
+  assert.deepEqual(ids('D1-G1'), [
+    'D1-G1-R1', 'D1-G1-R2', 'D1-G1-R3', 'D1-G1-R4', 'D1-G1-R5', 'D1-G1-R6',
+    'D2-G1-R1', 'D2-G2-R1',
+  ]);
+  assert.deepEqual(ids('D2-G1'), [
+    'D2-G1-R2', 'D2-G1-R3', 'D2-G1-R4', 'D2-G1-R5', 'D2-G1-R6',
+    'D1-G1-R7', 'D3-G1-R1', 'D3-G2-R1',
+  ]);
+  assert.deepEqual(ids('D3-G1'), [
+    'D3-G1-R2', 'D3-G1-R3', 'D3-G1-R4', 'D3-G1-R5', 'D3-G1-R6',
+    'D2-G1-R7', 'D4-G1-R1', 'D4-G2-R1',
+  ]);
+  assert.equal(ids('D2-G2').includes('D1-G1-R8'), true);
+  assert.equal(ids('D3-G2').includes('D2-G1-R8'), true);
+  assert.equal(ids('D4-G2').includes('D3-G1-R8'), true);
+  assert.deepEqual(ids('D4-G1'), [
+    'D4-G1-R2', 'D4-G1-R3', 'D4-G1-R4', 'D4-G1-R5', 'D4-G1-R6', 'D4-G1-R7', 'D4-G1-R8',
+    'D3-G1-R7',
+  ]);
+
+  for (const teams of Object.values(result.groups)) {
+    assert.deepEqual(teams.map(team => team.rank), [1, 2, 3, 4, 5, 6, 7, 8]);
+    assert.ok(teams.every(team => team.matchesPlayed === 0 && team.points === 0));
+  }
+  const allIds = Object.values(result.groups).flat().map(team => team.id);
+  assert.equal(allIds.length, 120);
+  assert.equal(new Set(allIds).size, 120);
+});
+
+test('promotion/relegation mapping blocks a missing parent or child champion', () => {
+  const standings = Object.fromEntries(expectedRolloverGroups().map(group => [
+    group,
+    Array.from({ length: 8 }, (_, index) => ({ id: `${group}-R${index + 1}`, rank: index + 1 })),
+  ]));
+  standings['D2-G1'] = standings['D2-G1'].slice(0, 7);
+  const result = buildPromotionRelegationGroups(standings);
+  assert.equal(result.ready, false);
+  assert.equal(result.reason, 'ROLLOVER_GROUP_SIZE_INVALID');
+  assert.equal(result.group, 'D3-G2');
+});
+
 test('cron controlled failures use a non-success HTTP status', () => {
   assert.equal(cronResultStatus({ success: true }), 200);
   assert.equal(cronResultStatus({ success: false }), 409);
@@ -155,4 +223,270 @@ test('expired rollover lease cannot commit protected writes', async () => {
     /SEASON_ROLLOVER_LOCK_LOST/,
   );
   assert.equal(db.read('season-slot'), undefined);
+});
+
+
+test('each protected rollover write renews the lease atomically', async () => {
+  const db = mockDb();
+  const lease = await acquireSeasonRolloverLock(db, 1, 2, { ownerId: 'renewing-writer', nowMs: Date.now() - 1_000 });
+  const before = db.read().expiresAtMs;
+  const ref = db.collection('protected').doc('archive-chunk');
+  await commitSeasonRolloverWrites(db, lease.ownerId, lease.token, [
+    { ref, data: { saved: true } },
+  ]);
+  assert.equal(db.read('archive-chunk').saved, true);
+  assert.ok(db.read().expiresAtMs > before);
+  assert.equal(await assertSeasonRolloverLock(db, lease.ownerId, lease.token), true);
+});
+
+
+test('expired rollover owner cannot write after a replacement owner takes the lease', async () => {
+  const db = mockDb();
+  const old = await acquireSeasonRolloverLock(db, 1, 2, {
+    ownerId: 'old-rollover-owner',
+    nowMs: 100,
+    ttlMs: 10,
+  });
+  const replacement = await acquireSeasonRolloverLock(db, 1, 2, {
+    ownerId: 'replacement-rollover-owner',
+    nowMs: 111,
+  });
+  assert.equal(replacement.acquired, true);
+  const ref = db.collection('protected').doc('season-archive');
+  await assert.rejects(
+    () => commitSeasonRolloverWrites(db, old.ownerId, old.token, [
+      { ref, data: { writtenBy: 'stale-owner' } },
+    ]),
+    /SEASON_ROLLOVER_LOCK_LOST/,
+  );
+  assert.equal(db.read('season-archive'), undefined);
+  assert.equal(db.read().ownerId, replacement.ownerId);
+});
+
+
+test('each protected calendar write renews the lease atomically', async () => {
+  const db = mockDb();
+  const lease = await acquireSeasonCalendarBuildLock(db, 1, 2, {
+    ownerId: 'renewing-calendar-builder',
+    nowMs: Date.now() - 1_000,
+  });
+  const before = db.read('season_calendar_build_v1').expiresAtMs;
+  const ref = db.collection('protected').doc('calendar-chunk');
+  await commitSeasonCalendarWrites(db, lease.ownerId, lease.token, [
+    { ref, data: { saved: true } },
+  ]);
+  assert.equal(db.read('calendar-chunk').saved, true);
+  assert.ok(db.read('season_calendar_build_v1').expiresAtMs > before);
+  assert.equal(await assertSeasonCalendarBuildLock(db, lease.ownerId, lease.token), true);
+});
+
+
+test('recovery carry-forward archive, plan, and skipped history writes are fenced by the calendar lease', async () => {
+  const fs = await import('node:fs/promises');
+  const source = await fs.readFile(new URL('../src/app/actions/season-calendar.ts', import.meta.url), 'utf8');
+  const recoveryStart = source.indexOf('async function prepareRecoveryCarryForwardPlan(');
+  const recoveryEnd = source.indexOf('\n}\n\nasync function buildSeasonCalendar', recoveryStart);
+  assert.ok(recoveryStart >= 0 && recoveryEnd > recoveryStart, 'recovery planner must be present');
+  const recovery = source.slice(recoveryStart, recoveryEnd);
+  assert.match(recovery, /lease: BuildLease/, 'recovery planner must receive the active lease');
+  assert.match(recovery, /await lease\.commit\(\[\{ ref: archiveRef, data: snapshot\.archive \}\]\)/,
+    'recovered archive writes must be fenced');
+  assert.match(recovery, /commitPlan: async \(ref, value\) => \{/,
+    'carry-forward plan publication must use the lease-fenced writer');
+  assert.match(recovery, /commitHistory: async writes => \{\s*await lease\.commit\(writes\);\s*\}/,
+    'skipped history publication must use the lease-fenced writer');
+  assert.match(recovery, /publishRecoveryRolloverDecision\(/,
+    'recovery plan and history publication must use the retry-safe publication workflow');
+  const publication = await fs.readFile(new URL('../src/app/actions/season-recovery-publication.ts', import.meta.url), 'utf8');
+  assert.match(publication, /Promise\.all\(args\.historyEntries\.map\(entry => args\.read\(entry\.ref\)\)\)/,
+    'all history markers must be preflighted before the plan can be published');
+  assert.match(publication, /args\.commitHistory\(historyWrites\.slice\(offset, offset \+ args\.batchLimit\)\)/,
+    'history marker writes must be chunked through the injected fenced writer');
+  assert.match(publication, /persistedPlan = existingPlan/,
+    'retries must reuse the first durable plan');
+  assert.doesNotMatch(recovery, /\.set\(snapshot\.archive\)|\.set\(plan\)|historyBatch\.commit\(\)/,
+    'recovery must not bypass the lease with direct writes');
+  assert.equal((source.match(/prepareRecoveryCarryForwardPlan\(db, activeSeasonBefore, seasonNumber, lease\)/g) || []).length, 2,
+    'all recovery planner call sites must pass the same active lease');
+});
+
+test('post-activation skipped history cleanup preflights existing markers before fenced writes', async () => {
+  const fs = await import('node:fs/promises');
+  const source = await fs.readFile(new URL('../src/app/actions/season-calendar.ts', import.meta.url), 'utf8');
+  const cleanupStart = source.indexOf('async function pruneSeasonHistoryAfterActivation(');
+  const cleanupEnd = source.indexOf('\n}\n\n/** Read-only canonical gate', cleanupStart);
+  assert.ok(cleanupStart >= 0 && cleanupEnd > cleanupStart, 'history cleanup must be present');
+  const cleanup = source.slice(cleanupStart, cleanupEnd);
+  assert.match(cleanup, /resolveActivatedSkippedHistoryMarker/,
+    'final skipped markers must be validated before cleanup writes');
+  assert.match(cleanup, /skippedHistorySnapshots = await Promise\.all\(skippedHistoryRefs\.map\(entry => entry\.ref\.get\(\)\)\)/,
+    'cleanup must read every existing marker before writing any final status');
+  assert.match(cleanup, /skippedHistoryWrites\.slice\(offset, offset \+ 400\)/,
+    'final skipped marker writes must remain chunked');
+  assert.match(cleanup, /commitSeasonHistoryCleanupWrites\(/,
+    'final skipped marker writes must use the fenced cleanup lease');
+});
+
+test('expired rollover lease gets a fresh fencing token when ownerId is reused', async () => {
+  const db = mockDb();
+  const nowMs = Date.now();
+  const old = await acquireSeasonRolloverLock(db, 1, 2, {
+    ownerId: 'reused-rollover-owner',
+    nowMs,
+    ttlMs: 10,
+  });
+  const replacement = await acquireSeasonRolloverLock(db, 1, 2, {
+    ownerId: 'reused-rollover-owner',
+    nowMs: nowMs + 11,
+  });
+
+  assert.equal(replacement.acquired, true);
+  assert.equal(replacement.ownerId, old.ownerId);
+  assert.notEqual(replacement.token, old.token);
+
+  const staleRef = db.collection('protected').doc('same-owner-stale-write');
+  await assert.rejects(
+    () => commitSeasonRolloverWrites(db, old.ownerId, old.token, [
+      { ref: staleRef, data: { writtenBy: 'old-token' } },
+    ]),
+    /SEASON_ROLLOVER_LOCK_LOST/,
+  );
+  assert.equal(db.read('same-owner-stale-write'), undefined);
+
+  const currentRef = db.collection('protected').doc('same-owner-current-write');
+  await commitSeasonRolloverWrites(db, replacement.ownerId, replacement.token, [
+    { ref: currentRef, data: { writtenBy: 'replacement-token' } },
+  ]);
+  assert.equal(db.read('same-owner-current-write').writtenBy, 'replacement-token');
+});
+
+test('expired calendar lease gets a fresh fencing token when ownerId is reused', async () => {
+  const db = mockDb();
+  const nowMs = Date.now();
+  const old = await acquireSeasonCalendarBuildLock(db, 1, 2, {
+    ownerId: 'reused-calendar-owner',
+    nowMs,
+    ttlMs: 10,
+  });
+  const replacement = await acquireSeasonCalendarBuildLock(db, 1, 2, {
+    ownerId: 'reused-calendar-owner',
+    nowMs: nowMs + 11,
+  });
+
+  assert.equal(replacement.acquired, true);
+  assert.equal(replacement.ownerId, old.ownerId);
+  assert.notEqual(replacement.token, old.token);
+
+  const staleRef = db.collection('protected').doc('same-calendar-owner-stale-write');
+  await assert.rejects(
+    () => commitSeasonCalendarWrites(db, old.ownerId, old.token, [
+      { ref: staleRef, data: { writtenBy: 'old-token' } },
+    ]),
+    /SEASON_CALENDAR_BUILD_LOCK_LOST/,
+  );
+  assert.equal(db.read('same-calendar-owner-stale-write'), undefined);
+
+  const currentRef = db.collection('protected').doc('same-calendar-owner-current-write');
+  await commitSeasonCalendarWrites(db, replacement.ownerId, replacement.token, [
+    { ref: currentRef, data: { writtenBy: 'replacement-token' } },
+  ]);
+  assert.equal(db.read('same-calendar-owner-current-write').writtenBy, 'replacement-token');
+});
+
+test('live lease cannot be reacquired by ownerId alone, but calendar token permits explicit reuse', async () => {
+  const db = mockDb();
+  const rollover = await acquireSeasonRolloverLock(db, 1, 2, {
+    ownerId: 'same-live-rollover-owner',
+  });
+  const rolloverDuplicate = await acquireSeasonRolloverLock(db, 1, 2, {
+    ownerId: 'same-live-rollover-owner',
+  });
+  assert.equal(rollover.acquired, true);
+  assert.equal(rolloverDuplicate.acquired, false);
+
+  const calendar = await acquireSeasonCalendarBuildLock(db, 1, 2, {
+    ownerId: 'same-live-calendar-owner',
+  });
+  const calendarDuplicateWithoutToken = await acquireSeasonCalendarBuildLock(db, 1, 2, {
+    ownerId: 'same-live-calendar-owner',
+  });
+  const calendarRetryWithToken = await acquireSeasonCalendarBuildLock(db, 1, 2, {
+    ownerId: 'same-live-calendar-owner',
+    token: calendar.token,
+  });
+  assert.equal(calendar.acquired, true);
+  assert.equal(calendarDuplicateWithoutToken.acquired, false);
+  assert.equal(calendarRetryWithToken.acquired, true);
+  assert.equal(calendarRetryWithToken.token, calendar.token);
+});
+
+
+function mockCleanupDb(activeSeasonNumber = 3) {
+  const states = new Map([
+    ['season_calendar_build_v1', null],
+    ['season_config', { activeSeasonNumber, worldReady: true }],
+  ]);
+  let queue = Promise.resolve();
+  return {
+    collection: () => ({ doc: id => ({ id, get: async () => ({ exists: Boolean(states.get(id)), data: () => states.get(id) }) }) }),
+    runTransaction: fn => {
+      const next = queue.then(async () => {
+        const tx = {
+          get: async ref => ({ exists: Boolean(states.get(ref.id)), data: () => states.get(ref.id) }),
+          set: (ref, value) => { states.set(ref.id, { ...(states.get(ref.id) || {}), ...value }); },
+          delete: ref => { states.set(ref.id, null); },
+        };
+        return fn(tx);
+      });
+      queue = next.catch(() => {});
+      return next;
+    },
+    read: id => states.get(id),
+  };
+}
+
+test('post-activation cleanup writes are fenced by the live calendar lease and active season', async () => {
+  const db = mockCleanupDb(3);
+  const lease = await acquireSeasonCalendarBuildLock(db, 2, 3);
+  const ref = db.collection('cleanup').doc('archive');
+  await commitSeasonHistoryCleanupWrites(db, lease.ownerId, lease.token, 3, [{ ref, data: { marker: true } }]);
+  assert.equal(db.read('archive').marker, true);
+  await releaseSeasonCalendarBuildLock(db, lease.ownerId, lease.token);
+});
+
+test('stale cleanup owner cannot delete after a replacement calendar lease is acquired', async () => {
+  const db = mockCleanupDb(3);
+  const nowMs = Date.now();
+  const stale = await acquireSeasonCalendarBuildLock(db, 2, 3, { ownerId: 'cleanup-old', nowMs, ttlMs: 10 });
+  await acquireSeasonCalendarBuildLock(db, 2, 3, { ownerId: 'cleanup-new', nowMs: nowMs + 11 });
+  const ref = db.collection('cleanup').doc('old-archive');
+  await assert.rejects(
+    () => commitSeasonHistoryCleanupWrites(db, stale.ownerId, stale.token, 3, [], [ref]),
+    /SEASON_CALENDAR_BUILD_LOCK_LOST/,
+  );
+  assert.notEqual(db.read('old-archive'), null);
+});
+
+test('cleanup mutations stop if a newer season activates during pruning', async () => {
+  const db = mockCleanupDb(3);
+  const lease = await acquireSeasonCalendarBuildLock(db, 2, 3);
+  await db.runTransaction(async tx => {
+    tx.set(db.collection('system_v1').doc('season_config'), { activeSeasonNumber: 4, worldReady: true });
+  });
+  const ref = db.collection('cleanup').doc('archive');
+  await assert.rejects(
+    () => commitSeasonHistoryCleanupWrites(db, lease.ownerId, lease.token, 3, [], [ref]),
+    /SEASON_HISTORY_CLEANUP_TARGET_CHANGED/,
+  );
+});
+
+test('post-activation archive and rollover pruning never bypass the cleanup lease', async () => {
+  const source = (await import('node:fs')).readFileSync(new URL('../src/app/actions/season-calendar.ts', import.meta.url), 'utf8');
+  const start = source.indexOf('async function pruneSeasonHistoryAfterActivation(');
+  const end = source.indexOf('/** Read-only canonical gate shared by build and the final publication step. */', start);
+  const cleanup = source.slice(start, end);
+  assert.match(cleanup, /acquireSeasonCalendarBuildLock\(db, targetSeason - 1, targetSeason\)/);
+  assert.match(cleanup, /commitSeasonHistoryCleanupWrites\(/);
+  assert.match(cleanup, /finally\s*\{\s*await releaseSeasonCalendarBuildLock/);
+  assert.doesNotMatch(cleanup, /batch\.commit\(\)|\.ref\.delete\(\)|\.ref\.set\(/);
 });

@@ -1,9 +1,11 @@
 import { getAuth } from 'firebase-admin/auth';
 import { getAdminDb } from '@/lib/firebase-admin';
+import { recordUserActivityUnlessRetiring } from '../../functions/club-activity-fence.js';
 
 export interface ServerActor {
   uid: string;
   isAdmin: boolean;
+  email: string | null;
 }
 
 /**
@@ -18,14 +20,25 @@ export interface ServerActor {
 export async function requireServerActor(idToken: string): Promise<ServerActor> {
   if (!idToken) throw new Error('AUTHENTICATION_REQUIRED');
 
-  getAdminDb();
+  const db = getAdminDb();
 
   try {
     const decoded = await getAuth().verifyIdToken(idToken, true);
-    return { uid: decoded.uid, isAdmin: decoded.admin === true };
+    const activity = await recordUserActivityUnlessRetiring(db, decoded.uid);
+    if (!activity.success) throw new Error(activity.error);
+    return {
+      uid: decoded.uid,
+      isAdmin: decoded.admin === true,
+      email: typeof decoded.email === 'string' ? decoded.email : null,
+    };
   } catch (error: any) {
     const code = String(error?.code || '').toLowerCase();
     const message = String(error?.message || '').toLowerCase();
+
+    // A disabled Auth user is terminal for this session, just like a revoked token.
+    if (code.includes('user-disabled') || message.includes('user disabled')) {
+      throw new Error('ACCOUNT_DISABLED');
+    }
 
     // Keep revocation checks enabled. A revoked token is never accepted.
     // Expired tokens are recoverable by forcing a client-side ID-token refresh.

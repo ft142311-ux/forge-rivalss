@@ -1,15 +1,37 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getAuth } from 'firebase-admin/auth';
 import { getAppCheck } from 'firebase-admin/app-check';
 import { getAdminDb } from '@/lib/firebase-admin';
+import { requireServerActor } from '@/lib/server-auth';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+
+type RegistrationMatchPlan =
+  | { ok: true; updates: Array<{ matchId: string | null; patch: Record<string, any> }> }
+  | { ok: false; reason: string; updates: []; matchId?: string };
+
+type RegistrationStandingTransfer =
+  | { ok: true; stats: Record<string, Record<string, any>>; transferredRow: Record<string, any> }
+  | { ok: false; reason: string };
 
 type RegistrationCore = {
   isEligibleRegistrationSlot: (slot: Record<string, unknown>, season: number) => boolean;
   validateRegistrationSchedule: (matches: Record<string, unknown>[], rank: number, botId: string) => boolean;
   generateStartingSquad: () => Record<string, unknown>[];
+  buildRegistrationMatchPlan: (
+    matches: Record<string, unknown>[],
+    botId: string,
+    userId: string,
+    clubName: string,
+    nowMs?: number,
+  ) => RegistrationMatchPlan;
+  transferBotStandingToUser: (
+    stats: Record<string, Record<string, any>>,
+    botId: string,
+    userId: string,
+    clubName: string,
+    rank: number,
+  ) => RegistrationStandingTransfer;
 };
 
 // Keep the same audited invariants and squad generator as the emulator callable.
@@ -53,6 +75,16 @@ function mapRegistrationError(error: unknown): { status: number; code: string } 
     BOT_NOT_FOUND_IN_SLOT: { status: 503, code: 'BOT_NOT_FOUND_IN_SLOT' },
     INVALID_LEAGUE_SLOT: { status: 409, code: 'INVALID_LEAGUE_SLOT' },
     NO_FREE_SLOTS_IN_LEAGUE: { status: 409, code: 'NO_FREE_SLOTS_IN_LEAGUE' },
+    SLOT_MATCH_IN_PROGRESS: { status: 409, code: 'SLOT_MATCH_IN_PROGRESS' },
+    SLOT_MATCH_DUE: { status: 409, code: 'SLOT_MATCH_DUE' },
+    SLOT_MATCH_TIME_UNKNOWN: { status: 409, code: 'SLOT_MATCH_TIME_UNKNOWN' },
+    SLOT_HISTORY_EVENT_EXISTS: { status: 409, code: 'SLOT_HISTORY_EVENT_EXISTS' },
+    ACCOUNT_RETIRING: { status: 403, code: 'ACCOUNT_RETIRING' },
+    ACCOUNT_RETIRED: { status: 403, code: 'ACCOUNT_RETIRED' },
+    ACCOUNT_DISABLED: { status: 401, code: 'ACCOUNT_DISABLED' },
+    AUTH_TOKEN_REVOKED: { status: 401, code: 'AUTH_TOKEN_REVOKED' },
+    AUTH_TOKEN_INVALID: { status: 401, code: 'AUTH_TOKEN_INVALID' },
+    NO_UPCOMING_FIXTURES_FOR_SLOT: { status: 409, code: 'NO_UPCOMING_FIXTURES_FOR_SLOT' },
     LEAGUE_TABLE_SLOT_CONFLICT: { status: 503, code: 'LEAGUE_TABLE_SLOT_CONFLICT' },
     LEAGUE_SCHEDULE_SLOT_CONFLICT: { status: 503, code: 'LEAGUE_SCHEDULE_SLOT_CONFLICT' },
   };
@@ -78,9 +110,9 @@ export async function POST(request: NextRequest) {
 
   try {
     const db = getAdminDb();
-    const decoded = await getAuth().verifyIdToken(tokenMatch[1], true);
-    const userId = decoded.uid;
-    const email = typeof decoded.email === 'string' ? decoded.email : '';
+    const actor = await requireServerActor(tokenMatch[1]);
+    const userId = actor.uid;
+    const email = actor.email || '';
 
     if (!email) {
       return json(403, { success: false, error: 'EMAIL_REQUIRED' });
@@ -176,6 +208,9 @@ export async function POST(request: NextRequest) {
       if (slot.status !== 'FREE' || slot.occupantId || Number(slot.season) !== seasonNum) {
         throw new Error('INVALID_LEAGUE_SLOT');
       }
+      const targetGeneration = Math.max(0, Number(slot.occupancyGeneration) || 0) + 1;
+      const historyRef = db.collection('league_slot_history_v1')
+        .doc(`${slotDocument.id}_G${targetGeneration}`);
 
       const tableId = `table_v140_S${seasonNum}_L${LEAGUE_ID}_V${slot.division}_G${slot.group}`;
       const tableRef = db.collection('league_tables_v2').doc(tableId);
@@ -194,6 +229,7 @@ export async function POST(request: NextRequest) {
         Number(stats[id]?.rank) === Number(slot.rank) && stats[id]?.isBot === true
       );
       if (!botId) throw new Error('BOT_NOT_FOUND_IN_SLOT');
+      const botPlayerRef = db.collection('players_v14').doc(botId);
 
       const rowsAtRank = Object.entries(stats).filter(([, team]) =>
         Number(team?.rank) === Number(slot.rank)
@@ -209,50 +245,82 @@ export async function POST(request: NextRequest) {
         .where('groupId', '==', Number(slot.group))
         .where('version', '==', 140);
       const matchesSnapshot = await transaction.get(matchesQuery);
+      const historySnapshot = await transaction.get(historyRef);
+      const botPlayerSnapshot = await transaction.get(botPlayerRef);
       if (matchesSnapshot.size !== 56) throw new Error('WORLD_NOT_READY');
+      if (historySnapshot.exists) throw new Error('SLOT_HISTORY_EVENT_EXISTS');
 
       const matches = matchesSnapshot.docs.map((document) => document.data() || {});
       if (!registrationCore.validateRegistrationSchedule(matches, Number(slot.rank), botId)) {
         throw new Error('LEAGUE_SCHEDULE_SLOT_CONFLICT');
       }
 
-      // All reads are complete. Firestore commits every mutation atomically.
+      const matchPlan = registrationCore.buildRegistrationMatchPlan(
+        matchesSnapshot.docs.map((document) => ({ ...(document.data() || {}), id: document.id })),
+        botId,
+        userId,
+        clubName,
+        Date.now(),
+      );
+      if (!matchPlan.ok) throw new Error(matchPlan.reason);
+
+      const standingTransfer = registrationCore.transferBotStandingToUser(
+        stats,
+        botId,
+        userId,
+        clubName,
+        Number(slot.rank),
+      );
+      if (!standingTransfer.ok) throw new Error(standingTransfer.reason);
+
+      // All reads and safety checks are complete. Firestore commits every mutation atomically.
       transaction.update(slotDocument.ref, {
         status: 'OCCUPIED',
         occupantId: userId,
+        occupancyGeneration: targetGeneration,
+        lastOccupantId: botId,
+        lastTransitionReason: 'NEW_REGISTRATION',
+        lastTransitionAt: new Date(),
         updatedAt: new Date(),
       });
 
-      const nextStats = { ...stats };
-      delete nextStats[botId];
-      nextStats[userId] = {
-        id: userId,
-        name: clubName,
-        rank: slot.rank,
-        matchesPlayed: 0,
-        wins: 0,
-        draws: 0,
-        losses: 0,
-        points: 0,
-        diff: 0,
-        isBot: false,
-      };
-      transaction.update(tableRef, { stats: nextStats, updatedAt: new Date() });
+      // The slot owns its season-to-date record. Transfer identity only; do not
+      // reset wins, draws, losses, points, match count, diff or additive fields.
+      transaction.create(historyRef, {
+        slotId: slotDocument.id,
+        season: seasonNum,
+        leagueId: LEAGUE_ID,
+        division: Number(slot.division),
+        group: Number(slot.group),
+        rank: Number(slot.rank),
+        previousGeneration: targetGeneration - 1,
+        generation: targetGeneration,
+        previousOccupantType: 'BOT',
+        previousOccupantId: botId,
+        previousOwnerUid: null,
+        previousClubId: botId,
+        previousClubSnapshot: botPlayerSnapshot.exists ? botPlayerSnapshot.data() : null,
+        newOccupantType: 'USER',
+        newOccupantId: userId,
+        newOwnerUid: userId,
+        newClubId: userId,
+        reason: 'NEW_REGISTRATION',
+        operationId: userId,
+        createdAt: new Date(),
+      });
 
-      transaction.delete(db.collection('players_v14').doc(botId));
+      transaction.update(tableRef, {
+        stats: standingTransfer.stats,
+        updatedAt: new Date(),
+      });
 
-      for (const matchDocument of matchesSnapshot.docs) {
-        const match = matchDocument.data() || {};
-        const patch: Record<string, string> = {};
-        if (match.homeId === botId) {
-          patch.homeId = userId;
-          patch.homeName = clubName;
-        }
-        if (match.awayId === botId) {
-          patch.awayId = userId;
-          patch.awayName = clubName;
-        }
-        if (Object.keys(patch).length > 0) transaction.update(matchDocument.ref, patch);
+      transaction.delete(botPlayerRef);
+
+      // Historical completed fixtures remain byte-for-byte unchanged. Only
+      // future, not-yet-due fixtures are rebound to the new club.
+      for (const update of matchPlan.updates) {
+        const matchDocument = matchesSnapshot.docs.find((document) => document.id === update.matchId);
+        if (matchDocument) transaction.update(matchDocument.ref, update.patch);
       }
 
       const totalPlayers =
