@@ -206,6 +206,7 @@ export async function POST(request: NextRequest) {
       const targetGeneration = Math.max(0, Number(slot.occupancyGeneration) || 0) + 1;
       const historyRef = db.collection('league_slot_history_v1')
         .doc(`${slotDocument.id}_G${targetGeneration}`);
+      const botPlayerRef = db.collection('players_v14').doc(botId);
 
       const tableId = `table_v140_S${seasonNum}_L${LEAGUE_ID}_V${slot.division}_G${slot.group}`;
       const tableRef = db.collection('league_tables_v2').doc(tableId);
@@ -240,6 +241,7 @@ export async function POST(request: NextRequest) {
         .where('version', '==', 140);
       const matchesSnapshot = await transaction.get(matchesQuery);
       const historySnapshot = await transaction.get(historyRef);
+      const botPlayerSnapshot = await transaction.get(botPlayerRef);
       if (matchesSnapshot.size !== 56) throw new Error('WORLD_NOT_READY');
       if (historySnapshot.exists) throw new Error('SLOT_HISTORY_EVENT_EXISTS');
 
@@ -292,6 +294,7 @@ export async function POST(request: NextRequest) {
         previousOccupantId: botId,
         previousOwnerUid: null,
         previousClubId: botId,
+        previousClubSnapshot: botPlayerSnapshot.exists ? botPlayerSnapshot.data() : null,
         newOccupantType: 'USER',
         newOccupantId: userId,
         newOwnerUid: userId,
@@ -306,7 +309,7 @@ export async function POST(request: NextRequest) {
         updatedAt: new Date(),
       });
 
-      transaction.delete(db.collection('players_v14').doc(botId));
+      transaction.delete(botPlayerRef);
 
       // Historical completed fixtures remain byte-for-byte unchanged. Only
       // future, not-yet-due fixtures are rebound to the new club.
