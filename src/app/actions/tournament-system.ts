@@ -455,7 +455,14 @@ async function resolveTournamentMatch(db: any, tournamentId: string, matchId: st
         : [];
       const homeRow = groupRows.find((row: any) => row.id === home.id);
       const awayRow = groupRows.find((row: any) => row.id === away.id);
-      if (m.stage === 'groups' && (!groupSnap?.exists || !homeRow || !awayRow || home.id === away.id)) {
+      if (m.stage === 'groups' && (
+        !groupSnap?.exists ||
+        groupRows.length !== 4 ||
+        new Set(groupRows.map((row: any) => row.id)).size !== 4 ||
+        !homeRow ||
+        !awayRow ||
+        home.id === away.id
+      )) {
         throw new Error('TOURNAMENT_GROUP_STANDINGS_INTEGRITY_FAILED');
       }
 
