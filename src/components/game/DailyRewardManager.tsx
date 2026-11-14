@@ -2,7 +2,8 @@
 
 import { useState, useEffect, useMemo } from 'react';
 import { useGameState } from '@/app/lib/store';
-import { getMoscowDateString, getMoscowTime } from '@/app/lib/time-utils';
+import { getMoscowDateString } from '@/app/lib/time-utils';
+import { getDailyRewardForDay } from '@/app/lib/daily-reward';
 import { 
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter 
 } from '@/components/ui/dialog';
@@ -29,19 +30,15 @@ export function DailyRewardManager() {
     }
   }, [isLoaded, lastRewardClaimDate, pathname, selectedLeagueId]);
 
-  const calendarRewards = useMemo(() => {
-    return Array.from({ length: 30 }, (_, i) => {
-      const day = i + 1;
-      const credits = 100000 + (i * 150000) + (Math.floor(i / 7) * 500000);
-      const crystals = 10 + (i * 15) + (day % 7 === 0 ? 50 : 0);
-      return { day, credits, crystals };
-    });
-  }, []);
+  const calendarRewards = useMemo(
+    () => Array.from({ length: 30 }, (_, i) => getDailyRewardForDay(i + 1)),
+    [],
+  );
 
-  const currentDayReward = calendarRewards[rewardDay - 1] || calendarRewards[0];
+  const currentDayReward = getDailyRewardForDay(rewardDay);
 
   const handleClaim = () => {
-    claimReward(currentDayReward.credits, currentDayReward.crystals);
+    claimReward();
     setShowReward(false);
   };
 

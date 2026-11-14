@@ -4,7 +4,7 @@
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { z } from 'zod';
-import { getMoscowTime } from '@/app/lib/time-utils';
+import { getMoscowDateString } from '@/app/lib/time-utils';
 import { requireServerActor } from '@/lib/server-auth';
 
 /**
@@ -65,7 +65,7 @@ export async function claimDailyRewardAction(idToken: string) {
   try {
     const { uid: userId } = await requireServerActor(idToken);
     const db = getAdminDb();
-  const today = new Date().toISOString().split('T')[0]; // МСК Дата в идеале
+  const today = getMoscowDateString();
   const playerRef = db.collection('players_v14').doc(userId);
 
   try {
