@@ -402,9 +402,31 @@ async function retireInactiveClub({ db, auth, userRecord, now = new Date() }) {
     return { action: 'RETIRED_AND_REPLACED', botId, season, division, group, rank };
   });
 
+  if ([
+    'BLOCKED_ARCHIVE_COLLISION',
+    'BLOCKED_HISTORY_EVENT_COLLISION',
+    'BLOCKED_OWNERSHIP_CHANGED',
+    'BLOCKED_TABLE_IDENTITY_CONFLICT',
+    'BLOCKED_BOT_ID_COLLISION',
+    'BLOCKED_INTEGRITY_CHECK',
+  ].includes(result.action)) {
+    await db.runTransaction(async (transaction) => {
+      const pending = await transaction.get(pendingRef);
+      if (pending.exists) {
+        transaction.update(pendingRef, {
+          phase: 'REVIEW_REQUIRED',
+          lastErrorCode: result.action,
+          reviewRequiredAt: now,
+          updatedAt: now,
+        });
+      }
+    });
+    return result;
+  }
+
   if (!['RETIRED_AND_REPLACED', 'ALREADY_RETIRED'].includes(result.action)) {
-    // Business/integrity conflicts must not lock a manager out. Remove the
-    // pending marker and restore sign-in; a later daily pass can re-evaluate.
+    // Deferrals and non-destructive precondition failures leave the club with
+    // its existing owner. Restore sign-in so a later daily pass can re-evaluate.
     await auth.updateUser(uid, { disabled: false }).catch(() => undefined);
     await pendingRef.delete().catch(() => undefined);
   }
