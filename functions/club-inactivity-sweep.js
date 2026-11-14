@@ -2,6 +2,7 @@
 
 const { resolveClubInactivity } = require('./club-inactivity-policy');
 const { timestampToMillis } = require('./registration-core');
+const { randomUUID } = require('node:crypto');
 
 const LEAGUE_ID = 'ALPHA';
 const BATCH_SIZE = 1000;
@@ -149,9 +150,11 @@ async function retireInactiveClub({ db, auth, userRecord, now = new Date() }) {
     return { action: 'SKIPPED_INVALID_CLUB_COORDINATES' };
   }
 
-  // Claim retirement in the same Firestore transaction that reads activity.
-  // The login handshake reads this marker and writes the activity document, so
-  // exactly one side wins a concurrent login/retirement race.
+  // The durable pending marker is also a lease. Only one worker may advance
+  // it at a time; an expired lease is reclaimable after a crash or timeout.
+  // The login handshake reads the same marker in its activity transaction.
+  const leaseOwner = `inactivity-${process.pid || 'worker'}-${randomUUID()}`;
+  const leaseUntil = new Date(now.getTime() + 10 * 60 * 1000);
   const claim = await db.runTransaction(async (transaction) => {
     const [pending, latestActivity] = await Promise.all([
       transaction.get(pendingRef),
@@ -159,9 +162,19 @@ async function retireInactiveClub({ db, auth, userRecord, now = new Date() }) {
     ]);
     if (pending.exists) {
       if (pending.get('phase') === 'REVIEW_REQUIRED') {
-        return { claimed: false, alreadyClaimed: false, reviewRequired: true };
+        return { claimed: false, reviewRequired: true };
       }
-      return { claimed: false, alreadyClaimed: true };
+      const currentLeaseUntil = timestampToMillis(pending.get('leaseUntil'));
+      if (Number.isFinite(currentLeaseUntil) && currentLeaseUntil > now.getTime()) {
+        return { claimed: false, busy: true };
+      }
+      transaction.update(pendingRef, {
+        leaseOwner,
+        leaseUntil,
+        attempts: Number(pending.get('attempts') || 0) + 1,
+        updatedAt: now,
+      });
+      return { claimed: true, resumed: true };
     }
 
     const claimEligibility = resolveClubInactivity(
@@ -171,7 +184,7 @@ async function retireInactiveClub({ db, auth, userRecord, now = new Date() }) {
       latestActivity.exists ? latestActivity.get('lastActiveAt') : null,
     );
     if (!claimEligibility.eligible) {
-      return { claimed: false, alreadyClaimed: false, reason: claimEligibility.reason };
+      return { claimed: false, reason: claimEligibility.reason };
     }
 
     transaction.create(pendingRef, {
@@ -186,12 +199,16 @@ async function retireInactiveClub({ db, auth, userRecord, now = new Date() }) {
       rank,
       expectedSlotId,
       expectedGeneration,
+      leaseOwner,
+      leaseUntil,
+      attempts: 1,
     });
-    return { claimed: true, alreadyClaimed: false };
+    return { claimed: true, resumed: false };
   });
 
   if (claim.reviewRequired) return { action: 'SKIPPED_REVIEW_REQUIRED' };
-  if (!claim.claimed && !claim.alreadyClaimed) {
+  if (claim.busy) return { action: 'SKIPPED_RETIREMENT_IN_PROGRESS' };
+  if (!claim.claimed) {
     return { action: 'SKIPPED_ACTIVITY_RACE', reason: claim.reason || 'RECENT_ACTIVITY' };
   }
   if (!latestAuthRecord.disabled) await auth.updateUser(uid, { disabled: true });
@@ -239,6 +256,7 @@ async function retireInactiveClub({ db, auth, userRecord, now = new Date() }) {
       return { action: 'BLOCKED_ARCHIVE_COLLISION' };
     }
     if (!pending.exists) return { action: 'BLOCKED_RETIREMENT_MARKER_MISSING' };
+    if (pending.get('leaseOwner') !== leaseOwner) return { action: 'BLOCKED_STALE_RETIREMENT_WORKER' };
     if (history.exists) return { action: 'BLOCKED_HISTORY_EVENT_COLLISION' };
 
     const currentConfig = activeConfig.exists ? activeConfig.data() || {} : {};
@@ -415,6 +433,7 @@ async function retireInactiveClub({ db, auth, userRecord, now = new Date() }) {
     'BLOCKED_TABLE_IDENTITY_CONFLICT',
     'BLOCKED_BOT_ID_COLLISION',
     'BLOCKED_INTEGRITY_CHECK',
+    'BLOCKED_STALE_RETIREMENT_WORKER',
   ].includes(result.action)) {
     await db.runTransaction(async (transaction) => {
       const pending = await transaction.get(pendingRef);
@@ -431,10 +450,17 @@ async function retireInactiveClub({ db, auth, userRecord, now = new Date() }) {
   }
 
   if (!['RETIRED_AND_REPLACED', 'ALREADY_RETIRED'].includes(result.action)) {
-    // Deferrals and non-destructive precondition failures leave the club with
-    // its existing owner. Restore sign-in so a later daily pass can re-evaluate.
-    await auth.updateUser(uid, { disabled: false }).catch(() => undefined);
-    await pendingRef.delete().catch(() => undefined);
+    // Only the current lease owner may release the operation or re-enable Auth.
+    // A stale worker must never undo a newer worker's progress.
+    const stillOwnsLease = await db.runTransaction(async (transaction) => {
+      const pending = await transaction.get(pendingRef);
+      if (!pending.exists || pending.get('leaseOwner') !== leaseOwner) return false;
+      transaction.delete(pendingRef);
+      return true;
+    });
+    if (stillOwnsLease) {
+      await auth.updateUser(uid, { disabled: false }).catch(() => undefined);
+    }
   }
   return result;
 }
