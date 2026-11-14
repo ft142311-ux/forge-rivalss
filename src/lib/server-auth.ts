@@ -1,6 +1,12 @@
 import { getAuth } from 'firebase-admin/auth';
 import { getAdminDb } from '@/lib/firebase-admin';
-import { recordUserActivityUnlessRetiring } from '../../functions/club-activity-fence.js';
+
+const { recordUserActivityUnlessRetiring } = require('../../functions/club-activity-fence.js') as {
+  recordUserActivityUnlessRetiring: (
+    db: ReturnType<typeof getAdminDb>,
+    uid: string,
+  ) => Promise<{ success: boolean; error?: string }>;
+};
 
 export interface ServerActor {
   uid: string;
