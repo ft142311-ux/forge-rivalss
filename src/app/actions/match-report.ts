@@ -5,6 +5,32 @@ import { requireServerActor } from '@/lib/server-auth';
 import { FieldValue } from 'firebase-admin/firestore';
 import { MATCH_REPORT_COLLECTIONS } from '@/app/lib/match-storage';
 
+/**
+ * Legacy league fixtures may identify participants by their league rank rather
+ * than UID. Rank alone is not an identity: it repeats across every group.
+ * Require the full canonical league coordinates to match the authenticated
+ * profile before allowing this compatibility path.
+ */
+async function isRankBasedLeagueParticipant(db: FirebaseFirestore.Firestore, uid: string, match: any, collectionName: string) {
+  if (collectionName !== MATCH_COLLECTIONS.league) return false;
+
+  const leagueId = String(match.leagueId || '').trim();
+  const groupId = String(match.groupId || '').trim();
+  const level = Number(match.level);
+  const homeRank = Number(match.homeRank);
+  const awayRank = Number(match.awayRank);
+  if (!leagueId || !groupId || !Number.isInteger(level) ||
+      !Number.isInteger(homeRank) || !Number.isInteger(awayRank)) return false;
+
+  const profileSnap = await db.collection('players_v14').doc(uid).get();
+  if (!profileSnap.exists) return false;
+  const profile = profileSnap.data() || {};
+  return String(profile.selectedLeagueId || '') === leagueId &&
+    String(profile.groupId || '') === groupId &&
+    Number(profile.leagueLevel) === level &&
+    [homeRank, awayRank].includes(Number(profile.rank));
+}
+
 function serializeMatchReport(value: any): any {
   if (value == null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return value;
   if (value instanceof Date) return value.toISOString();
@@ -31,12 +57,9 @@ export async function getMatchReportAction(idToken: string, matchId: string) {
     const match: any = snap.data() || {};
     const participant = [match.homeId, match.awayId, match.homeUid, match.awayUid, match.hostId, match.challengerId]
       .some((participantId) => String(participantId || '') === uid);
-    let rankParticipant = false;
-    if (!participant && (match.homeRank != null || match.awayRank != null)) {
-      const profile = await db.collection('players_v14').doc(uid).get();
-      const rank = Number(profile.data()?.rank);
-      rankParticipant = Number.isFinite(rank) && (rank === Number(match.homeRank) || rank === Number(match.awayRank));
-    }
+    const rankParticipant = !participant
+      ? await isRankBasedLeagueParticipant(db, uid, match, collectionName)
+      : false;
     if (!participant && !rankParticipant) return { success: false, error: 'MATCH_ACCESS_DENIED' };
     return { success: true, match: serializeMatchReport({ ...match, id: snap.id }), collection: collectionName };
   }
@@ -78,13 +101,10 @@ export async function markMatchViewedAction(idToken: string, matchId: string) {
     const isParticipant = [m.homeId, m.awayId, m.homeUid, m.awayUid, m.hostId, m.challengerId]
       .some((participantId) => String(participantId || '') === uid);
 
-    // Rank-based league records need the player's rank to be resolved from the profile.
-    let rankParticipant = false;
-    if (!isParticipant && (m.homeRank != null || m.awayRank != null)) {
-      const playerSnap = await db.collection('players_v14').doc(uid).get();
-      const rank = Number(playerSnap.data()?.rank);
-      rankParticipant = Number.isFinite(rank) && (rank === Number(m.homeRank) || rank === Number(m.awayRank));
-    }
+    // Legacy rank-based access is limited to an exact league/group/level match.
+    const rankParticipant = !isParticipant
+      ? await isRankBasedLeagueParticipant(db, uid, m, collectionName)
+      : false;
 
     if (!isParticipant && !rankParticipant) {
       return { success: false, error: 'MATCH_ACCESS_DENIED' };
