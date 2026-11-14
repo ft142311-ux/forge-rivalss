@@ -353,9 +353,12 @@ test('registration HTTP API enforces its boundary and safely initializes a club'
     assert.equal(audit.size, 1);
     assert.equal(audit.docs[0].get('event'), 'CLUB_REGISTRATION_COMPLETED');
 
-    const retryResponse = await request();
-    const retryBody = await retryResponse.json();
-    assert.equal(retryResponse.status, 200);
+    // Simulate an ambiguous network outcome: the server commits a retry-safe
+    // request, but the client discards the response before it can observe it.
+    await request();
+    const retryAfterLostResponse = await request();
+    const retryBody = await retryAfterLostResponse.json();
+    assert.equal(retryAfterLostResponse.status, 200);
     assert.equal(retryBody.alreadyInitialized, true);
     assert.equal(retryBody.numericId, responseBody.numericId);
 
