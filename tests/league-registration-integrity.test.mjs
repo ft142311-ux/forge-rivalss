@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const { isEligibleRegistrationSlot, validateRegistrationSchedule } = require('../functions/league-integrity.js');
+const { transferBotStandingToUser } = require('../functions/registration-core.js');
 function fixtures(byRank) {
   const matches = [];
   for (let homeRank = 1; homeRank <= 8; homeRank++) for (let awayRank = 1; awayRank <= 8; awayRank++) {
@@ -38,4 +39,30 @@ test('new registration can randomly claim any free D1-D4 slot in the active seas
   assert.equal(isEligibleRegistrationSlot({ ...base, division: 4 }, 8), false);
   assert.equal(isEligibleRegistrationSlot({ ...base, division: 4, status: 'OCCUPIED', occupantId: 'user-1' }, 7), false);
   assert.equal(isEligibleRegistrationSlot({ ...base, division: 4, occupantId: 'user-1' }, 7), false);
+});
+
+
+test('bot standings transfer preserves results and rejects a second transfer', () => {
+  const original = {
+    BOT_ALPHA_L2_G1_R3: {
+      id: 'BOT_ALPHA_L2_G1_R3', name: 'League Bot', rank: 3, isBot: true,
+      matchesPlayed: 14, wins: 9, draws: 2, losses: 3, points: 29, diff: 17,
+    },
+  };
+  const first = transferBotStandingToUser(original, 'BOT_ALPHA_L2_G1_R3', 'user-123', 'New Club', 3);
+  assert.equal(first.ok, true);
+  assert.equal(first.stats['BOT_ALPHA_L2_G1_R3'], undefined);
+  assert.deepEqual(first.stats['user-123'], {
+    ...original.BOT_ALPHA_L2_G1_R3,
+    id: 'user-123', name: 'New Club', rank: 3, isBot: false,
+  });
+  assert.deepEqual(original.BOT_ALPHA_L2_G1_R3, {
+    id: 'BOT_ALPHA_L2_G1_R3', name: 'League Bot', rank: 3, isBot: true,
+    matchesPlayed: 14, wins: 9, draws: 2, losses: 3, points: 29, diff: 17,
+  }, 'the source standings object remains immutable');
+
+  const second = transferBotStandingToUser(first.stats, 'BOT_ALPHA_L2_G1_R3', 'user-456', 'Second Club', 3);
+  assert.deepEqual(second, { ok: false, reason: 'LEAGUE_TABLE_SLOT_CONFLICT' });
+  const duplicateUser = transferBotStandingToUser(first.stats, 'BOT_ALPHA_L2_G1_R3', 'user-123', 'New Club', 3);
+  assert.deepEqual(duplicateUser, { ok: false, reason: 'LEAGUE_TABLE_SLOT_CONFLICT' });
 });
