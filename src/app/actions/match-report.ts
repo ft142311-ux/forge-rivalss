@@ -11,7 +11,7 @@ import { MATCH_REPORT_COLLECTIONS } from '@/app/lib/match-storage';
  * Require the full canonical league coordinates to match the authenticated
  * profile before allowing this compatibility path.
  */
-async function isRankBasedLeagueParticipant(db: FirebaseFirestore.Firestore, uid: string, match: any, collectionName: string) {
+async function isRankBasedLeagueParticipant(db: any, uid: string, match: any, collectionName: string) {
   if (collectionName !== MATCH_COLLECTIONS.league) return false;
 
   const leagueId = String(match.leagueId || '').trim();
