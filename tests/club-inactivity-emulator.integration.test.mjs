@@ -75,6 +75,8 @@ test('inactive club replacement is atomic and preserves completed match results'
       homeName: i === 0 || i === 2 ? player.clubName : `Opponent ${i}`,
       awayId: i === 1 ? uid : `away_${i}`,
       awayName: i === 1 ? player.clubName : `Away ${i}`,
+      homeLogo: i === 2 ? 'old-club-home-logo' : null,
+      awayLogo: i === 1 ? 'old-club-away-logo' : null,
       homeRank: i === 0 ? rank : 1,
       awayRank: i === 1 ? rank : 2,
       // A due fixture for unrelated teams must not block this user's retirement.
