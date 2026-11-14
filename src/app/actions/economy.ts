@@ -1,7 +1,7 @@
 
 'use server';
 
-import { FieldValue, Timestamp } from 'firebase-admin/firestore';
+import { FieldValue } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { getMoscowDateString } from '@/app/lib/time-utils';
 import { getDailyRewardForDay, getNextDailyRewardDay, getPremiumDailyCrystalBonus } from '@/app/lib/daily-reward';
@@ -21,12 +21,16 @@ export async function claimDailyRewardAction(idToken: string) {
     const db = getAdminDb();
   const today = getMoscowDateString();
   const playerRef = db.collection('players_v14').doc(userId);
+  const receiptRef = db.collection('daily_reward_receipts').doc(`${userId}_${today}`);
 
   try {
     const result = await db.runTransaction(async (t) => {
+      const receiptSnap = await t.get(receiptRef);
+      if (receiptSnap.exists) return receiptSnap.data()?.result;
+
       const pSnap = await t.get(playerRef);
       if (!pSnap.exists) throw new Error("PLAYER_NOT_FOUND");
-      
+
       const p = pSnap.data()!;
       if (p.lastRewardClaimDate === today) throw new Error("ALREADY_CLAIMED");
 
@@ -35,17 +39,51 @@ export async function claimDailyRewardAction(idToken: string) {
       const premiumUntilMs = p.premiumUntil ? new Date(String(p.premiumUntil)).getTime() : 0;
       const premiumBonus = getPremiumDailyCrystalBonus(p.isPremium === true && premiumUntilMs > Date.now());
       const crystals = baseCrystals + premiumBonus;
+      const creditsBefore = Number(p.credits || 0);
+      const crystalsBefore = Number(p.crystals || 0);
+      const creditsAfter = creditsBefore + credits;
+      const crystalsAfter = crystalsBefore + crystals;
+      const result = { success: true, credits, crystals, premiumBonus };
 
-      // Применяем награду
       t.update(playerRef, {
-        credits: (p.credits || 0) + credits,
-        crystals: (p.crystals || 0) + crystals,
+        credits: creditsAfter,
+        crystals: crystalsAfter,
         lastRewardClaimDate: today,
-        rewardDay: rewardDay,
+        rewardDay,
         updatedAt: FieldValue.serverTimestamp()
       });
 
-      return { success: true, credits, crystals, premiumBonus };
+      t.create(db.collection('economy_transactions').doc(`daily_reward_${userId}_${today}_credits`), {
+        userId,
+        amount: credits,
+        currency: 'credits',
+        type: 'DAILY_REWARD',
+        referenceId: today,
+        description: `Daily reward day ${rewardDay}`,
+        balanceBefore: creditsBefore,
+        balanceAfter: creditsAfter,
+        timestamp: FieldValue.serverTimestamp()
+      });
+      t.create(db.collection('economy_transactions').doc(`daily_reward_${userId}_${today}_crystals`), {
+        userId,
+        amount: crystals,
+        currency: 'crystals',
+        type: 'DAILY_REWARD',
+        referenceId: today,
+        description: `Daily reward day ${rewardDay}`,
+        balanceBefore: crystalsBefore,
+        balanceAfter: crystalsAfter,
+        timestamp: FieldValue.serverTimestamp()
+      });
+      t.create(receiptRef, {
+        userId,
+        date: today,
+        rewardDay,
+        result,
+        createdAt: FieldValue.serverTimestamp()
+      });
+
+      return result;
     });
 
     return result;
