@@ -13,9 +13,10 @@ import { cn } from '@/lib/utils';
 import { usePathname } from 'next/navigation';
 
 export function DailyRewardManager() {
-  const { isLoaded, language, lastRewardClaimDate, rewardDay, claimReward, selectedLeagueId, isPremium } = useGameState();
+  const { isLoaded, language, lastRewardClaimDate, rewardDay, claimReward, selectedLeagueId, isPremium, premiumUntil } = useGameState();
   const [showReward, setShowReward] = useState(false);
   const pathname = usePathname();
+  const isPremiumActive = isPremium && Boolean(premiumUntil) && new Date(premiumUntil!).getTime() > Date.now();
 
   useEffect(() => {
     if (isLoaded && pathname === '/' && !!selectedLeagueId) {
@@ -133,7 +134,7 @@ export function DailyRewardManager() {
               </div>
             </div>
             
-            {isPremium && (
+            {isPremiumActive && (
               <div className="p-2.5 bg-yellow-500/10 rounded-xl border border-yellow-500/20 flex items-center justify-between shadow-[0_0_15px_rgba(234,179,8,0.1)]">
                 <div className="flex items-center gap-3">
                   <div className="p-1.5 rounded-lg bg-yellow-500/20"><Crown className="w-4 h-4 text-yellow-500" /></div>
