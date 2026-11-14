@@ -39,3 +39,14 @@ test('report loading and viewed acknowledgement recognize every participant iden
   }
   assert.match(markViewed, /\.some\(\(participantId\) => String\(participantId \|\| ''\) === uid\)/);
 });
+
+test('legacy rank-based report access requires exact league, group and division coordinates', () => {
+  assert.match(matchReportAction, /async function isRankBasedLeagueParticipant/);
+  assert.match(matchReportAction, /collectionName !== MATCH_COLLECTIONS\.league/);
+  assert.match(matchReportAction, /profile\.selectedLeagueId \|\| ''\) === leagueId/);
+  assert.match(matchReportAction, /profile\.groupId \|\| ''\) === groupId/);
+  assert.match(matchReportAction, /Number\(profile\.leagueLevel\) === level/);
+  assert.match(matchReportAction, /\[homeRank, awayRank\]\.includes\(Number\(profile\.rank\)\)/);
+  assert.match(matchReportAction, /await isRankBasedLeagueParticipant\(db, uid, match, collectionName\)/);
+  assert.match(matchReportAction, /await isRankBasedLeagueParticipant\(db, uid, m, collectionName\)/);
+});
