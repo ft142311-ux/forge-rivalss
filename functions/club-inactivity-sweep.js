@@ -98,6 +98,24 @@ async function retireInactiveClub({ db, auth, userRecord, now = new Date() }) {
   if (pendingSnap.exists && pendingSnap.get('phase') === 'REVIEW_REQUIRED') {
     return { action: 'SKIPPED_REVIEW_REQUIRED' };
   }
+  const initialPendingPhase = pendingSnap.exists ? String(pendingSnap.get('phase') || '') : '';
+  if (pendingSnap.exists &&
+      !['PENDING_AUTH_DISABLE', 'CANCELLED', 'REVIEW_REQUIRED'].includes(initialPendingPhase)) {
+    await db.runTransaction(async (transaction) => {
+      const pending = await transaction.get(pendingRef);
+      const phase = pending.exists ? String(pending.get('phase') || '') : '';
+      if (pending.exists &&
+          !['PENDING_AUTH_DISABLE', 'CANCELLED', 'REVIEW_REQUIRED'].includes(phase)) {
+        transaction.update(pendingRef, {
+          phase: 'REVIEW_REQUIRED',
+          lastErrorCode: 'UNKNOWN_RETIREMENT_PHASE',
+          reviewRequiredAt: now,
+          updatedAt: now,
+        });
+      }
+    });
+    return { action: 'SKIPPED_REVIEW_REQUIRED' };
+  }
   // Refresh Auth metadata immediately before making the eligibility decision.
   const latestAuthRecord = await auth.getUser(uid);
   if (pendingSnap.exists && pendingSnap.get('phase') === 'CANCELLED') {
