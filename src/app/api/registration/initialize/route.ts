@@ -297,7 +297,7 @@ export async function POST(request: NextRequest) {
         newOwnerUid: userId,
         newClubId: userId,
         reason: 'NEW_REGISTRATION',
-        operationId: registrationRef.id,
+        operationId: userId,
         createdAt: new Date(),
       });
 
