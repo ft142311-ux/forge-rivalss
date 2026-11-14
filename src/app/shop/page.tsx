@@ -39,6 +39,23 @@ import {
   createShopPlayerAction,
 } from '@/app/actions/shop';
 
+const EXCHANGE_OPERATION_PREFIX = 'forge-rivals:shop-operation:exchange';
+
+function getPendingExchangeOperationId(userId: string, amount: number): string {
+  const key = `${EXCHANGE_OPERATION_PREFIX}:${userId}:${amount}`;
+  const existing = window.localStorage.getItem(key);
+  if (existing) return existing;
+  const operationId = typeof crypto !== 'undefined' && 'randomUUID' in crypto
+    ? crypto.randomUUID().replace(/-/g, '')
+    : `${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`;
+  window.localStorage.setItem(key, operationId);
+  return operationId;
+}
+
+function clearPendingExchangeOperationId(userId: string, amount: number): void {
+  window.localStorage.removeItem(`${EXCHANGE_OPERATION_PREFIX}:${userId}:${amount}`);
+}
+
 type ShopTab = 
   | 'menu'
   | 'diamonds' 
@@ -330,8 +347,13 @@ export default function ShopPage() {
   const handleExchange = async (amount: number) => {
     try {
       setIsProcessing(true);
-      const res = await exchangeCrystalsForCreditsAction(await getToken(), amount);
-      if ('error' in res) throw new Error(res.error || 'EXCHANGE_FAILED');
+      const operationId = getPendingExchangeOperationId(user?.uid || 'unknown', amount);
+      const res = await exchangeCrystalsForCreditsAction(await getToken(), amount, operationId);
+      if (!res.success) {
+        clearPendingExchangeOperationId(user?.uid || 'unknown', amount);
+        throw new Error(res.error || 'EXCHANGE_FAILED');
+      }
+      clearPendingExchangeOperationId(user?.uid || 'unknown', amount);
       toast({ title: language === 'ru' ? `Обменено ${amount} 💎 на €${(amount * 10000).toLocaleString()}` : 'Assets converted' });
     } catch (e: any) {
       toast({ title: e?.message || t.insufficient, variant: 'destructive' });

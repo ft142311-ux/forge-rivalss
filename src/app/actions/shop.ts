@@ -166,14 +166,19 @@ export async function purchaseDiamondPackAction(idToken: string, amount: number)
   }
 }
 
-export async function exchangeCrystalsForCreditsAction(idToken: string, crystalsAmount: number) {
+export async function exchangeCrystalsForCreditsAction(idToken: string, crystalsAmount: number, operationId: string) {
   try {
     const { uid } = await requireServerActor(idToken);
     const amount = Number(crystalsAmount);
     if (![100, 500, 1000].includes(amount)) throw new Error('INVALID_EXCHANGE_AMOUNT');
     const creditsAmount = amount * 10000;
+    const normalizedOperationId = String(operationId || '').trim();
+    if (!/^[a-zA-Z0-9_-]{16,80}$/.test(normalizedOperationId)) throw new Error('INVALID_OPERATION_ID');
     const db = getAdminDb();
+    const receiptRef = db.collection('shop_operation_receipts').doc(`${uid}_exchange_${normalizedOperationId}`);
     return await db.runTransaction(async (t) => {
+      const receiptSnap = await t.get(receiptRef);
+      if (receiptSnap.exists) return receiptSnap.data()?.result;
       const ref = db.collection('players_v14').doc(uid);
       const snap = await t.get(ref);
       if (!snap.exists) throw new Error('PLAYER_NOT_FOUND');
@@ -194,7 +199,14 @@ export async function exchangeCrystalsForCreditsAction(idToken: string, crystals
         balanceAfter: crystals - amount,
         timestamp: FieldValue.serverTimestamp(),
       });
-      return { success: true, crystals: crystals - amount, credits: credits + creditsAmount };
+      const result = { success: true, crystals: crystals - amount, credits: credits + creditsAmount };
+      t.create(receiptRef, {
+        userId: uid,
+        operation: 'CRYSTAL_TO_CREDITS',
+        result,
+        createdAt: FieldValue.serverTimestamp(),
+      });
+      return result;
     });
   } catch (e) {
     return { success: false, error: errorMessage(e) };
