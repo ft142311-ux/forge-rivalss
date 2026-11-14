@@ -224,8 +224,12 @@ async function retireInactiveClub({ db, auth, userRecord, now = new Date() }) {
           ['in_progress', 'in-progress', 'processing', 'resolving'].includes(status)) {
         return { action: 'DEFERRED_MATCH_PROCESSING', matchId: matchDoc.id };
       }
-      const startMs = timestampToMillis(match.startTime || match.scheduledStartAt);
-      if (Number.isFinite(startMs) && startMs <= now.getTime()) {
+      const startValue = match.startTime ?? match.scheduledStartAt;
+      const startMs = timestampToMillis(startValue);
+      if (startValue == null || !Number.isFinite(startMs)) {
+        return { action: 'DEFERRED_MATCH_TIME_UNKNOWN', matchId: matchDoc.id };
+      }
+      if (startMs <= now.getTime()) {
         return { action: 'DEFERRED_MATCH_ALREADY_DUE', matchId: matchDoc.id };
       }
     }
