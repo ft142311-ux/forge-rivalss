@@ -180,7 +180,20 @@ async function finishTechnically(db: any, season: number, round: number, pairing
     const existing: any = snap.data() || {};
     const terminal = existing.isFinished === true ||
       ['finished', 'completed'].includes(String(existing.status || '').toLowerCase());
-    if (terminal && existing.winnerId) return true;
+    if (terminal && existing.winnerId) {
+      // Repair report/processing metadata without touching the authoritative result.
+      tx.set(ref, {
+        isFinished: true,
+        status: 'finished',
+        isProcessing: false,
+        processingToken: FieldValue.delete(),
+        processingAt: FieldValue.delete(),
+        reportStatus: existing.reportStatus === 'viewed' ? 'viewed' : 'new',
+        seen: existing.seen === true,
+        updatedAt: FieldValue.serverTimestamp(),
+      }, { merge: true });
+      return true;
+    }
 
     // A completed knockout draw still needs a bracket winner. Preserve its real
     // score/report and apply only the deterministic seed tie-break when no winner exists.
