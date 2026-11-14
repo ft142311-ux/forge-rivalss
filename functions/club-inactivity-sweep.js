@@ -54,7 +54,8 @@ function buildBotClub(botId, name) {
 }
 
 function isFinished(match) {
-  return match.isFinished === true || String(match.status || '').toLowerCase() === 'finished';
+  const status = String(match && match.status || '').toLowerCase();
+  return Boolean(match && match.isFinished === true) || status === 'finished' || status === 'completed';
 }
 
 /**
@@ -150,7 +151,7 @@ async function retireInactiveClub({ db, auth, userRecord, now = new Date() }) {
     .where('version', '==', 140);
 
   const result = await db.runTransaction(async (transaction) => {
-    const [freshPlayer, slots, table, bot, archive, matches, pending] = await Promise.all([
+    const [freshPlayer, slots, table, bot, archive, matches, pending, latestActivity] = await Promise.all([
       transaction.get(playerRef),
       transaction.get(slotQuery),
       transaction.get(tableRef),
@@ -158,6 +159,7 @@ async function retireInactiveClub({ db, auth, userRecord, now = new Date() }) {
       transaction.get(archiveRef),
       transaction.get(matchesQuery),
       transaction.get(pendingRef),
+      transaction.get(activityRef),
     ]);
 
     if (archive.exists && !freshPlayer.exists) {
@@ -168,6 +170,20 @@ async function retireInactiveClub({ db, auth, userRecord, now = new Date() }) {
       return { action: 'BLOCKED_ARCHIVE_COLLISION' };
     }
     if (!pending.exists) return { action: 'BLOCKED_RETIREMENT_MARKER_MISSING' };
+
+    // Re-check activity inside the same transaction that changes the slot.
+    // A concurrent verified session write conflicts with this read and forces
+    // Firestore to retry the transaction with the newer activity timestamp.
+    const transactionEligibility = resolveClubInactivity(
+      postDisableAuthRecord.metadata && postDisableAuthRecord.metadata.lastSignInTime,
+      now.getTime(),
+      undefined,
+      latestActivity.exists ? latestActivity.get('lastActiveAt') : null
+    );
+    if (!transactionEligibility.eligible) {
+      return { action: 'SKIPPED_ACTIVITY_RACE', reason: transactionEligibility.reason };
+    }
+
     if (!freshPlayer.exists || slots.size !== 1 || !table.exists || matches.size !== 56) {
       return { action: 'BLOCKED_INTEGRITY_CHECK', reason: 'CLUB_SLOT_TABLE_OR_FIXTURES_MISMATCH' };
     }
@@ -227,11 +243,17 @@ async function retireInactiveClub({ db, auth, userRecord, now = new Date() }) {
       isBot: true,
     };
 
+    // A bot is the temporary table/fixture participant for an available
+    // place. The canonical slot remains claimable by the next new user.
     transaction.update(slotDoc.ref, {
-      status: 'OCCUPIED',
-      occupantId: botId,
-      replacedAt: new Date(),
-      updatedAt: new Date(),
+      status: 'FREE',
+      occupantId: null,
+      occupancyGeneration: Math.max(0, Number(slot.occupancyGeneration) || 0) + 1,
+      lastOccupantId: uid,
+      lastTransitionReason: 'INACTIVITY_RETIREMENT',
+      lastTransitionAt: now,
+      replacedAt: now,
+      updatedAt: now,
     });
     transaction.update(tableRef, { stats: nextStats, updatedAt: new Date() });
     if (!bot.exists) transaction.create(botRef, buildBotClub(botId, botName));
