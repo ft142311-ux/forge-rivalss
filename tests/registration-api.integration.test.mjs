@@ -145,7 +145,12 @@ test('registration HTTP API enforces its boundary and safely initializes a club'
       group,
       stats: tableStats,
     });
-    await botPlayerRef.set({ id: botId, clubName: 'Test Bot' });
+    await botPlayerRef.set({
+      id: botId,
+      clubName: 'Test Bot',
+      isBot: true,
+      ownedPlayers: Array.from({ length: 5 }, (_, index) => ({ id: `bot-player-${index + 1}` })),
+    });
 
     for (let divisionNumber = 1; divisionNumber <= 4; divisionNumber += 1) {
       const groups = divisionNumber === 1 ? 1 : divisionNumber === 2 ? 2 : divisionNumber === 3 ? 4 : 8;
@@ -264,6 +269,8 @@ test('registration HTTP API enforces its boundary and safely initializes a club'
     assert.equal(history.exists, true);
     assert.equal(history.get('reason'), 'NEW_REGISTRATION');
     assert.equal(history.get('previousOccupantId'), botId);
+    assert.equal(history.get('previousClubSnapshot').clubName, 'Test Bot');
+    assert.equal(history.get('previousClubSnapshot').ownedPlayers.length, 5);
     assert.equal(history.get('newOccupantId'), uid);
     assert.equal(history.get('generation'), 8);
     assert.equal(matches.size, 56);
