@@ -212,6 +212,9 @@ export async function changeClubNameAction(idToken: string, name: string) {
       const snap = await t.get(ref);
       if (!snap.exists) throw new Error('PLAYER_NOT_FOUND');
       const data = snap.data() || {};
+      if (String(data.clubName || '').trim().replace(/\s+/g, ' ').toLowerCase() === clean.toLowerCase()) {
+        return { success: true, unchanged: true, clubName: String(data.clubName || clean), crystals: Number(data.crystals || 0) };
+      }
       const crystals = Number(data.crystals || 0);
       if (crystals < 100) throw new Error('INSUFFICIENT_FUNDS');
       t.update(ref, { crystals: crystals - 100, clubName: clean, updatedAt: FieldValue.serverTimestamp() });
@@ -234,6 +237,9 @@ export async function changeClubCountryAction(idToken: string, country: unknown)
       const snap = await t.get(ref);
       if (!snap.exists) throw new Error('PLAYER_NOT_FOUND');
       const data = snap.data() || {};
+      if (String(data.countryCode || '').toUpperCase() === parsed.code.toUpperCase()) {
+        return { success: true, unchanged: true, country: String(data.country || parsed.name), crystals: Number(data.crystals || 0) };
+      }
       const crystals = Number(data.crystals || 0);
       if (crystals < 100) throw new Error('INSUFFICIENT_FUNDS');
       t.update(ref, { crystals: crystals - 100, country: parsed.name, countryCode: parsed.code, countryFlag: parsed.flag, updatedAt: FieldValue.serverTimestamp() });

@@ -59,6 +59,7 @@ export default function ShopPage() {
   const [isProcessing, setIsProcessing] = useState(false);
   const { toast } = useToast();
   const { user } = useUser();
+  const isPremiumActive = isPremium && Boolean(premiumUntil) && new Date(premiumUntil!).getTime() > Date.now();
 
   const [heroNickname, setHeroNickname] = useState('');
   const [heroRole, setHeroRole] = useState<Role>('Carry');
@@ -490,7 +491,7 @@ export default function ShopPage() {
             </div>
 
             <div className="pt-4">
-              {isPremium ? (
+              {isPremiumActive ? (
                 <div className="p-4 bg-green-500/10 border border-green-500/20 rounded-xl text-center space-y-2">
                   <p className="text-xs font-black text-green-400 uppercase tracking-widest">{t.premiumInfo.active}</p>
                   <p className="text-[10px] text-muted-foreground uppercase">{t.premiumInfo.expires}: {new Date(premiumUntil!).toLocaleDateString()}</p>
