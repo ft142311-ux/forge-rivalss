@@ -185,8 +185,12 @@ function buildRegistrationMatchPlan(matches, botId, userId, clubName, nowMs = Da
       return { ok: false, reason: 'SLOT_MATCH_IN_PROGRESS', matchId: match.id, updates: [] };
     }
 
-    const startMs = timestampToMillis(match.startTime || match.scheduledStartAt);
-    if (Number.isFinite(startMs) && startMs <= nowMs) {
+    const startValue = match.startTime ?? match.scheduledStartAt;
+    const startMs = timestampToMillis(startValue);
+    if (startValue == null || !Number.isFinite(startMs)) {
+      return { ok: false, reason: 'SLOT_MATCH_TIME_UNKNOWN', matchId: match.id, updates: [] };
+    }
+    if (startMs <= nowMs) {
       return { ok: false, reason: 'SLOT_MATCH_DUE', matchId: match.id, updates: [] };
     }
 
