@@ -18,7 +18,12 @@ test('login activity handshake is blocked once retirement has been claimed', {
   const testProjectId = `demo-act-${randomUUID().slice(0, 8)}`;
   const app = initializeApp({ projectId: testProjectId }, `activity-fence-test-${randomUUID()}`);
   const db = getFirestore(app);
-  const uid = `activity-test-${randomUUID()}`;
+  const auth = getAuth(app);
+  const authUser = await auth.createUser({
+    email: `activity-fence-${randomUUID()}@example.test`,
+    password: 'TestPassword123!',
+  });
+  const uid = authUser.uid;
   const pendingRef = db.collection('inactive_club_retirements_v1').doc(uid);
   const retiredRef = db.collection('inactive_clubs_v1').doc(uid);
   const activityRef = db.collection('user_activity_v1').doc(uid);
@@ -27,15 +32,24 @@ test('login activity handshake is blocked once retirement has been claimed', {
     await pendingRef.delete().catch(() => undefined);
     await retiredRef.delete().catch(() => undefined);
     await activityRef.delete().catch(() => undefined);
+    await auth.deleteUser(uid).catch(() => undefined);
     await deleteApp(app);
   });
 
+  await activityRef.set({
+    uid,
+    lastActiveAt: new Date(Date.now() - 91 * 24 * 60 * 60 * 1000),
+  });
   const first = await recordUserActivityUnlessRetiring(db, uid);
   assert.deepEqual(first, { success: true });
   const before = await activityRef.get();
   assert.equal(before.exists, true);
   const beforeMillis = before.get('lastActiveAt')?.toMillis?.();
   assert.ok(Number.isFinite(beforeMillis));
+
+  const retirementAttempt = await retireInactiveClub({ db, auth, userRecord: authUser, now: new Date() });
+  assert.equal(retirementAttempt.action, 'SKIPPED_NOT_INACTIVE');
+  assert.equal((await auth.getUser(uid)).disabled, false);
 
   await pendingRef.set({ uid, status: 'CLAIMED', claimedAt: new Date() });
   const blocked = await recordUserActivityUnlessRetiring(db, uid);
