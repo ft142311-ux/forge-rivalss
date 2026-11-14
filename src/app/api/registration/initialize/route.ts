@@ -206,7 +206,6 @@ export async function POST(request: NextRequest) {
       const targetGeneration = Math.max(0, Number(slot.occupancyGeneration) || 0) + 1;
       const historyRef = db.collection('league_slot_history_v1')
         .doc(`${slotDocument.id}_G${targetGeneration}`);
-      const botPlayerRef = db.collection('players_v14').doc(botId);
 
       const tableId = `table_v140_S${seasonNum}_L${LEAGUE_ID}_V${slot.division}_G${slot.group}`;
       const tableRef = db.collection('league_tables_v2').doc(tableId);
@@ -225,6 +224,7 @@ export async function POST(request: NextRequest) {
         Number(stats[id]?.rank) === Number(slot.rank) && stats[id]?.isBot === true
       );
       if (!botId) throw new Error('BOT_NOT_FOUND_IN_SLOT');
+      const botPlayerRef = db.collection('players_v14').doc(botId);
 
       const rowsAtRank = Object.entries(stats).filter(([, team]) =>
         Number(team?.rank) === Number(slot.rank)
