@@ -29,6 +29,7 @@ test('inactive club replacement is atomic and preserves completed match results'
   const lastSignInTime = new Date(now.getTime() - 91 * 24 * 60 * 60 * 1000).toISOString();
   const playerRef = db.collection('players_v14').doc(uid);
   const slotRef = db.collection('league_slots_v1').doc(`test_${uid}`);
+  const historyRef = db.collection('league_slot_history_v1').doc(`${slotRef.id}_G1`);
   const tableRef = db.collection('league_tables_v2').doc(`table_v140_S${season}_LALPHA_V${division}_G${group}`);
   const archiveRef = db.collection('inactive_clubs_v1').doc(uid);
   const pendingRef = db.collection('inactive_club_retirements_v1').doc(uid);
@@ -39,6 +40,7 @@ test('inactive club replacement is atomic and preserves completed match results'
   t.after(async () => {
     await playerRef.delete().catch(() => undefined);
     await slotRef.delete().catch(() => undefined);
+    await historyRef.delete().catch(() => undefined);
     await tableRef.delete().catch(() => undefined);
     await archiveRef.delete().catch(() => undefined);
     await pendingRef.delete().catch(() => undefined);
@@ -118,6 +120,12 @@ test('inactive club replacement is atomic and preserves completed match results'
   assert.equal(releasedSlot.get('occupantId'), null);
   assert.equal(releasedSlot.get('occupancyGeneration'), 1);
   assert.equal(releasedSlot.get('lastOccupantId'), uid);
+  const history = await historyRef.get();
+  assert.equal(history.exists, true);
+  assert.equal(history.get('reason'), 'INACTIVITY_RETIREMENT');
+  assert.equal(history.get('previousOccupantId'), uid);
+  assert.equal(history.get('newOccupantId'), botId);
+  assert.equal(history.get('generation'), 1);
 
   const table = (await tableRef.get()).data();
   assert.equal(table.stats[botId].isBot, true);
