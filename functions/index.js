@@ -36,16 +36,32 @@ exports.initializeClub = functions.region('us-central1').https.onCall(async (dat
   }
 
   let decodedToken;
-  try {
-    decodedToken = await admin.auth().verifyIdToken(tokenMatch[1], true);
-  } catch (error) {
-    const authCode = String(error?.code || '').toLowerCase();
-    const authMessage = String(error?.message || '').toLowerCase();
-    const reason = authCode.includes('user-disabled') || authMessage.includes('user disabled')
-      ? 'ACCOUNT_DISABLED'
-      : (authCode.includes('id-token-revoked') ? 'AUTH_TOKEN_REVOKED' : 'AUTH_TOKEN_INVALID');
-    throw new functions.https.HttpsError('unauthenticated', reason);
+  if (tokenMatch) {
+    try {
+      decodedToken = await admin.auth().verifyIdToken(tokenMatch[1], true);
+    } catch (error) {
+      const authCode = String(error?.code || '').toLowerCase();
+      const authMessage = String(error?.message || '').toLowerCase();
+      const reason = authCode.includes('user-disabled') || authMessage.includes('user disabled')
+        ? 'ACCOUNT_DISABLED'
+        : (authCode.includes('id-token-revoked') ? 'AUTH_TOKEN_REVOKED' : 'AUTH_TOKEN_INVALID');
+      throw new functions.https.HttpsError('unauthenticated', reason);
+    }
+  } else {
+    // Some callable SDK versions expose the verified claims but omit the raw
+    // header. In that case, enforce disabled + tokensValidAfterTime checks.
+    const authUser = await admin.auth().getUser(userId);
+    if (authUser.disabled) {
+      throw new functions.https.HttpsError('unauthenticated', 'ACCOUNT_DISABLED');
+    }
+    const authTimeMs = Number(context.auth.token.auth_time || 0) * 1000;
+    const validAfterMs = Date.parse(String(authUser.tokensValidAfterTime || ''));
+    if (Number.isFinite(validAfterMs) && authTimeMs < validAfterMs) {
+      throw new functions.https.HttpsError('unauthenticated', 'AUTH_TOKEN_REVOKED');
+    }
+    decodedToken = { uid: userId, email: context.auth.token.email };
   }
+
   if (decodedToken.uid !== userId) {
     throw new functions.https.HttpsError('unauthenticated', 'AUTHENTICATION_REQUIRED');
   }
