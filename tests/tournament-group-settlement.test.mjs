@@ -9,9 +9,9 @@ test('group stage accepts completed BO2 draws while knockout stages require a wi
   const end = source.indexOf('function expectedStageMatchCount', start);
   assert.ok(start >= 0 && end > start);
   const stageCheck = source.slice(start, end);
-  assert.match(stageCheck, /match\.status !== 'finished' \|\| !match\.homeId \|\| !match\.awayId/);
-  assert.match(stageCheck, /stage !== 'groups' && !match\.winnerId/);
-  assert.match(stageCheck, /match\.winnerId && !\[match\.homeId, match\.awayId\]\.includes\(match\.winnerId\)/);
+  assert.match(stageCheck, /isTournamentStageMatchComplete\(match, stage\)/);
+  assert.match(stageCheck, /getTournamentStageMatchKey\(match, stage, doc\.id\)/);
+  assert.match(stageCheck, /if \(!key \|\| ids\.has\(key\)\) return false/);
 });
 
 test('group match settlement validates standings rows before atomically publishing result and report', () => {
