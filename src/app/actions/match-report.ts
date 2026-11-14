@@ -3,7 +3,7 @@
 import { getAdminDb } from '@/lib/firebase-admin';
 import { requireServerActor } from '@/lib/server-auth';
 import { FieldValue } from 'firebase-admin/firestore';
-import { MATCH_REPORT_COLLECTIONS } from '@/app/lib/match-storage';
+import { MATCH_COLLECTIONS, MATCH_REPORT_COLLECTIONS } from '@/app/lib/match-storage';
 
 /**
  * Legacy league fixtures may identify participants by their league rank rather
