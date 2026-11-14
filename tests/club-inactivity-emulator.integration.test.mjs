@@ -84,6 +84,12 @@ test('Firestore rules deny a retired account access to its active club data', {
     (error) => error && error.code === 'permission-denied',
   );
 
+  await pendingRef.set({ uid, phase: 'CANCELLED' });
+  await assert.rejects(
+    getDoc(playerDoc),
+    (error) => error && error.code === 'permission-denied',
+  );
+
   await pendingRef.delete();
   await retiredRef.set({ uid, retiredAt: new Date() });
   await assert.rejects(
