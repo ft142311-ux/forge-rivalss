@@ -30,6 +30,11 @@ export async function requireServerActor(idToken: string): Promise<ServerActor> 
     const code = String(error?.code || '').toLowerCase();
     const message = String(error?.message || '').toLowerCase();
 
+    // A disabled Auth user is terminal for this session, just like a revoked token.
+    if (code.includes('user-disabled') || message.includes('user disabled')) {
+      throw new Error('ACCOUNT_DISABLED');
+    }
+
     // Keep revocation checks enabled. A revoked token is never accepted.
     // Expired tokens are recoverable by forcing a client-side ID-token refresh.
     if (
