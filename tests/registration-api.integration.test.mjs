@@ -566,7 +566,6 @@ test('registration HTTP API enforces its boundary and safely initializes a club'
       const currentActivityRef = db.collection('user_activity_v1').doc(currentOwnerUid);
       const currentArchiveRef = db.collection('inactive_clubs_v1').doc(currentOwnerUid);
       const currentPlayerRef = db.collection('players_v14').doc(currentOwnerUid);
-      const currentEmail = (await auth.getUser(currentOwnerUid)).email;
       const currentInactiveSince = new Date(Date.now() - 91 * 24 * 60 * 60 * 1000).toISOString();
       await currentActivityRef.set({ uid: currentOwnerUid, lastActiveAt: currentInactiveSince });
       const currentAuthRecord = await auth.getUser(currentOwnerUid);
