@@ -172,6 +172,9 @@ async function retireInactiveClub({ db, auth, userRecord, now = new Date() }) {
   const tableRef = db.collection('league_tables_v2')
     .doc(`table_v140_S${season}_L${LEAGUE_ID}_V${division}_G${group}`);
   const botId = `BOT_${LEAGUE_ID}_L${division}_G${group}_R${rank}`;
+  const targetGeneration = expectedGeneration + 1;
+  const historyRef = db.collection('league_slot_history_v1')
+    .doc(`${expectedSlotId}_G${targetGeneration}`);
   const botRef = db.collection('players_v14').doc(botId);
   const archiveRef = db.collection('inactive_clubs_v1').doc(uid);
   const matchesQuery = db.collection('matches_v2')
@@ -182,7 +185,7 @@ async function retireInactiveClub({ db, auth, userRecord, now = new Date() }) {
     .where('version', '==', 140);
 
   const result = await db.runTransaction(async (transaction) => {
-    const [freshPlayer, slots, table, bot, archive, matches, pending, latestActivity, activeConfig] = await Promise.all([
+    const [freshPlayer, slots, table, bot, archive, matches, pending, latestActivity, activeConfig, history] = await Promise.all([
       transaction.get(playerRef),
       transaction.get(slotQuery),
       transaction.get(tableRef),
@@ -192,6 +195,7 @@ async function retireInactiveClub({ db, auth, userRecord, now = new Date() }) {
       transaction.get(pendingRef),
       transaction.get(activityRef),
       transaction.get(configRef),
+      transaction.get(historyRef),
     ]);
 
     if (archive.exists && !freshPlayer.exists) {
@@ -202,6 +206,7 @@ async function retireInactiveClub({ db, auth, userRecord, now = new Date() }) {
       return { action: 'BLOCKED_ARCHIVE_COLLISION' };
     }
     if (!pending.exists) return { action: 'BLOCKED_RETIREMENT_MARKER_MISSING' };
+    if (history.exists) return { action: 'BLOCKED_HISTORY_EVENT_COLLISION' };
 
     const currentConfig = activeConfig.exists ? activeConfig.data() || {} : {};
     if (!activeConfig.exists ||
@@ -302,12 +307,33 @@ async function retireInactiveClub({ db, auth, userRecord, now = new Date() }) {
     transaction.update(slotDoc.ref, {
       status: 'FREE',
       occupantId: null,
-      occupancyGeneration: Math.max(0, Number(slot.occupancyGeneration) || 0) + 1,
+      occupancyGeneration: targetGeneration,
       lastOccupantId: uid,
       lastTransitionReason: 'INACTIVITY_RETIREMENT',
       lastTransitionAt: now,
       replacedAt: now,
       updatedAt: now,
+    });
+    transaction.create(historyRef, {
+      slotId: slotDoc.id,
+      season,
+      leagueId: LEAGUE_ID,
+      division,
+      group,
+      rank,
+      previousGeneration: expectedGeneration,
+      generation: targetGeneration,
+      previousOccupantType: 'USER',
+      previousOccupantId: uid,
+      previousOwnerUid: uid,
+      previousClubId: uid,
+      newOccupantType: 'BOT',
+      newOccupantId: botId,
+      newOwnerUid: null,
+      newClubId: botId,
+      reason: 'INACTIVITY_RETIREMENT',
+      operationId: pendingRef.id,
+      createdAt: now,
     });
     transaction.update(tableRef, { stats: nextStats, updatedAt: new Date() });
     if (!bot.exists) transaction.create(botRef, buildBotClub(botId, botName));
