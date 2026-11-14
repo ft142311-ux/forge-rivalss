@@ -231,7 +231,7 @@ test('inactive club replacement is atomic and preserves completed match results'
 });
 
 
-test('a pending retirement is cancelled and Auth is re-enabled when recent activity is recovered', {
+test('a pending retirement with conflicting activity is blocked for manual review', {
   skip: !emulatorHost,
 }, async (t) => {
   assert.match(emulatorHost, /^(127[.]0[.]0[.]1|localhost):[0-9]+$/);
@@ -274,7 +274,7 @@ test('a pending retirement is cancelled and Auth is re-enabled when recent activ
     now,
   });
 
-  assert.equal(result.action, 'CANCELLED_PENDING_RETIREMENT');
-  assert.equal(disabled, false);
-  assert.equal((await pendingRef.get()).exists, false);
+  assert.equal(result.action, 'BLOCKED_PENDING_RETIREMENT_ACTIVITY_CONFLICT');
+  assert.equal(disabled, true);
+  assert.equal((await pendingRef.get()).exists, true);
 });
