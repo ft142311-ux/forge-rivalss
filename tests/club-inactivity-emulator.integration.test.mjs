@@ -47,7 +47,26 @@ test('login activity handshake is blocked once retirement has been claimed', {
   const beforeMillis = before.get('lastActiveAt')?.toMillis?.();
   assert.ok(Number.isFinite(beforeMillis));
 
-  const retirementAttempt = await retireInactiveClub({ db, auth, userRecord: authUser, now: new Date() });
+  const now = new Date();
+  const staleAuthRecord = {
+    ...authUser,
+    disabled: false,
+    metadata: {
+      ...authUser.metadata,
+      lastSignInTime: new Date(now.getTime() - 91 * 24 * 60 * 60 * 1000).toISOString(),
+    },
+  };
+  const authWithStaleMetadata = {
+    getUser: async () => staleAuthRecord,
+    updateUser: (...args) => auth.updateUser(...args),
+    revokeRefreshTokens: (...args) => auth.revokeRefreshTokens(...args),
+  };
+  const retirementAttempt = await retireInactiveClub({
+    db,
+    auth: authWithStaleMetadata,
+    userRecord: staleAuthRecord,
+    now,
+  });
   assert.equal(retirementAttempt.action, 'SKIPPED_NOT_INACTIVE');
   assert.equal((await auth.getUser(uid)).disabled, false);
 
