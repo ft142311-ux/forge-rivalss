@@ -41,3 +41,25 @@ test('shop client persists the same creation operation across an ambiguous reque
   assert.match(handler, /catch \(e: any\) \{\s*toast/);
   assert.doesNotMatch(handler.slice(handler.indexOf('catch (e: any)'), handler.indexOf('finally')), /clearPendingPlayerCreationOperationId/);
 });
+
+
+test('license purchase retry cannot debit twice because the tier transition is sequential', () => {
+  const start = action.indexOf('export async function purchaseLicenseAction');
+  const end = action.indexOf('export async function purchasePremiumShopAction', start);
+  const license = action.slice(start, end);
+  assert.match(license, /tier !== current - 1/);
+  assert.match(license, /crystals: crystals - cost,[\s\S]*activeLicenseTier: tier/);
+  assert.match(license, /t\.set\(tx,[\s\S]*type: 'LICENSE_PURCHASE'/);
+  assert.ok(license.indexOf('tier !== current - 1') < license.indexOf('crystals: crystals - cost'));
+});
+
+test('premium purchase retry is rejected while the first purchase remains active', () => {
+  const start = action.indexOf('export async function purchasePremiumShopAction');
+  const end = action.indexOf('export async function purchaseDiamondPackAction', start);
+  const premium = action.slice(start, end);
+  assert.match(premium, /data\.isPremium === true && currentUntil > now/);
+  assert.match(premium, /throw new Error\('PREMIUM_ALREADY_ACTIVE'\)/);
+  assert.match(premium, /crystals: crystals - cost,[\s\S]*isPremium: true,[\s\S]*premiumUntil/);
+  assert.match(premium, /t\.set\(tx,[\s\S]*type: 'PREMIUM_PURCHASE'/);
+  assert.ok(premium.indexOf('PREMIUM_ALREADY_ACTIVE') < premium.indexOf('crystals: crystals - cost'));
+});
