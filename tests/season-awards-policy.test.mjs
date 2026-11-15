@@ -44,3 +44,18 @@ test('only completed ordinary rewards or explicit recovery plans can be publishe
   assert.equal(isRolloverPlanPublicationReady({ ready: true, awards: { ready: false } }), false);
   assert.equal(isRolloverPlanPublicationReady({ ready: true }), false);
 });
+
+test('split player award and ledger markers block rollover for manual reconciliation', () => {
+  assert.equal(resolveSeasonAwardRecipientState(
+    true, false, { seasonAwards: { S3: { prize: 100 } } }, 3,
+  ), 'ACCOUNTING_CONFLICT');
+  assert.equal(resolveSeasonAwardRecipientState(
+    true, true, {}, 3,
+  ), 'ACCOUNTING_CONFLICT');
+});
+
+test('matching player award and ledger markers are the only consistent already-paid state', () => {
+  assert.equal(resolveSeasonAwardRecipientState(
+    true, true, { seasonAwards: { S3: { prize: 100 } } }, 3,
+  ), 'ALREADY_APPLIED');
+});
