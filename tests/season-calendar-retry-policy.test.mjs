@@ -54,3 +54,19 @@ test('unfinished match coordinates can be repaired during an unpublished build',
   assert.equal(shouldRepairExistingMatchCoordinates({ isFinished: false, level: 1, groupId: 1 }, 2, 3), true);
   assert.equal(shouldRepairExistingMatchCoordinates({ isFinished: false, level: 2, groupId: 3 }, 2, 3), false);
 });
+
+test('a FREE slot with an occupant is rejected instead of overwriting its owner', () => {
+  for (const plannedId of ['CLUB_HUMAN_A', 'BOT_ALPHA_L1_G1_R1']) {
+    assert.deepEqual(
+      resolvePreparedSlotRetry({ status: 'FREE', occupantId: 'CLUB_HUMAN_EXISTING' }, plannedId),
+      { ready: false, reason: 'PREPARED_SLOT_IDENTITY_CONFLICT' },
+    );
+  }
+});
+
+test('a FREE slot with a whitespace-only occupant id remains eligible', () => {
+  assert.deepEqual(
+    resolvePreparedSlotRetry({ status: 'FREE', occupantId: '   ' }, 'CLUB_HUMAN_A'),
+    { ready: true, action: 'PLACE_HUMAN' },
+  );
+});
