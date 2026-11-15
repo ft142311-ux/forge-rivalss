@@ -3,9 +3,11 @@ import assert from 'node:assert/strict';
 import { isCronAuthorized } from '../src/app/api/cron/cron-auth.ts';
 
 function requestWithAuthorization(value) {
-  const headers = new Headers();
-  if (value !== undefined) headers.set('authorization', value);
-  return { headers };
+  return {
+    headers: {
+      get: name => name.toLowerCase() === 'authorization' ? (value ?? null) : null,
+    },
+  };
 }
 
 test('cron auth accepts only the exact configured Bearer token', () => {
