@@ -73,6 +73,23 @@ function clearPendingExchangeOperationId(userId: string, amount: number): void {
   window.localStorage.removeItem(`${EXCHANGE_OPERATION_PREFIX}:${userId}:${amount}`);
 }
 
+const PLAYER_CREATION_OPERATION_PREFIX = 'forge-rivals:shop-operation:player-creation';
+
+function getPendingPlayerCreationOperationId(userId: string, fingerprint: string): string {
+  const key = `${PLAYER_CREATION_OPERATION_PREFIX}:${userId}:${fingerprint}`;
+  const existing = window.localStorage.getItem(key);
+  if (existing) return existing;
+  const operationId = typeof crypto !== 'undefined' && 'randomUUID' in crypto
+    ? crypto.randomUUID().replace(/-/g, '')
+    : `${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`;
+  window.localStorage.setItem(key, operationId);
+  return operationId;
+}
+
+function clearPendingPlayerCreationOperationId(userId: string, fingerprint: string): void {
+  window.localStorage.removeItem(`${PLAYER_CREATION_OPERATION_PREFIX}:${userId}:${fingerprint}`);
+}
+
 type ShopTab = 
   | 'menu'
   | 'diamonds' 
@@ -310,16 +327,24 @@ export default function ShopPage() {
 
   const handleCreatePlayer = async () => {
     const country = COUNTRIES.find(c => c.code === heroCountryCode) || COUNTRIES[0];
+    const nickname = heroNickname.trim().replace(/\\s+/g, ' ');
+    const fingerprint = JSON.stringify([nickname, heroRole, Number(heroTalent), Number(heroAge), country.code, country.name, country.flag]);
+    const userId = user?.uid || 'unknown';
     try {
       setIsProcessing(true);
+      const operationId = getPendingPlayerCreationOperationId(userId, fingerprint);
       const res = await createShopPlayerAction(await getToken(), {
-        nickname: heroNickname.trim(),
+        nickname,
         role: heroRole,
         talent: Number(heroTalent),
         age: Number(heroAge),
         country: { code: country.code, name: country.name, flag: country.flag },
-      });
-      if ('error' in res) throw new Error(res.error || 'PLAYER_CREATION_FAILED');
+      }, operationId);
+      if (!res.success) {
+        clearPendingPlayerCreationOperationId(userId, fingerprint);
+        throw new Error(res.error || 'PLAYER_CREATION_FAILED');
+      }
+      clearPendingPlayerCreationOperationId(userId, fingerprint);
       toast({ title: ('isYouth' in res && res.isYouth) ? 'Игрок отправлен в Академию!' : 'Игрок добавлен в состав!' });
       setHeroNickname('');
       setActiveTab('menu');
