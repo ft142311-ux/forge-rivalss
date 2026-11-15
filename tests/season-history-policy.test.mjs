@@ -2,6 +2,49 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { resolveSeasonCatchUpPolicy } from '../src/app/actions/season-history-policy.ts';
 
+test('history cleanup completion requires the exact active target and a ready world', async () => {
+  const { resolveHistoryCleanupCompletion } = await import('../src/app/actions/season-history-policy.ts');
+  const valid = {
+    activeSeasonNumber: 4,
+    historyCleanupTargetSeason: 4,
+    historyCleanupPending: true,
+    worldReady: true,
+  };
+  assert.deepEqual(resolveHistoryCleanupCompletion(valid, 4), {
+    ready: true,
+    reason: null,
+    shouldMarkComplete: true,
+  });
+
+  for (const [config, target] of [
+    [{ ...valid, activeSeasonNumber: 5 }, 4],
+    [{ ...valid, historyCleanupTargetSeason: 5 }, 4],
+    [{ ...valid, worldReady: false }, 4],
+    [valid, 1],
+    [valid, 4.5],
+  ]) {
+    const result = resolveHistoryCleanupCompletion(config, target);
+    assert.equal(result.ready, false);
+    assert.equal(result.shouldMarkComplete, false);
+    assert.equal(result.reason, 'HISTORY_CLEANUP_TARGET_CHANGED');
+  }
+});
+
+test('completed history cleanup is idempotent and does not request another marker write', async () => {
+  const { resolveHistoryCleanupCompletion } = await import('../src/app/actions/season-history-policy.ts');
+  const result = resolveHistoryCleanupCompletion({
+    activeSeasonNumber: 4,
+    historyCleanupTargetSeason: 4,
+    historyCleanupPending: false,
+    worldReady: true,
+  }, 4);
+  assert.deepEqual(result, {
+    ready: true,
+    reason: null,
+    shouldMarkComplete: false,
+  });
+});
+
 test('incomplete elapsed seasons can be skipped without fabricating results', () => {
   const result = resolveSeasonCatchUpPolicy([1, 2, 3], {
     1: { status: 'completed', archiveValid: true },
