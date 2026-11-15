@@ -1,14 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { calculateGroupStandings } from '../src/app/actions/season-rollover-standings.ts';
-import { expectedRolloverGroups } from '../src/app/actions/season-rollover-plan.ts';
+import { buildPromotionRelegationGroups, expectedRolloverGroups } from '../src/app/actions/season-rollover-plan.ts';
 import { getCompletedSeasonArchives, getVisibleSeasonArchives, isCompletedSeasonArchive, isRecoveredSeasonArchive, isSeasonArchiveReadyToComplete, validateSeasonArchiveSnapshot } from '../src/app/actions/season-archive.ts';
 
 function makeSeasonArchive(sourceSeason = 1) {
   const groups = expectedRolloverGroups();
   const matches = [];
   const standings = {};
-  const planGroups = {};
   for (const groupKey of groups) {
     const [, level, group] = /^D([1-4])-G(\d+)$/.exec(groupKey);
     const participantByRank = Object.fromEntries(Array.from({ length: 8 }, (_, index) => [index + 1, `${groupKey}-TEAM-${index + 1}`]));
@@ -33,8 +32,10 @@ function makeSeasonArchive(sourceSeason = 1) {
       }
     }
     standings[groupKey] = calculateGroupStandings({}, fixtures).map((row, index) => ({ ...row, rank: index + 1 }));
-    planGroups[groupKey] = standings[groupKey].map(row => ({ id: row.id, rank: row.rank }));
   }
+  const placement = buildPromotionRelegationGroups(standings);
+  assert.equal(placement.ready, true);
+  const planGroups = placement.groups;
   const archive = {
     sourceSeason, leagueId: 'ALPHA', archiveVersion: 1, status: 'preparing',
     expectedMatches: 840, finishedMatches: 840, groups: 15, teamCount: 120,
@@ -78,6 +79,14 @@ test('archive validation rejects a club duplicated across different groups befor
   const result = validateSeasonArchiveSnapshot(archive, matches);
   assert.equal(result.valid, false);
   assert.equal(result.reasons.some(reason => reason.startsWith('ARCHIVE_TEAM_ID_DUPLICATED:D1-G2:')), true);
+});
+
+test('archive readiness rejects a valid-shaped rollover plan that does not match archived standings', () => {
+  const { archive, matches, plan } = makeSeasonArchive();
+  assert.equal(isSeasonArchiveReadyToComplete(archive, matches, plan), true);
+  const tampered = structuredClone(plan);
+  tampered.groups['D1-G1'][0].id = 'FOREIGN_OR_STALE_CLUB';
+  assert.equal(isSeasonArchiveReadyToComplete(archive, matches, tampered), false);
 });
 
 test('archive standings are checked against all 840 persisted match results', () => {
