@@ -522,6 +522,17 @@ test('inactive club replacement is atomic and preserves completed match results'
   const futureAway = (await matchRefs[1].get()).data();
   assert.equal(futureAway.awayId, botId);
   assert.equal(futureAway.awayName, 'Bot01200103');
+
+  // A later daily sweep must not attempt a second retirement or mutate the
+  // already archived club, released slot, bot row, or preserved match result.
+  const repeatedRetirement = await retireInactiveClub({
+    db, auth, userRecord, now: new Date(recoveryNow.getTime() + 24 * 60 * 60 * 1000),
+  });
+  assert.equal(repeatedRetirement.action, 'SKIPPED_PREVIOUSLY_DISABLED');
+  assert.equal((await archiveRef.get()).get('replacedByBotId'), botId);
+  assert.equal((await slotRef.get()).get('occupancyGeneration'), 1);
+  assert.equal((await historyRef.get()).exists, true);
+  assert.equal((await matchRefs[0].get()).get('scoreA'), 2);
 });
 
 
