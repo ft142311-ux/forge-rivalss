@@ -20,3 +20,12 @@ test('legacy recovery endpoints that advance to S3 are disabled fail-closed', ()
     assert.doesNotMatch(source, /recoverIncompleteSeasonTwo|reconstructMissingSeasonTwoAndPrepareSeasonThree|completeRecoveredSeasonTwo|ensureSeasonCalendar|publishPreparedSeason/);
   }
 });
+
+test('public staging health endpoint is uncached and does not expose backend exception details', () => {
+  const source = read('src/app/api/health/route.ts');
+  assert.match(source, /export const dynamic = 'force-dynamic'/);
+  assert.match(source, /Cache-Control': 'no-store'/);
+  assert.match(source, /error: 'FIRESTORE_UNAVAILABLE'/);
+  assert.match(source, /console\.error\('\[HEALTH CHECK FAILED\]:', error\)/);
+  assert.doesNotMatch(source, /error:\s*error\.message/);
+});
