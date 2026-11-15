@@ -25,7 +25,8 @@ export function isSeasonOrchestratorSuccessful(result: any) {
     && result?.matchSettlement?.success !== false
     && result?.tournaments?.success !== false
     && result?.publication?.success !== false
-    && result?.activation?.success !== false;
+    && result?.activation?.success !== false
+    && result?.activation?.historyCleanup?.pending !== true;
 }
 
 export function cronResultStatus(result: { success?: boolean }) {
