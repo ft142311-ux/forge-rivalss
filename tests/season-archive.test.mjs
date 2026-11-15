@@ -68,8 +68,13 @@ test('late engine-reconstructed archive remains visibly completed only with full
 
 test('archive validation rejects a club duplicated across different groups before rewards can run', () => {
   const { archive, matches } = makeSeasonArchive();
-  const firstGroupId = archive.standings['D1-G1'][0].id;
-  archive.standings['D1-G2'][0].id = firstGroupId;
+  const groupKeys = Object.keys(archive.standings);
+  assert.ok(groupKeys.length >= 2, 'fixture must include at least two distinct groups');
+  const [firstGroup, secondGroup] = groupKeys;
+  assert.ok(archive.standings[firstGroup]?.[0]?.id, 'first group must include a ranked club');
+  assert.ok(archive.standings[secondGroup]?.[0], 'second group must include a ranked club');
+  const firstGroupId = archive.standings[firstGroup][0].id;
+  archive.standings[secondGroup][0].id = firstGroupId;
   const result = validateSeasonArchiveSnapshot(archive, matches);
   assert.equal(result.valid, false);
   assert.equal(result.reasons.some(reason => reason.startsWith('ARCHIVE_TEAM_ID_DUPLICATED:D1-G2:')), true);
