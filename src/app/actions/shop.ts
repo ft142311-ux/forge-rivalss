@@ -290,7 +290,8 @@ export async function changeClubCountryAction(idToken: string, country: unknown)
 
 export async function createShopPlayerAction(
   idToken: string,
-  input: { nickname: string; role: Role; talent: number; age: number; country: { code: string; name: string; flag: string } }
+  input: { nickname: string; role: Role; talent: number; age: number; country: { code: string; name: string; flag: string } },
+  operationId: string,
 ) {
   try {
     const { uid } = await requireServerActor(idToken);
@@ -303,6 +304,8 @@ export async function createShopPlayerAction(
     if (![3.5, 4, 4.5, 5].includes(talent)) throw new Error('INVALID_TALENT');
     if (!Number.isInteger(age) || age < 14 || age > 28) throw new Error('INVALID_AGE');
     const country = CountrySchema.parse(input.country);
+    const normalizedOperationId = String(operationId || '').trim();
+    if (!/^[a-zA-Z0-9_-]{16,80}$/.test(normalizedOperationId)) throw new Error('INVALID_OPERATION_ID');
 
     let creationCost = 200;
     if (talent === 3.5) creationCost += 150;
@@ -313,8 +316,26 @@ export async function createShopPlayerAction(
     else if (age < 22) creationCost += 100;
 
     const db = getAdminDb();
+    const receiptRef = db.collection('shop_operation_receipts').doc(`${uid}_player_${normalizedOperationId}`);
     const playerId = `shop_${uid}_${randomUUID()}`;
     return await db.runTransaction(async (t) => {
+      const receiptSnap = await t.get(receiptRef);
+      if (receiptSnap.exists) {
+        const receipt = receiptSnap.data() || {};
+        const sameRequest =
+          receipt.userId === uid &&
+          receipt.operation === 'SHOP_PLAYER_CREATION' &&
+          receipt.nickname === nickname &&
+          receipt.role === parsedRole &&
+          Number(receipt.talent) === talent &&
+          Number(receipt.age) === age &&
+          receipt.country?.code === country.code &&
+          receipt.country?.name === country.name &&
+          receipt.country?.flag === country.flag;
+        if (!sameRequest) throw new Error('IDEMPOTENCY_KEY_REUSED');
+        return { ...(receipt.result || {}), duplicate: true };
+      }
+
       const ref = db.collection('players_v14').doc(uid);
       const snap = await t.get(ref);
       if (!snap.exists) throw new Error('PLAYER_NOT_FOUND');
@@ -371,7 +392,19 @@ export async function createShopPlayerAction(
         balanceAfter: crystals - creationCost,
         timestamp: FieldValue.serverTimestamp(),
       });
-      return { success: true, player: updated, creationCost, crystals: crystals - creationCost, isYouth: age < 18 };
+      const result = { success: true, player: updated, creationCost, crystals: crystals - creationCost, isYouth: age < 18 };
+      t.create(receiptRef, {
+        userId: uid,
+        operation: 'SHOP_PLAYER_CREATION',
+        nickname,
+        role: parsedRole,
+        talent,
+        age,
+        country,
+        result,
+        createdAt: FieldValue.serverTimestamp(),
+      });
+      return result;
     });
   } catch (e) {
     return { success: false, error: errorMessage(e) };
