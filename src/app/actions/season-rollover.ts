@@ -227,6 +227,9 @@ async function applySeasonAwards(db: any, sourceSeason: number, standings: Recor
       if (recipientState === 'PROFILE_MISSING') {
         return { settled: false, prize, trophy: false, missingProfile: true };
       }
+      if (recipientState === 'ACCOUNTING_CONFLICT') {
+        return { settled: false, prize, trophy: false, accountingConflict: true };
+      }
       const awardKey = `S${sourceSeason}`;
       const awards = player.seasonAwards && typeof player.seasonAwards === 'object' ? player.seasonAwards : {};
 
