@@ -14,11 +14,15 @@ function actionBody(name) {
   return source.slice(start, next < 0 ? source.length : next);
 }
 
-test('league calendar repair actions require an administrator identity', () => {
-  assert.match(source, /import \{ requireAdminActor \} from ['"]@\/lib\/server-auth['"]/);
-  assert.doesNotMatch(source, /requireServerActor/);
+test('current-group calendar repair is authenticated and cannot rewrite global season state', () => {
+  const action = actionBody('repairCurrentLeagueCalendar');
+  assert.match(action, /requireServerActor\(idToken\)/);
+  assert.doesNotMatch(action, /requireAdminActor\(idToken\)/);
+  assert.doesNotMatch(action, /data:\s*\{\s*activeSeasonNumber:/);
+  assert.doesNotMatch(action, /lease\.commit\(\[\{\s*ref:\s*db\.collection\(['"]system_v1['"]\)/);
+});
 
-  for (const name of ['repairCurrentLeagueCalendar', 'repairAllLeagueCalendar']) {
-    assert.match(actionBody(name), /await requireAdminActor\(idToken\)/, name);
-  }
+test('all-groups calendar repair is restricted to administrators', () => {
+  const action = actionBody('repairAllLeagueCalendar');
+  assert.match(action, /requireAdminActor\(idToken\)/);
 });
