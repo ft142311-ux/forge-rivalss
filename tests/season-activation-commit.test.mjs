@@ -174,3 +174,43 @@ test('a crash immediately after activation commit leaves a durable cleanup retry
   assert.deepEqual(retry, { ready: true, sourceSeason: 1, targetSeason: 2 });
   assert.equal(db.read('season_config').historyCleanupPending, true);
 });
+
+import { compareRecoveryRolloverPlans, expectedRolloverGroups } from '../src/app/actions/season-rollover-plan.ts';
+
+function recoveryPlan() {
+  return {
+    sourceSeason: 1,
+    targetSeason: 2,
+    leagueId: 'ALPHA',
+    ready: true,
+    mode: 'recovery_carry_forward',
+    skippedSeasons: [{ seasonNumber: 1, reason: 'SEASON_INCOMPLETE' }],
+    lastTrustedSeason: 1,
+    placementSource: 'recovered_participants',
+    retainedArchiveSeason: null,
+    promotionRule: 'carry_forward_without_promotion_or_relegation',
+    groups: Object.fromEntries(expectedRolloverGroups().map(group => [
+      group,
+      Array.from({ length: 8 }, (_, index) => ({ id: `${group}-T${index + 1}`, rank: index + 1 })),
+    ])),
+  };
+}
+
+test('recovery activation rejects a valid but replaced plan that differs from the prepared calendar', async () => {
+  const preparedPlan = recoveryPlan();
+  const replacementPlan = structuredClone(preparedPlan);
+  replacementPlan.groups['D1-G1'][0].id = 'REPLACEMENT_TEAM';
+  const config = preparedConfig();
+  config.preparedRecoveryMode = true;
+  const db = activationDb({ config, plan: replacementPlan });
+
+  const result = await commitSeasonActivation(db, configRef, planRef, expected({
+    recoveryMode: true,
+    isPlanReady: plan => plan?.ready === true &&
+      compareRecoveryRolloverPlans(preparedPlan, plan).same,
+  }));
+
+  assert.deepEqual(result, { success: false, reason: 'ROLLOVER_PLAN_INVALID' });
+  assert.equal(db.read('season_config').activeSeasonNumber, 1);
+  assert.equal(db.updateCount(), 0);
+});
