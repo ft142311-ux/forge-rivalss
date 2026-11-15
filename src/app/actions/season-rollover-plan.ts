@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 // Kept local so this pure validator can be exercised without the Next.js path alias.
 const MAX_LEVELS = 4;
 const TEAMS_PER_GROUP = 8;
@@ -225,7 +227,8 @@ export function getRecoveryRolloverPlanSignature(plan: any): string | null {
   if (!validation.valid || plan?.mode !== 'recovery_carry_forward') return null;
   const fields = ['leagueId', 'mode', 'sourceSeason', 'targetSeason', 'skippedSeasons',
     'lastTrustedSeason', 'placementSource', 'retainedArchiveSeason', 'promotionRule', 'groups'];
-  return JSON.stringify(Object.fromEntries(fields.map(field => [field, stablePlanValue(plan[field])])));
+  const canonical = JSON.stringify(Object.fromEntries(fields.map(field => [field, stablePlanValue(plan[field])])));
+  return createHash('sha256').update(canonical).digest('hex');
 }
 
 export function compareRecoveryRolloverPlans(existing: any, candidate: any) {
