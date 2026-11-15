@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { FieldValue } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { requireServerActor } from '@/lib/server-auth';
+import { assertCronSecret } from '@/lib/server-cron-auth';
 import { getMoscowDateString } from '@/app/lib/time-utils';
 import { hash32 } from '@/app/lib/hash-utils';
 import { buildMatchTeamSnapshot, createDeterministicBotSquad } from '@/app/lib/match-simulation';
@@ -191,8 +192,9 @@ async function generateDailyTournamentsInternal() {
 }
 
 export async function generateDailyTournaments(cronToken: string) {
-  const cronSecret = process.env.CRON_SECRET;
-  if (!cronSecret || typeof cronToken !== 'string' || cronToken !== cronSecret) {
+  try {
+    assertCronSecret(cronToken);
+  } catch {
     return { success: false, error: 'UNAUTHORIZED' };
   }
   return generateDailyTournamentsInternal();
@@ -687,8 +689,9 @@ async function advanceTournament(db: any, tournament: any, now: number) {
 }
 
 export async function runTournamentCycle(cronToken: string) {
-  const cronSecret = process.env.CRON_SECRET;
-  if (!cronSecret || typeof cronToken !== 'string' || cronToken !== cronSecret) {
+  try {
+    assertCronSecret(cronToken);
+  } catch {
     return { success: false, error: 'UNAUTHORIZED' };
   }
   const generated = await generateDailyTournamentsInternal();
