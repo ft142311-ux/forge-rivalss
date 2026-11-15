@@ -1669,7 +1669,7 @@ export async function activatePublishedSeason() {
     nextSeasonStartMs: preparedNextStartMs,
     multiSeasonRecovery,
     recoveryMode,
-    isPlanReady: plan => {
+    isPlanReady: (plan, currentConfig) => {
       const validPlan = validateRolloverPlan(plan, recoveryMode ? targetSeason - 1 : sourceSeason, targetSeason).valid &&
         isRolloverPlanPublicationReady(plan) &&
         isPlanBoundToValidatedSourceArchive(sourceArchiveValidation, plan);
@@ -1678,7 +1678,7 @@ export async function activatePublishedSeason() {
       // used by the calendar build, or activation could publish different teams.
       const recoveryPlanUnchanged = !recoveryMode || (
         compareRecoveryRolloverPlans(activationPlan, plan).same &&
-        getRecoveryRolloverPlanSignature(plan) === current.preparedRolloverPlanSignature
+        getRecoveryRolloverPlanSignature(plan) === currentConfig.preparedRolloverPlanSignature
       );
       return validPlan && recoveryPlanUnchanged;
     },
