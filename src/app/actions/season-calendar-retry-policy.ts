@@ -11,7 +11,7 @@ export function resolvePreparedSlotRetry(
   if (!existing) return { ready: true, action: 'CREATE' };
 
   const status = String(existing.status || '').toUpperCase();
-  const occupantId = String(existing.occupantId ?? '').trim();
+  const occupantId = String(existing.occupantId ?? '');
   const isHumanPlan = !plannedId.startsWith('BOT_');
 
   if (status === 'OCCUPIED') {
