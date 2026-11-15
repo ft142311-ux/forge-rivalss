@@ -4,7 +4,7 @@
 import React, { createContext, useContext, ReactNode, useMemo, useState, useEffect } from 'react';
 import { FirebaseApp } from 'firebase/app';
 import { Firestore } from 'firebase/firestore';
-import { Auth, onAuthStateChanged, User, signOut } from 'firebase/auth';
+import { Auth, onIdTokenChanged, User, signOut } from 'firebase/auth';
 import { recordUserActivityAction } from '@/app/actions/user-activity';
 
 /**
@@ -49,7 +49,7 @@ export const FirebaseProvider: React.FC<{ children: ReactNode; firebaseApp: Fire
     }
 
     let authChangeSequence = 0;
-    const unsubscribe = onAuthStateChanged(
+    const unsubscribe = onIdTokenChanged(
       auth,
       async (user) => {
         const sequence = ++authChangeSequence;
@@ -59,9 +59,12 @@ export const FirebaseProvider: React.FC<{ children: ReactNode; firebaseApp: Fire
         }
 
         try {
-          // Force Firebase to issue/refresh the ID token on each new auth session.
-          // Do not mark the app as ready until the refresh has completed.
-          const idToken = await user.getIdToken(true);
+          // onIdTokenChanged fires on initial sign-in and on scheduled token
+          // refreshes. Read the current token without forcing another refresh:
+          // forcing here would recursively trigger this listener.
+          // Each verified token event also refreshes the server-side activity
+          // heartbeat, so a long-lived active tab is not mistaken for inactivity.
+          const idToken = await user.getIdToken();
           if (sequence !== authChangeSequence || auth.currentUser?.uid !== user.uid) return;
 
           // A persistent Firebase session can open the game without a new
