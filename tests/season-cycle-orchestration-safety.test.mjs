@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import { isSeasonOrchestratorSuccessful, cronResultStatus } from '../src/app/api/cron/cron-result.ts';
+import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 const source = readFileSync(
@@ -31,7 +31,7 @@ test('prepared season is published before activation and activation ends the sch
 });
 
 test('season finalization requires a ready rollover before lifecycle phase can advance', () => {
-  const finalize = source.indexOf("if (beforeFinalizeSnap.exists && (beforeFinalizeSnap.data() || {}).phase === 'FINALIZING')");
+  const finalize = source.indexOf("if (beforeFinalizeSnap.exists && (beforeFinalizeSnap.data() || {}).phase === 'FINALIZING'");
   const rollover = source.indexOf('prepareSeasonRollover(db, activeSeason, activeSeason + 1)', finalize);
   const blocked = source.indexOf("action: 'WAITING_FOR_SEASON_RESULTS'", rollover);
   const transaction = source.indexOf('const result = await db.runTransaction', finalize);
@@ -64,4 +64,10 @@ test('season cron reports blocked activation and incomplete lifecycle results as
   assert.equal(isSeasonOrchestratorSuccessful({ action: 'SEASON_PUBLISHED_WAITING_ACTIVATION', worldReady: true }), true);
   assert.equal(cronResultStatus({ success: true }), 200);
   assert.equal(cronResultStatus({ success: false }), 409);
+});
+
+test('season cron fails closed for unknown actions or missing active-world readiness', () => {
+  assert.equal(isSeasonOrchestratorSuccessful({ action: 'UNKNOWN_ACTION', worldReady: true }), false);
+  assert.equal(isSeasonOrchestratorSuccessful({ action: 'IDLE' }), false);
+  assert.equal(isSeasonOrchestratorSuccessful({ worldReady: true }), false);
 });
