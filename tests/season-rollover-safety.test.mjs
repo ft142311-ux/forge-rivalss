@@ -563,6 +563,33 @@ test('stale cleanup owner cannot delete after a replacement calendar lease is ac
   assert.notEqual(db.read('old-archive'), null);
 });
 
+test('expired cleanup worker cannot release a replacement worker lease', async () => {
+  const db = mockCleanupDb(3);
+  const nowMs = Date.now();
+  const stale = await acquireSeasonCalendarBuildLock(db, 2, 3, {
+    ownerId: 'cleanup-expired-owner',
+    nowMs,
+    ttlMs: 10,
+  });
+  const replacement = await acquireSeasonCalendarBuildLock(db, 2, 3, {
+    ownerId: 'cleanup-replacement-owner',
+    nowMs: nowMs + 11,
+  });
+
+  assert.equal(replacement.acquired, true);
+  assert.notEqual(replacement.token, stale.token);
+
+  const staleRelease = await releaseSeasonCalendarBuildLock(db, stale.ownerId, stale.token);
+  assert.equal(staleRelease.released, false);
+  assert.equal(db.read('season_calendar_build_v1').ownerId, replacement.ownerId);
+  assert.equal(db.read('season_calendar_build_v1').token, replacement.token);
+
+  const protectedRef = db.collection('cleanup').doc('replacement-lease-protected');
+  await commitSeasonHistoryCleanupWrites(db, replacement.ownerId, replacement.token, 3, [], [protectedRef]);
+  assert.equal(db.read('replacement-lease-protected'), null);
+  await releaseSeasonCalendarBuildLock(db, replacement.ownerId, replacement.token);
+});
+
 test('cleanup mutations stop if a newer season activates during pruning', async () => {
   const db = mockCleanupDb(3);
   const lease = await acquireSeasonCalendarBuildLock(db, 2, 3);
