@@ -66,6 +66,23 @@ test('season cron reports blocked activation and incomplete lifecycle results as
   assert.equal(cronResultStatus({ success: false }), 409);
 });
 
+test('season cron accepts every documented non-blocking orchestrator action', () => {
+  for (const action of [
+    'SEASON_ACTIVATED',
+    'SEASON_PUBLISHED_WAITING_ACTIVATION',
+    'START_FINALIZATION',
+    'RESOLVE_MATCHES',
+    'GENERATE_NEXT',
+    'IDLE',
+  ]) {
+    assert.equal(
+      isSeasonOrchestratorSuccessful({ action, worldReady: true }),
+      true,
+      `expected ${action} to be a successful scheduler outcome`,
+    );
+  }
+});
+
 test('season cron fails closed for unknown actions or missing active-world readiness', () => {
   assert.equal(isSeasonOrchestratorSuccessful({ action: 'UNKNOWN_ACTION', worldReady: true }), false);
   assert.equal(isSeasonOrchestratorSuccessful({ action: 'IDLE' }), false);
