@@ -454,6 +454,35 @@ test('post-activation cleanup writes are fenced by the live calendar lease and a
   await releaseSeasonCalendarBuildLock(db, lease.ownerId, lease.token);
 });
 
+test('archive child deletion resumes from the next chunk after cleanup worker interruption', async () => {
+  const db = mockCleanupDb(3);
+  const firstLease = await acquireSeasonCalendarBuildLock(db, 2, 3, { ownerId: 'cleanup-worker-first' });
+  const refs = Array.from({ length: 401 }, (_, index) => db.collection('cleanup').doc(`archive-match-${index}`));
+
+  await commitSeasonHistoryCleanupWrites(db, firstLease.ownerId, firstLease.token, 3, [], refs.slice(0, 400));
+  for (const ref of refs.slice(0, 400)) assert.equal(db.read(ref.id), null);
+  assert.equal(db.read(refs[400].id), undefined);
+
+  await releaseSeasonCalendarBuildLock(db, firstLease.ownerId, firstLease.token);
+  const retryLease = await acquireSeasonCalendarBuildLock(db, 2, 3, { ownerId: 'cleanup-worker-retry' });
+  await commitSeasonHistoryCleanupWrites(db, retryLease.ownerId, retryLease.token, 3, [], refs.slice(400));
+
+  for (const ref of refs) assert.equal(db.read(ref.id), null);
+  await releaseSeasonCalendarBuildLock(db, retryLease.ownerId, retryLease.token);
+});
+
+test('cleanup deletion helper rejects batches larger than the Firestore-safe limit', async () => {
+  const db = mockCleanupDb(3);
+  const lease = await acquireSeasonCalendarBuildLock(db, 2, 3);
+  const refs = Array.from({ length: 451 }, (_, index) => db.collection('cleanup').doc(`oversized-${index}`));
+  await assert.rejects(
+    () => commitSeasonHistoryCleanupWrites(db, lease.ownerId, lease.token, 3, [], refs),
+    /SEASON_HISTORY_CLEANUP_CHUNK_TOO_LARGE/,
+  );
+  assert.equal(db.read('oversized-0'), undefined);
+  await releaseSeasonCalendarBuildLock(db, lease.ownerId, lease.token);
+});
+
 test('post-activation cleanup writes stop after the durable cleanup marker is completed', async () => {
   const db = mockCleanupDb(3);
   const lease = await acquireSeasonCalendarBuildLock(db, 2, 3);
