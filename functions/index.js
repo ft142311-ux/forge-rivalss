@@ -2,6 +2,7 @@ const functions = require('firebase-functions');
 const admin = require('firebase-admin');
 const { isEligibleRegistrationSlot, validateRegistrationSchedule, generateStartingSquad, buildRegistrationMatchPlan, transferBotStandingToUser } = require('./registration-core');
 const { recordUserActivityUnlessRetiring } = require('./club-activity-fence');
+const { invokeSeasonOrchestrator } = require('./season-orchestrator-scheduler');
 
 /**
  * @fileOverview Р•РґРёРЅРѕРµ СЃРµСЂРІРµСЂРЅРѕРµ СЏРґСЂРѕ СЂРµРіРёСЃС‚СЂР°С†РёРё v165.
@@ -407,5 +408,27 @@ exports.replaceInactiveClubs = functions
     if (result.errors.length > 0) {
       throw new Error('INACTIVE_CLUB_SWEEP_PARTIAL_FAILURE');
     }
+    return result;
+  });
+
+
+// Runs the guarded Next.js season orchestrator through its authenticated HTTP route.
+// Deploying this scheduled function provisions the corresponding Cloud Scheduler job.
+exports.runSeasonOrchestrator = functions
+  .region('us-central1')
+  .runWith({
+    timeoutSeconds: 540,
+    memory: '256MB',
+    maxInstances: 1,
+    secrets: ['CRON_SECRET'],
+  })
+  .pubsub.schedule('every 5 minutes')
+  .timeZone('UTC')
+  .onRun(async () => {
+    const result = await invokeSeasonOrchestrator({
+      url: process.env.SEASON_ORCHESTRATOR_URL,
+      secret: process.env.CRON_SECRET,
+    });
+    console.log('[SEASON ORCHESTRATOR SCHEDULE]', JSON.stringify(result));
     return result;
   });
