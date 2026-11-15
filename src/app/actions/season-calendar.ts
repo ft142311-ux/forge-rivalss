@@ -14,7 +14,7 @@ import { getAdminDb } from '@/lib/firebase-admin';
 import { advanceAtMostOneSeasonBoundary, deriveRecoverySeasonWindow, deriveSeasonDatePlan, resolveCanonicalSeasonDateWindow, resolveNextSeasonTarget, resolveSeasonActivationWindow, resolveSeasonLifecycleWindow } from './season-boundary';
 import { FIRST_SEASON_NEXT_START_ISO } from '@/app/lib/time-utils';
 import { isRolloverPlanPublicationReady } from './season-awards-policy';
-import { buildRecoveredSeasonArchiveSnapshot, isCompletedSeasonArchive, isRecoveredSeasonArchive, resolveArchivePrunePlan, validateSeasonArchiveSnapshot } from './season-archive';
+import { buildRecoveredSeasonArchiveSnapshot, isCompletedSeasonArchive, isRecoveredSeasonArchive, isSeasonArchiveReadyToComplete, resolveArchivePrunePlan, validateSeasonArchiveSnapshot } from './season-archive';
 import { buildBotClub } from './bot-roster';
 import {
   MAX_LEVELS,
@@ -31,6 +31,41 @@ const LEAGUE_ID = 'ALPHA';
 const CALENDAR_REVISION = 4;
 const FIRST_SEASON_START_ISO = '2026-09-21T15:00:00.000Z'; // 18:00 MSK
 const BATCH_LIMIT = 450;
+
+/**
+ * A normal rollover plan is publishable only while it is still bound to the
+ * completed source-season archive. Recovery carry-forward plans intentionally
+ * represent skipped/incomplete seasons and therefore have no final standings
+ * archive to compare against.
+ */
+async function inspectRolloverPlanSourceArchive(db: any, plan: any) {
+  if (plan?.mode === 'recovery_carry_forward') {
+    return { valid: true, recoveryCarryForward: true, archive: null, matches: [] as any[] };
+  }
+  const sourceSeason = Number(plan?.sourceSeason);
+  if (!Number.isSafeInteger(sourceSeason) || sourceSeason < 1) {
+    return { valid: false, reason: 'ROLLOVER_SOURCE_SEASON_INVALID', archive: null, matches: [] as any[] };
+  }
+  const archiveRef = db.collection('league_season_archives_v1').doc(`S${sourceSeason}`);
+  const archiveSnap = await archiveRef.get();
+  if (!archiveSnap.exists) {
+    return { valid: false, reason: 'ROLLOVER_SOURCE_ARCHIVE_MISSING', archive: null, matches: [] as any[] };
+  }
+  const archive = archiveSnap.data() || {};
+  const matchesSnap = await archiveRef.collection('matches').get();
+  const matches = matchesSnap.docs.map((doc: any) => ({ ...doc.data(), matchId: doc.id }));
+  if (!isCompletedSeasonArchive(archive) || !isSeasonArchiveReadyToComplete(archive, matches, plan)) {
+    return { valid: false, reason: 'ROLLOVER_SOURCE_ARCHIVE_PLAN_MISMATCH', archive, matches };
+  }
+  return { valid: true, recoveryCarryForward: false, archive, matches };
+}
+
+function isPlanBoundToValidatedSourceArchive(validation: any, plan: any) {
+  return validation?.valid === true && (
+    validation.recoveryCarryForward === true ||
+    isSeasonArchiveReadyToComplete(validation.archive, validation.matches, plan)
+  );
+}
 
 function getGroupCoordinates(index: number) {
   let tier = 1;
@@ -1357,9 +1392,13 @@ export async function publishPreparedSeason() {
       inspectCanonicalSeason(db, targetSeason),
     ]);
     const plan = planSnap.exists ? planSnap.data() || {} : null;
+    const sourceArchiveValidation = plan
+      ? await inspectRolloverPlanSourceArchive(db, plan)
+      : { valid: false, reason: 'ROLLOVER_PLAN_MISSING' };
     const preparedStartMs = new Date(initial.preparedSeasonStart || '').getTime();
     const preparedNextStartMs = new Date(initial.preparedNextSeasonStart || '').getTime();
-    const validPublishedState = initial.worldReady === true &&
+    const validPublishedState = sourceArchiveValidation.valid &&
+      initial.worldReady === true &&
       initial.preparedWorldReady === true &&
       String(initial.phase || '') === 'PUBLISHED' &&
       (multiSeasonRecovery || preparedStartMs === new Date(initial.nextSeasonStart || '').getTime()) &&
@@ -1446,6 +1485,17 @@ export async function publishPreparedSeason() {
   if (!plan || !validateRolloverPlan(plan, planSourceSeason, targetSeason).valid || !isRolloverPlanPublicationReady(plan)) {
     return { success: false, action: 'ROLLOVER_NOT_READY', sourceSeason, targetSeason, reason: 'ARCHIVE_OR_PLACEMENT_PLAN_NOT_READY' };
   }
+  const sourceArchiveValidation = await inspectRolloverPlanSourceArchive(db, plan);
+  if (!sourceArchiveValidation.valid) {
+    return {
+      success: false,
+      action: 'ROLLOVER_NOT_READY',
+      sourceSeason,
+      targetSeason,
+      reason: sourceArchiveValidation.reason,
+      writesStarted: false,
+    };
+  }
 
   const readiness = await inspectCanonicalSeason(db, targetSeason);
   if (!readiness.ready) {
@@ -1468,7 +1518,9 @@ export async function publishPreparedSeason() {
           calendarRevision: Number(initial.preparedCalendarRevision || 0),
           phase: String(initial.phase || ''),
           planRef,
-          validatePlan: (candidate: any) => validateRolloverPlan(candidate, planSourceSeason, targetSeason).valid && isRolloverPlanPublicationReady(candidate),
+          validatePlan: (candidate: any) => validateRolloverPlan(candidate, planSourceSeason, targetSeason).valid &&
+            isRolloverPlanPublicationReady(candidate) &&
+            isPlanBoundToValidatedSourceArchive(sourceArchiveValidation, candidate),
           publicationDeadlineMs: overdueRecoveryMode ? preparedStartMs : lifecycle!.publicationDeadlineAt.getTime(),
           activationAtMs: overdueRecoveryMode ? preparedStartMs : lifecycle!.activationAt.getTime(),
           allowOverdueRecovery: overdueRecoveryMode,
@@ -1584,6 +1636,18 @@ export async function activatePublishedSeason() {
   }
 
   const planRef = db.collection('league_season_rollovers_v1').doc(`S${targetSeason}`);
+  const activationPlanSnap = await planRef.get();
+  const activationPlan = activationPlanSnap.exists ? activationPlanSnap.data() || {} : null;
+  if (!activationPlan ||
+      !validateRolloverPlan(activationPlan, recoveryMode ? targetSeason - 1 : sourceSeason, targetSeason).valid ||
+      !isRolloverPlanPublicationReady(activationPlan)) {
+    return { success: false, action: 'WORLD_NOT_READY', reason: 'ROLLOVER_PLAN_INVALID', sourceSeason, targetSeason, writesStarted: false };
+  }
+  const sourceArchiveValidation = await inspectRolloverPlanSourceArchive(db, activationPlan);
+  if (!sourceArchiveValidation.valid) {
+    return { success: false, action: 'WORLD_NOT_READY', reason: sourceArchiveValidation.reason, sourceSeason, targetSeason, writesStarted: false };
+  }
+
   const readiness = await inspectCanonicalSeason(db, targetSeason);
   if (!readiness.ready) {
     return { success: false, action: 'WORLD_NOT_READY', reason: 'CANONICAL_CALENDAR_INCOMPLETE', sourceSeason, targetSeason, ...readiness };
@@ -1598,7 +1662,8 @@ export async function activatePublishedSeason() {
     multiSeasonRecovery,
     recoveryMode,
     isPlanReady: plan => validateRolloverPlan(plan, recoveryMode ? targetSeason - 1 : sourceSeason, targetSeason).valid &&
-      isRolloverPlanPublicationReady(plan),
+      isRolloverPlanPublicationReady(plan) &&
+      isPlanBoundToValidatedSourceArchive(sourceArchiveValidation, plan),
     buildUpdate: (current, plan) => ({
       activeSeasonNumber: targetSeason,
       phase: 'REGULAR_SEASON',
