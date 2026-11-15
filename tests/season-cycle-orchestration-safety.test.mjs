@@ -36,3 +36,18 @@ test('season finalization requires a ready rollover before lifecycle phase can a
   const transaction = source.indexOf('const result = await db.runTransaction', finalize);
   assert.ok(finalize >= 0 && rollover > finalize && blocked > rollover && transaction > blocked);
 });
+
+
+test('season orchestrator cron entry is bearer-protected and delegates to the lifecycle orchestrator', () => {
+  const route = readFileSync(
+    resolve(import.meta.dirname, '../src/app/api/cron/season-orchestrator/route.ts'),
+    'utf8',
+  );
+  assert.match(route, /isCronAuthorized\(request\)/);
+  assert.match(route, /runSeasonOrchestrator\(\)/);
+  assert.match(route, /maxDuration\s*=\s*300/);
+  assert.match(route, /cronResultStatus\(response\)/);
+  const unauthorized = route.indexOf("return new NextResponse('Unauthorized', { status: 401 })");
+  const orchestrator = route.indexOf('runSeasonOrchestrator()');
+  assert.ok(unauthorized >= 0 && orchestrator > unauthorized, 'unauthorized requests must be rejected before lifecycle writes can start');
+});
