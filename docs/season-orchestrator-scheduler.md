@@ -11,6 +11,7 @@ Vercel Cron configuration is required.
 - Frequency: every 5 minutes
 - Time zone: UTC
 - Function timeout: 540 seconds
+- HTTP request timeout: 270 seconds (30-second margin below the Next.js route's 300-second `maxDuration`)
 - Maximum concurrent function instances: 1
 - Target: the protected Next.js route
   `/api/cron/season-orchestrator`
