@@ -76,3 +76,13 @@ test('client compatibility paths and AI adapter also use the shared engine', () 
     assert.doesNotMatch(source, /simulateMatchCore\(/, `${file} must not bypass the shared engine`);
   }
 });
+
+
+test('shared match simulation stays deterministic for a stable match id and snapshots', () => {
+  const simulation = read('src/app/lib/match-simulation.ts');
+  assert.doesNotMatch(simulation, /Math\.random\s*\(|Date\.now\s*\(|randomUUID\s*\(/);
+  assert.match(simulation, /resolveMatchDraft\(teamA, teamB, input\.matchId\)/);
+  assert.match(simulation, /\`\$\{input\.matchId\}:g\$\{i\+1\}\`/);
+  assert.match(simulation, /hash32\(\`\$\{seed\}\|\$\{salt\}\`\)/);
+  assert.match(simulation, /seed:input\.matchId/);
+});
