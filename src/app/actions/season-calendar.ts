@@ -1661,9 +1661,16 @@ export async function activatePublishedSeason() {
     nextSeasonStartMs: preparedNextStartMs,
     multiSeasonRecovery,
     recoveryMode,
-    isPlanReady: plan => validateRolloverPlan(plan, recoveryMode ? targetSeason - 1 : sourceSeason, targetSeason).valid &&
-      isRolloverPlanPublicationReady(plan) &&
-      isPlanBoundToValidatedSourceArchive(sourceArchiveValidation, plan),
+    isPlanReady: plan => {
+      const validPlan = validateRolloverPlan(plan, recoveryMode ? targetSeason - 1 : sourceSeason, targetSeason).valid &&
+        isRolloverPlanPublicationReady(plan) &&
+        isPlanBoundToValidatedSourceArchive(sourceArchiveValidation, plan);
+      // Recovery plans seed the target slots and standings. Re-reading a merely
+      // valid plan is insufficient: it must still be the exact immutable plan
+      // used by the calendar build, or activation could publish different teams.
+      const recoveryPlanUnchanged = !recoveryMode || compareRecoveryRolloverPlans(activationPlan, plan).same;
+      return validPlan && recoveryPlanUnchanged;
+    },
     buildUpdate: (current, plan) => ({
       activeSeasonNumber: targetSeason,
       phase: 'REGULAR_SEASON',
