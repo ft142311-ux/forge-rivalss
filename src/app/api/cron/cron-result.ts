@@ -10,6 +10,7 @@ export function isSeasonOrchestratorSuccessful(result: any) {
     && !blockedActions.has(String(result?.action || ''))
     && result?.worldReady !== false
     && result?.matchSettlement?.success !== false
+    && result?.tournaments?.success !== false
     && result?.publication?.success !== false
     && result?.activation?.success !== false;
 }
