@@ -454,6 +454,29 @@ test('post-activation cleanup writes are fenced by the live calendar lease and a
   await releaseSeasonCalendarBuildLock(db, lease.ownerId, lease.token);
 });
 
+test('parallel archive cleanup workers have one lease owner and the losing worker cannot delete', async () => {
+  const db = mockCleanupDb(3);
+  const [first, second] = await Promise.all([
+    acquireSeasonCalendarBuildLock(db, 2, 3, { ownerId: 'cleanup-worker-A' }),
+    acquireSeasonCalendarBuildLock(db, 2, 3, { ownerId: 'cleanup-worker-B' }),
+  ]);
+
+  assert.deepEqual([first.acquired, second.acquired].sort(), [false, true]);
+  const winner = first.acquired ? first : second;
+  const loser = first.acquired ? second : first;
+  const protectedRef = db.collection('cleanup').doc('parallel-worker-protected');
+
+  await assert.rejects(
+    () => commitSeasonHistoryCleanupWrites(db, loser.ownerId, loser.token, 3, [], [protectedRef]),
+    /SEASON_CALENDAR_BUILD_LOCK_LOST/,
+  );
+  assert.equal(db.read('parallel-worker-protected'), undefined);
+
+  await commitSeasonHistoryCleanupWrites(db, winner.ownerId, winner.token, 3, [], [protectedRef]);
+  assert.equal(db.read('parallel-worker-protected'), null);
+  await releaseSeasonCalendarBuildLock(db, winner.ownerId, winner.token);
+});
+
 test('archive child deletion resumes from the next chunk after cleanup worker interruption', async () => {
   const db = mockCleanupDb(3);
   const firstLease = await acquireSeasonCalendarBuildLock(db, 2, 3, { ownerId: 'cleanup-worker-first' });
