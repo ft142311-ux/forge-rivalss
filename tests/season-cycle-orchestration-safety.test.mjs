@@ -50,4 +50,6 @@ test('season orchestrator cron entry is bearer-protected and delegates to the li
   const unauthorized = route.indexOf("return new NextResponse('Unauthorized', { status: 401 })");
   const orchestrator = route.indexOf('runSeasonOrchestrator()');
   assert.ok(unauthorized >= 0 && orchestrator > unauthorized, 'unauthorized requests must be rejected before lifecycle writes can start');
+  assert.match(route, /'ACTIVATION_BLOCKED'/);
+  assert.match(route, /result\?\.activation\?\.success !== false/);
 });
