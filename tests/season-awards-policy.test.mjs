@@ -30,8 +30,8 @@ test('missing player profile without a ledger blocks reward completion', () => {
   assert.equal(resolveSeasonAwardRecipientState(false, false, null, 1), 'PROFILE_MISSING');
 });
 
-test('player reward marker prevents a duplicate payment', () => {
-  assert.equal(resolveSeasonAwardRecipientState(true, false, { seasonAwards: { S2: { prize: 100 } } }, 2), 'ALREADY_APPLIED');
+test('matching player reward and ledger markers prevent a duplicate payment', () => {
+  assert.equal(resolveSeasonAwardRecipientState(true, true, { seasonAwards: { S2: { prize: 100 } } }, 2), 'ALREADY_APPLIED');
 });
 
 test('existing profile without a marker is ready for its first reward', () => {
