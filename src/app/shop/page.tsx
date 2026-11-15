@@ -327,7 +327,7 @@ export default function ShopPage() {
 
   const handleCreatePlayer = async () => {
     const country = COUNTRIES.find(c => c.code === heroCountryCode) || COUNTRIES[0];
-    const nickname = heroNickname.trim().replace(/\\s+/g, ' ');
+    const nickname = heroNickname.trim().replace(/\s+/g, ' ');
     const fingerprint = JSON.stringify([nickname, heroRole, Number(heroTalent), Number(heroAge), country.code, country.name, country.flag]);
     const userId = user?.uid || 'unknown';
     try {
