@@ -64,9 +64,9 @@ test('a FREE slot with an occupant is rejected instead of overwriting its owner'
   }
 });
 
-test('a FREE slot with a whitespace-only occupant id remains eligible', () => {
+test('a FREE slot with a malformed whitespace occupant id is rejected', () => {
   assert.deepEqual(
     resolvePreparedSlotRetry({ status: 'FREE', occupantId: '   ' }, 'CLUB_HUMAN_A'),
-    { ready: true, action: 'PLACE_HUMAN' },
+    { ready: false, reason: 'PREPARED_SLOT_IDENTITY_CONFLICT' },
   );
 });
