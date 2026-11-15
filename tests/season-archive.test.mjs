@@ -66,6 +66,15 @@ test('late engine-reconstructed archive remains visibly completed only with full
   assert.equal(isSeasonArchiveReadyToComplete(archive, matches.slice(1), plan), false);
 });
 
+test('archive validation rejects a club duplicated across different groups before rewards can run', () => {
+  const { archive, matches } = makeSeasonArchive();
+  const firstGroupId = archive.standings['D1-G1'][0].id;
+  archive.standings['D1-G2'][0].id = firstGroupId;
+  const result = validateSeasonArchiveSnapshot(archive, matches);
+  assert.equal(result.valid, false);
+  assert.equal(result.reasons.some(reason => reason.startsWith('ARCHIVE_TEAM_ID_DUPLICATED:D1-G2:')), true);
+});
+
 test('archive standings are checked against all 840 persisted match results', () => {
   const { archive, matches } = makeSeasonArchive();
   const altered = structuredClone(matches);
