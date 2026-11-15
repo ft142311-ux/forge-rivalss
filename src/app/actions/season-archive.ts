@@ -132,7 +132,6 @@ export function validateSeasonArchiveRolloverPlan(archive: any, rolloverPlan: an
 /** An archive becomes visible only after the snapshot and its rollover plan are valid. */
 export function isSeasonArchiveReadyToComplete(archive: any, matches: any[], rolloverPlan: any): boolean {
   const snapshot = validateSeasonArchiveSnapshot(archive, matches);
-  const sourceSeason = Number(archive?.sourceSeason);
   return snapshot.valid &&
     validateSeasonArchiveRolloverPlan(archive, rolloverPlan).valid &&
     isRolloverPlanPublicationReady(rolloverPlan);
