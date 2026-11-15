@@ -294,6 +294,11 @@ export function resolveArchivePrunePlan(
             Number(archive.prunePolicyVersion) !== 1) {
           return { ready: false as const, reason: 'ARCHIVE_PRUNE_MARKER_CONFLICT', archiveId: item.id, pruneIds: [] as string[] };
         }
+        // Older cleanup workers could persist PRUNING from a pending marker.
+        // Re-check the finalized history state before resuming that deletion.
+        if (String(item.historyStatus || '') !== 'SKIPPED') {
+          return { ready: false as const, reason: 'RECOVERED_ARCHIVE_SKIP_MARKER_MISSING', archiveId: item.id, pruneIds: [] as string[] };
+        }
       } else if (String(item.historyStatus || '') !== 'SKIPPED') {
         return { ready: false as const, reason: 'RECOVERED_ARCHIVE_SKIP_MARKER_MISSING', archiveId: item.id, pruneIds: [] as string[] };
       }
