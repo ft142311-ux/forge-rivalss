@@ -857,6 +857,19 @@ export async function resolveDailyMatches() {
           tx.set(awayEffectRef!, { matchId: matchDoc.id, userId: awayId, effect: 'PLAYER_PROGRESSION', appliedAt: FieldValue.serverTimestamp() });
         }
 
+        if (homeRef && homeSnap?.exists && economyTxSnap?.exists) {
+          const receipt = economyTxSnap.data() || {};
+          const receiptMatchesOperation =
+            receipt.userId === homeId &&
+            receipt.referenceId === matchDoc.id &&
+            receipt.currency === 'credits' &&
+            receipt.type === 'MATCH_REVENUE' &&
+            Number(receipt.amount) === homeEconomy.totalRevenue;
+          if (!receiptMatchesOperation) {
+            throw new Error('MATCH_ECONOMY_RECEIPT_CONFLICT');
+          }
+        }
+
         if (homeRef && homeSnap?.exists && !economyTxSnap?.exists) {
           const before = Number(homePlayerData.credits || 0);
           const after = before + homeEconomy.totalRevenue;
