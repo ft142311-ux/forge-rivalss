@@ -1,7 +1,9 @@
 'use strict';
 
 const ORCHESTRATOR_PATH = '/api/cron/season-orchestrator';
-const REQUEST_TIMEOUT_MS = 510_000;
+// Keep the HTTP request below the Next.js route's 300-second maxDuration.
+// The 30-second margin lets the scheduler record a clean timeout before the route is terminated.
+const REQUEST_TIMEOUT_MS = 270_000;
 
 function resolveOrchestratorUrl(value) {
   if (typeof value !== 'string' || !value.trim()) {
