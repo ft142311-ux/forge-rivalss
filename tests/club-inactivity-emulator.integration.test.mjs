@@ -716,3 +716,88 @@ test('a pending retirement with recent activity is safely cancelled and Auth acc
   assert.equal(unknownPhase.action, 'SKIPPED_REVIEW_REQUIRED');
   assert.equal((await pendingRef.get()).get('phase'), 'REVIEW_REQUIRED');
 });
+
+test('retirement defers when one of the retiring club fixtures is processing and restores login access', {
+  skip: !emulatorHost,
+}, async (t) => {
+  assert.match(emulatorHost, /^(127[.]0[.]0[.]1|localhost):[0-9]+$/);
+  const testProjectId = `demo-defer-${randomUUID().slice(0, 8)}`;
+  const app = initializeApp({ projectId: testProjectId }, `inactive-defer-test-${randomUUID()}`);
+  const db = getFirestore(app);
+  const uid = `inactive-defer-${randomUUID()}`;
+  const season = 98;
+  const division = 2;
+  const group = 1;
+  const rank = 4;
+  const now = new Date('2026-11-14T12:00:00.000Z');
+  const lastSignInTime = new Date(now.getTime() - 91 * 24 * 60 * 60 * 1000).toISOString();
+  const playerRef = db.collection('players_v14').doc(uid);
+  const slotRef = db.collection('league_slots_v1').doc(`defer_${uid}`);
+  const tableRef = db.collection('league_tables_v2').doc(`table_v140_S${season}_LALPHA_V${division}_G${group}`);
+  const pendingRef = db.collection('inactive_club_retirements_v1').doc(uid);
+  const matchRefs = [];
+
+  t.after(async () => {
+    await playerRef.delete().catch(() => undefined);
+    await slotRef.delete().catch(() => undefined);
+    await tableRef.delete().catch(() => undefined);
+    await pendingRef.delete().catch(() => undefined);
+    for (const matchRef of matchRefs) await matchRef.delete().catch(() => undefined);
+    await deleteApp(app);
+  });
+
+  await db.collection('system_v1').doc('season_config').set({
+    activeSeasonNumber: season, phase: 'REGULAR_SEASON', worldReady: true,
+  });
+  await playerRef.set({
+    id: uid, clubName: 'Processing Fixture Club', selectedLeagueId: 'ALPHA',
+    leagueLevel: division, groupId: group, rank,
+  });
+  await slotRef.set({
+    season, leagueId: 'ALPHA', division, group, rank,
+    status: 'OCCUPIED', occupantId: uid, occupancyGeneration: 0,
+  });
+  await tableRef.set({
+    season, leagueId: 'ALPHA', level: division, group,
+    stats: {
+      [uid]: { id: uid, name: 'Processing Fixture Club', rank, points: 6, isBot: false },
+    },
+  });
+
+  for (let i = 0; i < 56; i++) {
+    const matchRef = db.collection('matches_v2').doc(`defer_${uid}_${i}`);
+    matchRefs.push(matchRef);
+    const involvesUser = i === 0;
+    await matchRef.set({
+      season, leagueId: 'ALPHA', level: division, groupId: group, version: 140,
+      homeId: involvesUser ? uid : `home_${i}`,
+      awayId: `away_${i}`,
+      homeName: involvesUser ? 'Processing Fixture Club' : `Home ${i}`,
+      awayName: `Away ${i}`,
+      startTime: new Date(now.getTime() + (i + 1) * 60 * 60 * 1000).toISOString(),
+      isFinished: false,
+      status: involvesUser ? 'processing' : 'scheduled',
+      isProcessing: involvesUser,
+    });
+  }
+
+  let disabled = false;
+  const auth = {
+    getUser: async () => ({ uid, disabled, metadata: { lastSignInTime } }),
+    updateUser: async (_uid, patch) => { disabled = patch.disabled; return { uid, disabled }; },
+    revokeRefreshTokens: async () => undefined,
+  };
+  const result = await retireInactiveClub({
+    db, auth, userRecord: { uid, disabled: false, metadata: { lastSignInTime } }, now,
+  });
+
+  assert.equal(result.action, 'DEFERRED_MATCH_PROCESSING');
+  assert.equal(disabled, false, 'Auth access must be restored when retirement is deferred');
+  assert.equal((await playerRef.get()).exists, true, 'the human club must remain intact');
+  assert.equal((await pendingRef.get()).exists, false, 'the temporary retirement fence must be cleaned up');
+  assert.equal((await slotRef.get()).get('occupantId'), uid, 'the active slot must remain owned by the user');
+  assert.equal((await tableRef.get()).get(`stats.${uid}.isBot`), false);
+  const processingFixture = (await matchRefs[0].get()).data();
+  assert.equal(processingFixture.homeId, uid);
+  assert.equal(processingFixture.isProcessing, true);
+});
