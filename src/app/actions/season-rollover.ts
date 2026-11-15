@@ -3,7 +3,7 @@ import { getTableId, MAX_LEVELS, TEAMS_PER_GROUP, TOTAL_GROUPS } from '@/app/lib
 import { buildCanonicalSlotRepairs, calculateGroupStandings, evaluateRolloverPreflight, hasCanonicalFixtureStructure, hasCompleteCanonicalFixtureSet, inspectGroupReconciliation } from './season-rollover-standings';
 import { acquireSeasonRolloverLock, commitSeasonRolloverWrites, releaseSeasonRolloverLock, SEASON_ROLLOVER_LOCK_TTL_MS } from './season-rollover-lock';
 import { buildPromotionRelegationGroups, validateRolloverPlan } from './season-rollover-plan';
-import { isSeasonArchiveReadyToComplete, validateSeasonArchiveSnapshot } from './season-archive';
+import { isSeasonArchiveReadyToComplete, validateSeasonArchiveRolloverPlan, validateSeasonArchiveSnapshot } from './season-archive';
 import { runTwoPhaseSeasonOrchestration } from './season-orchestration';
 import { isValidCleanSeasonOneBoundary } from './season-boundary';
 import { resolveSeasonAwardRecipientState, shouldPersistSeasonTrophies } from './season-awards-policy';
@@ -411,13 +411,16 @@ export async function prepareSeasonRollover(db: any, sourceSeason: number, targe
     // The saved plan is already the durable placement decision. Validate its
     // identity and shape, but never rebuild or replace its groups during retry.
     const savedPlan = planSnap.data() || {};
-    if (!validateRolloverPlan(savedPlan, sourceSeason, targetSeason).valid) {
+    const planConsistency = validateSeasonArchiveRolloverPlan(archiveData, savedPlan);
+    if (!planConsistency.valid) {
       return {
         ready: false,
-        reason: 'SEASON_ARCHIVE_RECOVERY_PLAN_INVALID',
+        reason: 'SEASON_ARCHIVE_RECOVERY_PLAN_MISMATCH',
         sourceSeason,
         targetSeason,
-        writesStarted: true,
+        writesStarted: false,
+        planError: planConsistency.reason,
+        group: (planConsistency as any).group || null,
       };
     }
 
@@ -908,6 +911,10 @@ export async function prepareSeasonRollover(db: any, sourceSeason: number, targe
     const archiveValidation = validateSeasonArchiveSnapshot(archiveData, savedMatches);
     if (!archiveValidation.valid) {
       return { ready: false, reason: 'SEASON_ARCHIVE_VALIDATION_FAILED', sourceSeason, targetSeason, writesStarted: false, archiveMatches: savedMatches.length, archiveErrors: archiveValidation.reasons };
+    }
+    const planConsistency = validateSeasonArchiveRolloverPlan(archiveData, planSnap.data() || {});
+    if (!planConsistency.valid) {
+      return { ready: false, reason: 'SEASON_ARCHIVE_PLAN_MISMATCH', sourceSeason, targetSeason, writesStarted: false, planError: planConsistency.reason, group: (planConsistency as any).group || null };
     }
     const awards = await applySeasonAwards(db, sourceSeason, archiveData.standings || {}, lock);
     if (!awards.ready) {
