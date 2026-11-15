@@ -24,6 +24,21 @@ test('preparing archive recovery uses the persisted snapshot instead of rebuildi
   assert.ok(branch.indexOf('isSeasonArchiveReadyToComplete') < branch.indexOf("data: { status: 'completed'"));
 });
 
+test('generated promotion plans are validated against the archive before rewards are applied', async () => {
+  const source = await readFile(sourceUrl, 'utf8');
+  const noPlanStart = source.indexOf("if (archiveSnap.exists && String((archiveSnap.data() || {}).status || '') === 'preparing' && !planSnap.exists)");
+  const noPlanEnd = source.indexOf('  // A Firestore subcollection can outlive a missing parent document.', noPlanStart);
+  const noPlanRecovery = source.slice(noPlanStart, noPlanEnd);
+  assert.ok(noPlanRecovery.includes('validateSeasonArchiveRolloverPlan(archiveData, {'));
+  assert.ok(noPlanRecovery.indexOf('validateSeasonArchiveRolloverPlan') < noPlanRecovery.indexOf('applySeasonAwards'));
+
+  const archiveWrite = source.indexOf("data: { ...summary, standings, archiveVersion: 1, status: 'preparing', matchManifest: matchArchive }");
+  const placementValidation = source.indexOf('validateSeasonArchiveRolloverPlan(preparedArchive, {', archiveWrite);
+  const rewardApplication = source.indexOf('applySeasonAwards(db, sourceSeason, standings, lock)', archiveWrite);
+  assert.ok(archiveWrite >= 0 && placementValidation > archiveWrite);
+  assert.ok(rewardApplication > placementValidation, 'candidate placements must pass archive validation before any rewards');
+});
+
 test('orphaned archive match chunks and unknown archive states fail closed before normal writes', async () => {
   const source = await readFile(sourceUrl, 'utf8');
   const orphanGuard = source.indexOf('ORPHANED_PARTIAL_SEASON_ARCHIVE_REQUIRES_RECONCILIATION');
