@@ -220,6 +220,14 @@ function stablePlanValue(value: any): any {
   return value;
 }
 
+export function getRecoveryRolloverPlanSignature(plan: any): string | null {
+  const validation = validateRolloverPlan(plan, Number(plan?.sourceSeason), Number(plan?.targetSeason));
+  if (!validation.valid || plan?.mode !== 'recovery_carry_forward') return null;
+  const fields = ['leagueId', 'mode', 'sourceSeason', 'targetSeason', 'skippedSeasons',
+    'lastTrustedSeason', 'placementSource', 'retainedArchiveSeason', 'promotionRule', 'groups'];
+  return JSON.stringify(Object.fromEntries(fields.map(field => [field, stablePlanValue(plan[field])])));
+}
+
 export function compareRecoveryRolloverPlans(existing: any, candidate: any) {
   const sourceSeason = Number(candidate?.sourceSeason);
   const targetSeason = Number(candidate?.targetSeason);
