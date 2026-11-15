@@ -11,7 +11,7 @@ type ActivationExpectation = {
   multiSeasonRecovery: boolean;
   recoveryMode: boolean;
   nowMs?: number;
-  isPlanReady: (plan: any) => boolean;
+  isPlanReady: (plan: any, currentConfig: any) => boolean;
   buildUpdate: (current: any, plan: any) => Record<string, any>;
 };
 
@@ -61,7 +61,7 @@ export async function commitSeasonActivation(
     if (transactionNowMs >= expected.nextSeasonStartMs) {
       return { success: false, reason: 'ACTIVATION_WINDOW_EXPIRED' };
     }
-    if (!expected.isPlanReady(plan)) {
+    if (!expected.isPlanReady(plan, current)) {
       return { success: false, reason: 'ROLLOVER_PLAN_INVALID' };
     }
 
