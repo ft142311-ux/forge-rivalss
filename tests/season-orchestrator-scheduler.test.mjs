@@ -74,7 +74,7 @@ test('scheduler treats HTTP errors and unsuccessful orchestrator payloads as fai
         json: async () => ({ success: false, action: 'ACTIVATION_BLOCKED' }),
       }),
     }),
-    /SEASON_ORCHESTRATOR_UNSUCCESSFUL/,
+    /SEASON_ORCHESTRATOR_HTTP_409/,
   );
 
   await assert.rejects(
