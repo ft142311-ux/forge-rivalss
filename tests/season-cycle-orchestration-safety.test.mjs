@@ -59,6 +59,8 @@ test('season cron reports blocked activation and incomplete lifecycle results as
   assert.equal(isSeasonOrchestratorSuccessful({ action: 'ACTIVATION_BLOCKED', worldReady: true, activation: { success: false } }), false);
   assert.equal(isSeasonOrchestratorSuccessful({ action: 'SEASON_ACTIVATED', worldReady: true, activation: { success: false } }), false);
   assert.equal(isSeasonOrchestratorSuccessful({ action: 'WAITING_FOR_SEASON_RESULTS', worldReady: true }), false);
+  assert.equal(isSeasonOrchestratorSuccessful({ action: 'IDLE', worldReady: true, tournaments: { success: false, error: 'UNAUTHORIZED' } }), false);
+  assert.equal(isSeasonOrchestratorSuccessful({ action: 'IDLE', worldReady: true, tournaments: { generated: 0, resolved: 0 } }), true);
   assert.equal(isSeasonOrchestratorSuccessful({ action: 'SEASON_PUBLISHED_WAITING_ACTIVATION', worldReady: true }), true);
   assert.equal(cronResultStatus({ success: true }), 200);
   assert.equal(cronResultStatus({ success: false }), 409);
