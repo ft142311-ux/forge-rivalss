@@ -78,7 +78,7 @@ test('archive validation rejects a club duplicated across different groups befor
   archive.standings[secondGroup][0].id = firstGroupId;
   const result = validateSeasonArchiveSnapshot(archive, matches);
   assert.equal(result.valid, false);
-  assert.equal(result.reasons.some(reason => reason.startsWith('ARCHIVE_TEAM_ID_DUPLICATED:D1-G2:')), true);
+  assert.equal(result.reasons.some(reason => reason.startsWith(`ARCHIVE_TEAM_ID_DUPLICATED:${secondGroup}:`)), true);
 });
 
 test('archive readiness rejects a valid-shaped rollover plan that does not match archived standings', () => {
