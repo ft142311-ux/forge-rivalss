@@ -13,12 +13,19 @@ test('cron auth accepts only the exact configured Bearer token', () => {
   assert.equal(isCronAuthorized(requestWithAuthorization('bearer secret'), 'secret'), false);
   assert.equal(isCronAuthorized(requestWithAuthorization('secret'), 'secret'), false);
   assert.equal(isCronAuthorized(requestWithAuthorization('Bearer other'), 'secret'), false);
+  assert.equal(isCronAuthorized(requestWithAuthorization('Bearer secret '), 'secret'), false);
   assert.equal(isCronAuthorized(requestWithAuthorization(undefined), 'secret'), false);
 });
 
 test('cron auth fails closed when the configured secret is missing or empty', () => {
   assert.equal(isCronAuthorized(requestWithAuthorization('Bearer undefined'), undefined), false);
   assert.equal(isCronAuthorized(requestWithAuthorization('Bearer '), ''), false);
+});
+
+test('cron bearer secret comparison uses constant-time equality after length validation', () => {
+  const source = readFileSync(new URL('../src/app/api/cron/cron-auth.ts', import.meta.url), 'utf8');
+  assert.match(source, /import \{ timingSafeEqual \} from 'node:crypto'/);
+  assert.match(source, /supplied\.length === expected\.length && timingSafeEqual\(supplied, expected\)/);
 });
 
 import { readFileSync } from 'node:fs';
