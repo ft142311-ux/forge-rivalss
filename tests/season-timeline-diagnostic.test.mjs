@@ -118,3 +118,27 @@ test('recovery plan promotion metadata follows the actual selected placement bas
   const source = readFileSync(resolve(root, 'src/app/actions/season-calendar.ts'), 'utf8');
   assert.match(source, /promotionRule: placementBaseline === 'completed_archive'/);
 });
+
+
+test('clean canonical world diagnostic keeps Season 1 active until its persisted Nov 26 boundary', () => {
+  const seasonStart = new Date('2026-11-09T15:00:00.000Z');
+  const nextSeasonStart = new Date('2026-11-26T15:00:00.000Z');
+
+  const beforeActivation = deriveSeasonDatePlan(
+    1, seasonStart, nextSeasonStart,
+    new Date('2026-11-26T14:59:59.999Z'), 15,
+  );
+  assert.equal(beforeActivation.expectedSeasonNumber, 1);
+  assert.deepEqual(beforeActivation.completedSeasons, []);
+  assert.equal(beforeActivation.expectedSeasonStart.toISOString(), '2026-11-09T15:00:00.000Z');
+  assert.equal(beforeActivation.expectedNextSeasonStart.toISOString(), '2026-11-26T15:00:00.000Z');
+
+  const atActivation = deriveSeasonDatePlan(
+    1, seasonStart, nextSeasonStart,
+    new Date('2026-11-26T15:00:00.000Z'), 15,
+  );
+  assert.equal(atActivation.expectedSeasonNumber, 2);
+  assert.deepEqual(atActivation.completedSeasons, [1]);
+  assert.equal(atActivation.expectedSeasonStart.toISOString(), '2026-11-26T15:00:00.000Z');
+  assert.equal(atActivation.expectedNextSeasonStart.toISOString(), '2026-12-11T15:00:00.000Z');
+});
