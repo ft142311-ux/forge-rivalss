@@ -1525,9 +1525,9 @@ export async function publishPreparedSeason() {
           calendarRevision: Number(initial.preparedCalendarRevision || 0),
           phase: String(initial.phase || ''),
           planRef,
-          validatePlan: (candidate: any) => validateRolloverPlan(candidate, planSourceSeason, targetSeason).valid &&
+          validatePlan: (candidate: any, currentConfig: any) => validateRolloverPlan(candidate, planSourceSeason, targetSeason).valid &&
             isRolloverPlanPublicationReady(candidate) &&
-            (!recoveryMode || getRecoveryRolloverPlanSignature(candidate) === initial.preparedRolloverPlanSignature) &&
+            (!recoveryMode || getRecoveryRolloverPlanSignature(candidate) === currentConfig.preparedRolloverPlanSignature) &&
             isPlanBoundToValidatedSourceArchive(sourceArchiveValidation, candidate),
           publicationDeadlineMs: overdueRecoveryMode ? preparedStartMs : lifecycle!.publicationDeadlineAt.getTime(),
           activationAtMs: overdueRecoveryMode ? preparedStartMs : lifecycle!.activationAt.getTime(),
