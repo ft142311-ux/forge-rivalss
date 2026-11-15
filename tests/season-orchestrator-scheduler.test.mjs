@@ -107,6 +107,16 @@ test('scheduler rejects non-JSON responses instead of recording a false success'
 });
 
 
+
+test('App Hosting exposes cron and system credentials only to the server runtime', () => {
+  const config = readFileSync(new URL('../apphosting.yaml', import.meta.url), 'utf8');
+  assert.match(config, /^env:/m);
+  assert.doesNotMatch(config, /^environmentVariables:/m);
+  assert.match(config, /variable: CRON_SECRET\\s+secret: CRON_SECRET\\s+availability:\\s+- RUNTIME/s);
+  assert.match(config, /variable: SYSTEM_ACCOUNT_PASSWORD\\s+secret: SYSTEM_ACCOUNT_PASSWORD\\s+availability:\\s+- RUNTIME/s);
+  assert.match(config, /variable: NEXT_PUBLIC_FIREBASE_API_KEY\\s+value:/);
+});
+
 test('Firebase scheduled function provisions a five-minute UTC trigger with the cron secret bound', () => {
   const source = readFileSync(new URL('../functions/index.js', import.meta.url), 'utf8');
   const start = source.indexOf('exports.runSeasonOrchestrator = functions');
