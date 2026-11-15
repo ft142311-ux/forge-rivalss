@@ -3,7 +3,7 @@
 import { FieldValue } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { TEAMS_PER_GROUP, TOTAL_GROUPS, getBotId, getBotName, getTableId, generateSeasonCalendar } from '@/app/lib/leagues-data';
-import { requireServerActor } from '@/lib/server-auth';
+import { requireAdminActor } from '@/lib/server-auth';
 import { acquireSeasonCalendarBuildLock, commitSeasonCalendarWrites, releaseSeasonCalendarBuildLock } from './season-rollover-lock';
 import { inspectGroupReconciliation } from './season-rollover-standings';
 import { runTwoPhaseSeasonOrchestration } from './season-orchestration';
@@ -81,7 +81,7 @@ async function repairGroup(db:any, season:number, level:number, group:number, se
 }
 
 export async function repairCurrentLeagueCalendar(idToken:string) {
-  const {uid}=await requireServerActor(idToken);
+  const {uid}=await requireAdminActor(idToken);
   const db=getAdminDb();
   const readState = async () => {
     const playerSnap=await db.collection('players_v14').doc(uid).get();
@@ -116,7 +116,7 @@ export async function repairCurrentLeagueCalendar(idToken:string) {
 }
 
 export async function repairAllLeagueCalendar(idToken:string) {
-  await requireServerActor(idToken);
+  await requireAdminActor(idToken);
   const db=getAdminDb();
   const readState = async () => {
     const configSnap=await db.collection('system_v1').doc('season_config').get();
