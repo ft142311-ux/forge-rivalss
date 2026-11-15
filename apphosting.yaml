@@ -1,16 +1,20 @@
-# Settings to manage and configure a Firebase App Hosting backend.
-# https://firebase.google.com/docs/app-hosting/configure
+# Firebase App Hosting backend configuration.
+# Keep sensitive values available only to server runtime, never the browser build.
 
 runConfig:
-  # Increase this value if you'd like to automatically spin up
-  # more instances in response to increased traffic.
   maxInstances: 1
 
-# Регистрация переменных окружения и секретов
-environmentVariables:
+env:
   - variable: SYSTEM_ACCOUNT_PASSWORD
     secret: SYSTEM_ACCOUNT_PASSWORD
+    availability:
+      - RUNTIME
   - variable: CRON_SECRET
     secret: CRON_SECRET
+    availability:
+      - RUNTIME
   - variable: NEXT_PUBLIC_FIREBASE_API_KEY
     value: AIzaSyDk-5jCdodI_Any76Jq2jiS3F_0DJBMnuo
+    availability:
+      - BUILD
+      - RUNTIME
