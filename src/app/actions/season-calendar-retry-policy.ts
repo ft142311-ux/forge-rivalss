@@ -6,12 +6,12 @@ export function resolvePreparedSlotRetry(
   existing: Record<string, any> | null,
   plannedTeamId: string,
 ) : PreparedSlotDecision {
-  const plannedId = String(plannedTeamId || '');
+  const plannedId = String(plannedTeamId || '').trim();
   if (!plannedId) return { ready: false, reason: 'PREPARED_SLOT_IDENTITY_CONFLICT' };
   if (!existing) return { ready: true, action: 'CREATE' };
 
   const status = String(existing.status || '').toUpperCase();
-  const occupantId = String(existing.occupantId || '');
+  const occupantId = String(existing.occupantId ?? '').trim();
   const isHumanPlan = !plannedId.startsWith('BOT_');
 
   if (status === 'OCCUPIED') {
@@ -21,6 +21,9 @@ export function resolvePreparedSlotRetry(
   }
 
   if (status === 'FREE') {
+    // FREE is valid only when no club occupies the slot. Never let a retry
+    // overwrite a contradictory occupantId while placing the planned club.
+    if (occupantId) return { ready: false, reason: 'PREPARED_SLOT_IDENTITY_CONFLICT' };
     return isHumanPlan
       ? { ready: true, action: 'PLACE_HUMAN' }
       : { ready: true, action: 'PRESERVE' };
