@@ -550,6 +550,21 @@ export async function prepareSeasonRollover(db: any, sourceSeason: number, targe
       };
     }
 
+    const candidatePlanValidation = validateSeasonArchiveRolloverPlan(archiveData, {
+      sourceSeason, targetSeason, ready: true, groups: placementResult.groups,
+    });
+    if (!candidatePlanValidation.valid) {
+      return {
+        ready: false,
+        reason: 'SEASON_ARCHIVE_RECOVERY_PLACEMENT_PLAN_MISMATCH',
+        sourceSeason,
+        targetSeason,
+        writesStarted: false,
+        planError: candidatePlanValidation.reason,
+        group: (candidatePlanValidation as any).group || null,
+      };
+    }
+
     const awards = await applySeasonAwards(db, sourceSeason, archiveData.standings || {}, lock);
     if (!awards.ready) {
       return { ready: false, reason: awards.reason, sourceSeason, targetSeason, writesStarted: true, awards };
@@ -1077,18 +1092,31 @@ export async function prepareSeasonRollover(db: any, sourceSeason: number, targe
     return { ready: false, reason: 'SEASON_ARCHIVE_VALIDATION_FAILED', sourceSeason, targetSeason, writesStarted: true, archiveMatches: preparedMatches.length, archiveErrors: archiveValidation.reasons };
   }
 
-  // Pay clubs and award the D1 champion before the rollover plan is marked ready.
+  // Derive and validate the complete placement plan before any season rewards are applied.
+  const placementResult = buildPromotionRelegationGroups(standings);
+  if (!placementResult.ready) {
+    return { ready: false, reason: placementResult.reason, group: placementResult.group, count: placementResult.count };
+  }
+  const candidatePlanValidation = validateSeasonArchiveRolloverPlan(preparedArchive, {
+    sourceSeason, targetSeason, ready: true, groups: placementResult.groups,
+  });
+  if (!candidatePlanValidation.valid) {
+    return {
+      ready: false,
+      reason: 'SEASON_ARCHIVE_PLACEMENT_PLAN_MISMATCH',
+      sourceSeason,
+      targetSeason,
+      writesStarted: false,
+      planError: candidatePlanValidation.reason,
+      group: (candidatePlanValidation as any).group || null,
+    };
+  }
+
   const awards = await applySeasonAwards(db, sourceSeason, standings, lock);
   if (!awards.ready) {
     return { ready: false, reason: awards.reason, sourceSeason, targetSeason, writesStarted: true, awards };
   }
 
-  // Apply the canonical pyramid movement using the pure, regression-tested
-  // placement function. A malformed group blocks the plan before it is persisted.
-  const placementResult = buildPromotionRelegationGroups(standings);
-  if (!placementResult.ready) {
-    return { ready: false, reason: placementResult.reason, group: placementResult.group, count: placementResult.count };
-  }
   const placements = placementResult.groups as Record<string, TeamRow[]>;
   await commitSeasonRolloverWrites(db, lock.ownerId, lock.token, [{
     ref: planRef,
