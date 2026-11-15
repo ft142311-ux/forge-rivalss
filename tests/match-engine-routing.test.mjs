@@ -80,7 +80,14 @@ test('client compatibility paths and AI adapter also use the shared engine', () 
 
 test('shared match simulation stays deterministic for a stable match id and snapshots', () => {
   const simulation = read('src/app/lib/match-simulation.ts');
-  assert.doesNotMatch(simulation, /Math\.random\s*\(|Date\.now\s*\(|randomUUID\s*\(/);
+  // Snapshot construction may evaluate time-sensitive eligibility (for example,
+  // player suspensions). Once snapshots are supplied, the simulation core must
+  // not read clocks or random sources.
+  const snapshotBuilderStart = simulation.indexOf('export function buildMatchTeamSnapshot(');
+  const botFactoryStart = simulation.indexOf('export function createDeterministicBotSquad(', snapshotBuilderStart);
+  assert.ok(snapshotBuilderStart >= 0 && botFactoryStart > snapshotBuilderStart, 'snapshot builder boundaries must remain explicit');
+  const deterministicCore = simulation.slice(0, snapshotBuilderStart) + simulation.slice(botFactoryStart);
+  assert.doesNotMatch(deterministicCore, /Math\.random\s*\(|Date\.now\s*\(|randomUUID\s*\(/);
   assert.match(simulation, /resolveMatchDraft\(teamA, teamB, input\.matchId\)/);
   assert.match(simulation, /\`\$\{input\.matchId\}:g\$\{i\+1\}\`/);
   assert.match(simulation, /hash32\(\`\$\{seed\}\|\$\{salt\}\`\)/);
