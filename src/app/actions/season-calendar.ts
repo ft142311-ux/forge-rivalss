@@ -1527,6 +1527,7 @@ export async function publishPreparedSeason() {
           planRef,
           validatePlan: (candidate: any) => validateRolloverPlan(candidate, planSourceSeason, targetSeason).valid &&
             isRolloverPlanPublicationReady(candidate) &&
+            (!recoveryMode || getRecoveryRolloverPlanSignature(candidate) === initial.preparedRolloverPlanSignature) &&
             isPlanBoundToValidatedSourceArchive(sourceArchiveValidation, candidate),
           publicationDeadlineMs: overdueRecoveryMode ? preparedStartMs : lifecycle!.publicationDeadlineAt.getTime(),
           activationAtMs: overdueRecoveryMode ? preparedStartMs : lifecycle!.activationAt.getTime(),
