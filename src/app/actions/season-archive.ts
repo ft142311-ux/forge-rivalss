@@ -64,6 +64,7 @@ export function validateSeasonArchiveSnapshot(archive: any, matches: any[]) {
   const standings = archive?.standings && typeof archive.standings === 'object' ? archive.standings : {};
   const expectedGroups = expectedRolloverGroups();
   if (Object.keys(standings).length !== expectedGroups.length) reasons.push('ARCHIVE_STANDINGS_GROUP_COUNT_INVALID');
+  const globalTeamIds = new Set<string>();
   for (const key of expectedGroups) {
     const fixtures = byGroup.get(key) || [];
     if (!hasCompleteCanonicalFixtureSet(fixtures, 8)) {
@@ -87,12 +88,17 @@ export function validateSeasonArchiveSnapshot(archive: any, matches: any[]) {
       const actual = computed[index];
       const id = String(saved.id || '');
       const rank = Number(saved.rank);
+      if (id && globalTeamIds.has(id)) {
+        reasons.push(`ARCHIVE_TEAM_ID_DUPLICATED:${key}:${id}`);
+        break;
+      }
       if (!id || ids.has(id) || !Number.isInteger(rank) || ranks.has(rank) || rank !== index + 1 || id !== String(actual.id) ||
           ['matchesPlayed', 'wins', 'draws', 'losses', 'points', 'diff'].some(field => Number(saved[field]) !== Number((actual as any)[field]))) {
         reasons.push(`ARCHIVE_STANDINGS_MISMATCH:${key}`);
         break;
       }
       ids.add(id);
+      globalTeamIds.add(id);
       ranks.add(rank);
     }
   }
