@@ -180,3 +180,31 @@ test('two complete competing publication attempts allow at most one commit and a
   assert.equal(await attempt('publisher-repeat'), false);
   assert.equal(db.read('season_config').activeSeasonNumber, 1);
 });
+
+
+test('recovery publication rejects a plan whose fingerprint differs from the prepared calendar config', async () => {
+  const planRef = { id: 'S2' };
+  const config = { ...preparedConfig(), preparedRolloverPlanSignature: 'prepared-plan-signature' };
+  const db = publicationDb({
+    lock: { ownerId: 'owner', token: 'token', expiresAtMs: Date.now() + 60_000 },
+    config,
+  });
+  db.replace('S2', { ready: true, sourceSeason: 1, targetSeason: 2, signature: 'replacement-plan-signature' });
+
+  await assert.rejects(
+    () => commitSeasonCalendarPublication(
+      db,
+      'owner',
+      'token',
+      {
+        ...expected,
+        planRef,
+        validatePlan: (plan, currentConfig) =>
+          plan.ready === true && plan.signature === currentConfig.preparedRolloverPlanSignature,
+      },
+      { ref: { id: 'season_config' }, data: { preparedPublished: true, phase: 'PUBLISHED' }, options: { merge: true } },
+    ),
+    /SEASON_CALENDAR_PUBLICATION_PLAN_CHANGED/,
+  );
+  assert.equal(db.writes(), 0);
+});
