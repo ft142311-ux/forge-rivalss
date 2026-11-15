@@ -122,3 +122,16 @@ test('split reward markers block completion and identify affected clubs without 
   assert.equal(result.totalCredits, 500);
   assert.deepEqual(calls, recipients.map(item => item.uid));
 });
+
+test('every production award settlement path blocks rollover plan publication on accounting conflicts', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const source = await readFile(new URL('../src/app/actions/season-rollover.ts', import.meta.url), 'utf8');
+  const calls = [...source.matchAll(/const awards = await applySeasonAwards\(db,[^;]+;/g)];
+  assert.equal(calls.length, 4, 'all archive creation and recovery paths must use the same award gate');
+
+  for (const call of calls) {
+    const tail = source.slice(call.index + call[0].length, call.index + call[0].length + 350);
+    assert.match(tail, /if \(!awards\.ready\)\s*\{\s*return \{ ready: false, reason: awards\.reason/);
+    assert.match(tail, /awards/);
+  }
+});
