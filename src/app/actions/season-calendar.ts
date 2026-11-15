@@ -1699,6 +1699,7 @@ export async function activatePublishedSeason() {
       preparedPublished: FieldValue.delete(),
       preparedPublishedAt: FieldValue.delete(),
       preparedRecoveryMode: FieldValue.delete(),
+      preparedRolloverPlanSignature: FieldValue.delete(),
       recoveryTargetSeason: FieldValue.delete(),
       retainedArchiveSeason: recoveryMode ? (plan.retainedArchiveSeason !== null && plan.retainedArchiveSeason !== undefined && Number.isSafeInteger(Number(plan.retainedArchiveSeason)) ? Number(plan.retainedArchiveSeason) : null) : sourceSeason,
       historyCleanupPending: true,
