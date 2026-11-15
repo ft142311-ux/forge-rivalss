@@ -814,3 +814,123 @@ test('retirement defers when one of the retiring club fixtures is processing and
   assert.equal(processingFixture.homeId, uid);
   assert.equal(processingFixture.isProcessing, true);
 });
+
+test('concurrent inactivity workers serialize on the durable lease and only one replaces the club', {
+  skip: !emulatorHost,
+}, async (t) => {
+  assert.match(emulatorHost, /^(127[.]0[.]0[.]1|localhost):[0-9]+$/);
+  const testProjectId = `demo-race-${randomUUID().slice(0, 8)}`;
+  const app = initializeApp({ projectId: testProjectId }, `inactive-race-test-${randomUUID()}`);
+  const db = getFirestore(app);
+  const uid = `inactive-race-${randomUUID()}`;
+  const season = 97;
+  const division = 2;
+  const group = 1;
+  const rank = 5;
+  const now = new Date('2026-11-14T12:00:00.000Z');
+  const lastSignInTime = new Date(now.getTime() - 91 * 24 * 60 * 60 * 1000).toISOString();
+  const playerRef = db.collection('players_v14').doc(uid);
+  const slotRef = db.collection('league_slots_v1').doc(`race_${uid}`);
+  const tableRef = db.collection('league_tables_v2').doc(`table_v140_S${season}_LALPHA_V${division}_G${group}`);
+  const configRef = db.collection('system_v1').doc('season_config');
+  const archiveRef = db.collection('inactive_clubs_v1').doc(uid);
+  const pendingRef = db.collection('inactive_club_retirements_v1').doc(uid);
+  const historyRef = db.collection('league_slot_history_v1').doc(`${slotRef.id}_G1`);
+  const botId = `BOT_ALPHA_L${division}_G${group}_R${rank}`;
+  const botRef = db.collection('players_v14').doc(botId);
+  const matchRefs = [];
+
+  t.after(async () => {
+    await playerRef.delete().catch(() => undefined);
+    await slotRef.delete().catch(() => undefined);
+    await tableRef.delete().catch(() => undefined);
+    await configRef.delete().catch(() => undefined);
+    await archiveRef.delete().catch(() => undefined);
+    await pendingRef.delete().catch(() => undefined);
+    await historyRef.delete().catch(() => undefined);
+    await botRef.delete().catch(() => undefined);
+    for (const matchRef of matchRefs) await matchRef.delete().catch(() => undefined);
+    await deleteApp(app);
+  });
+
+  await configRef.set({
+    activeSeasonNumber: season, phase: 'REGULAR_SEASON', worldReady: true,
+  });
+  await playerRef.set({
+    id: uid, clubName: 'Concurrent Retirement Club', selectedLeagueId: 'ALPHA',
+    leagueLevel: division, groupId: group, rank,
+  });
+  await slotRef.set({
+    season, leagueId: 'ALPHA', division, group, rank,
+    status: 'OCCUPIED', occupantId: uid, occupancyGeneration: 0,
+  });
+  await tableRef.set({
+    season, leagueId: 'ALPHA', level: division, group,
+    stats: {
+      [uid]: {
+        id: uid, name: 'Concurrent Retirement Club', rank,
+        matchesPlayed: 2, wins: 2, draws: 0, losses: 0, points: 6, diff: 3, isBot: false,
+      },
+    },
+  });
+  for (let i = 0; i < 56; i++) {
+    const matchRef = db.collection('matches_v2').doc(`race_${uid}_${i}`);
+    matchRefs.push(matchRef);
+    const involvesUser = i === 0;
+    await matchRef.set({
+      season, leagueId: 'ALPHA', level: division, groupId: group, version: 140,
+      homeId: involvesUser ? uid : `race_home_${i}`,
+      awayId: `race_away_${i}`,
+      homeName: involvesUser ? 'Concurrent Retirement Club' : `Home ${i}`,
+      awayName: `Away ${i}`,
+      startTime: new Date(now.getTime() + (i + 1) * 60 * 60 * 1000).toISOString(),
+      isFinished: false, status: 'scheduled', isProcessing: false,
+    });
+  }
+
+  let disabled = false;
+  let disableCalls = 0;
+  let revokeCalls = 0;
+  let signalDisableStarted;
+  let releaseDisable;
+  const disableStarted = new Promise((resolve) => { signalDisableStarted = resolve; });
+  const disableGate = new Promise((resolve) => { releaseDisable = resolve; });
+  const auth = {
+    getUser: async () => ({ uid, disabled, metadata: { lastSignInTime } }),
+    updateUser: async (_uid, patch) => {
+      if (patch.disabled === true) {
+        disableCalls++;
+        if (disableCalls === 1) {
+          signalDisableStarted();
+          await disableGate;
+        }
+      }
+      disabled = patch.disabled;
+      return { uid, disabled };
+    },
+    revokeRefreshTokens: async () => { revokeCalls++; },
+  };
+  const userRecord = { uid, disabled: false, metadata: { lastSignInTime } };
+
+  const firstWorker = retireInactiveClub({ db, auth, userRecord, now });
+  await disableStarted;
+  const secondWorker = await retireInactiveClub({ db, auth, userRecord, now });
+
+  assert.equal(secondWorker.action, 'SKIPPED_RETIREMENT_IN_PROGRESS');
+  assert.equal(disableCalls, 1, 'the second worker must not disable Auth again');
+  assert.equal(revokeCalls, 0, 'the second worker must not revoke tokens');
+
+  releaseDisable();
+  const firstResult = await firstWorker;
+  assert.equal(firstResult.action, 'RETIRED_AND_REPLACED');
+  assert.equal(disabled, true);
+  assert.equal(disableCalls, 1);
+  assert.equal(revokeCalls, 1);
+  assert.equal((await playerRef.get()).exists, false);
+  assert.equal((await archiveRef.get()).get('replacedByBotId'), botId);
+  assert.equal((await slotRef.get()).get('occupancyGeneration'), 1);
+  assert.equal((await historyRef.get()).exists, true);
+  assert.equal((await botRef.get()).get('isBot'), true);
+  assert.equal((await pendingRef.get()).exists, false);
+  assert.equal((await matchRefs[0].get()).get('homeId'), botId);
+});
