@@ -92,3 +92,33 @@ test('production rollover delegates per-recipient settlement to retry-stable acc
   assert.ok(source.includes('return { settled: true, prize, trophy: Boolean(isChampion || isPyramidWinner) }'));
   assert.ok(source.includes('return { settled: false, prize, trophy: false, missingProfile: true }'));
 });
+
+test('split reward markers block completion and identify affected clubs without retrying payment', async () => {
+  const recipients = [
+    { uid: 'club-consistent', prize: 500 },
+    { uid: 'club-award-only', prize: 250 },
+    { uid: 'club-ledger-only', prize: 100 },
+  ];
+  const states = {
+    'club-consistent': { award: true, ledger: true },
+    'club-award-only': { award: true, ledger: false },
+    'club-ledger-only': { award: false, ledger: true },
+  };
+  const calls = [];
+  const result = await applySeasonAwardRecipients(recipients, async recipient => {
+    calls.push(recipient.uid);
+    const state = states[recipient.uid];
+    if (state.award !== state.ledger) {
+      return { settled: false, prize: recipient.prize, accountingConflict: true };
+    }
+    return { settled: true, prize: recipient.prize };
+  });
+
+  assert.equal(result.ready, false);
+  assert.equal(result.reason, 'SEASON_AWARD_LEDGER_CONFLICT');
+  assert.equal(result.accountingConflictCount, 2);
+  assert.deepEqual(result.accountingConflictUids, ['club-award-only', 'club-ledger-only']);
+  assert.equal(result.rewardedClubs, 1);
+  assert.equal(result.totalCredits, 500);
+  assert.deepEqual(calls, recipients.map(item => item.uid));
+});
