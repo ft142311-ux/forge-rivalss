@@ -206,9 +206,22 @@ export function resolveRolloverPlanPruneIds(
 }
 
 
+/** Stable normalization used when comparing persisted recovery decisions. */
+function stablePlanValue(value: any): any {
+  if (value === undefined) return null;
+  if (Array.isArray(value)) return value.map(stablePlanValue);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.keys(value).sort().map(key => [key, stablePlanValue(value[key])]));
+  }
+  return value;
+}
+
 /**
- * Recovery retries may republish the 
-ns(existing: any, candidate: any) {
+ * Recovery retries may republish the same deterministic plan, but must never
+ * replace a previously persisted placement decision with a different one.
+ * Volatile metadata and post-publication award fields are intentionally ignored.
+ */
+export function compareRecoveryRolloverPlans(existing: any, candidate: any) {
   const sourceSeason = Number(candidate?.sourceSeason);
   const targetSeason = Number(candidate?.targetSeason);
   const existingValidation = validateRolloverPlan(existing, sourceSeason, targetSeason);
