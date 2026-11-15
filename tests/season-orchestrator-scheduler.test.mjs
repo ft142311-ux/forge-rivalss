@@ -6,6 +6,11 @@ import scheduler from '../functions/season-orchestrator-scheduler.js';
 const url = 'https://forge-rivals.example.com/api/cron/season-orchestrator';
 const secret = 'test-secret-value-that-is-long-enough-123456';
 
+test('scheduler request timeout stays below the Next.js route execution limit', () => {
+  assert.equal(scheduler.REQUEST_TIMEOUT_MS, 270_000);
+  assert.ok(scheduler.REQUEST_TIMEOUT_MS < 300_000);
+});
+
 test('scheduler invokes only the exact HTTPS season orchestrator route with bearer auth', async () => {
   let requestedUrl;
   let requestedOptions;
