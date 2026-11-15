@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { isSeasonOrchestratorSuccessful, cronResultStatus } from '../src/app/api/cron/cron-result.ts';
 import { resolve } from 'node:path';
 
 const source = readFileSync(
@@ -50,6 +51,15 @@ test('season orchestrator cron entry is bearer-protected and delegates to the li
   const unauthorized = route.indexOf("return new NextResponse('Unauthorized', { status: 401 })");
   const orchestrator = route.indexOf('runSeasonOrchestrator()');
   assert.ok(unauthorized >= 0 && orchestrator > unauthorized, 'unauthorized requests must be rejected before lifecycle writes can start');
-  assert.match(route, /'ACTIVATION_BLOCKED'/);
-  assert.match(route, /result\?\.activation\?\.success !== false/);
+  assert.match(route, /isSeasonOrchestratorSuccessful\(result\)/);
+});
+
+test('season cron reports blocked activation and incomplete lifecycle results as failures', () => {
+  assert.equal(isSeasonOrchestratorSuccessful({ action: 'SEASON_ACTIVATED', worldReady: true, activation: { success: true } }), true);
+  assert.equal(isSeasonOrchestratorSuccessful({ action: 'ACTIVATION_BLOCKED', worldReady: true, activation: { success: false } }), false);
+  assert.equal(isSeasonOrchestratorSuccessful({ action: 'SEASON_ACTIVATED', worldReady: true, activation: { success: false } }), false);
+  assert.equal(isSeasonOrchestratorSuccessful({ action: 'WAITING_FOR_SEASON_RESULTS', worldReady: true }), false);
+  assert.equal(isSeasonOrchestratorSuccessful({ action: 'SEASON_PUBLISHED_WAITING_ACTIVATION', worldReady: true }), true);
+  assert.equal(cronResultStatus({ success: true }), 200);
+  assert.equal(cronResultStatus({ success: false }), 409);
 });
