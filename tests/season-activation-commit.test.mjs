@@ -175,7 +175,7 @@ test('a crash immediately after activation commit leaves a durable cleanup retry
   assert.equal(db.read('season_config').historyCleanupPending, true);
 });
 
-import { compareRecoveryRolloverPlans, expectedRolloverGroups } from '../src/app/actions/season-rollover-plan.ts';
+import { compareRecoveryRolloverPlans, expectedRolloverGroups, getRecoveryRolloverPlanSignature } from '../src/app/actions/season-rollover-plan.ts';
 
 function recoveryPlan() {
   return {
@@ -202,12 +202,14 @@ test('recovery activation rejects a valid but replaced plan that differs from th
   replacementPlan.groups['D1-G1'][0].id = 'REPLACEMENT_TEAM';
   const config = preparedConfig();
   config.preparedRecoveryMode = true;
+  config.preparedRolloverPlanSignature = getRecoveryRolloverPlanSignature(preparedPlan);
   const db = activationDb({ config, plan: replacementPlan });
 
   const result = await commitSeasonActivation(db, configRef, planRef, expected({
     recoveryMode: true,
-    isPlanReady: plan => plan?.ready === true &&
-      compareRecoveryRolloverPlans(preparedPlan, plan).same,
+    isPlanReady: (plan, currentConfig) => plan?.ready === true &&
+      compareRecoveryRolloverPlans(preparedPlan, plan).same &&
+      getRecoveryRolloverPlanSignature(plan) === currentConfig.preparedRolloverPlanSignature,
   }));
 
   assert.deepEqual(result, { success: false, reason: 'ROLLOVER_PLAN_INVALID' });
