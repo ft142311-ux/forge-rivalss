@@ -1,5 +1,5 @@
 import { calculateGroupStandings, hasCompleteCanonicalFixtureSet } from './season-rollover-standings';
-import { buildCarryForwardGroups, expectedRolloverGroups, validateRolloverPlan } from './season-rollover-plan';
+import { buildCarryForwardGroups, buildPromotionRelegationGroups, expectedRolloverGroups, validateRolloverPlan } from './season-rollover-plan';
 import { isRolloverPlanPublicationReady } from './season-awards-policy';
 
 const MATCHES_PER_SEASON = 840;
@@ -106,12 +106,35 @@ export function validateSeasonArchiveSnapshot(archive: any, matches: any[]) {
   return { valid: reasons.length === 0, reasons: [...new Set(reasons)] };
 }
 
+/** Ensure a persisted rollover plan is the exact deterministic movement derived from its validated final archive. */
+export function validateSeasonArchiveRolloverPlan(archive: any, rolloverPlan: any) {
+  const sourceSeason = Number(archive?.sourceSeason);
+  const planValidation = validateRolloverPlan(rolloverPlan, sourceSeason, sourceSeason + 1);
+  if (!planValidation.valid) return planValidation;
+
+  const expected = buildPromotionRelegationGroups(archive?.standings || {});
+  if (!expected.ready) {
+    return { valid: false, reason: 'ARCHIVE_ROLLOVER_PLACEMENTS_INVALID', group: expected.group };
+  }
+  for (const key of expectedRolloverGroups()) {
+    const expectedRows = expected.groups[key] || [];
+    const savedRows = rolloverPlan?.groups?.[key] || [];
+    if (expectedRows.length !== 8 || savedRows.length !== 8 ||
+        expectedRows.some((row: any, index: number) =>
+          String(row?.id || '') !== String(savedRows[index]?.id || '') ||
+          Number(row?.rank) !== Number(savedRows[index]?.rank))) {
+      return { valid: false, reason: 'ARCHIVE_ROLLOVER_PLAN_MISMATCH', group: key };
+    }
+  }
+  return { valid: true };
+}
+
 /** An archive becomes visible only after the snapshot and its rollover plan are valid. */
 export function isSeasonArchiveReadyToComplete(archive: any, matches: any[], rolloverPlan: any): boolean {
   const snapshot = validateSeasonArchiveSnapshot(archive, matches);
   const sourceSeason = Number(archive?.sourceSeason);
   return snapshot.valid &&
-    validateRolloverPlan(rolloverPlan, sourceSeason, sourceSeason + 1).valid &&
+    validateSeasonArchiveRolloverPlan(archive, rolloverPlan).valid &&
     isRolloverPlanPublicationReady(rolloverPlan);
 }
 
