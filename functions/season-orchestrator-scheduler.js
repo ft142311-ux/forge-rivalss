@@ -51,6 +51,10 @@ async function invokeSeasonOrchestrator({
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
 
+  if (!response.ok) {
+    throw new Error(`SEASON_ORCHESTRATOR_HTTP_${response.status}`);
+  }
+
   let payload;
   try {
     payload = await response.json();
@@ -58,7 +62,7 @@ async function invokeSeasonOrchestrator({
     throw new Error('SEASON_ORCHESTRATOR_INVALID_RESPONSE');
   }
 
-  if (!response.ok || payload?.success !== true) {
+  if (payload?.success !== true) {
     throw new Error('SEASON_ORCHESTRATOR_UNSUCCESSFUL');
   }
 
