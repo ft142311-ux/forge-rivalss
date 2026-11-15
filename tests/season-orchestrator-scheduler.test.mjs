@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import scheduler from '../functions/season-orchestrator-scheduler.js';
 
 const url = 'https://forge-rivals.example.com/api/cron/season-orchestrator';
@@ -103,4 +104,19 @@ test('scheduler rejects non-JSON responses instead of recording a false success'
     }),
     /SEASON_ORCHESTRATOR_INVALID_RESPONSE/,
   );
+});
+
+
+test('Firebase scheduled function provisions a five-minute UTC trigger with the cron secret bound', () => {
+  const source = readFileSync(new URL('../functions/index.js', import.meta.url), 'utf8');
+  const start = source.indexOf('exports.runSeasonOrchestrator = functions');
+  assert.notEqual(start, -1);
+  const scheduledFunction = source.slice(start);
+  assert.match(scheduledFunction, /\.schedule\('every 5 minutes'\)/);
+  assert.match(scheduledFunction, /\.timeZone\('UTC'\)/);
+  assert.match(scheduledFunction, /secrets:\s*\['CRON_SECRET'\]/);
+  assert.match(scheduledFunction, /process\.env\.SEASON_ORCHESTRATOR_URL/);
+  assert.match(scheduledFunction, /process\.env\.CRON_SECRET/);
+  assert.match(scheduledFunction, /maxInstances:\s*1/);
+  assert.match(scheduledFunction, /invokeSeasonOrchestrator\(/);
 });
