@@ -44,9 +44,12 @@ See `functions/.env.example` for the non-secret URL setting.
 
 ## Staging deployment and verification
 
-Do not deploy this function to Production as part of code review. For the
-isolated staging Firebase project only, after confirming the project alias,
-App Hosting URL, and secret are correct, deploy the targeted function:
+Do not deploy this function to Production as part of code review. The repository's
+`.firebaserc` default project alias has not been verified as the staging target.
+Never rely on the implicit Firebase default or run a deploy without an explicit
+`--project` value. For the isolated staging Firebase project only, first verify its
+project ID in Firebase Console and confirm it is not the protected Production
+project. Then confirm the App Hosting URL and secret before deploying the targeted function:
 
 ```sh
 firebase deploy --only functions:runSeasonOrchestrator --project <STAGING_PROJECT_ID>
