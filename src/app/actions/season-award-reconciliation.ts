@@ -20,6 +20,7 @@ export type SeasonAwardRecipientResult = {
   prize: number;
   trophy?: boolean;
   missingProfile?: boolean;
+  accountingConflict?: boolean;
 };
 
 /**
@@ -35,11 +36,16 @@ export async function applySeasonAwardRecipients<T>(
   let totalCredits = 0;
   let trophiesAwarded = 0;
   const missingProfileUids: string[] = [];
+  const accountingConflictUids: string[] = [];
 
   for (const recipient of recipients) {
     const result = await applyRecipient(recipient);
+    const uid = String((recipient as any)?.uid || '');
+    if (result.accountingConflict) {
+      if (uid) accountingConflictUids.push(uid);
+      continue;
+    }
     if (result.missingProfile) {
-      const uid = String((recipient as any)?.uid || '');
       if (uid) missingProfileUids.push(uid);
       continue;
     }
@@ -51,8 +57,13 @@ export async function applySeasonAwardRecipients<T>(
   }
 
   return {
-    ready: missingProfileUids.length === 0,
-    ...(missingProfileUids.length ? {
+    ready: missingProfileUids.length === 0 && accountingConflictUids.length === 0,
+    ...(accountingConflictUids.length ? {
+      reason: 'SEASON_AWARD_LEDGER_CONFLICT',
+      accountingConflictCount: accountingConflictUids.length,
+      accountingConflictUids,
+    } : {}),
+    ...(!accountingConflictUids.length && missingProfileUids.length ? {
       reason: 'SEASON_AWARD_PLAYER_PROFILE_MISSING',
       missingProfileCount: missingProfileUids.length,
       missingProfileUids,
