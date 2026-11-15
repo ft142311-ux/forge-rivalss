@@ -191,3 +191,57 @@ test('clean emulator S1 may use its persisted 17-day boundary without changing p
     'PRODUCTION', 1, '2026-09-25T15:00:00.000Z', '2026-10-12T15:00:00.000Z',
   ), false);
 });
+
+
+test('CLEAN_S1_V1 uses the canonical Nov 9 to Nov 26 window and activates Season 2 only at its exact boundary', async () => {
+  const { resolveCanonicalSeasonDateWindow, deriveSeasonDatePlan } = await import('../src/app/actions/season-boundary.ts');
+  const cleanWindow = resolveCanonicalSeasonDateWindow({
+    worldGeneration: 'CLEAN_S1_V1',
+    activeSeasonNumber: 1,
+    persistedSeasonStart: new Date('2026-11-09T15:00:00.000Z'),
+    persistedNextSeasonStart: new Date('2026-11-26T15:00:00.000Z'),
+    canonicalSeasonStart: new Date('2026-09-21T15:00:00.000Z'),
+    canonicalNextSeasonStart: new Date('2026-10-08T15:00:00.000Z'),
+  });
+
+  assert.equal(cleanWindow.source, 'CLEAN_S1_V1');
+  assert.equal(cleanWindow.seasonStart.toISOString(), '2026-11-09T15:00:00.000Z');
+  assert.equal(cleanWindow.nextSeasonStart.toISOString(), '2026-11-26T15:00:00.000Z');
+
+  const beforeBoundary = deriveSeasonDatePlan(
+    1, cleanWindow.seasonStart, cleanWindow.nextSeasonStart,
+    new Date('2026-11-26T14:59:59.999Z'), 15,
+  );
+  assert.equal(beforeBoundary.expectedSeasonNumber, 1);
+
+  const atBoundary = deriveSeasonDatePlan(
+    1, cleanWindow.seasonStart, cleanWindow.nextSeasonStart,
+    new Date('2026-11-26T15:00:00.000Z'), 15,
+  );
+  assert.equal(atBoundary.expectedSeasonNumber, 2);
+  assert.equal(atBoundary.expectedSeasonStart.toISOString(), '2026-11-26T15:00:00.000Z');
+  assert.equal(atBoundary.expectedNextSeasonStart.toISOString(), '2026-12-11T15:00:00.000Z');
+  assert.deepEqual(atBoundary.completedSeasons, [1]);
+
+  const lifecycle = resolveSeasonLifecycleWindow({
+    seasonStart: cleanWindow.seasonStart,
+    nextSeasonStart: cleanWindow.nextSeasonStart,
+    now: new Date('2026-11-23T15:00:00.000Z'),
+  });
+  assert.equal(lifecycle.finalizationAt.toISOString(), '2026-11-23T13:00:00.000Z');
+  assert.equal(lifecycle.offseasonStartAt.toISOString(), '2026-11-23T15:00:00.000Z');
+  assert.equal(lifecycle.publicationDeadlineAt.toISOString(), '2026-11-24T13:00:00.000Z');
+  assert.equal(lifecycle.activationAt.toISOString(), '2026-11-26T15:00:00.000Z');
+
+  const productionWindow = resolveCanonicalSeasonDateWindow({
+    worldGeneration: 'PRODUCTION',
+    activeSeasonNumber: 1,
+    persistedSeasonStart: new Date('2026-11-09T15:00:00.000Z'),
+    persistedNextSeasonStart: new Date('2026-11-26T15:00:00.000Z'),
+    canonicalSeasonStart: new Date('2026-09-21T15:00:00.000Z'),
+    canonicalNextSeasonStart: new Date('2026-10-08T15:00:00.000Z'),
+  });
+  assert.equal(productionWindow.source, 'CANONICAL');
+  assert.equal(productionWindow.seasonStart.toISOString(), '2026-09-21T15:00:00.000Z');
+  assert.equal(productionWindow.nextSeasonStart.toISOString(), '2026-10-08T15:00:00.000Z');
+});
