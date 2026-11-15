@@ -471,6 +471,33 @@ test('post-activation cleanup writes stop after the durable cleanup marker is co
   assert.equal(db.read('late-archive'), undefined);
 });
 
+test('completed cleanup marker blocks both new prune intents and mixed archive deletion batches', async () => {
+  const db = mockCleanupDb(3);
+  const lease = await acquireSeasonCalendarBuildLock(db, 2, 3);
+  await db.runTransaction(async tx => {
+    tx.set(db.collection('system_v1').doc('season_config'), {
+      historyCleanupPending: false,
+      historyCleanupTargetSeason: 3,
+    });
+  });
+
+  const archiveRef = db.collection('cleanup').doc('late-prune-intent');
+  const childRef = db.collection('cleanup').doc('late-child-delete');
+  await assert.rejects(
+    () => commitSeasonHistoryCleanupWrites(
+      db,
+      lease.ownerId,
+      lease.token,
+      3,
+      [{ ref: archiveRef, data: { pruneStatus: 'PRUNING', pruneTargetSeason: 3 } }],
+      [childRef],
+    ),
+    /SEASON_HISTORY_CLEANUP_TARGET_CHANGED/,
+  );
+  assert.equal(db.read('late-prune-intent'), undefined);
+  assert.equal(db.read('late-child-delete'), undefined);
+});
+
 test('stale cleanup owner cannot delete after a replacement calendar lease is acquired', async () => {
   const db = mockCleanupDb(3);
   const nowMs = Date.now();
