@@ -934,3 +934,63 @@ test('concurrent inactivity workers serialize on the durable lease and only one 
   assert.equal((await pendingRef.get()).exists, false);
   assert.equal((await matchRefs[0].get()).get('homeId'), botId);
 });
+
+test('inactivity sweep paginates pending recoveries and Auth users without rescanning UIDs', {
+  skip: !emulatorHost,
+}, async (t) => {
+  assert.match(emulatorHost, /^(127[.]0[.]0[.]1|localhost):[0-9]+$/);
+  const testProjectId = `demo-pages-${randomUUID().slice(0, 8)}`;
+  const app = initializeApp({ projectId: testProjectId }, `inactive-pages-test-${randomUUID()}`);
+  const db = getFirestore(app);
+  const pendingUids = [
+    `pending-a-${randomUUID()}`,
+    `pending-b-${randomUUID()}`,
+    `pending-c-${randomUUID()}`,
+  ];
+  const now = new Date('2026-11-14T12:00:00.000Z');
+  const activeUsers = [
+    { uid: `active-a-${randomUUID()}`, metadata: { lastSignInTime: now.toISOString() } },
+    { uid: pendingUids[1], metadata: { lastSignInTime: now.toISOString() } },
+    { uid: `active-c-${randomUUID()}`, metadata: { lastSignInTime: now.toISOString() } },
+  ];
+  const pendingRefs = pendingUids.map((uid) => db.collection('inactive_club_retirements_v1').doc(uid));
+  t.after(async () => {
+    for (const pendingRef of pendingRefs) await pendingRef.delete().catch(() => undefined);
+    await deleteApp(app);
+  });
+
+  for (const pendingRef of pendingRefs) {
+    await pendingRef.set({ uid: pendingRef.id, phase: 'REVIEW_REQUIRED' });
+  }
+
+  const listUserCalls = [];
+  const auth = {
+    listUsers: async (requestedPageSize, pageToken) => {
+      listUserCalls.push({ requestedPageSize, pageToken: pageToken || null });
+      if (!pageToken) {
+        return { users: activeUsers.slice(0, 2), pageToken: 'auth-page-2' };
+      }
+      assert.equal(pageToken, 'auth-page-2');
+      return { users: activeUsers.slice(2), pageToken: undefined };
+    },
+  };
+
+  await assert.rejects(
+    runClubInactivitySweep({ db, auth, now, pageSize: 0 }),
+    (error) => error instanceof RangeError,
+  );
+  await assert.rejects(
+    runClubInactivitySweep({ db, auth, now, pageSize: 1001 }),
+    (error) => error instanceof RangeError,
+  );
+
+  const summary = await runClubInactivitySweep({ db, auth, now, pageSize: 2 });
+  assert.equal(summary.pendingOperationsScanned, 3);
+  assert.equal(summary.reviewRequired, 3);
+  assert.equal(summary.scannedAuthUsers, 3);
+  assert.equal(summary.inactiveCandidates, 0);
+  assert.deepEqual(listUserCalls, [
+    { requestedPageSize: 2, pageToken: null },
+    { requestedPageSize: 2, pageToken: 'auth-page-2' },
+  ]);
+});
