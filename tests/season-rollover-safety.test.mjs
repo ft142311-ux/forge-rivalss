@@ -424,7 +424,7 @@ test('live lease cannot be reacquired by ownerId alone, but calendar token permi
 function mockCleanupDb(activeSeasonNumber = 3) {
   const states = new Map([
     ['season_calendar_build_v1', null],
-    ['season_config', { activeSeasonNumber, worldReady: true }],
+    ['season_config', { activeSeasonNumber, worldReady: true, historyCleanupPending: true, historyCleanupTargetSeason: activeSeasonNumber }],
   ]);
   let queue = Promise.resolve();
   return {
@@ -452,6 +452,23 @@ test('post-activation cleanup writes are fenced by the live calendar lease and a
   await commitSeasonHistoryCleanupWrites(db, lease.ownerId, lease.token, 3, [{ ref, data: { marker: true } }]);
   assert.equal(db.read('archive').marker, true);
   await releaseSeasonCalendarBuildLock(db, lease.ownerId, lease.token);
+});
+
+test('post-activation cleanup writes stop after the durable cleanup marker is completed', async () => {
+  const db = mockCleanupDb(3);
+  const lease = await acquireSeasonCalendarBuildLock(db, 2, 3);
+  await db.runTransaction(async tx => {
+    tx.set(db.collection('system_v1').doc('season_config'), {
+      historyCleanupPending: false,
+      historyCleanupTargetSeason: 3,
+    });
+  });
+  const ref = db.collection('cleanup').doc('late-archive');
+  await assert.rejects(
+    () => commitSeasonHistoryCleanupWrites(db, lease.ownerId, lease.token, 3, [], [ref]),
+    /SEASON_HISTORY_CLEANUP_TARGET_CHANGED/,
+  );
+  assert.equal(db.read('late-archive'), undefined);
 });
 
 test('stale cleanup owner cannot delete after a replacement calendar lease is acquired', async () => {
