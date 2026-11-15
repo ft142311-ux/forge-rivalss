@@ -27,7 +27,11 @@ function resolveClubInactivity(lastSignInAt, nowMs = Date.now(), inactivityWindo
 
   // A verified in-app session may be newer than the Auth sign-in metadata.
   // It can postpone retirement, but it cannot replace missing Auth evidence.
-  const appActivityMs = toTimestampMs(lastActiveAt);
+  const hasAppActivity = lastActiveAt !== null && lastActiveAt !== undefined;
+  const appActivityMs = hasAppActivity ? toTimestampMs(lastActiveAt) : NaN;
+  if (hasAppActivity && !Number.isFinite(appActivityMs)) {
+    return { eligible: false, reason: 'LAST_ACTIVITY_UNKNOWN' };
+  }
   const lastSignInMs = Number.isFinite(appActivityMs)
     ? Math.max(authSignInMs, appActivityMs)
     : authSignInMs;
