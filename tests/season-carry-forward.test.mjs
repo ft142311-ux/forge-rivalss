@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { buildCarryForwardGroups } from '../src/app/actions/season-rollover-plan.ts';
 
 function sourceGroups() {
@@ -143,4 +144,12 @@ test('recovery plan comparison ignores object key order but preserves array orde
   assert.equal(compareRecoveryRolloverPlans(plan, reordered).same, true);
   const reorderedRows = { ...plan, groups: { ...plan.groups, 'D1-G1': [...plan.groups['D1-G1']].reverse() } };
   assert.equal(compareRecoveryRolloverPlans(plan, reorderedRows).same, false);
+});
+
+
+test('prepared recovery mode survives the final calendar readiness commit', () => {
+  const source = readFileSync(new URL('../src/app/actions/season-calendar.ts', import.meta.url), 'utf8');
+  const expected = "preparedRecoveryMode: directRecovery || rolloverPlan?.mode === 'recovery_carry_forward',";
+  assert.equal(source.split(expected).length - 1, 2,
+    'both the initial prepared-world commit and final readiness commit must preserve recovery mode');
 });
