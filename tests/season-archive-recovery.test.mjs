@@ -81,13 +81,13 @@ test('crash after plan publication resumes from the saved plan without recalcula
   const recovery = source.slice(recoveryStart, recoveryEnd);
 
   assert.ok(recovery.includes('validateSeasonArchiveSnapshot(archiveData, savedMatches)'));
-  assert.ok(recovery.includes('validateRolloverPlan(savedPlan, sourceSeason, targetSeason)'));
+  assert.ok(recovery.includes('validateSeasonArchiveRolloverPlan(archiveData, savedPlan)'));
   assert.ok(recovery.includes('applySeasonAwards(db, sourceSeason, archiveData.standings || {}, lock)'));
   assert.ok(recovery.includes('data: { awards }'));
   assert.ok(recovery.includes('resumedAfterPlanPublication: true'));
   assert.ok(!recovery.includes('buildPromotionRelegationGroups('), 'saved placements must not be recalculated');
   assert.ok(!recovery.includes('data: { groups:'), 'saved plan groups must never be overwritten');
-  assert.ok(recovery.indexOf('validateRolloverPlan') < recovery.indexOf('applySeasonAwards'));
+  assert.ok(recovery.indexOf('validateSeasonArchiveRolloverPlan') < recovery.indexOf('applySeasonAwards'));
   assert.ok(recovery.indexOf('applySeasonAwards') < recovery.indexOf('data: { awards }'));
   assert.ok(recovery.indexOf('isSeasonArchiveReadyToComplete') < recovery.indexOf("data: { status: 'completed'"));
 });
@@ -101,7 +101,7 @@ test('a published rollover plan is preserved while only award reconciliation met
   assert.match(planWrite, /data:\s*\{\s*awards\s*\}/);
   assert.doesNotMatch(planWrite, /groups\s*:/);
   assert.match(branch, /const savedPlan = planSnap\.data\(\) \|\| \{\}/);
-  assert.match(branch, /validateRolloverPlan\(savedPlan, sourceSeason, targetSeason\)/);
+  assert.match(branch, /validateSeasonArchiveRolloverPlan\(archiveData, savedPlan\)/);
 });
 
 
