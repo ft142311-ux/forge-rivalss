@@ -68,3 +68,18 @@ test('Firestore Timestamp-style activity values are accepted', () => {
   const result = resolveClubInactivity(NOW - INACTIVITY_WINDOW_MS * 2, NOW, undefined, timestamp);
   assert.equal(result.eligible, false);
 });
+
+test('fails closed when a present verified app-activity timestamp is malformed', () => {
+  const oldSignIn = NOW - INACTIVITY_WINDOW_MS * 2;
+  for (const value of ['', 'not-a-date', NaN, {}, { toDate: () => 'not-a-date' }]) {
+    const result = resolveClubInactivity(oldSignIn, NOW, undefined, value);
+    assert.equal(result.eligible, false);
+    assert.equal(result.reason, 'LAST_ACTIVITY_UNKNOWN');
+  }
+});
+
+test('allows retirement evaluation when app-activity record is absent', () => {
+  const oldSignIn = NOW - INACTIVITY_WINDOW_MS - 1;
+  assert.equal(resolveClubInactivity(oldSignIn, NOW, undefined, null).eligible, true);
+  assert.equal(resolveClubInactivity(oldSignIn, NOW, undefined, undefined).eligible, true);
+});
