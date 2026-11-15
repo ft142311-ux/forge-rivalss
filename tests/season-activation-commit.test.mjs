@@ -175,7 +175,8 @@ test('a crash immediately after activation commit leaves a durable cleanup retry
   assert.equal(db.read('season_config').historyCleanupPending, true);
 });
 
-import { compareRecoveryRolloverPlans, expectedRolloverGroups, getRecoveryRolloverPlanSignature } from '../src/app/actions/season-rollover-plan.ts';
+import { compareRecoveryRolloverPlans, expectedRolloverGroups } from '../src/app/actions/season-rollover-plan.ts';
+import { getRecoveryRolloverPlanSignature } from '../src/app/actions/season-rollover-plan-signature.ts';
 
 function recoveryPlan() {
   return {
