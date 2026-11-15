@@ -29,12 +29,18 @@ export function resolveSeasonAwardRecipientState(
   transactionExists: boolean,
   player: any,
   sourceSeason: number,
-): 'ALREADY_APPLIED' | 'PROFILE_MISSING' | 'READY' {
+): 'ALREADY_APPLIED' | 'PROFILE_MISSING' | 'ACCOUNTING_CONFLICT' | 'READY' {
   const season = Number(sourceSeason);
   if (!Number.isSafeInteger(season) || season < 1) return 'PROFILE_MISSING';
-  if (transactionExists === true) return 'ALREADY_APPLIED';
-  if (!playerExists) return 'PROFILE_MISSING';
-  if (isSeasonAwardAlreadyApplied(player, false, season)) return 'ALREADY_APPLIED';
+  if (!playerExists) return transactionExists === true ? 'ALREADY_APPLIED' : 'PROFILE_MISSING';
+
+  const awards = player?.seasonAwards && typeof player.seasonAwards === 'object'
+    ? player.seasonAwards
+    : {};
+  const hasAwardMarker = Boolean(awards[`S${season}`]);
+  const hasLedger = transactionExists === true;
+  if (hasAwardMarker && hasLedger) return 'ALREADY_APPLIED';
+  if (hasAwardMarker !== hasLedger) return 'ACCOUNTING_CONFLICT';
   return 'READY';
 }
 
