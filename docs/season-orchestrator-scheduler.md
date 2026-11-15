@@ -26,13 +26,18 @@ is unavailable, returns non-2xx, returns invalid JSON, or reports
    intended Firebase project (for example, `functions/.env.<project-id>`).
    Its value must be the exact public HTTPS URL of the deployed Next.js app followed
    by `/api/cron/season-orchestrator`, with no query string.
-2. Create or update the `CRON_SECRET` Secret Manager secret using
-   `firebase functions:secrets:set CRON_SECRET`.
-3. Ensure the hosting provider binds the same `CRON_SECRET` value to the Next.js
-   runtime. The repository's `apphosting.yaml` declares it for Firebase App Hosting;
-   if the staging deployment uses another host (for example Vercel), configure the
-   same secret in that host's environment settings instead.
-4. Keep the secret value out of Git, logs, command history, and client bundles.
+2. Create or update the `CRON_SECRET` Secret Manager secret once, using
+   `firebase functions:secrets:set CRON_SECRET`. Use the same project ID for
+   the scheduled Function and the App Hosting backend.
+3. If the secret was created through the Functions CLI, grant the App Hosting
+   backend access to that same Secret Manager secret:
+   `firebase apphosting:secrets:grantaccess CRON_SECRET --backend <BACKEND_ID> --location <REGION>`.
+   If the secret was created through the App Hosting CLI instead, verify that the
+   Functions deployment can bind it through `runWith({ secrets: ['CRON_SECRET'] })`.
+4. The repository's `apphosting.yaml` declares `CRON_SECRET` as a runtime-only
+   secret. If the staging deployment uses another host (for example Vercel),
+   configure the same secret in that host's server-side environment settings instead.
+5. Keep the secret value out of Git, logs, command history, and client bundles.
    Use a long random value (at least 32 characters).
 
 See `functions/.env.example` for the non-secret URL setting.
