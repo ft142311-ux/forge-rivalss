@@ -4,7 +4,7 @@ import { FieldValue } from 'firebase-admin/firestore';
 import { commitSeasonActivation } from './season-activation-commit';
 import { prepareSeasonRollover } from './season-rollover';
 import { acquireSeasonCalendarBuildLock, assertSeasonCalendarBuildLock, commitSeasonCalendarPublication, commitSeasonCalendarWrites, commitSeasonHistoryCleanupWrites, releaseSeasonCalendarBuildLock } from './season-rollover-lock';
-import { buildCarryForwardGroups, buildPromotionRelegationGroups, compareRecoveryRolloverPlans, resolveRecoveryPlacementSource, resolveRolloverPlanPruneIds, validateRolloverPlan } from './season-rollover-plan';
+import { buildCarryForwardGroups, buildPromotionRelegationGroups, compareRecoveryRolloverPlans, getRecoveryRolloverPlanSignature, resolveRecoveryPlacementSource, resolveRolloverPlanPruneIds, validateRolloverPlan } from './season-rollover-plan';
 import { resolveActivatedSkippedHistoryMarker, resolveActivatedSkippedSeasons, resolveHistoryCleanupCompletion, resolvePendingSkippedHistoryMarker, resolvePostActivationRetry, resolveSeasonCatchUpPolicy, type SeasonHistoryState } from './season-history-policy';
 import { evaluateCanonicalDocuments } from './season-canonical';
 import { resolvePreparedSlotRetry, shouldRepairExistingMatchCoordinates } from './season-calendar-retry-policy';
@@ -941,6 +941,9 @@ async function buildSeasonCalendar(lease: BuildLease, pristineFirstWorld = false
         preparedWorldReady: current.preparedWorldReady === true && Number(current.preparedSeasonNumber) === seasonNumber,
         preparedPublished: current.preparedPublished === true && Number(current.preparedSeasonNumber) === seasonNumber,
         preparedRecoveryMode: directRecovery || rolloverPlan?.mode === 'recovery_carry_forward',
+        preparedRolloverPlanSignature: rolloverPlan?.mode === 'recovery_carry_forward'
+          ? getRecoveryRolloverPlanSignature(rolloverPlan)
+          : FieldValue.delete(),
       } : {
         activeSeasonNumber: seasonNumber,
         phase: String(current.phase || 'REGULAR_SEASON'),
@@ -1131,6 +1134,9 @@ async function buildSeasonCalendar(lease: BuildLease, pristineFirstWorld = false
       preparedNextSeasonStart: nextSeasonStart.toISOString(),
       preparedCalendarRevision: CALENDAR_REVISION,
       preparedRecoveryMode: directRecovery || rolloverPlan?.mode === 'recovery_carry_forward',
+        preparedRolloverPlanSignature: rolloverPlan?.mode === 'recovery_carry_forward'
+          ? getRecoveryRolloverPlanSignature(rolloverPlan)
+          : FieldValue.delete(),
       preparedWorldReady: true,
       phase: current.preparedPublished === true && Number(current.preparedSeasonNumber) === seasonNumber ? 'PUBLISHED' : 'GENERATING_NEXT',
       updatedAt: FieldValue.serverTimestamp(),
@@ -1405,6 +1411,7 @@ export async function publishPreparedSeason() {
       preparedNextStartMs === preparedStartMs + TOTAL_CYCLE_DAYS * 24 * 60 * 60 * 1000 &&
       validateRolloverPlan(plan, recoveryMode ? targetSeason - 1 : sourceSeason, targetSeason).valid &&
       isRolloverPlanPublicationReady(plan) &&
+      (!recoveryMode || getRecoveryRolloverPlanSignature(plan) === initial.preparedRolloverPlanSignature) &&
       readiness.ready;
     if (!validPublishedState) {
       return {
@@ -1668,7 +1675,10 @@ export async function activatePublishedSeason() {
       // Recovery plans seed the target slots and standings. Re-reading a merely
       // valid plan is insufficient: it must still be the exact immutable plan
       // used by the calendar build, or activation could publish different teams.
-      const recoveryPlanUnchanged = !recoveryMode || compareRecoveryRolloverPlans(activationPlan, plan).same;
+      const recoveryPlanUnchanged = !recoveryMode || (
+        compareRecoveryRolloverPlans(activationPlan, plan).same &&
+        getRecoveryRolloverPlanSignature(plan) === current.preparedRolloverPlanSignature
+      );
       return validPlan && recoveryPlanUnchanged;
     },
     buildUpdate: (current, plan) => ({
