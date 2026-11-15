@@ -18,7 +18,7 @@ type PublicationExpectation = {
   calendarRevision: number;
   phase: string;
   planRef?: any;
-  validatePlan?: (plan: any) => boolean;
+  validatePlan?: (plan: any, config: any) => boolean;
   publicationDeadlineMs: number;
   activationAtMs: number;
   allowOverdueRecovery?: boolean;
@@ -219,7 +219,7 @@ export async function commitSeasonCalendarPublication(
     } else if (nowMs > expected.publicationDeadlineMs || nowMs >= expected.activationAtMs) {
       throw new Error('SEASON_CALENDAR_PUBLICATION_WINDOW_CLOSED');
     }
-    if (expected.planRef && (!planSnap?.exists || !expected.validatePlan?.(planSnap.data() || {}))) {
+    if (expected.planRef && (!planSnap?.exists || !expected.validatePlan?.(planSnap.data() || {}, config))) {
       throw new Error('SEASON_CALENDAR_PUBLICATION_PLAN_CHANGED');
     }
     tx.set(write.ref, write.data, write.options);
