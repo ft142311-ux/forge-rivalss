@@ -253,7 +253,9 @@ export async function commitSeasonHistoryCleanupWrites(
         isSeasonRolloverLockStale(currentLock, nowMs)) {
       throw new Error('SEASON_CALENDAR_BUILD_LOCK_LOST');
     }
-    if (!config || Number(config.activeSeasonNumber || 0) !== targetSeason || config.worldReady !== true) {
+    if (!config || Number(config.activeSeasonNumber || 0) !== targetSeason || config.worldReady !== true ||
+        config.historyCleanupPending !== true ||
+        Number(config.historyCleanupTargetSeason || 0) !== targetSeason) {
       throw new Error('SEASON_HISTORY_CLEANUP_TARGET_CHANGED');
     }
     tx.set(lockRef, { expiresAtMs: nowMs + SEASON_CALENDAR_BUILD_LOCK_TTL_MS, renewedAtMs: nowMs }, { merge: true });
