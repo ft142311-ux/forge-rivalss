@@ -156,13 +156,27 @@ async function payCupPrize(db: any, season: number, team: Team | null, place: 'c
   const ledgerRef = db.collection('economy_transactions').doc(`pyramid_cup_S${season}_${place}_${team.id}`);
   return db.runTransaction(async (tx: any) => {
     const [ledgerSnap, playerSnap] = await Promise.all([tx.get(ledgerRef), tx.get(playerRef)]);
-    if (ledgerSnap.exists || !playerSnap.exists) return 0;
+    const rewardType = place === 'champion' ? 'PYRAMID_CUP_CHAMPION_REWARD' : 'PYRAMID_CUP_FINALIST_REWARD';
+    const referenceId = `cup_s${season}_l${LEAGUE_ID}`;
+    if (ledgerSnap.exists) {
+      const receipt = ledgerSnap.data() || {};
+      const receiptMatchesReward =
+        receipt.userId === team.id &&
+        receipt.amount === amount &&
+        receipt.currency === 'credits' &&
+        receipt.type === rewardType &&
+        receipt.referenceId === referenceId &&
+        Number(receipt.division) === Number(team.level);
+      if (!receiptMatchesReward) throw new Error('CUP_PRIZE_RECEIPT_CONFLICT');
+      return 0;
+    }
+    if (!playerSnap.exists) return 0;
     const player = playerSnap.data() || {};
     const before = Math.max(0, Math.floor(Number(player.credits) || 0));
     tx.update(playerRef, { credits: before + amount, updatedAt: FieldValue.serverTimestamp() });
     tx.create(ledgerRef, {
-      userId: team.id, amount, currency: 'credits', type: place === 'champion' ? 'PYRAMID_CUP_CHAMPION_REWARD' : 'PYRAMID_CUP_FINALIST_REWARD',
-      referenceId: `cup_s${season}_l${LEAGUE_ID}`, description: `Pyramid Cup season ${season}: ${place}`,
+      userId: team.id, amount, currency: 'credits', type: rewardType,
+      referenceId, description: `Pyramid Cup season ${season}: ${place}`,
       division: team.level, balanceBefore: before, balanceAfter: before + amount, timestamp: FieldValue.serverTimestamp(),
     });
     return amount;
