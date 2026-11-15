@@ -195,6 +195,31 @@ test('archive pruning fails closed for malformed, partial, and unmarked recovere
   ], 4, null).reason, 'RECOVERED_ARCHIVE_SKIP_MARKER_MISSING');
 });
 
+test('recovered archive cannot be pruned from a pending activation marker', async () => {
+  const { resolveArchivePrunePlan } = await import('../src/app/actions/season-archive.ts');
+  const startingParticipants = Object.fromEntries(expectedRolloverGroups().map(group => [group,
+    Array.from({ length: 8 }, (_, i) => ({ id: `${group}-S2-${i + 1}`, rank: i + 1 }))]));
+  const recovered = {
+    sourceSeason: 2, leagueId: 'ALPHA', archiveVersion: 1, status: 'recovered',
+    recoveredAt: '2026-10-27T00:00:00.000Z', expectedMatches: 840, finishedMatches: 0,
+    unresolvedMatches: 840, groups: 15, teamCount: 120, standings: {}, startingParticipants,
+    recovery: { status: 'incomplete', finalStandingsAvailable: false, reason: 'SEASON_INCOMPLETE' },
+  };
+
+  const pending = resolveArchivePrunePlan([
+    { id: 'S2', archive: recovered, matches: [], historyStatus: 'SKIPPED_PENDING_ACTIVATION' },
+  ], 4, null);
+  assert.equal(pending.ready, false);
+  assert.equal(pending.reason, 'RECOVERED_ARCHIVE_SKIP_MARKER_MISSING');
+  assert.deepEqual(pending.pruneIds, []);
+
+  const finalized = resolveArchivePrunePlan([
+    { id: 'S2', archive: recovered, matches: [], historyStatus: 'SKIPPED' },
+  ], 4, null);
+  assert.equal(finalized.ready, true);
+  assert.deepEqual(finalized.pruneIds, ['S2']);
+});
+
 test('archive pruning resumes interrupted subcollection deletion only with a matching intent marker', async () => {
   const { resolveArchivePrunePlan } = await import('../src/app/actions/season-archive.ts');
   const first = makeSeasonArchive(1);
