@@ -994,3 +994,136 @@ test('inactivity sweep paginates pending recoveries and Auth users without resca
     { requestedPageSize: 2, pageToken: 'auth-page-2' },
   ]);
 });
+
+test('expired lease recovers a worker crash after Auth disable and token revocation but before Firestore commit', {
+  skip: !emulatorHost,
+}, async (t) => {
+  assert.match(emulatorHost, /^(127[.]0[.]0[.]1|localhost):[0-9]+$/);
+  const testProjectId = `demo-crash-${randomUUID().slice(0, 8)}`;
+  const app = initializeApp({ projectId: testProjectId }, `inactive-crash-test-${randomUUID()}`);
+  const db = getFirestore(app);
+  const uid = `inactive-crash-${randomUUID()}`;
+  const season = 96;
+  const division = 2;
+  const group = 1;
+  const rank = 6;
+  const now = new Date('2026-11-14T12:00:00.000Z');
+  const lastSignInTime = new Date(now.getTime() - 91 * 24 * 60 * 60 * 1000).toISOString();
+  const playerRef = db.collection('players_v14').doc(uid);
+  const slotRef = db.collection('league_slots_v1').doc(`crash_${uid}`);
+  const tableRef = db.collection('league_tables_v2').doc(`table_v140_S${season}_LALPHA_V${division}_G${group}`);
+  const configRef = db.collection('system_v1').doc('season_config');
+  const pendingRef = db.collection('inactive_club_retirements_v1').doc(uid);
+  const archiveRef = db.collection('inactive_clubs_v1').doc(uid);
+  const historyRef = db.collection('league_slot_history_v1').doc(`${slotRef.id}_G1`);
+  const botId = `BOT_ALPHA_L${division}_G${group}_R${rank}`;
+  const botRef = db.collection('players_v14').doc(botId);
+  const matchRefs = [];
+
+  t.after(async () => {
+    await playerRef.delete().catch(() => undefined);
+    await slotRef.delete().catch(() => undefined);
+    await tableRef.delete().catch(() => undefined);
+    await configRef.delete().catch(() => undefined);
+    await pendingRef.delete().catch(() => undefined);
+    await archiveRef.delete().catch(() => undefined);
+    await historyRef.delete().catch(() => undefined);
+    await botRef.delete().catch(() => undefined);
+    for (const matchRef of matchRefs) await matchRef.delete().catch(() => undefined);
+    await deleteApp(app);
+  });
+
+  await configRef.set({ activeSeasonNumber: season, phase: 'REGULAR_SEASON', worldReady: true });
+  await playerRef.set({
+    id: uid, clubName: 'Crash Recovery Club', selectedLeagueId: 'ALPHA',
+    leagueLevel: division, groupId: group, rank,
+  });
+  await slotRef.set({
+    season, leagueId: 'ALPHA', division, group, rank,
+    status: 'OCCUPIED', occupantId: uid, occupancyGeneration: 0,
+  });
+  await tableRef.set({
+    season, leagueId: 'ALPHA', level: division, group,
+    stats: {
+      [uid]: {
+        id: uid, name: 'Crash Recovery Club', rank,
+        matchesPlayed: 0, wins: 0, draws: 0, losses: 0, points: 0, diff: 0, isBot: false,
+      },
+    },
+  });
+  for (let i = 0; i < 56; i++) {
+    const matchRef = db.collection('matches_v2').doc(`crash_${uid}_${i}`);
+    matchRefs.push(matchRef);
+    await matchRef.set({
+      season, leagueId: 'ALPHA', level: division, groupId: group, version: 140,
+      homeId: i === 0 ? uid : `crash_home_${i}`,
+      awayId: `crash_away_${i}`,
+      homeName: i === 0 ? 'Crash Recovery Club' : `Home ${i}`,
+      awayName: `Away ${i}`,
+      startTime: new Date(now.getTime() + (i + 1) * 60 * 60 * 1000).toISOString(),
+      isFinished: false, status: 'scheduled', isProcessing: false,
+    });
+  }
+
+  let disabled = false;
+  let disableCalls = 0;
+  let revokeCalls = 0;
+  const auth = {
+    getUser: async () => ({ uid, disabled, metadata: { lastSignInTime } }),
+    updateUser: async (_uid, patch) => {
+      disabled = patch.disabled;
+      if (patch.disabled === true) disableCalls++;
+      return { uid, disabled };
+    },
+    revokeRefreshTokens: async () => { revokeCalls++; },
+  };
+
+  let transactionCalls = 0;
+  const crashingDb = {
+    collection: db.collection.bind(db),
+    runTransaction: async (...args) => {
+      transactionCalls++;
+      if (transactionCalls === 2) {
+        throw new Error('SIMULATED_WORKER_CRASH_BEFORE_FIRESTORE_COMMIT');
+      }
+      return db.runTransaction(...args);
+    },
+  };
+
+  await assert.rejects(
+    retireInactiveClub({
+      db: crashingDb, auth,
+      userRecord: { uid, disabled: false, metadata: { lastSignInTime } },
+      now,
+    }),
+    /SIMULATED_WORKER_CRASH_BEFORE_FIRESTORE_COMMIT/,
+  );
+
+  assert.equal(transactionCalls, 2);
+  assert.equal(disabled, true, 'Auth must already be disabled at the simulated crash point');
+  assert.equal(disableCalls, 1);
+  assert.equal(revokeCalls, 1);
+  assert.equal((await playerRef.get()).exists, true, 'Firestore club ownership must remain unchanged before commit');
+  assert.equal((await slotRef.get()).get('occupantId'), uid);
+  assert.equal((await pendingRef.get()).get('phase'), 'PENDING_AUTH_DISABLE');
+  assert.ok((await pendingRef.get()).get('leaseUntil').toDate() > now);
+
+  const recoveryNow = new Date(now.getTime() + 11 * 60 * 1000);
+  const recovered = await retireInactiveClub({
+    db, auth,
+    userRecord: { uid, disabled: true, metadata: { lastSignInTime } },
+    now: recoveryNow,
+  });
+
+  assert.equal(recovered.action, 'RETIRED_AND_REPLACED');
+  assert.equal(disabled, true);
+  assert.equal((await playerRef.get()).exists, false);
+  assert.equal((await archiveRef.get()).get('replacedByBotId'), botId);
+  assert.equal((await slotRef.get()).get('status'), 'FREE');
+  assert.equal((await slotRef.get()).get('occupancyGeneration'), 1);
+  assert.equal((await historyRef.get()).exists, true);
+  assert.equal((await botRef.get()).get('isBot'), true);
+  assert.equal((await pendingRef.get()).exists, false);
+  assert.equal((await matchRefs[0].get()).get('homeId'), botId);
+  assert.equal(revokeCalls, 2, 'recovery safely repeats token revocation before completing the retirement');
+});
