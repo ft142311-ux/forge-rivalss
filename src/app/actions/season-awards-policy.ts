@@ -1,7 +1,8 @@
 /**
  * Idempotency gate for season rewards.
- * The player marker and economy ledger are written in the same transaction;
- * either one is sufficient to prevent a retry from crediting the club twice.
+ * The player marker and economy ledger are written in the same transaction.
+ * Both must agree before a recipient is treated as already settled; a split
+ * marker is an accounting conflict and must block rollover completion.
  */
 export function isSeasonAwardAlreadyApplied(
   player: any,
