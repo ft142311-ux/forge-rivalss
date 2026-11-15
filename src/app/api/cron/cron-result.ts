@@ -1,14 +1,27 @@
+const ALLOWED_ACTIONS = new Set([
+  'SEASON_ACTIVATED',
+  'SEASON_PUBLISHED_WAITING_ACTIVATION',
+  'START_FINALIZATION',
+  'RESOLVE_MATCHES',
+  'GENERATE_NEXT',
+  'IDLE',
+]);
+
+const BLOCKED_ACTIONS = new Set([
+  'ERROR',
+  'WORLD_NOT_READY',
+  'WORLD_BUILDING',
+  'WAITING_FOR_SEASON_RESULTS',
+  'ACTIVATION_BLOCKED',
+  'PUBLICATION_BLOCKED',
+]);
+
 export function isSeasonOrchestratorSuccessful(result: any) {
-  const blockedActions = new Set([
-    'ERROR',
-    'WORLD_NOT_READY',
-    'WORLD_BUILDING',
-    'WAITING_FOR_SEASON_RESULTS',
-    'ACTIVATION_BLOCKED',
-  ]);
+  const action = String(result?.action || '');
   return result?.success !== false
-    && !blockedActions.has(String(result?.action || ''))
-    && result?.worldReady !== false
+    && ALLOWED_ACTIONS.has(action)
+    && !BLOCKED_ACTIONS.has(action)
+    && result?.worldReady === true
     && result?.matchSettlement?.success !== false
     && result?.tournaments?.success !== false
     && result?.publication?.success !== false
