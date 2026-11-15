@@ -43,7 +43,7 @@ function makeHistory(match: any, userId: string, profile: any) {
  * The calendar is never regenerated here. The user's rank is simply bound
  * to the existing 56 matches, and the table/history are rebuilt from facts.
  */
-export async function repairRegisteredClubState(userId: string) {
+async function repairRegisteredClubState(userId: string) {
   const db = getAdminDb();
   const playerRef = db.collection('players_v14').doc(userId);
   const playerSnap = await playerRef.get();
