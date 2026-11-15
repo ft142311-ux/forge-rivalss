@@ -3,7 +3,7 @@
 import { FieldValue } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { TEAMS_PER_GROUP, TOTAL_GROUPS, getBotId, getBotName, getTableId, generateSeasonCalendar } from '@/app/lib/leagues-data';
-import { requireAdminActor } from '@/lib/server-auth';
+import { requireAdminActor, requireServerActor } from '@/lib/server-auth';
 import { acquireSeasonCalendarBuildLock, commitSeasonCalendarWrites, releaseSeasonCalendarBuildLock } from './season-rollover-lock';
 import { inspectGroupReconciliation } from './season-rollover-standings';
 import { runTwoPhaseSeasonOrchestration } from './season-orchestration';
@@ -81,7 +81,7 @@ async function repairGroup(db:any, season:number, level:number, group:number, se
 }
 
 export async function repairCurrentLeagueCalendar(idToken:string) {
-  const {uid}=await requireAdminActor(idToken);
+  const {uid}=await requireServerActor(idToken);
   const db=getAdminDb();
   const readState = async () => {
     const playerSnap=await db.collection('players_v14').doc(uid).get();
@@ -109,7 +109,6 @@ export async function repairCurrentLeagueCalendar(idToken:string) {
     commit: async (state, lock) => {
       const lease={commit:(writes:any[])=>commitSeasonCalendarWrites(db,lock.ownerId,lock.token,writes)};
       const result=await repairGroup(db,state.season,state.level,state.group,state.seasonStart,lease);
-      await lease.commit([{ref:db.collection('system_v1').doc('season_config'),data:{activeSeasonNumber:state.season,phase:'REGULAR_SEASON',worldReady:true,seasonStart:state.seasonStart.toISOString(),nextSeasonStart:new Date(state.seasonStart.getTime()+17*86400000).toISOString(),calendarRevision:CALENDAR_REVISION,updatedAt:FieldValue.serverTimestamp()},options:{merge:true}}]);
       return {success:true,season:state.season,...result};
     },
   });
