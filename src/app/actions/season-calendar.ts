@@ -1095,7 +1095,7 @@ async function buildSeasonCalendar(lease: BuildLease, pristineFirstWorld = false
       preparedSeasonStart: seasonStart.toISOString(),
       preparedNextSeasonStart: nextSeasonStart.toISOString(),
       preparedCalendarRevision: CALENDAR_REVISION,
-      preparedRecoveryMode: directRecovery,
+      preparedRecoveryMode: directRecovery || rolloverPlan?.mode === 'recovery_carry_forward',
       preparedWorldReady: true,
       phase: current.preparedPublished === true && Number(current.preparedSeasonNumber) === seasonNumber ? 'PUBLISHED' : 'GENERATING_NEXT',
       updatedAt: FieldValue.serverTimestamp(),
