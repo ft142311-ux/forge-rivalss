@@ -734,6 +734,7 @@ test('retirement defers when one of the retiring club fixtures is processing and
   const playerRef = db.collection('players_v14').doc(uid);
   const slotRef = db.collection('league_slots_v1').doc(`defer_${uid}`);
   const tableRef = db.collection('league_tables_v2').doc(`table_v140_S${season}_LALPHA_V${division}_G${group}`);
+  const configRef = db.collection('system_v1').doc('season_config');
   const pendingRef = db.collection('inactive_club_retirements_v1').doc(uid);
   const matchRefs = [];
 
@@ -741,6 +742,7 @@ test('retirement defers when one of the retiring club fixtures is processing and
     await playerRef.delete().catch(() => undefined);
     await slotRef.delete().catch(() => undefined);
     await tableRef.delete().catch(() => undefined);
+    await configRef.delete().catch(() => undefined);
     await pendingRef.delete().catch(() => undefined);
     for (const matchRef of matchRefs) await matchRef.delete().catch(() => undefined);
     await deleteApp(app);
