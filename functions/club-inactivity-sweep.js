@@ -759,6 +759,10 @@ async function retireInactiveClub({ db, auth, userRecord, now = new Date(), cloc
 }
 
 async function runClubInactivitySweep({ db, auth, now = new Date(), pageSize = BATCH_SIZE }) {
+  if (!Number.isInteger(pageSize) || pageSize < 1 || pageSize > BATCH_SIZE) {
+    throw new RangeError(`pageSize must be an integer between 1 and ${BATCH_SIZE}`);
+  }
+
   const summary = {
     scannedAuthUsers: 0,
     pendingOperationsScanned: 0,
