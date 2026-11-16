@@ -524,7 +524,10 @@ test('inactive club replacement is atomic and preserves completed match results'
   const result = await retireInactiveClub({ db, auth, userRecord, now: new Date(recoveryNow.getTime() + 60 * 1000) });
   assert.equal(result.action, 'RETIRED_AND_REPLACED');
   assert.equal(disabled, true);
-  assert.equal(revokedTokenCalls, 2);
+  // Each of the two market-deferral attempts and the final retirement attempt
+  // revokes refresh tokens after claiming the Auth fence; deferred attempts
+  // then restore account access without changing club ownership.
+  assert.equal(revokedTokenCalls, 3);
   assert.equal((await playerRef.get()).exists, false);
   assert.equal((await pendingRef.get()).exists, false);
   const archivedClub = (await archiveRef.get()).data();
