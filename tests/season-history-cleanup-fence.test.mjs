@@ -4,8 +4,8 @@ import { commitSeasonHistoryCleanupWrites } from '../src/app/actions/season-roll
 
 function makeDb({ lock, config } = {}) {
   const state = new Map([
-    ['season_calendar_build_v1', lock],
-    ['season_config', config],
+    ['system_v1/season_calendar_build_v1', lock],
+    ['system_v1/season_config', config],
   ]);
   let transactionCount = 0;
   return {
