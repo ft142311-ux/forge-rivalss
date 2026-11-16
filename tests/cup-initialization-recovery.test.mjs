@@ -34,7 +34,7 @@ test('interrupted cup initialization recreates only missing fixtures and preserv
 test('Pyramid Cup cycle repairs fixtures before attempting to resolve the current round', () => {
   const start = source.indexOf('export async function runPyramidCupCycle');
   const cycle = source.slice(start);
-  const repair = cycle.indexOf('repairCurrentRoundFixtures(db, cup)');
+  const repair = cycle.indexOf('repairCurrentRoundFixtures(db, cup, activeSeasonStart)');
   const round = cycle.indexOf('const round = Number(cup.data.currentRound || 1)');
   assert.ok(repair >= 0 && round > repair);
 });
