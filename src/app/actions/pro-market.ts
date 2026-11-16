@@ -5,6 +5,7 @@ import { getAdminDb } from '@/lib/firebase-admin';
 import { requireServerActor } from '@/lib/server-auth';
 import { generateVtunePlayer } from '@/app/lib/moba-data';
 import { getMoscowDateString, getMoscowTime } from '@/app/lib/time-utils';
+import { canPruneUnbidSystemAuctionLot, resolvePreviousAuctionBidEscrow } from '@/app/lib/auction-settlement';
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error || 'PRO_MARKET_FAILED');
@@ -39,8 +40,17 @@ export async function ensureProMarketDailyDropAction(idToken: string) {
         tx.get(lotRef),
       ]);
 
+      let removed = 0;
+      let retainedWithBids = 0;
       for (const oldLot of systemLots.docs) {
-        if (oldLot.id !== lotId) tx.delete(oldLot.ref);
+        if (oldLot.id === lotId) continue;
+        if (canPruneUnbidSystemAuctionLot(oldLot.data() || {})) {
+          tx.delete(oldLot.ref);
+          removed++;
+        } else {
+          // A bid/escrow is still outstanding; the shared expiry sweep owns settlement.
+          retainedWithBids++;
+        }
       }
 
       if (!currentLot.exists) {
@@ -63,7 +73,7 @@ export async function ensureProMarketDailyDropAction(idToken: string) {
         });
       }
 
-      return { created: !currentLot.exists, removed: systemLots.docs.filter((doc) => doc.id !== lotId).length };
+      return { created: !currentLot.exists, removed, retainedWithBids };
     });
 
     return { success: true, lotId, ...result };
@@ -111,11 +121,14 @@ async function placeSpecialMarketBid(
     const currentBid = money(lot.currentBid || lot.startingPrice || 0);
     if (bid <= currentBid) throw new Error('BID_TOO_LOW');
     const currency = marketKind === 'pro' ? 'crystals' : 'credits';
-    const previousBidderId = String(lot.highestBidderId || '');
-    const previousEscrow = lot.escrowCurrency === currency ? money(lot.escrowedAmount) : 0;
-    if (previousEscrow > 0 && (!previousBidderId || previousEscrow !== currentBid)) {
-      throw new Error('AUCTION_ESCROW_MISMATCH');
-    }
+    const previousBidderId = String(lot.highestBidderId || lot.highestBidderUid || '');
+    const previousEscrow = resolvePreviousAuctionBidEscrow({
+      currency,
+      escrowCurrency: lot.escrowCurrency,
+      escrowedAmount: lot.escrowedAmount,
+      currentBid,
+      previousBidderId,
+    });
     const sameEscrowedBidder = previousBidderId === uid && previousEscrow === currentBid;
     const chargeAmount = sameEscrowedBidder ? bid - currentBid : bid;
     const bidderBalance = money(bidder[currency]);
