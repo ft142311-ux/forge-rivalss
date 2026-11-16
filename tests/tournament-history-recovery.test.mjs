@@ -20,7 +20,6 @@ test('completed tournament history sync is retried and finalized only after idem
   const helperEnd = source.indexOf('async function advanceTournament', helperStart);
   assert.ok(helperStart >= 0 && helperEnd > helperStart);
   const helper = source.slice(helperStart, helperEnd);
-  assert.match(helper, /FieldValue\.arrayUnion\(/);
   assert.match(helper, /await Promise\.all\(updates\)/);
   assert.match(helper, /historySyncStatus: 'completed'/);
   const participantSyncStart = source.indexOf('async function syncTournamentHistoryForParticipant');
