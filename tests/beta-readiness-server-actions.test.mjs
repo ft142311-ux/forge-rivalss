@@ -15,9 +15,9 @@ const settlement = read('../src/app/actions/autonomous-cycle.ts');
 
 function blockBetween(source, start, end) {
   const from = source.indexOf(start);
-  assert.notEqual(from, -1, \`missing block start: \${start}\`);
+  assert.notEqual(from, -1, 'missing block start: ' + start);
   const to = source.indexOf(end, from);
-  assert.notEqual(to, -1, \`missing block end: \${end}\`);
+  assert.notEqual(to, -1, 'missing block end: ' + end);
   return source.slice(from, to);
 }
 
@@ -63,7 +63,7 @@ test('auction settlement supports system PRO lots and youth player arrays', () =
 
 test('legacy tournament routes redirect to the canonical daily tournament catalog', () => {
   for (const route of ['iron-kettle', 'iron-brick', 'iron-globe']) {
-    const source = read(\`../src/app/tournaments/\${route}/page.tsx\`);
-    assert.match(source, /redirect\('\\/tournaments\\/open'\\)/);
+    const source = read('../src/app/tournaments/' + route + '/page.tsx');
+    assert.match(source, /redirect\('\/tournaments\/open'\)/);
   }
 });
