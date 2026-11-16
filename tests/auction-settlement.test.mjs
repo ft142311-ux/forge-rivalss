@@ -55,6 +55,15 @@ test('auction escrow requires an exact amount and matching currency', () => {
   }), /AUCTION_ESCROW_AMOUNT_MISMATCH/);
 });
 
+test('malformed recorded escrow fails closed instead of being treated as an empty legacy escrow', () => {
+  for (const escrowedAmount of ['corrupt', -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+    assert.throws(() => resolveAuctionEscrow({
+      currency: 'credits', escrowCurrency: 'credits', escrowedAmount,
+      price: 500, bidderId: 'buyer-1', buyerExists: true,
+    }), /AUCTION_ESCROW_AMOUNT_INVALID/);
+  }
+});
+
 test('auction escrow cannot be discarded when the winning bidder is unavailable', () => {
   assert.throws(() => resolveAuctionEscrow({
     currency: 'credits', escrowCurrency: 'credits', escrowedAmount: 500,
