@@ -1,6 +1,6 @@
 'use server';
 
-import { FieldValue, type DocumentReference } from 'firebase-admin/firestore';
+import { FieldValue } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { requireServerActor } from '@/lib/server-auth';
 import { generateVtunePlayer } from '@/app/lib/moba-data';
