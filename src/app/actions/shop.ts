@@ -133,7 +133,14 @@ export async function purchaseDiamondPackAction(idToken: string, amount: number,
     if (!isEmulator) {
       return await db.runTransaction(async (t) => {
         const receiptSnap = await t.get(receiptRef);
-        if (receiptSnap.exists) return receiptSnap.data()?.result;
+        if (receiptSnap.exists) {
+          const receipt = receiptSnap.data() || {};
+          if (receipt.userId !== uid || receipt.operation !== 'DIAMOND_PACK_ORDER' ||
+              receipt.productId !== pack.productId || Number(receipt.amount) !== Number(amount)) {
+            throw new Error('IDEMPOTENCY_KEY_REUSED');
+          }
+          return receipt.result;
+        }
         const orderRef = db.collection('shop_orders').doc();
         const result = { success: true, pending: true, orderId: orderRef.id };
         t.create(orderRef, {
@@ -147,6 +154,8 @@ export async function purchaseDiamondPackAction(idToken: string, amount: number,
         t.create(receiptRef, {
           userId: uid,
           operation: 'DIAMOND_PACK_ORDER',
+          productId: pack.productId,
+          amount: Number(amount),
           result,
           createdAt: FieldValue.serverTimestamp(),
         });
@@ -156,7 +165,14 @@ export async function purchaseDiamondPackAction(idToken: string, amount: number,
 
     return await db.runTransaction(async (t) => {
       const receiptSnap = await t.get(receiptRef);
-      if (receiptSnap.exists) return receiptSnap.data()?.result;
+      if (receiptSnap.exists) {
+        const receipt = receiptSnap.data() || {};
+        if (receipt.userId !== uid || receipt.operation !== 'DIAMOND_PACK_TEST_PURCHASE' ||
+            receipt.productId !== pack.productId || Number(receipt.amount) !== Number(amount)) {
+          throw new Error('IDEMPOTENCY_KEY_REUSED');
+        }
+        return receipt.result;
+      }
       const ref = db.collection('players_v14').doc(uid);
       const snap = await t.get(ref);
       if (!snap.exists) throw new Error('PLAYER_NOT_FOUND');
@@ -180,6 +196,8 @@ export async function purchaseDiamondPackAction(idToken: string, amount: number,
       t.create(receiptRef, {
         userId: uid,
         operation: 'DIAMOND_PACK_TEST_PURCHASE',
+        productId: pack.productId,
+        amount: Number(amount),
         result,
         createdAt: FieldValue.serverTimestamp(),
       });
@@ -202,7 +220,14 @@ export async function exchangeCrystalsForCreditsAction(idToken: string, crystals
     const receiptRef = db.collection('shop_operation_receipts').doc(`${uid}_exchange_${normalizedOperationId}`);
     return await db.runTransaction(async (t) => {
       const receiptSnap = await t.get(receiptRef);
-      if (receiptSnap.exists) return receiptSnap.data()?.result;
+      if (receiptSnap.exists) {
+        const receipt = receiptSnap.data() || {};
+        if (receipt.userId !== uid || receipt.operation !== 'CRYSTAL_TO_CREDITS' ||
+            Number(receipt.crystalsAmount) !== amount || Number(receipt.creditsAmount) !== creditsAmount) {
+          throw new Error('IDEMPOTENCY_KEY_REUSED');
+        }
+        return receipt.result;
+      }
       const ref = db.collection('players_v14').doc(uid);
       const snap = await t.get(ref);
       if (!snap.exists) throw new Error('PLAYER_NOT_FOUND');
@@ -227,6 +252,8 @@ export async function exchangeCrystalsForCreditsAction(idToken: string, crystals
       t.create(receiptRef, {
         userId: uid,
         operation: 'CRYSTAL_TO_CREDITS',
+        crystalsAmount: amount,
+        creditsAmount,
         result,
         createdAt: FieldValue.serverTimestamp(),
       });
