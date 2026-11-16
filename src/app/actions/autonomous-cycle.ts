@@ -14,7 +14,6 @@ import { runTransferMarketExpirySweepWithDb } from '@/app/lib/auction-expiry-swe
 
 import { FieldPath, FieldValue } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
-import { isSystemAuctionSeller, normalizeAuctionBalance, resolveAuctionCurrency, resolveAuctionEscrow } from '@/app/lib/auction-settlement';
 import { getTableId, MAX_LEVELS } from '@/app/lib/leagues-data';
 import { getGlobalSeasonInfo } from '@/app/lib/time-utils';
 import { logger } from '@/app/lib/logger';
