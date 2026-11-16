@@ -347,7 +347,9 @@ export async function applyMatchConsequencesAction(
   try {
     const safeMatchId = typeof matchId === 'string' ? matchId.trim() : '';
     const safeMatchType = typeof matchType === 'string' ? matchType.trim().toLowerCase() : '';
-    if (!safeMatchId || safeMatchId.length > 180) throw new Error('INVALID_MATCH_ID');
+    if (!safeMatchId || safeMatchId.length > 180 || !/^[A-Za-z0-9_-]+$/.test(safeMatchId)) {
+      throw new Error('INVALID_MATCH_ID');
+    }
     if (!safeMatchType) throw new Error('INVALID_MATCH_TYPE');
     if (!Array.isArray(playerIds) || playerIds.length > 10 ||
         playerIds.some(id => typeof id !== 'string' || !id.trim())) {
@@ -367,9 +369,15 @@ export async function applyMatchConsequencesAction(
     }
     if (!matchRef) throw new Error('MATCH_NOT_FOUND');
 
-    await db.runTransaction(async t => {
+    const receiptRef = db.collection('match_consequence_receipts').doc(`${userId}_${safeMatchId}`);
+    const transactionResult = await db.runTransaction(async t => {
       const profileRef = db.collection('players_v14').doc(userId);
-      const [matchSnap, profileSnap] = await Promise.all([t.get(matchRef), t.get(profileRef)]);
+      const [matchSnap, profileSnap, receiptSnap] = await Promise.all([
+        t.get(matchRef),
+        t.get(profileRef),
+        t.get(receiptRef),
+      ]);
+      if (receiptSnap.exists) return { duplicate: true };
       if (!matchSnap.exists) throw new Error('MATCH_NOT_FOUND');
       if (!profileSnap.exists) throw new Error('PLAYER_NOT_FOUND');
       const match: any = matchSnap.data() || {};
@@ -472,8 +480,17 @@ export async function applyMatchConsequencesAction(
         updatedAt: FieldValue.serverTimestamp(),
         lastMatchConsequences: { matchId: safeMatchId, matchType: safeMatchType, minutesPlayed: verifiedMinutesPlayed },
       });
+      t.create(receiptRef, {
+        userId,
+        matchId: safeMatchId,
+        matchType: safeMatchType,
+        playerIds: [...ids],
+        minutesPlayed: verifiedMinutesPlayed,
+        createdAt: FieldValue.serverTimestamp(),
+      });
+      return { duplicate: false };
     });
-    return { success: true };
+    return { success: true, duplicate: transactionResult.duplicate };
   } catch (e: any) {
     return { success: false, error: e?.message || 'MATCH_CONSEQUENCES_FAILED' };
   }
