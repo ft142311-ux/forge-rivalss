@@ -70,18 +70,18 @@ export async function acquireSeasonRolloverLock(
   return acquireLease(db, SEASON_ROLLOVER_LOCK_ID, sourceSeason, targetSeason, options);
 }
 
-async function releaseLease(db: LockDb, lockId: string, ownerId: string, token?: string) {
+async function releaseLease(db: LockDb, lockId: string, ownerId: string, token: string) {
   const ref = db.collection('system_v1').doc(lockId);
   return db.runTransaction(async (tx: any) => {
     const snap = await tx.get(ref);
     const current = snap.exists ? snap.data() || {} : null;
-    if (!current || current.ownerId !== ownerId || (token && current.token !== token)) return { released: false };
+    if (!current || current.ownerId !== ownerId || current.token !== token) return { released: false };
     tx.delete(ref);
     return { released: true };
   });
 }
 
-export async function releaseSeasonRolloverLock(db: LockDb, ownerId: string, token?: string) {
+export async function releaseSeasonRolloverLock(db: LockDb, ownerId: string, token: string) {
   return releaseLease(db, SEASON_ROLLOVER_LOCK_ID, ownerId, token);
 }
 
