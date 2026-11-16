@@ -410,8 +410,8 @@ export async function applyMatchConsequencesAction(
 
       const data = profileSnap.data() || {};
       const players: Player[] = Array.isArray(data.ownedPlayers) ? data.ownedPlayers : [];
-      const ids = new Set(requestedIds.length ? requestedIds : actualPlayerIds);
       const ownedIds = new Set(players.map(player => String(player.id)));
+      const ids = new Set(requestedIds.length ? requestedIds : actualPlayerIds.filter(id => ownedIds.has(id)));
       for (const id of ids) {
         if (!ownedIds.has(id)) throw new Error('MATCH_PLAYER_NOT_OWNED');
       }
