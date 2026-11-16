@@ -441,7 +441,8 @@ export async function runPyramidCupCycle() {
   const pairings: Pairing[] = Array.isArray(rounds[roundKey(round)]) ? rounds[roundKey(round)] : [];
   const now = Date.now();
   const seasonStart = resolveCupDate(cup.data.seasonStart || activeSeasonStart);
-  const nextRoundDeadline = round < ROUND_COUNT ? roundDate(seasonStart, ROUND_DAYS[round]) .getTime() : Number.POSITIVE_INFINITY;
+  const deadlineDay = ROUND_DAYS[round] ?? (ROUND_DAYS[ROUND_COUNT - 1] + 1);
+  const nextRoundDeadline = roundDate(seasonStart, deadlineDay).getTime();
   let resolved = 0;
 
   for (const pairing of pairings) {
