@@ -83,7 +83,8 @@ export async function ensureProMarketDailyDropAction(idToken: string) {
   }
 }
 
-/** Places a bid on a special auction with server-side type, balance and expasync function placeSpecialMarketBid(
+/** Places a bid on a special auction with server-side type, balance and expiry checks. */
+async function placeSpecialMarketBid(
   idToken: string,
   marketId: string,
   amount: number,
@@ -91,9 +92,6 @@ export async function ensureProMarketDailyDropAction(idToken: string) {
 ) {
   const { uid } = await requireServerActor(idToken);
   return placeSpecialMarketBidWithDb(getAdminDb(), uid, marketId, amount, marketKind);
-}
-    };
-  });
 }
 
 export async function placeProMarketBidAction(idToken: string, marketId: string, amount: number) {
