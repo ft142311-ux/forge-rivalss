@@ -26,12 +26,14 @@ test('five-minute Firebase schedule invokes the protected market-expiry route', 
 test('auction settlement compatibility entry point delegates to the same idempotent sweep', () => {
   const actions = read('../src/app/actions/autonomous-cycle.ts');
   const settlementCore = read('../src/app/lib/auction-expiry-sweep.ts');
+  const bidCore = read('../src/app/lib/auction-bid.ts');
   assert.match(
     actions,
     /export async function runPlayerAuctionSettlementSweep\(\)\s*\{\s*return runTransferMarketExpirySweep\(\);\s*\}/,
   );
   assert.match(actions, /export async function runTransferMarketExpirySweep\(\)/);
   assert.match(settlementCore, /export async function runTransferMarketExpirySweepWithDb\(db: any\)/);
+  assert.match(bidCore, /export async function placeSpecialMarketBidWithDb\(/);
 });
 
 test('market expiry route fails closed when the sweep reports partial errors', () => {
