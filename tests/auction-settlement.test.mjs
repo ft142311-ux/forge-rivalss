@@ -5,6 +5,8 @@ import {
   normalizeAuctionBalance,
   resolveAuctionCurrency,
   resolveAuctionEscrow,
+  resolvePreviousAuctionBidEscrow,
+  canPruneUnbidSystemAuctionLot,
 } from '../src/app/lib/auction-settlement.ts';
 
 test('legacy auction lots default to credits', () => {
@@ -71,3 +73,36 @@ test('legacy auctions without recorded escrow keep the fallback settlement path'
   }), { amount: 0, hasRecordedEscrow: false, hasValidEscrow: false });
 });
 
+
+
+test('new bids reject mismatched, incomplete, or unowned previous escrow', () => {
+  assert.equal(resolvePreviousAuctionBidEscrow({
+    currency: 'crystals', escrowCurrency: 'crystals', escrowedAmount: 500,
+    currentBid: 500, previousBidderId: 'manager-1',
+  }), 500);
+  assert.throws(() => resolvePreviousAuctionBidEscrow({
+    currency: 'crystals', escrowCurrency: 'credits', escrowedAmount: 500,
+    currentBid: 500, previousBidderId: 'manager-1',
+  }), /AUCTION_ESCROW_CURRENCY_MISMATCH/);
+  assert.throws(() => resolvePreviousAuctionBidEscrow({
+    currency: 'crystals', escrowCurrency: 'crystals', escrowedAmount: 400,
+    currentBid: 500, previousBidderId: 'manager-1',
+  }), /AUCTION_ESCROW_AMOUNT_MISMATCH/);
+  assert.throws(() => resolvePreviousAuctionBidEscrow({
+    currency: 'crystals', escrowCurrency: 'crystals', escrowedAmount: 500,
+    currentBid: 500, previousBidderId: '',
+  }), /AUCTION_ESCROW_BIDDER_UNAVAILABLE/);
+  assert.throws(() => resolvePreviousAuctionBidEscrow({
+    currency: 'crystals', escrowCurrency: 'crystals', escrowedAmount: 'corrupt',
+    currentBid: 500, previousBidderId: 'manager-1',
+  }), /AUCTION_ESCROW_AMOUNT_INVALID/);
+});
+
+test('daily system-lot rotation prunes only lots with no bidder and no escrow', () => {
+  assert.equal(canPruneUnbidSystemAuctionLot({ highestBidderId: null, escrowedAmount: 0 }), true);
+  assert.equal(canPruneUnbidSystemAuctionLot({}), true);
+  assert.equal(canPruneUnbidSystemAuctionLot({ highestBidderId: 'manager-1', escrowedAmount: 0 }), false);
+  assert.equal(canPruneUnbidSystemAuctionLot({ highestBidderUid: 'manager-1' }), false);
+  assert.equal(canPruneUnbidSystemAuctionLot({ escrowedAmount: 500 }), false);
+  assert.equal(canPruneUnbidSystemAuctionLot({ escrowedAmount: 'corrupt' }), false);
+});
