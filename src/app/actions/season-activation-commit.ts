@@ -44,6 +44,7 @@ export async function commitSeasonActivation(
       current.worldReady === true &&
       current.preparedWorldReady === true &&
       current.preparedPublished === true &&
+      current.historyCleanupPending !== true &&
       String(current.phase || '') === 'PUBLISHED' &&
       Number(current.preparedCalendarRevision || 0) === expected.calendarRevision &&
       new Date(current.preparedSeasonStart || '').getTime() === expected.activationAtMs &&
