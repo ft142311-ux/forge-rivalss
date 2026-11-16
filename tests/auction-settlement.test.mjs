@@ -4,6 +4,7 @@ import {
   isSystemAuctionSeller,
   normalizeAuctionBalance,
   resolveAuctionCurrency,
+  resolveAuctionEscrow,
 } from '../src/app/lib/auction-settlement.ts';
 
 test('legacy auction lots default to credits', () => {
@@ -32,3 +33,41 @@ test('auction balances are normalized to non-negative integer amounts', () => {
   assert.equal(normalizeAuctionBalance(-5), 0);
   assert.equal(normalizeAuctionBalance('invalid'), 0);
 });
+
+test('auction escrow requires an exact amount and matching currency', () => {
+  assert.deepEqual(resolveAuctionEscrow({
+    currency: 'credits', escrowCurrency: 'credits', escrowedAmount: 500,
+    price: 500, bidderId: 'buyer-1', buyerExists: true,
+  }), { amount: 500, hasRecordedEscrow: true, hasValidEscrow: true });
+  assert.throws(() => resolveAuctionEscrow({
+    currency: 'credits', escrowCurrency: 'crystals', escrowedAmount: 500,
+    price: 500, bidderId: 'buyer-1', buyerExists: true,
+  }), /AUCTION_ESCROW_CURRENCY_MISMATCH/);
+  assert.throws(() => resolveAuctionEscrow({
+    currency: 'credits', escrowCurrency: 'credits', escrowedAmount: 400,
+    price: 500, bidderId: 'buyer-1', buyerExists: true,
+  }), /AUCTION_ESCROW_AMOUNT_MISMATCH/);
+  assert.throws(() => resolveAuctionEscrow({
+    currency: 'credits', escrowCurrency: 'credits', escrowedAmount: 600,
+    price: 500, bidderId: 'buyer-1', buyerExists: true,
+  }), /AUCTION_ESCROW_AMOUNT_MISMATCH/);
+});
+
+test('auction escrow cannot be discarded when the winning bidder is unavailable', () => {
+  assert.throws(() => resolveAuctionEscrow({
+    currency: 'credits', escrowCurrency: 'credits', escrowedAmount: 500,
+    price: 500, bidderId: 'buyer-1', buyerExists: false,
+  }), /AUCTION_ESCROW_BIDDER_UNAVAILABLE/);
+  assert.throws(() => resolveAuctionEscrow({
+    currency: 'credits', escrowCurrency: 'credits', escrowedAmount: 500,
+    price: 500, bidderId: '', buyerExists: true,
+  }), /AUCTION_ESCROW_BIDDER_UNAVAILABLE/);
+});
+
+test('legacy auctions without recorded escrow keep the fallback settlement path', () => {
+  assert.deepEqual(resolveAuctionEscrow({
+    currency: 'credits', escrowCurrency: undefined, escrowedAmount: 0,
+    price: 500, bidderId: 'buyer-1', buyerExists: true,
+  }), { amount: 0, hasRecordedEscrow: false, hasValidEscrow: false });
+});
+
