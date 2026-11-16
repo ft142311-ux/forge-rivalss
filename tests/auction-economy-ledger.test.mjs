@@ -27,13 +27,12 @@ test('auction settlement records fallback debit, seller proceeds and escrow refu
 
 test('expired auction settlement uses strict price validation before any transaction writes', () => {
   assert.match(expirySweep, /resolveAuctionPrice\(lot\.currentBid, lot\.startingPrice, lot\.price\)/);
-  assert.match(cycle, /import \{ resolveAuctionPrice \} from '\@\/app\/lib\/auction-settlement'/);
+  assert.match(cycle, /import \{ runTransferMarketExpirySweepWithDb \} from '\@\/app\/lib\/auction-expiry-sweep'/);
 });
 
 test('ambiguous auction escrow is rejected before the expired lot can be deleted', () => {
-  const start = cycle.indexOf('export async function runTransferMarketExpirySweep');
-  const end = cycle.indexOf('export async function runPlayerAuctionSettlementSweep', start);
-  const block = cycle.slice(start, end);
+  const start = expirySweep.indexOf('export async function runTransferMarketExpirySweepWithDb');
+  const block = expirySweep.slice(start);
   const escrowGuard = block.indexOf('resolveAuctionEscrow({');
   const firstLotDelete = block.indexOf('tx.delete(lotRef)');
   assert.ok(escrowGuard >= 0, 'settlement must validate recorded escrow');
