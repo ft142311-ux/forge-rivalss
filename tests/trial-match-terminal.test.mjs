@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { isProcessingLeaseStale } from '../src/app/lib/match-processing-lease.ts';
 
 const source = readFileSync(new URL('../src/app/actions/trial-match-resolver.ts', import.meta.url), 'utf8');
 
@@ -16,4 +17,20 @@ test('trial match scheduler treats finished and completed as terminal in every w
   assert.match(source, /data\?\.processingToken !== processingToken/);
   assert.match(source, /data\?\.processingToken === processingToken/);
   assert.match(source, /isTrialMatchProcessingLeaseStale\(data, Date\.now\(\)\)/);
+});
+
+test('trial processing claims with missing or invalid timestamps are recoverable', () => {
+  const nowMs = 10_000_000;
+  const leaseMs = 5 * 60 * 1000;
+  assert.equal(isProcessingLeaseStale({ isProcessing: true, startedAtMs: Number.NaN, nowMs, leaseMs }), true);
+  assert.equal(isProcessingLeaseStale({ isProcessing: true, startedAtMs: 0, nowMs, leaseMs }), true);
+  assert.equal(isProcessingLeaseStale({ isProcessing: true, startedAtMs: nowMs - leaseMs, nowMs, leaseMs }), true);
+  assert.equal(isProcessingLeaseStale({ isProcessing: true, startedAtMs: nowMs - 1, nowMs, leaseMs }), false);
+  assert.equal(isProcessingLeaseStale({ isProcessing: false, startedAtMs: nowMs, nowMs, leaseMs }), true);
+  assert.equal(isProcessingLeaseStale({ isProcessing: true, startedAtMs: nowMs, nowMs, leaseMs: 0 }), true);
+});
+
+test('trial resolver delegates claim expiry to the shared processing lease policy', () => {
+  assert.match(source, /isProcessingLeaseStale\(\{/);
+  assert.match(source, /startedAtMs: timestampToMillis\(match\?\.processingStartedAt\)/);
 });
