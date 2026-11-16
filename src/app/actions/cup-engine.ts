@@ -87,7 +87,7 @@ function buildRoundPairings(round: number, input: Team[]): Pairing[] {
   }
   return pairs;
 }
-function buildCupRoundMatchData(season: number, round: number, pairing: Pairing[], scheduledAt: any) {
+function buildCupRoundMatchData(season: number, round: number, pairing: Pairing, scheduledAt: any) {
   const isFinal = round === ROUND_COUNT;
   return {
     id: pairing.matchId, type: 'cup', matchType: 'cup', source: 'pyramid-cup', cupId: cupId(season), cupRound: round,
@@ -297,17 +297,26 @@ async function repairCurrentRoundFixtures(db: any, cup: { ref: any; data: any })
           pairing.matchId = expectedId;
           changed = true;
         }
-        return { pairing, ref: db.collection(MATCH_COLLECTIONS.cup).doc(expectedId) };
+        return {
+          pairing,
+          dedicatedRef: db.collection(MATCH_COLLECTIONS.cup).doc(expectedId),
+          legacyRef: db.collection('matches_v2').doc(expectedId),
+        };
       });
-    const snapshots = await Promise.all(entries.map(entry => tx.get(entry.ref)));
+    const snapshots = await Promise.all(entries.map(async entry => ({
+      dedicated: await tx.get(entry.dedicatedRef),
+      legacy: await tx.get(entry.legacyRef),
+    })));
     let repaired = 0;
     const scheduledAt = Timestamp.fromDate(roundDate(
       new Date(String(data.seasonStart || getGlobalSeasonInfo().currentSeasonStart.toISOString())),
       ROUND_DAYS[round - 1],
     ));
     entries.forEach((entry, index) => {
-      if (snapshots[index].exists) return;
-      tx.create(entry.ref, buildCupRoundMatchData(season, round, entry.pairing, scheduledAt));
+      // Older cup fixtures may already live in matches_v2. Preserve them and
+      // let the resolver's existing legacy fallback consume their results.
+      if (snapshots[index].dedicated.exists || snapshots[index].legacy.exists) return;
+      tx.create(entry.dedicatedRef, buildCupRoundMatchData(season, round, entry.pairing, scheduledAt));
       repaired++;
     });
     if (changed || repaired > 0) {
