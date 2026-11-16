@@ -7,7 +7,14 @@ const page = readFileSync(new URL('../src/app/shop/page.tsx', import.meta.url), 
 
 test('exchange uses a persisted operation receipt inside the balance transaction', () => {
   assert.match(action, /shop_operation_receipts/);
-  assert.match(action, /const receiptSnap = await t\.get\(receiptRef\);[\s\S]*if \(receiptSnap\.exists\) return receiptSnap\.data\(\)\?\.result;/);
+  const start = action.indexOf('export async function exchangeCrystalsForCreditsAction');
+  const end = action.indexOf('export async function changeClubNameAction', start);
+  const exchange = action.slice(start, end);
+  assert.match(exchange, /const receiptSnap = await t\\.get\\(receiptRef\\)/);
+  assert.match(exchange, /receipt\\.operation !== 'CRYSTAL_TO_CREDITS'/);
+  assert.match(exchange, /Number\\(receipt\\.crystalsAmount\\) !== amount/);
+  assert.match(exchange, /Number\\(receipt\\.creditsAmount\\) !== creditsAmount/);
+  assert.match(exchange, /return receipt\\.result/);
   assert.match(action, /t\.create\(receiptRef,[\s\S]*operation: 'CRYSTAL_TO_CREDITS'/);
 });
 
