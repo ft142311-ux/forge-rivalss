@@ -1,7 +1,7 @@
 
 'use server';
 
-import { FieldValue } from 'firebase-admin/firestore';
+import { FieldValue, type DocumentReference } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { z } from 'zod';
 import { Player, calculatePlayerMarketValue } from '@/app/lib/moba-data';
@@ -358,7 +358,7 @@ export async function applyMatchConsequencesAction(
     const requestedIds = [...new Set(playerIds.map(id => id.trim()))];
     if (requestedIds.length !== playerIds.length) throw new Error('DUPLICATE_MATCH_PLAYER_IDS');
 
-    let matchRef: any = null;
+    let matchRef: DocumentReference | null = null;
     for (const collectionName of MATCH_REPORT_COLLECTIONS) {
       const candidate = db.collection(collectionName).doc(safeMatchId);
       const snapshot = await candidate.get();
@@ -368,12 +368,13 @@ export async function applyMatchConsequencesAction(
       }
     }
     if (!matchRef) throw new Error('MATCH_NOT_FOUND');
+    const resolvedMatchRef = matchRef;
 
     const receiptRef = db.collection('match_consequence_receipts').doc(`${userId}_${safeMatchId}`);
     const transactionResult = await db.runTransaction(async t => {
       const profileRef = db.collection('players_v14').doc(userId);
       const [matchSnap, profileSnap, receiptSnap] = await Promise.all([
-        t.get(matchRef),
+        t.get(resolvedMatchRef),
         t.get(profileRef),
         t.get(receiptRef),
       ]);
