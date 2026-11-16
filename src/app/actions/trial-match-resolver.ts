@@ -10,6 +10,7 @@ import { MATCH_COLLECTIONS } from '@/app/lib/match-storage';
 import { hash32 } from '@/app/lib/hash-utils';
 import { timestampToMillis } from '@/app/lib/timestamp-utils';
 import { getMatchWinnerId } from '@/app/lib/match-winner';
+import { isProcessingLeaseStale } from '@/app/lib/match-processing-lease';
 
 function startTimeMs(match: any): number {
   const raw = match?.startTime || match?.scheduledStartAt || match?.scheduledAt;
@@ -24,9 +25,12 @@ function isTrialMatchTerminal(match: any): boolean {
 const TRIAL_MATCH_PROCESSING_LEASE_MS = 5 * 60 * 1000;
 
 function isTrialMatchProcessingLeaseStale(match: any, nowMs: number): boolean {
-  if (match?.isProcessing !== true) return true;
-  const startedAt = timestampToMillis(match.processingStartedAt);
-  return Number.isFinite(startedAt) && nowMs - startedAt >= TRIAL_MATCH_PROCESSING_LEASE_MS;
+  return isProcessingLeaseStale({
+    isProcessing: match?.isProcessing,
+    startedAtMs: timestampToMillis(match?.processingStartedAt),
+    nowMs,
+    leaseMs: TRIAL_MATCH_PROCESSING_LEASE_MS,
+  });
 }
 
 
