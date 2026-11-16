@@ -229,6 +229,7 @@ export async function recoverPlayerFatigueCreditsAction(idToken: string, playerI
   try {
     return await mutateOwnedPlayer(idToken, playerId, (player, manager) => {
       const balance = money(manager.credits);
+      if (Number(player.fatigue ?? 100) >= 100) throw new Error('FATIGUE_ALREADY_FULL');
       if (balance < PLAYER_ACTION_COSTS.fatigueCredits) throw new Error('INSUFFICIENT_FUNDS');
       const next = { ...player, fatigue: 100 };
       next.marketValue = calculatePlayerMarketValue(next); next.price = next.marketValue;
@@ -242,6 +243,7 @@ export async function recoverPlayerFatigueCrystalsAction(idToken: string, player
   try {
     return await mutateOwnedPlayer(idToken, playerId, (player, manager) => {
       const balance = money(manager.crystals);
+      if (Number(player.fatigue ?? 100) >= 100) throw new Error('FATIGUE_ALREADY_FULL');
       if (balance < PLAYER_ACTION_COSTS.fatigueCrystals) throw new Error('INSUFFICIENT_CRYSTALS');
       const next = { ...player, fatigue: 100 };
       next.marketValue = calculatePlayerMarketValue(next); next.price = next.marketValue;
@@ -255,6 +257,7 @@ export async function boostPlayerFormAction(idToken: string, playerId: string) {
   try {
     return await mutateOwnedPlayer(idToken, playerId, (player, manager) => {
       const balance = money(manager.credits);
+      if (Number(player.form || 0) >= 100) throw new Error('FORM_ALREADY_MAX');
       if (balance < PLAYER_ACTION_COSTS.formCredits) throw new Error('INSUFFICIENT_FUNDS');
       const next = { ...player, form: Math.min(100, Number(player.form || 0) + 15) };
       next.marketValue = calculatePlayerMarketValue(next); next.price = next.marketValue;
