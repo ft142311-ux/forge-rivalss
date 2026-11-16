@@ -7,6 +7,7 @@ import { resolveSeasonLifecycleWindow } from './season-boundary';
 import { logger } from '@/app/lib/logger';
 import { activatePublishedSeason, ensureSeasonCalendar, publishPreparedSeason } from './season-calendar';
 import { runTournamentCycle } from './tournament-system';
+import { runPyramidCupCycle } from './cup-engine';
 import { resolveDailyMatches } from './autonomous-cycle';
 import { prepareSeasonRollover } from './season-rollover';
 import { validateRolloverPlan } from './season-rollover-plan';
@@ -130,8 +131,10 @@ export async function runSeasonOrchestrator() {
     if (!world?.waitingForSeasonResults && world?.worldReady === true) {
       catchUp = await resolveDailyMatches();
     }
-    const tournaments = await runTournamentCycle(process.env.CRON_SECRET || '');
-
+    const [tournaments, pyramidCup] = await Promise.all([
+      runTournamentCycle(process.env.CRON_SECRET || ''),
+      runPyramidCupCycle(),
+    ]);
 
     const configRef = db.collection('system_v1').doc('season_config');
 
@@ -205,6 +208,7 @@ export async function runSeasonOrchestrator() {
       createdMatches: world.createdMatches,
       repairedMatches: world.repairedMatches,
       tournaments,
+      pyramidCup,
       matchSettlement: catchUp,
     };
   } catch (e: any) {
