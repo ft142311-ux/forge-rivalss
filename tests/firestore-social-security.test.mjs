@@ -34,3 +34,13 @@ test('notifications are readable only by their recipient and never client-writab
   assert.match(notificationRule[1], /allow read: if signedIn\(\)\s*&&\s*resource\.data\.userId\s*==\s*request\.auth\.uid/);
   assert.match(notificationRule[1], /allow create, update, delete: if false/);
 });
+
+test('private message sender Premium state is checked against the authoritative profile', () => {
+  const messageRule = rules.match(/match \/private_messages_v3\/{msgId}\s*\{([\s\S]*?)\n    \}/);
+  assert.ok(messageRule, 'private message rule exists');
+  const createRule = messageRule[1].match(/allow create: if([\s\S]*?);/);
+  assert.ok(createRule, 'private message create rule exists');
+  assert.match(createRule[1], /senderIsPremium\s*==\s*\([\s\S]*?players_v14\/\$\(request\.auth\.uid\)[\s\S]*?data\.isPremium\s*==\s*true/);
+  assert.match(createRule[1], /request\.resource\.data\.read\s*==\s*false/);
+  assert.match(createRule[1], /request\.resource\.data\.createdAt is string/);
+});
