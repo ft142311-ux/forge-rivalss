@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { deleteApp, initializeApp } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
 import { runTransferMarketExpirySweepWithDb } from '../src/app/lib/auction-expiry-sweep.ts';
+import { placeSpecialMarketBidWithDb } from '../src/app/lib/auction-bid.ts';
 
 const emulatorHost = process.env.FIRESTORE_EMULATOR_HOST;
 const projectId = process.env.GCLOUD_PROJECT || 'demo-forge-rivals';
@@ -14,7 +15,7 @@ async function withIsolatedFirestore(t) {
   const app = initializeApp({ projectId }, `auction-expiry-test-${randomUUID()}`);
   const firestore = getFirestore(app);
   const prefix = `auctionExpiryTest_${randomUUID().replaceAll('-', '')}_`;
-  const names = ['market_v7', 'players_v14', 'economy_transactions', 'transfer_history'];
+  const names = ['market_v7', 'players_v14', 'economy_transactions', 'transfer_history', 'notifications_v7'];
   const db = {
     collection: name => firestore.collection(prefix + name),
     runTransaction: callback => firestore.runTransaction(callback),
@@ -48,6 +49,68 @@ function expiredLot(overrides = {}) {
     ...overrides,
   };
 }
+
+
+test('Firestore Emulator refunds the outbid manager and charges only the incremental amount for a same-bidder raise', {
+  skip: !emulatorHost,
+}, async t => {
+  const { db } = await withIsolatedFirestore(t);
+  const now = Date.now();
+  await db.collection('players_v14').doc('seller-1').set({ crystals: 0, ownedPlayers: [] });
+  await db.collection('players_v14').doc('bidder-1').set({ crystals: 1000, displayName: 'First', ownedPlayers: [] });
+  await db.collection('players_v14').doc('bidder-2').set({ crystals: 1000, displayName: 'Second', ownedPlayers: [] });
+  await db.collection('market_v7').doc('pro-lot').set({
+    sellerId: 'seller-1', isPro: true, currency: 'crystals',
+    currentBid: 200, startingPrice: 200, highestBidderId: null,
+    bidders: [], expiresAt: new Date(now + 60 * 60 * 1000).toISOString(),
+    heroData: { id: 'pro-player', name: 'Pro Player' },
+  });
+
+  await placeSpecialMarketBidWithDb(db, 'bidder-1', 'pro-lot', 300, 'pro', now);
+  await placeSpecialMarketBidWithDb(db, 'bidder-2', 'pro-lot', 500, 'pro', now);
+  await placeSpecialMarketBidWithDb(db, 'bidder-2', 'pro-lot', 600, 'pro', now);
+
+  assert.equal((await db.collection('players_v14').doc('bidder-1').get()).get('crystals'), 1000);
+  assert.equal((await db.collection('players_v14').doc('bidder-2').get()).get('crystals'), 400);
+  const lot = await db.collection('market_v7').doc('pro-lot').get();
+  assert.equal(lot.get('highestBidderId'), 'bidder-2');
+  assert.equal(lot.get('currentBid'), 600);
+  assert.equal(lot.get('escrowedAmount'), 600);
+  const ledger = await db.collection('economy_transactions').where('referenceId', '==', 'pro-lot').get();
+  const rows = ledger.docs.map(doc => doc.data());
+  assert.equal(rows.filter(row => row.type === 'SPECIAL_AUCTION_BID_ESCROW').reduce((sum, row) => sum - row.amount, 0), 600);
+  assert.equal(rows.filter(row => row.type === 'SPECIAL_AUCTION_OUTBID_REFUND').reduce((sum, row) => sum + row.amount, 0), 300);
+  assert.equal((await db.collection('notifications_v7').where('userId', '==', 'bidder-1').get()).size, 1);
+});
+
+test('Firestore Emulator serializes concurrent bids and rejects a stale lower bid without overcharging', {
+  skip: !emulatorHost,
+}, async t => {
+  const { db } = await withIsolatedFirestore(t);
+  const now = Date.now();
+  await db.collection('players_v14').doc('seller-1').set({ crystals: 0 });
+  await db.collection('players_v14').doc('bidder-1').set({ crystals: 1000, displayName: 'Bidder' });
+  await db.collection('market_v7').doc('race-lot').set({
+    sellerId: 'seller-1', isPro: true, currency: 'crystals',
+    currentBid: 200, startingPrice: 200, highestBidderId: null,
+    bidders: [], expiresAt: new Date(now + 60 * 60 * 1000).toISOString(),
+    heroData: { id: 'race-player', name: 'Race Player' },
+  });
+
+  const outcomes = await Promise.allSettled([
+    placeSpecialMarketBidWithDb(db, 'bidder-1', 'race-lot', 400, 'pro', now),
+    placeSpecialMarketBidWithDb(db, 'bidder-1', 'race-lot', 500, 'pro', now),
+  ]);
+  assert.equal(outcomes.filter(item => item.status === 'fulfilled').length, 1);
+  const rejected = outcomes.find(item => item.status === 'rejected');
+  assert.match(String(rejected?.status === 'rejected' ? rejected.reason?.message : ''), /BID_TOO_LOW/);
+  assert.equal((await db.collection('players_v14').doc('bidder-1').get()).get('crystals'), 500);
+  const lot = await db.collection('market_v7').doc('race-lot').get();
+  assert.equal(lot.get('currentBid'), 500);
+  assert.equal(lot.get('escrowedAmount'), 500);
+  const ledger = await db.collection('economy_transactions').where('referenceId', '==', 'race-lot').get();
+  assert.equal(ledger.docs.reduce((sum, doc) => sum + Math.abs(doc.get('amount')), 0), 500);
+});
 
 test('Firestore Emulator settles a lot only once under concurrent expiry sweeps', {
   skip: !emulatorHost,
