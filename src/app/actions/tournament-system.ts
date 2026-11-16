@@ -628,6 +628,34 @@ function expectedStageMatchCount(maxParticipants: number, stage: string) {
  * Keep a durable pending marker until every human profile receives its
  * idempotent arrayUnion entry, so an interrupted cron run can resume.
  */
+async function syncTournamentHistoryForParticipant(db: any, participantId: string, historyEntry: Record<string, any>) {
+  const playerRef = db.collection('players_v14').doc(participantId);
+  const archiveRef = db.collection('inactive_clubs_v1').doc(participantId);
+  return db.runTransaction(async (t: any) => {
+    const [playerSnap, archiveSnap] = await Promise.all([
+      t.get(playerRef),
+      t.get(archiveRef),
+    ]);
+    if (playerSnap.exists) {
+      t.update(playerRef, {
+        tournamentHistory: FieldValue.arrayUnion(historyEntry),
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+      return 'active';
+    }
+    // Inactive-club retirement deletes the live profile but preserves its
+    // snapshot. Keep completed tournament history with that archived club.
+    if (archiveSnap.exists) {
+      t.update(archiveRef, {
+        'clubSnapshot.tournamentHistory': FieldValue.arrayUnion(historyEntry),
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+      return 'archived';
+    }
+    throw new Error('TOURNAMENT_HISTORY_PROFILE_MISSING');
+  });
+}
+
 async function syncCompletedTournamentHistory(db: any, tournament: any) {
   if (tournament?.status !== 'completed' || tournament?.historySyncStatus === 'completed') {
     return tournament?.historySyncStatus === 'completed';
@@ -641,22 +669,20 @@ async function syncCompletedTournamentHistory(db: any, tournament: any) {
   const startAtMs = Number(tournament.startAt);
   const startDate = new Date(Number.isFinite(startAtMs) ? startAtMs : 0).toISOString();
 
-  const updates = participantSnap.docs.map((participantDoc: any) => {
+  const updates = participantSnap.docs.map(async (participantDoc: any) => {
     const participant = participantDoc.data() || {};
     if (participant.isBot || !participant.id) return null;
     const participantId = String(participant.id);
-    return db.collection('players_v14').doc(participantId).update({
-      tournamentHistory: FieldValue.arrayUnion({
-        tournamentId: String(tournament.id),
-        tournamentName: String(tournament.name || tournament.id),
-        result: participantId === String(tournament.winnerId) ? 'Победитель' : 'Участник',
-        status: 'finished',
-        startDate,
-        endDate,
-      }),
-      updatedAt: FieldValue.serverTimestamp(),
-    });
-  }).filter(Boolean);
+    const historyEntry = {
+      tournamentId: String(tournament.id),
+      tournamentName: String(tournament.name || tournament.id),
+      result: participantId === String(tournament.winnerId) ? 'Победитель' : 'Участник',
+      status: 'finished',
+      startDate,
+      endDate,
+    };
+    return syncTournamentHistoryForParticipant(db, participantId, historyEntry);
+  });
 
   await Promise.all(updates);
   await tournamentRef.update({
