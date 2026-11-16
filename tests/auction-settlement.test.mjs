@@ -41,7 +41,7 @@ test('auction price accepts valid integer values and rejects malformed recorded 
   assert.equal(resolveAuctionPrice(750, 500, 400), 750);
   assert.equal(resolveAuctionPrice(0, 500, 400), 500);
   assert.equal(resolveAuctionPrice(undefined, undefined, '250'), 250);
-  for (const value of [-1, 1.5, 'corrupt', Number.MAX_SAFE_INTEGER + 1]) {
+  for (const value of [-1, 1.5, 'corrupt', '   ', NaN, false, Number.MAX_SAFE_INTEGER + 1]) {
     assert.throws(() => resolveAuctionPrice(value, 500, 400), /AUCTION_PRICE_INVALID/);
   }
 });
