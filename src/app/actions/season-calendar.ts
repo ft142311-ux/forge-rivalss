@@ -2,11 +2,12 @@ import 'server-only';
 
 import { FieldValue } from 'firebase-admin/firestore';
 import { commitSeasonActivation } from './season-activation-commit';
+import { completeSeasonHistoryCleanup } from './season-history-cleanup';
 import { prepareSeasonRollover } from './season-rollover';
 import { acquireSeasonCalendarBuildLock, assertSeasonCalendarBuildLock, commitSeasonCalendarPublication, commitSeasonCalendarWrites, commitSeasonHistoryCleanupWrites, releaseSeasonCalendarBuildLock } from './season-rollover-lock';
 import { buildCarryForwardGroups, buildPromotionRelegationGroups, compareRecoveryRolloverPlans, resolveRecoveryPlacementSource, resolveRolloverPlanPruneIds, validateRolloverPlan } from './season-rollover-plan';
 import { getRecoveryRolloverPlanSignature } from './season-rollover-plan-signature';
-import { resolveActivatedSkippedHistoryMarker, resolveActivatedSkippedSeasons, resolveHistoryCleanupCompletion, resolveHistoryCleanupPostflight, resolvePendingSkippedHistoryMarker, resolvePostActivationRetry, resolveSeasonCatchUpPolicy, type SeasonHistoryState } from './season-history-policy';
+import { resolveActivatedSkippedHistoryMarker, resolveActivatedSkippedSeasons, resolveHistoryCleanupPostflight, resolvePendingSkippedHistoryMarker, resolvePostActivationRetry, resolveSeasonCatchUpPolicy, type SeasonHistoryState } from './season-history-policy';
 import { evaluateCanonicalDocuments } from './season-canonical';
 import { resolvePreparedSlotRetry, shouldRepairExistingMatchCoordinates } from './season-calendar-retry-policy';
 import { publishRecoveryRolloverDecision } from './season-recovery-publication';
@@ -1172,28 +1173,6 @@ async function buildSeasonCalendar(lease: BuildLease, pristineFirstWorld = false
 }
 
 
-/**
- * Mark post-activation cleanup complete only if this season still owns the
- * durable cleanup marker. This prevents a stale worker from clearing a newer
- * season's pending-cleanup state.
- */
-async function completeSeasonHistoryCleanup(db: any, targetSeason: number) {
-  const configRef = db.collection('system_v1').doc('season_config');
-  return await db.runTransaction(async (tx: any) => {
-    const configSnap = await tx.get(configRef);
-    const config = configSnap.exists ? configSnap.data() || {} : null;
-    const decision = resolveHistoryCleanupCompletion(config, targetSeason);
-    if (!decision.ready) return decision;
-    if (decision.shouldMarkComplete) {
-      tx.update(configRef, {
-        historyCleanupPending: false,
-        historyCleanupCompletedAt: FieldValue.serverTimestamp(),
-        updatedAt: FieldValue.serverTimestamp(),
-      });
-    }
-    return decision;
-  });
-}
 
 /**
  * Enforce the rolling one-archive policy only after a season has activated.
