@@ -23,3 +23,14 @@ test('auction settlement records fallback debit, seller proceeds and escrow refu
   assert.match(block, /auction_settlement_\$\{candidate\.id\}_seller/);
   assert.match(block, /auction_settlement_\$\{candidate\.id\}_refund/);
 });
+
+test('ambiguous auction escrow is rejected before the expired lot can be deleted', () => {
+  const start = cycle.indexOf('export async function runTransferMarketExpirySweep');
+  const end = cycle.indexOf('export async function runPlayerAuctionSettlementSweep', start);
+  const block = cycle.slice(start, end);
+  const escrowGuard = block.indexOf('resolveAuctionEscrow({');
+  const firstLotDelete = block.indexOf('tx.delete(lotRef)');
+  assert.ok(escrowGuard >= 0, 'settlement must validate recorded escrow');
+  assert.ok(firstLotDelete > escrowGuard, 'lot deletion must follow escrow validation');
+  assert.match(block, /if \(hasRecordedEscrow && buyerRef && buyerSnap\?\.exists\)/);
+});
