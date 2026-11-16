@@ -13,7 +13,7 @@ import { isSeasonRolloverLockStale, SEASON_ROLLOVER_LOCK_ID } from './season-rol
 
 import { FieldPath, FieldValue } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
-import { isSystemAuctionSeller, normalizeAuctionBalance, resolveAuctionCurrency } from '@/app/lib/auction-settlement';
+import { isSystemAuctionSeller, normalizeAuctionBalance, resolveAuctionCurrency, resolveAuctionEscrow } from '@/app/lib/auction-settlement';
 import { getTableId, MAX_LEVELS } from '@/app/lib/leagues-data';
 import { getGlobalSeasonInfo } from '@/app/lib/time-utils';
 import { logger } from '@/app/lib/logger';
@@ -1053,8 +1053,17 @@ export async function runTransferMarketExpirySweep() {
         const systemPlayer: any = isSystemSeller && lot.heroData?.id === playerId ? lot.heroData : null;
         const buyerPlayers: any[] = Array.isArray(buyer[playerArrayKey]) ? [...buyer[playerArrayKey]] : [];
         const buyerBalance = normalizeAuctionBalance(buyer[currency]);
-        const escrowedAmount = lot.escrowCurrency === currency ? normalizeAuctionBalance(lot.escrowedAmount) : 0;
-        const hasValidEscrow = escrowedAmount >= price && price > 0;
+        const escrow = resolveAuctionEscrow({
+          currency,
+          escrowCurrency: lot.escrowCurrency,
+          escrowedAmount: lot.escrowedAmount,
+          price,
+          bidderId,
+          buyerExists: Boolean(buyerSnap?.exists),
+        });
+        const escrowedAmount = escrow.amount;
+        const hasRecordedEscrow = escrow.hasRecordedEscrow;
+        const hasValidEscrow = escrow.hasValidEscrow;
         const sellerExists = isSystemSeller ? Boolean(systemPlayer) : Boolean(sellerSnap?.exists && sellerIndex >= 0);
         const validSale = Boolean(
           sellerExists && buyerSnap?.exists && buyerRef && bidderId !== sellerId && price > 0 &&
@@ -1118,7 +1127,7 @@ export async function runTransferMarketExpirySweep() {
           sellerPlayers[sellerIndex] = { ...sellerPlayers[sellerIndex], onTransferUntil: null, transferMarketId: null };
           tx.update(sellerRef, { [playerArrayKey]: sellerPlayers, updatedAt: FieldValue.serverTimestamp() });
         }
-        if (buyerRef && buyerSnap?.exists && hasValidEscrow) {
+        if (hasRecordedEscrow && buyerRef && buyerSnap?.exists) {
           const refundedBalance = buyerBalance + escrowedAmount;
           tx.update(buyerRef, {
             [currency]: refundedBalance,
