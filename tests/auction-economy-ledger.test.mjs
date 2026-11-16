@@ -25,6 +25,11 @@ test('auction settlement records fallback debit, seller proceeds and escrow refu
   assert.match(block, /auction_settlement_\$\{candidate\.id\}_refund/);
 });
 
+test('expired auction settlement uses strict price validation before any transaction writes', () => {
+  assert.match(cycle, /resolveAuctionPrice\(lot\.currentBid, lot\.startingPrice, lot\.price\)/);
+  assert.match(cycle, /import \{ resolveAuctionPrice \} from '\@\/app\/lib\/auction-settlement'/);
+});
+
 test('ambiguous auction escrow is rejected before the expired lot can be deleted', () => {
   const start = cycle.indexOf('export async function runTransferMarketExpirySweep');
   const end = cycle.indexOf('export async function runPlayerAuctionSettlementSweep', start);
