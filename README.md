@@ -1,36 +1,53 @@
-# Forge-Rivals — guarded local Season 1 reset
+# Forge-Rivals — canonical local development world
 
-This patch replaces `scripts/reset-and-build-local-world.js`. It targets the Firebase Emulator only. It does not connect to production.
+> **Important:** older reset instructions in this file have been superseded. Do not run historical reset commands, import an old emulator export, or overwrite the canonical world as part of routine development.
 
-## Safety behavior
-- Default mode is **dry-run**; no writes occur.
-- Refuses to run unless `FIRESTORE_EMULATOR_HOST` is `127.0.0.1:8080` or `localhost:8080`.
-- Requires `--backup-verified` alongside `--apply`.
-- Deletes only `matches_v2`, `league_tables_v2`, and `league_slots_v1`.
-- Preserves `players_v14`, the `global_stats` collection, Auth Emulator accounts, and other `system_v1` documents.
-- Replaces only `system_v1/season_config`; all other `system_v1` documents are preserved.
-- Sets Season 1 start to `2026-10-23T15:00:00.000Z` (18:00 MSK) and Season 2 start to `2026-11-09T15:00:00.000Z`.
-- Seeds bot slots as OCCUPIED with matching bot IDs, rather than FREE/null.
+## Canonical world
 
-## Run
-1. Stop any application processes that might write to the emulator. Keep the emulator running.
-2. Export the emulator to a new backup directory using the Firebase CLI, for example:
-   `firebase emulators:export .\emulator-data-backup-before-s1-reset-20261022 --project studio-2788872209-f7092`
-3. Set the local host explicitly in the same PowerShell session:
-   `$env:FIRESTORE_EMULATOR_HOST = '127.0.0.1:8080'`
-   `$env:GCLOUD_PROJECT = 'studio-2788872209-f7092'`
-4. Preview first:
-   `node .\scripts\reset-and-build-local-world.js`
-5. Review counts and backup contents. Only then apply:
-   `node .\scripts\reset-and-build-local-world.js --apply --backup-verified`
+The current canonical development world is `CLEAN_S1_V1`, created in the local Firebase Emulator project `demo-forge-rivals`.
 
-`--backup-verified` is an explicit operator acknowledgement; the script does not itself cryptographically validate the backup. Never run against a production Firestore endpoint.
+- Active season: Season 1
+- Phase at creation: `REGULAR_SEASON`
+- Season 1 start: `2026-11-09T15:00:00.000Z` (18:00 MSK)
+- League structure: 15 groups/tables across four divisions
+- League slots: 120
+- Canonical league fixtures: 840
+- Firebase Auth and Firestore are accessed through the local Emulator Suite for development and tests
 
-## Important limitation
-The script preserves player documents to avoid deleting user/club data. It is a world reset for canonical league fixtures/tables/slots, not a universal cleanup of every historical player stat or unrelated collection. A follow-up integrity pass must verify user-owned clubs and roster links before deciding whether any player fields need a targeted season-stat reset.
+The existing canonical-world backup/export is retained as the recovery point. Do not replace it or restore a different export without a fresh backup and explicit approval.
 
-## Expected counts
-- 15 league tables
-- 120 league slots
-- 840 fixtures
-- Auth accounts preserved
+## Development safety rules
+
+1. Work against the local Firebase Emulator project `demo-forge-rivals` for gameplay development and integration testing.
+2. Do not connect development scripts to Firebase Production.
+3. Do not reset, reseed, or import data into the canonical world during ordinary feature work.
+4. Any future destructive world operation requires a new verified emulator export and explicit approval before execution.
+5. Registration must claim an existing canonical league slot; it must not generate tables, slots, or fixtures.
+6. Season transitions must use the guarded prepare → publish → activate lifecycle. Do not bypass the canonical archive, rollover-plan, or cleanup fences.
+
+## Emulator endpoints
+
+| Service | Local endpoint |
+|---|---|
+| Authentication | `127.0.0.1:9099` |
+| Firestore | `127.0.0.1:8080` |
+| Functions | `127.0.0.1:5001` |
+| Emulator UI | `http://127.0.0.1:4000` |
+
+## Scheduled server tasks
+
+- Season orchestrator: every 5 minutes UTC
+- Inactive-club retirement sweep: daily at 03:15 UTC
+- Transfer-market and player-auction expiry: every 5 minutes UTC
+
+Protected scheduled routes require the shared `CRON_SECRET`, stored in Firebase Secret Manager. Never commit the secret or service-account credentials.
+
+## Beta validation baseline
+
+- TypeScript check
+- Core regression tests
+- Full test suite
+- Firebase Emulator registration transactions
+- Production build
+
+CI validation is not a deployment. The working branch and draft pull request must remain unmerged until explicitly approved.
