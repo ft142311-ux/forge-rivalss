@@ -87,28 +87,35 @@ function buildRoundPairings(round: number, input: Team[]): Pairing[] {
   }
   return pairs;
 }
+function buildCupRoundMatchData(season: number, round: number, pairing: Pairing[], scheduledAt: any) {
+  const isFinal = round === ROUND_COUNT;
+  return {
+    id: pairing.matchId, type: 'cup', matchType: 'cup', source: 'pyramid-cup', cupId: cupId(season), cupRound: round,
+    cupRoundLabel: isFinal ? 'final' : round === 1 ? 'preliminary' : `round_${round}`,
+    season, leagueId: LEAGUE_ID, homeId: pairing.home!.id, awayId: pairing.away!.id,
+    homeName: pairing.home!.name, awayName: pairing.away!.name,
+    homeRank: pairing.home!.rank, awayRank: pairing.away!.rank,
+    homeLevel: pairing.home!.level, awayLevel: pairing.away!.level,
+    homeGroup: pairing.home!.group, awayGroup: pairing.away!.group,
+    homeSeed: pairing.home!.seed, awaySeed: pairing.away!.seed,
+    bestOf: isFinal ? 3 : 1, scheduledAt, startTime: scheduledAt, scheduledStartAt: scheduledAt,
+    status: 'scheduled', isFinished: false, isProcessing: false, reportStatus: 'pending', seen: false,
+    affectsLeagueStandings: false, version: 141,
+    createdAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp(),
+  };
+}
+
 async function createRoundMatches(db: any, season: number, round: number, pairings: Pairing[], seasonStart: Date) {
   const batch = db.batch();
   const scheduledAt = Timestamp.fromDate(roundDate(seasonStart, ROUND_DAYS[round - 1]));
   for (const pairing of pairings) {
     if (!pairing.home || !pairing.away) continue;
-    const id = matchId(season, round, pairing.index);
-    pairing.matchId = id;
-    const isFinal = round === ROUND_COUNT;
-    batch.set(db.collection(MATCH_COLLECTIONS.cup).doc(id), {
-      id, type: 'cup', matchType: 'cup', source: 'pyramid-cup', cupId: cupId(season), cupRound: round,
-      cupRoundLabel: isFinal ? 'final' : round === 1 ? 'preliminary' : `round_${round}`,
-      season, leagueId: LEAGUE_ID, homeId: pairing.home.id, awayId: pairing.away.id,
-      homeName: pairing.home.name, awayName: pairing.away.name,
-      homeRank: pairing.home.rank, awayRank: pairing.away.rank,
-      homeLevel: pairing.home.level, awayLevel: pairing.away.level,
-      homeGroup: pairing.home.group, awayGroup: pairing.away.group,
-      homeSeed: pairing.home.seed, awaySeed: pairing.away.seed,
-      bestOf: isFinal ? 3 : 1, scheduledAt, startTime: scheduledAt, scheduledStartAt: scheduledAt,
-      status: 'scheduled', isFinished: false, isProcessing: false, reportStatus: 'pending', seen: false,
-      affectsLeagueStandings: false, version: 141,
-      createdAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp(),
-    }, { merge: true });
+    pairing.matchId = matchId(season, round, pairing.index);
+    batch.set(
+      db.collection(MATCH_COLLECTIONS.cup).doc(pairing.matchId),
+      buildCupRoundMatchData(season, round, pairing, scheduledAt),
+      { merge: true },
+    );
   }
   await batch.commit();
   return pairings;
@@ -124,16 +131,24 @@ export async function generatePyramidCup(targetSeasonNumber?: number) {
   const teams = await loadAllLeagueTeams(db, season);
   const seasonStart = info.currentSeasonStart;
   const first = createPreliminary(teams);
+  const batch = db.batch();
+  const scheduledAt = Timestamp.fromDate(roundDate(seasonStart, ROUND_DAYS[0]));
+  for (const pairing of first) {
+    if (!pairing.home || !pairing.away) continue;
+    pairing.matchId = matchId(season, 1, pairing.index);
+    batch.set(db.collection(MATCH_COLLECTIONS.cup).doc(pairing.matchId), buildCupRoundMatchData(season, 1, pairing, scheduledAt));
+  }
   const rounds: Record<string, any[]> = { [roundKey(1)]: first };
   for (let round = 2; round <= ROUND_COUNT; round++) rounds[roundKey(round)] = [];
-  await ref.create({
+  // The cup record and all 56 first-round fixtures commit together. A crash
+  // cannot leave an existing bracket with no match documents to process.
+  batch.create(ref, {
     id, season, leagueId: LEAGUE_ID, name: 'Кубок Пирамиды', status: 'active', currentRound: 1,
     totalRounds: ROUND_COUNT, totalParticipants: TOTAL_TEAMS, preliminaryMatches: 56, byeCount: 8,
     participants: teams.map(publicTeam), rounds, winnerId: null, winnerName: null,
     seasonStart: seasonStart.toISOString(), createdAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp(), version: 3,
   });
-  await createRoundMatches(db, season, 1, first, seasonStart);
-  await ref.update({ rounds: { ...rounds, [roundKey(1)]: first }, updatedAt: FieldValue.serverTimestamp() });
+  await batch.commit();
   return { success: true, created: true, cupId: id, participants: TOTAL_TEAMS, preliminaryMatches: 56 };
 }
 async function loadCup(db: any, season: number) {
@@ -250,6 +265,59 @@ async function finishTechnically(db: any, season: number, round: number, pairing
   });
 }
 
+/**
+ * Recover a legacy/interrupted round whose bracket was persisted before every
+ * fixture document. The transaction creates only missing deterministic IDs;
+ * existing results are never overwritten by a retry.
+ */
+async function repairCurrentRoundFixtures(db: any, cup: { ref: any; data: any }) {
+  return db.runTransaction(async (tx: any) => {
+    const cupSnap = await tx.get(cup.ref);
+    if (!cupSnap.exists) return { repaired: 0, changed: false };
+    const data = cupSnap.data() || {};
+    if (data.status === 'completed') return { repaired: 0, changed: false };
+    const season = Number(data.season);
+    const round = Number(data.currentRound || 1);
+    if (!Number.isSafeInteger(season) || season < 1 || !Number.isSafeInteger(round) || round < 1 || round > ROUND_COUNT) {
+      throw new Error('CUP_ROUND_IDENTITY_INVALID');
+    }
+    const rounds: Record<string, any[]> = { ...(data.rounds || {}) };
+    const rawPairings = rounds[roundKey(round)];
+    if (!Array.isArray(rawPairings)) return { repaired: 0, changed: false };
+    const pairings: Pairing[] = rawPairings.map((pairing: any) => ({ ...pairing }));
+    let changed = false;
+    const entries = pairings
+      .filter(pairing => pairing.home && pairing.away)
+      .map(pairing => {
+        const expectedId = matchId(season, round, Number(pairing.index));
+        if (pairing.matchId && pairing.matchId !== expectedId) {
+          throw new Error('CUP_FIXTURE_ID_CONFLICT');
+        }
+        if (pairing.matchId !== expectedId) {
+          pairing.matchId = expectedId;
+          changed = true;
+        }
+        return { pairing, ref: db.collection(MATCH_COLLECTIONS.cup).doc(expectedId) };
+      });
+    const snapshots = await Promise.all(entries.map(entry => tx.get(entry.ref)));
+    let repaired = 0;
+    const scheduledAt = Timestamp.fromDate(roundDate(
+      new Date(String(data.seasonStart || getGlobalSeasonInfo().currentSeasonStart.toISOString())),
+      ROUND_DAYS[round - 1],
+    ));
+    entries.forEach((entry, index) => {
+      if (snapshots[index].exists) return;
+      tx.create(entry.ref, buildCupRoundMatchData(season, round, entry.pairing, scheduledAt));
+      repaired++;
+    });
+    if (changed || repaired > 0) {
+      rounds[roundKey(round)] = pairings;
+      tx.update(cup.ref, { rounds, updatedAt: FieldValue.serverTimestamp() });
+    }
+    return { repaired, changed };
+  });
+}
+
 export async function runPyramidCupCycle() {
   const db = getAdminDb();
   const info = getGlobalSeasonInfo();
@@ -264,6 +332,13 @@ export async function runPyramidCupCycle() {
     }
   }
   if (cup.data.status === 'completed') return { generated: false, resolved: 0, advanced: 0, completed: true };
+
+  const fixtureRepair = await repairCurrentRoundFixtures(db, cup);
+  if (fixtureRepair.repaired > 0 || fixtureRepair.changed) {
+    console.warn('[PYRAMID CUP] Recovered interrupted round fixtures', { cupId: cup.data.id, ...fixtureRepair });
+    cup = await loadCup(db, season);
+    if (!cup) throw new Error('CUP_DISAPPEARED_DURING_FIXTURE_RECOVERY');
+  }
 
   const round = Number(cup.data.currentRound || 1);
   const rounds: Record<string, any[]> = { ...(cup.data.rounds || {}) };
