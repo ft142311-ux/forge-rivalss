@@ -42,3 +42,25 @@ test('concurrent final-stage workers reuse one committed completion timestamp', 
   assert.match(finalizer, /return \{ id: tournament\.id, \.\.\.current \}/);
   assert.match(finalizer, /const finishedAt = Date\.now\(\)/);
 });
+
+test('stage transitions are transactionally fenced against stale concurrent workers', () => {
+  const helperStart = source.indexOf('async function commitTournamentStageTransition');
+  const helperEnd = source.indexOf('async function advanceTournament', helperStart);
+  assert.ok(helperStart >= 0 && helperEnd > helperStart);
+  const helper = source.slice(helperStart, helperEnd);
+  assert.match(helper, /db\.runTransaction\(async \(t: any\) =>/);
+  assert.match(helper, /current\.stage !== expectedStage/);
+  assert.match(helper, /!\['groups', 'active'\]\.includes\(String\(current\.status\)\)/);
+  assert.match(helper, /TOURNAMENT_STAGE_FIXTURE_CONFLICT/);
+  assert.match(helper, /t\.create\(fixtureRefs\[index\]/);
+  assert.match(helper, /t\.update\(tournamentRef/);
+  assert.doesNotMatch(helper, /batch\.set/);
+});
+
+test('group and knockout advancement both use the same fenced transition commit', () => {
+  const advanceStart = source.indexOf('async function advanceTournament');
+  const advanceEnd = source.indexOf('export async function runTournamentCycle', advanceStart);
+  const advance = source.slice(advanceStart, advanceEnd);
+  const calls = advance.match(/commitTournamentStageTransition\(db, tournament\.id, stage, nextStage, fixtures\)/g) || [];
+  assert.equal(calls.length, 2);
+});
