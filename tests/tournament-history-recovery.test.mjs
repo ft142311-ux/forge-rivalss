@@ -27,6 +27,7 @@ test('completed tournament history sync is retried and finalized only after idem
   const participantSyncEnd = source.indexOf('async function syncCompletedTournamentHistory', participantSyncStart);
   assert.ok(participantSyncStart >= 0 && participantSyncEnd > participantSyncStart);
   const participantSync = source.slice(participantSyncStart, participantSyncEnd);
+  assert.match(participantSync, /FieldValue\\.arrayUnion\\(/);
   assert.match(participantSync, /inactive_clubs_v1/);
   assert.match(participantSync, /clubSnapshot\.tournamentHistory/);
   assert.match(participantSync, /TOURNAMENT_HISTORY_PROFILE_MISSING/);
