@@ -18,6 +18,7 @@ type Team = { id: string; name: string; level: number; group: number; rank: numb
 type Pairing = { id: string; index: number; home: Team | null; away: Team | null; status: 'scheduled' | 'bye' | 'finished'; matchId?: string | null; winnerId?: string | null; scoreA?: number | null; scoreB?: number | null; technicalDecision?: boolean };
 
 function resolveCupDate(value: any): Date {
+  if (value === null || value === undefined || value === '') throw new Error('CUP_SEASON_START_INVALID');
   const date = value instanceof Date
     ? new Date(value.getTime())
     : value && typeof value.toDate === 'function'
