@@ -64,3 +64,30 @@ test('group and knockout advancement both use the same fenced transition commit'
   const calls = advance.match(/commitTournamentStageTransition\(db, tournament\.id, stage, nextStage, fixtures\)/g) || [];
   assert.equal(calls.length, 2);
 });
+
+test('interrupted tournament initialization is reclaimed only after its lease expires', () => {
+  const initStart = source.indexOf('async function initializeTournament');
+  const initEnd = source.indexOf('async function participantSnapshot', initStart);
+  assert.ok(initStart >= 0 && initEnd > initStart);
+  const initializer = source.slice(initStart, initEnd);
+  assert.match(initializer, /data\.status === 'initializing'/);
+  assert.match(initializer, /isTournamentMatchLeaseExpired\(data\.initializingAt, now, TOURNAMENT_MATCH_LEASE_MS\)/);
+  assert.match(initializer, /initializationToken/);
+  assert.match(initializer, /current\.initializationToken !== initializationToken/);
+  assert.match(initializer, /TOURNAMENT_INITIALIZATION_LEASE_LOST/);
+  assert.match(initializer, /t\.create\(ref\.collection\('participants'\)/);
+  assert.match(initializer, /t\.create\(ref\.collection\('groups'\)/);
+  assert.match(initializer, /t\.create\(ref\.collection\('matches'\)/);
+  assert.match(initializer, /initializationToken: FieldValue\.delete\(\)/);
+  assert.match(initializer, /initializingAt: FieldValue\.delete\(\)/);
+});
+
+test('tournament cron revisits initializing tournaments for lease recovery', () => {
+  assert.match(source, /where\('status', 'in', \['registration', 'initializing', 'groups', 'active'\]\)/);
+  assert.match(source, /tournament\.status === 'initializing'/);
+  const initStart = source.indexOf('async function initializeTournament');
+  const initEnd = source.indexOf('async function participantSnapshot', initStart);
+  const initializer = source.slice(initStart, initEnd);
+  assert.match(initializer, /current\.status !== 'initializing'/);
+  assert.match(initializer, /current\.initializationToken !== initializationToken/);
+});
