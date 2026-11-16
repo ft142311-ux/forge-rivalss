@@ -6,7 +6,7 @@ import { prepareSeasonRollover } from './season-rollover';
 import { acquireSeasonCalendarBuildLock, assertSeasonCalendarBuildLock, commitSeasonCalendarPublication, commitSeasonCalendarWrites, commitSeasonHistoryCleanupWrites, releaseSeasonCalendarBuildLock } from './season-rollover-lock';
 import { buildCarryForwardGroups, buildPromotionRelegationGroups, compareRecoveryRolloverPlans, resolveRecoveryPlacementSource, resolveRolloverPlanPruneIds, validateRolloverPlan } from './season-rollover-plan';
 import { getRecoveryRolloverPlanSignature } from './season-rollover-plan-signature';
-import { resolveActivatedSkippedHistoryMarker, resolveActivatedSkippedSeasons, resolveHistoryCleanupCompletion, resolvePendingSkippedHistoryMarker, resolvePostActivationRetry, resolveSeasonCatchUpPolicy, type SeasonHistoryState } from './season-history-policy';
+import { resolveActivatedSkippedHistoryMarker, resolveActivatedSkippedSeasons, resolveHistoryCleanupCompletion, resolveHistoryCleanupPostflight, resolvePendingSkippedHistoryMarker, resolvePostActivationRetry, resolveSeasonCatchUpPolicy, type SeasonHistoryState } from './season-history-policy';
 import { evaluateCanonicalDocuments } from './season-canonical';
 import { resolvePreparedSlotRetry, shouldRepairExistingMatchCoordinates } from './season-calendar-retry-policy';
 import { publishRecoveryRolloverDecision } from './season-recovery-publication';
@@ -1348,6 +1348,47 @@ async function pruneSeasonHistoryAfterActivation(
     if (chunk.length) await commitSeasonHistoryCleanupWrites(db, cleanupLock.ownerId, cleanupLock.token, targetSeason, [], chunk.map(planId => db.collection('league_season_rollovers_v1').doc(planId)));
     deletedRolloverPlans += chunk.length;
   }
+
+  // Re-read persisted state after all deletion batches. A successful batch
+  // response alone is not enough to clear the durable cleanup marker.
+  const [postflightArchivesSnap, postflightHistorySnap, postflightPlansSnap] = await Promise.all([
+    db.collection('league_season_archives_v1').get(),
+    db.collection('league_season_history_v1').get(),
+    db.collection('league_season_rollovers_v1').get(),
+  ]);
+  const postflightHistoryById = new Map<string, any>(
+    postflightHistorySnap.docs.map((doc: any): [string, any] => [doc.id, doc.data() || {}]),
+  );
+  const postflightArchiveItems = [];
+  for (const archiveDoc of postflightArchivesSnap.docs) {
+    const matchesSnap = await archiveDoc.ref.collection('matches').get();
+    postflightArchiveItems.push({
+      id: archiveDoc.id,
+      archive: archiveDoc.data() || {},
+      matches: matchesSnap.docs.map((doc: any) => ({ ...doc.data(), matchId: doc.id })),
+      historyStatus: String((postflightHistoryById.get(archiveDoc.id) || {}).status || ''),
+    });
+  }
+  const postflightArchivePlan = resolveArchivePrunePlan(
+    postflightArchiveItems, targetSeason, retainedArchiveSeason,
+  );
+  const postflightRolloverPlan = resolveRolloverPlanPruneIds(
+    postflightPlansSnap.docs.map((doc: any) => ({ id: doc.id, plan: doc.data() || {} })),
+    targetSeason,
+  );
+  const postflightSkippedMarkers = configSkipped.seasons.map(item =>
+    resolveActivatedSkippedHistoryMarker(
+      postflightHistoryById.get(`S${item.seasonNumber}`) || null,
+      { seasonNumber: item.seasonNumber, reason: item.reason, targetSeason },
+    ),
+  );
+  const postflight = resolveHistoryCleanupPostflight({
+    archivePlan: postflightArchivePlan,
+    rolloverPlan: postflightRolloverPlan,
+    skippedHistoryMarkers: postflightSkippedMarkers,
+  });
+  if (!postflight.ready) throw new Error(postflight.reason || 'SEASON_HISTORY_CLEANUP_POSTFLIGHT_FAILED');
+
   return {
     deletedArchives,
     deletedArchiveMatches,
