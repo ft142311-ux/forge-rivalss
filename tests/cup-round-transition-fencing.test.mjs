@@ -4,18 +4,20 @@ import { readFileSync } from 'node:fs';
 
 const source = readFileSync(new URL('../src/app/actions/cup-engine.ts', import.meta.url), 'utf8');
 
-test('cup round fixture retries create only missing documents and never merge-reset existing matches', () => {
-  const start = source.indexOf('async function createRoundMatches');
+test('cup fixture creation and round advancement share one fenced transaction', () => {
+  const start = source.indexOf('async function commitCupRoundTransition');
   const end = source.indexOf('async function commitCupRoundState', start);
   assert.ok(start >= 0 && end > start);
-  const writer = source.slice(start, end);
-  assert.match(writer, /db\.runTransaction\(async \(tx: any\) =>/);
-  assert.match(writer, /tx\.get\(entry\.dedicatedRef\)/);
-  assert.match(writer, /tx\.get\(entry\.legacyRef\)/);
-  assert.match(writer, /if \(existing\) \{/);
-  assert.match(writer, /tx\.create\(entry\.dedicatedRef/);
-  assert.doesNotMatch(writer, /batch\.set\(/);
-  assert.doesNotMatch(writer, /\{ merge: true \}/);
+  const transition = source.slice(start, end);
+  assert.match(transition, /db\.runTransaction\(async \(tx: any\) =>/);
+  assert.match(transition, /Number\(current\.currentRound \|\| 1\) !== expectedRound/);
+  assert.match(transition, /tx\.get\(entry\.dedicatedRef\)/);
+  assert.match(transition, /tx\.get\(entry\.legacyRef\)/);
+  assert.match(transition, /tx\.create\(entry\.dedicatedRef/);
+  assert.match(transition, /rounds\[roundKey\(nextRound\)\] = nextPairings/);
+  assert.match(transition, /currentRound: nextRound/);
+  assert.ok(transition.indexOf('Promise.all(entries.map') < transition.indexOf('entries.forEach'));
+  assert.doesNotMatch(transition, /batch\.set\(/);
 });
 
 test('cup round state commits only when the persisted round still matches the worker snapshot', () => {
