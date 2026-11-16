@@ -23,7 +23,7 @@ export async function placeSpecialMarketBidWithDb(
   const bidderLedgerRef = db.collection('economy_transactions').doc();
   const refundLedgerRef = db.collection('economy_transactions').doc();
 
-  return db.runTransaction(async (tx) => {
+  return db.runTransaction(async (tx: any) => {
     const [lotSnap, bidderSnap] = await Promise.all([tx.get(lotRef), tx.get(bidderRef)]);
     if (!lotSnap.exists) throw new Error('MARKET_LOT_NOT_FOUND');
     if (!bidderSnap.exists) throw new Error('PLAYER_NOT_FOUND');
