@@ -50,9 +50,25 @@ test('two simultaneous rollover attempts have one owner', async () => {
 test('foreign owner cannot release the rollover lock', async () => {
   const db = mockDb();
   await acquireSeasonRolloverLock(db, 1, 2, { ownerId: 'owner', nowMs: 100 });
-  const result = await releaseSeasonRolloverLock(db, 'other');
+  const result = await releaseSeasonRolloverLock(db, 'other', 'wrong-token');
   assert.equal(result.released, false);
   assert.equal(db.read().ownerId, 'owner');
+});
+
+
+test('an expired worker with a reused owner id cannot release the replacement lease without its fencing token', async () => {
+  const db = mockDb();
+  const old = await acquireSeasonRolloverLock(db, 1, 2, { ownerId: 'reused-owner', nowMs: 100, ttlMs: 10 });
+  const replacement = await acquireSeasonRolloverLock(db, 1, 2, { ownerId: 'reused-owner', nowMs: 111 });
+  assert.equal(replacement.acquired, true);
+  assert.notEqual(replacement.token, old.token);
+
+  const staleRelease = await releaseSeasonRolloverLock(db, old.ownerId, old.token);
+  assert.equal(staleRelease.released, false);
+  assert.equal(db.read().token, replacement.token);
+
+  const currentRelease = await releaseSeasonRolloverLock(db, replacement.ownerId, replacement.token);
+  assert.equal(currentRelease.released, true);
 });
 
 test('expired rollover lock can be recovered by a new owner', async () => {
