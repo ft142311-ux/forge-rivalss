@@ -591,6 +591,50 @@ function expectedStageMatchCount(maxParticipants: number, stage: string) {
   return 0;
 }
 
+/**
+ * Final tournament results and participant history are separate documents.
+ * Keep a durable pending marker until every human profile receives its
+ * idempotent arrayUnion entry, so an interrupted cron run can resume.
+ */
+async function syncCompletedTournamentHistory(db: any, tournament: any) {
+  if (tournament?.status !== 'completed' || tournament?.historySyncStatus === 'completed') {
+    return tournament?.historySyncStatus === 'completed';
+  }
+  if (tournament?.historySyncStatus !== 'pending') return false;
+
+  const tournamentRef = db.collection('tournaments_v1').doc(String(tournament.id));
+  const participantSnap = await tournamentRef.collection('participants').get();
+  const finishedAtMs = Number(tournament.finishedAt);
+  const endDate = new Date(Number.isFinite(finishedAtMs) && finishedAtMs > 0 ? finishedAtMs : Date.now()).toISOString();
+  const startAtMs = Number(tournament.startAt);
+  const startDate = new Date(Number.isFinite(startAtMs) ? startAtMs : 0).toISOString();
+
+  const updates = participantSnap.docs.map((participantDoc: any) => {
+    const participant = participantDoc.data() || {};
+    if (participant.isBot || !participant.id) return null;
+    const participantId = String(participant.id);
+    return db.collection('players_v14').doc(participantId).update({
+      tournamentHistory: FieldValue.arrayUnion({
+        tournamentId: String(tournament.id),
+        tournamentName: String(tournament.name || tournament.id),
+        result: participantId === String(tournament.winnerId) ? 'Победитель' : 'Участник',
+        status: 'finished',
+        startDate,
+        endDate,
+      }),
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+  }).filter(Boolean);
+
+  await Promise.all(updates);
+  await tournamentRef.update({
+    historySyncStatus: 'completed',
+    historySyncedAt: FieldValue.serverTimestamp(),
+    updatedAt: FieldValue.serverTimestamp(),
+  });
+  return true;
+}
+
 async function advanceTournament(db: any, tournament: any, now: number) {
   const ref = db.collection('tournaments_v1').doc(tournament.id);
   const stage = tournament.stage as Stage;
@@ -664,24 +708,28 @@ async function advanceTournament(db: any, tournament: any, now: number) {
     const finalMatch = finalSnap.docs[0]?.data();
     if (!finalMatch?.winnerId) return false;
     const finishedAt = Date.now();
+    const completedTournament = {
+      ...tournament,
+      id: tournament.id,
+      name: tournament.name,
+      status: 'completed',
+      stage: 'completed',
+      winnerId: finalMatch.winnerId,
+      winnerName: finalMatch.winnerName,
+      finishedAt,
+      historySyncStatus: 'pending',
+    };
     await ref.update({
-      stage: 'completed', status: 'completed', winnerId: finalMatch.winnerId, winnerName: finalMatch.winnerName,
-      finishedAt, updatedAt: FieldValue.serverTimestamp(),
+      stage: 'completed',
+      status: 'completed',
+      winnerId: finalMatch.winnerId,
+      winnerName: finalMatch.winnerName,
+      finishedAt,
+      historySyncStatus: 'pending',
+      updatedAt: FieldValue.serverTimestamp(),
     });
 
-    const participantSnap = await ref.collection('participants').get();
-    const updates = participantSnap.docs.map((d: any) => {
-      const p = d.data();
-      if (p.isBot) return null;
-      return db.collection('players_v14').doc(p.id).update({
-        tournamentHistory: FieldValue.arrayUnion({
-          tournamentId: tournament.id, tournamentName: tournament.name, result: p.id === finalMatch.winnerId ? 'Победитель' : 'Участник',
-          status: 'finished', startDate: new Date(Number(tournament.startAt)).toISOString(), endDate: new Date(finishedAt).toISOString(),
-        }),
-        updatedAt: FieldValue.serverTimestamp(),
-      });
-    }).filter(Boolean);
-    await Promise.all(updates);
+    await syncCompletedTournamentHistory(db, completedTournament);
     return true;
   }
 
@@ -697,6 +745,21 @@ export async function runTournamentCycle(cronToken: string) {
   const generated = await generateDailyTournamentsInternal();
   const db = getAdminDb();
   const now = Date.now();
+  // Retry participant history independently from active tournament stages.
+  const pendingHistorySnap = await db.collection('tournaments_v1')
+    .where('historySyncStatus', '==', 'pending')
+    .get();
+  let historiesSynced = 0;
+  for (const pendingDoc of pendingHistorySnap.docs) {
+    const pendingTournament = { id: pendingDoc.id, ...pendingDoc.data() } as any;
+    if (pendingTournament.status !== 'completed') continue;
+    try {
+      if (await syncCompletedTournamentHistory(db, pendingTournament)) historiesSynced++;
+    } catch (error) {
+      console.error('[TOURNAMENT HISTORY SYNC] retry pending:', pendingDoc.id, error);
+    }
+  }
+
   const snap = await db.collection('tournaments_v1').where('status', 'in', ['registration', 'groups', 'active']).get();
   let initialized = 0;
   let resolved = 0;
@@ -723,7 +786,7 @@ export async function runTournamentCycle(cronToken: string) {
     }
   }
 
-  return { generated, initialized, resolved, advanced };
+  return { generated, initialized, resolved, advanced, historiesSynced };
 }
 
 export async function getTournamentCatalogAction(idToken: string) {
