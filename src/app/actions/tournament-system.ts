@@ -635,6 +635,40 @@ async function syncCompletedTournamentHistory(db: any, tournament: any) {
   return true;
 }
 
+/**
+ * Commit stage advancement only while the tournament remains on the expected
+ * source stage. Deterministic IDs make retries safe; stale workers cannot
+ * overwrite fixtures after a newer stage has already advanced.
+ */
+async function commitTournamentStageTransition(
+  db: any, tournamentId: string, expectedStage: string, nextStage: string,
+  fixtures: Array<Record<string, any>>,
+) {
+  const tournamentRef = db.collection('tournaments_v1').doc(tournamentId);
+  return db.runTransaction(async (t: any) => {
+    const tournamentSnap = await t.get(tournamentRef);
+    if (!tournamentSnap.exists) return false;
+    const current = tournamentSnap.data() || {};
+    if (current.stage !== expectedStage || current.status !== 'active') return false;
+    const fixtureRefs = fixtures.map(fixture => tournamentRef.collection('matches').doc(String(fixture.id)));
+    const existingSnaps = await Promise.all(fixtureRefs.map((ref: any) => t.get(ref)));
+    for (let index = 0; index < fixtures.length; index++) {
+      const fixture = fixtures[index];
+      const existing = existingSnaps[index];
+      if (!existing.exists) continue;
+      const data = existing.data() || {};
+      if (data.stage !== nextStage || String(data.homeId) !== String(fixture.homeId) ||
+          String(data.awayId) !== String(fixture.awayId) || Number(data.index) !== Number(fixture.index)) {
+        throw new Error('TOURNAMENT_STAGE_FIXTURE_CONFLICT');
+      }
+    }
+    fixtures.forEach((fixture, index) => {
+      if (!existingSnaps[index].exists) t.create(fixtureRefs[index], { ...fixture, createdAt: FieldValue.serverTimestamp() });
+    });
+    t.update(tournamentRef, { stage: nextStage, status: 'active', updatedAt: FieldValue.serverTimestamp() });
+    return true;
+  });
+}
 async function advanceTournament(db: any, tournament: any, now: number) {
   const ref = db.collection('tournaments_v1').doc(tournament.id);
   const stage = tournament.stage as Stage;
@@ -664,18 +698,15 @@ async function advanceTournament(db: any, tournament: any, now: number) {
       throw new Error('INVALID_KNOCKOUT_PAIRING');
     }
     const nextStage = stageForParticipants(Number(tournament.maxParticipants));
-    const batch = db.batch();
-    pairs.forEach(([home, away], index) => {
+    const fixtures = pairs.map(([home, away], index) => {
       const matchId = `${nextStage}_${index + 1}`;
-      batch.set(ref.collection('matches').doc(matchId), {
+      return {
         id: matchId, tournamentId: tournament.id, stage: nextStage, round: 1, index: index + 1,
         homeId: home.id, awayId: away.id, homeName: home.name, awayName: away.name,
-        bestOf: 2, scheduledAt: addMinutes(Number(tournament.startAt), stageStartOffset(Number(tournament.maxParticipants), nextStage)), status: 'scheduled', createdAt: FieldValue.serverTimestamp(),
-      });
+        bestOf: 2, scheduledAt: addMinutes(Number(tournament.startAt), stageStartOffset(Number(tournament.maxParticipants), nextStage)), status: 'scheduled',
+      };
     });
-    batch.update(ref, { stage: nextStage, status: 'active', updatedAt: FieldValue.serverTimestamp() });
-    await batch.commit();
-    return true;
+    return commitTournamentStageTransition(db, tournament.id, stage, nextStage, fixtures);
   }
 
   if (['round_of_16', 'quarterfinal', 'semifinal'].includes(stage)) {
@@ -687,19 +718,17 @@ async function advanceTournament(db: any, tournament: any, now: number) {
     const winners = ordered.map((d: any) => d.data()).map((m: any) => ({ id: m.winnerId, name: m.winnerName })).filter((x: any) => x.id);
     const nextStage: Stage = stage === 'round_of_16' ? 'quarterfinal' : stage === 'quarterfinal' ? 'semifinal' : 'final';
     if (winners.length !== stageExpected || new Set(winners.map((team: any) => team.id)).size !== winners.length || winners.length < 2 || winners.length % 2 !== 0) return false;
-    const batch = db.batch();
+    const fixtures = [];
     for (let i = 0; i < winners.length; i += 2) {
       const home = winners[i], away = winners[i + 1];
       const matchId = `${nextStage}_${i / 2 + 1}`;
-      batch.set(ref.collection('matches').doc(matchId), {
+      fixtures.push({
         id: matchId, tournamentId: tournament.id, stage: nextStage, round: 1, index: i / 2 + 1,
         homeId: home.id, awayId: away.id, homeName: home.name, awayName: away.name,
-        bestOf: 2, scheduledAt: addMinutes(Number(tournament.startAt), stageStartOffset(Number(tournament.maxParticipants), nextStage)), status: 'scheduled', createdAt: FieldValue.serverTimestamp(),
+        bestOf: 2, scheduledAt: addMinutes(Number(tournament.startAt), stageStartOffset(Number(tournament.maxParticipants), nextStage)), status: 'scheduled',
       });
     }
-    batch.update(ref, { stage: nextStage, status: 'active', updatedAt: FieldValue.serverTimestamp() });
-    await batch.commit();
-    return true;
+    return commitTournamentStageTransition(db, tournament.id, stage, nextStage, fixtures);
   }
 
   if (stage === 'final') {
