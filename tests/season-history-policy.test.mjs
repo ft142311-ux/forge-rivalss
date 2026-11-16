@@ -208,3 +208,25 @@ test('activated skipped history marker refuses to overwrite a conflicting lifecy
   }
 });
 
+
+
+test('history cleanup postflight requires archives, rollover plans, and skipped markers to be fully reconciled', async () => {
+  const { resolveHistoryCleanupPostflight } = await import('../src/app/actions/season-history-policy.ts');
+  const valid = {
+    archivePlan: { ready: true, pruneIds: [] },
+    rolloverPlan: { ready: true, pruneIds: [] },
+    skippedHistoryMarkers: [{ ready: true, shouldWrite: false }],
+  };
+  assert.deepEqual(resolveHistoryCleanupPostflight(valid), { ready: true, reason: null });
+
+  for (const [input, reason] of [
+    [{ ...valid, archivePlan: { ready: true, pruneIds: ['S1'] } }, 'HISTORY_CLEANUP_ARCHIVES_REMAIN'],
+    [{ ...valid, archivePlan: { ready: false, pruneIds: [] } }, 'HISTORY_CLEANUP_ARCHIVES_REMAIN'],
+    [{ ...valid, rolloverPlan: { ready: true, pruneIds: ['S1'] } }, 'HISTORY_CLEANUP_ROLLOVER_PLANS_REMAIN'],
+    [{ ...valid, rolloverPlan: { ready: false, pruneIds: [] } }, 'HISTORY_CLEANUP_ROLLOVER_PLANS_REMAIN'],
+    [{ ...valid, skippedHistoryMarkers: [{ ready: true, shouldWrite: true }] }, 'HISTORY_CLEANUP_SKIPPED_MARKERS_INCOMPLETE'],
+    [{ ...valid, skippedHistoryMarkers: [{ ready: false, shouldWrite: false }] }, 'HISTORY_CLEANUP_SKIPPED_MARKERS_INCOMPLETE'],
+  ]) {
+    assert.deepEqual(resolveHistoryCleanupPostflight(input), { ready: false, reason });
+  }
+});
