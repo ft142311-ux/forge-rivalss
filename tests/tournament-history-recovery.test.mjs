@@ -91,3 +91,13 @@ test('tournament cron revisits initializing tournaments for lease recovery', () 
   assert.match(initializer, /current\.status !== 'initializing'/);
   assert.match(initializer, /current\.initializationToken !== initializationToken/);
 });
+
+test('legacy initializing records without an ownership token can be recovered safely', () => {
+  const initStart = source.indexOf('async function initializeTournament');
+  const initEnd = source.indexOf('async function participantSnapshot', initStart);
+  const initializer = source.slice(initStart, initEnd);
+  assert.match(initializer, /typeof data\.initializationToken === 'string'/);
+  assert.match(initializer, /!hasInitializationOwner/);
+  assert.match(initializer, /isTournamentMatchLeaseExpired\(data\.initializingAt, now, TOURNAMENT_MATCH_LEASE_MS\)/);
+  assert.match(initializer, /initializationToken,/);
+});
