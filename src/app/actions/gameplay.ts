@@ -7,6 +7,7 @@ import { z } from 'zod';
 import { Player, calculatePlayerMarketValue } from '@/app/lib/moba-data';
 import { requireServerActor } from '@/lib/server-auth';
 import { hash32 } from '@/app/lib/hash-utils';
+import { MATCH_REPORT_COLLECTIONS } from '@/app/lib/match-storage';
 
 /**
  * @fileOverview Защищенный слой игровых действий.
@@ -339,19 +340,81 @@ export async function applyMatchConsequencesAction(
   matchId: string,
   matchType: string,
   playerIds: string[],
-  minutesPlayed: number
+  _minutesPlayed: number
 ) {
   const { uid: userId } = await requireServerActor(idToken);
   const db = getAdminDb();
   try {
+    const safeMatchId = typeof matchId === 'string' ? matchId.trim() : '';
+    const safeMatchType = typeof matchType === 'string' ? matchType.trim().toLowerCase() : '';
+    if (!safeMatchId || safeMatchId.length > 180) throw new Error('INVALID_MATCH_ID');
+    if (!safeMatchType) throw new Error('INVALID_MATCH_TYPE');
+    if (!Array.isArray(playerIds) || playerIds.length > 10 ||
+        playerIds.some(id => typeof id !== 'string' || !id.trim())) {
+      throw new Error('INVALID_MATCH_PLAYER_IDS');
+    }
+    const requestedIds = [...new Set(playerIds.map(id => id.trim()))];
+    if (requestedIds.length !== playerIds.length) throw new Error('DUPLICATE_MATCH_PLAYER_IDS');
+
+    let matchRef: any = null;
+    for (const collectionName of MATCH_REPORT_COLLECTIONS) {
+      const candidate = db.collection(collectionName).doc(safeMatchId);
+      const snapshot = await candidate.get();
+      if (snapshot.exists) {
+        matchRef = candidate;
+        break;
+      }
+    }
+    if (!matchRef) throw new Error('MATCH_NOT_FOUND');
+
     await db.runTransaction(async t => {
-      const ref = db.collection('players_v14').doc(userId);
-      const snap = await t.get(ref);
-      if (!snap.exists) throw new Error('PLAYER_NOT_FOUND');
-      const data = snap.data() || {};
+      const profileRef = db.collection('players_v14').doc(userId);
+      const [matchSnap, profileSnap] = await Promise.all([t.get(matchRef), t.get(profileRef)]);
+      if (!matchSnap.exists) throw new Error('MATCH_NOT_FOUND');
+      if (!profileSnap.exists) throw new Error('PLAYER_NOT_FOUND');
+      const match: any = matchSnap.data() || {};
+      const storedMatchType = String(match.matchType || match.type || 'league').toLowerCase();
+      if (storedMatchType !== safeMatchType) throw new Error('MATCH_TYPE_MISMATCH');
+      if (match.isFinished !== true && !['finished', 'completed'].includes(String(match.status || '').toLowerCase())) {
+        throw new Error('MATCH_NOT_FINISHED');
+      }
+
+      const homeId = String(match.homeId ?? match.hostId ?? match.teamAId ?? '');
+      const awayId = String(match.awayId ?? match.challengerId ?? match.teamBId ?? '');
+      const isHome = homeId === userId;
+      const isAway = awayId === userId;
+      if (!isHome && !isAway) throw new Error('MATCH_ACCESS_DENIED');
+
+      const simulation = match.simulation || {};
+      const actualRoles = isHome ? simulation.homeRoles : simulation.awayRoles;
+      if (!Array.isArray(actualRoles) || actualRoles.length === 0) {
+        throw new Error('MATCH_LINEUP_SNAPSHOT_MISSING');
+      }
+      const actualPlayerIds = [...new Set(actualRoles
+        .map((role: any) => String(role?.playerId || ''))
+        .filter((id: string) => id && !id.startsWith('BOT_') && !id.startsWith('bot_')))];
+      if (requestedIds.some(id => !actualPlayerIds.includes(id))) {
+        throw new Error('MATCH_PLAYER_NOT_USED');
+      }
+
+      const games = Array.isArray(match.games) ? match.games : Array.isArray(simulation.games) ? simulation.games : [];
+      const minutesPlayed = games.reduce((total: number, game: any) => {
+        const duration = String(game?.duration || '');
+        const parsed = duration.match(/^(\d{1,3}):(\d{2})$/);
+        return parsed ? total + Number(parsed[1]) + Number(parsed[2]) / 60 : total;
+      }, 0);
+      if (!Number.isFinite(minutesPlayed) || minutesPlayed <= 0) {
+        throw new Error('MATCH_MINUTES_UNAVAILABLE');
+      }
+      const verifiedMinutesPlayed = Math.min(120, Math.round(minutesPlayed));
+
+      const data = profileSnap.data() || {};
       const players: Player[] = Array.isArray(data.ownedPlayers) ? data.ownedPlayers : [];
-      const ids = new Set(playerIds);
-      const official = ['league', 'cup', 'association'].includes(String(matchType).toLowerCase());
+      const ids = new Set(requestedIds.length ? requestedIds : actualPlayerIds);
+      const ownedIds = new Set(players.map(player => String(player.id)));
+      for (const id of ids) {
+        if (!ownedIds.has(id)) throw new Error('MATCH_PLAYER_NOT_OWNED');
+      }
       const now = Date.now();
       const hash = (value: string) => hash32(value) / 4294967296;
 
@@ -363,8 +426,8 @@ export async function applyMatchConsequencesAction(
         const inclinations = { ...(player.skillInclinations || {}) };
         const stats = { ...(player.proStats || {}) } as Record<string, number>;
         const talents = { ...(player.proTalents || {}) } as Record<string, number>;
-        let nextFatigue = Math.max(0, Number(player.fatigue ?? 100) - (official ? 16 : 9));
-        let nextForm = Math.max(35, Math.min(100, Number(player.form ?? 100) + (Number(minutesPlayed) >= 45 ? 1 : -1)));
+        let nextFatigue = Math.max(0, Number(player.fatigue ?? 100) - (['league', 'cup', 'association'].includes(safeMatchType) ? 16 : 9));
+        let nextForm = Math.max(35, Math.min(100, Number(player.form ?? 100) + (verifiedMinutesPlayed >= 45 ? 1 : -1)));
         let tilt = Math.max(0, Number(player.tilt || 0));
 
         if (focus && Object.prototype.hasOwnProperty.call(stats, focus)) {
@@ -377,7 +440,7 @@ export async function applyMatchConsequencesAction(
           const ageFactor = age < 22 ? 1.22 : age < 25 ? 1.08 : age < 29 ? 0.94 : 0.78;
           const talentFactor = 0.70 + talent / 100;
           const ceilingFactor = current >= cap * 0.90 ? 0.25 : current >= cap * 0.80 ? 0.55 : 1;
-          const minutesFactor = Math.max(0, Math.min(1.25, Number(minutesPlayed) / 90));
+          const minutesFactor = Math.max(0, Math.min(1.25, verifiedMinutesPlayed / 90));
           const gain = 0.35 * ageFactor * talentFactor * ceilingFactor * minutesFactor;
           const nextProgress = currentProgress + gain;
           if (nextProgress >= 1 && current < cap) {
@@ -388,15 +451,14 @@ export async function applyMatchConsequencesAction(
           }
         }
 
-        // High-risk tactical choices can produce tilt/disciplinary consequences.
         const tactics = data.tactics || {};
         const risk = (tactics.aggression === 'high' ? 0.045 : 0.015) + (tactics.pressing === 'high' ? 0.02 : 0);
         const resistance = Math.max(0, Math.min(100, Number(player.proStats?.tiltResistance || 0)));
-        const eventRoll = hash(`${matchId}:${player.id}:discipline`);
+        const eventRoll = hash(`${safeMatchId}:${player.id}:discipline`);
         if (eventRoll < risk * (1 - resistance / 180)) {
           tilt = Math.min(100, tilt + 15);
-          if (official && eventRoll < risk * 0.22) {
-            const days = 1 + Math.floor(hash(`${matchId}:${player.id}:ban`) * 3);
+          if (['league', 'cup', 'association'].includes(safeMatchType) && eventRoll < risk * 0.22) {
+            const days = 1 + Math.floor(hash(`${safeMatchId}:${player.id}:ban`) * 3);
             player = { ...player, suspensionUntil: new Date(now + days * 86400000).toISOString(), warningCount: Number(player.warningCount || 0) + 1 };
           }
         } else if (tilt > 0 && nextForm > 70) {
@@ -405,7 +467,11 @@ export async function applyMatchConsequencesAction(
 
         return { ...player, proStats: stats, trainingProgress: progress, skillCaps: caps, skillInclinations: inclinations, fatigue: nextFatigue, form: nextForm, tilt };
       });
-      t.update(ref, { ownedPlayers: updated, updatedAt: FieldValue.serverTimestamp(), lastMatchConsequences: { matchId, matchType, minutesPlayed } });
+      t.update(profileRef, {
+        ownedPlayers: updated,
+        updatedAt: FieldValue.serverTimestamp(),
+        lastMatchConsequences: { matchId: safeMatchId, matchType: safeMatchType, minutesPlayed: verifiedMinutesPlayed },
+      });
     });
     return { success: true };
   } catch (e: any) {
