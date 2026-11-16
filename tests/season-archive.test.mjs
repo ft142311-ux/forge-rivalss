@@ -267,6 +267,54 @@ test('archive pruning resumes interrupted subcollection deletion only with a mat
 });
 
 
+
+test('archive pruning refuses to resume an interrupted deletion when any intent fence field changed', async () => {
+  const { resolveArchivePrunePlan } = await import('../src/app/actions/season-archive.ts');
+  const first = makeSeasonArchive(1);
+  first.archive.status = 'completed';
+  first.archive.completedAt = '2026-10-08T15:00:00.000Z';
+  first.archive.pruneStatus = 'PRUNING';
+  first.archive.pruneTargetSeason = 4;
+  first.archive.pruneRetainedArchiveSeason = 2;
+  first.archive.prunePolicyVersion = 1;
+  const second = makeSeasonArchive(2);
+  second.archive.status = 'completed';
+  second.archive.completedAt = '2026-10-23T15:00:00.000Z';
+
+  const variants = [
+    { ...first.archive, pruneTargetSeason: 5 },
+    { ...first.archive, pruneRetainedArchiveSeason: 1 },
+    { ...first.archive, prunePolicyVersion: 2 },
+  ];
+  for (const archive of variants) {
+    const result = resolveArchivePrunePlan([
+      { id: 'S1', archive, matches: [] },
+      { id: 'S2', archive: second.archive, matches: second.matches },
+    ], 4, 2);
+    assert.equal(result.ready, false);
+    assert.equal(result.reason, 'ARCHIVE_PRUNE_MARKER_CONFLICT');
+    assert.deepEqual(result.pruneIds, []);
+  }
+});
+
+test('archive pruning never resumes deletion of the newest retained completed archive', async () => {
+  const { resolveArchivePrunePlan } = await import('../src/app/actions/season-archive.ts');
+  const retained = makeSeasonArchive(2);
+  retained.archive.status = 'completed';
+  retained.archive.completedAt = '2026-10-23T15:00:00.000Z';
+  retained.archive.pruneStatus = 'PRUNING';
+  retained.archive.pruneTargetSeason = 4;
+  retained.archive.pruneRetainedArchiveSeason = 2;
+  retained.archive.prunePolicyVersion = 1;
+
+  const result = resolveArchivePrunePlan([
+    { id: 'S2', archive: retained.archive, matches: retained.matches },
+  ], 4, 2);
+  assert.equal(result.ready, false);
+  assert.equal(result.reason, 'RETAINED_ARCHIVE_MARKED_FOR_PRUNING');
+  assert.deepEqual(result.pruneIds, []);
+});
+
 test('recovered season archive snapshot records only starting placements and truthful unfinished counts', async () => {
   const { buildRecoveredSeasonArchiveSnapshot, isRecoveredSeasonArchive } = await import('../src/app/actions/season-archive.ts');
   const startingParticipants = Object.fromEntries(expectedRolloverGroups().map(group => [group,
