@@ -23,6 +23,14 @@ test('completed tournament history sync is retried and finalized only after idem
   assert.match(helper, /FieldValue\.arrayUnion\(/);
   assert.match(helper, /await Promise\.all\(updates\)/);
   assert.match(helper, /historySyncStatus: 'completed'/);
+  const participantSyncStart = source.indexOf('async function syncTournamentHistoryForParticipant');
+  const participantSyncEnd = source.indexOf('async function syncCompletedTournamentHistory', participantSyncStart);
+  assert.ok(participantSyncStart >= 0 && participantSyncEnd > participantSyncStart);
+  const participantSync = source.slice(participantSyncStart, participantSyncEnd);
+  assert.match(participantSync, /inactive_clubs_v1/);
+  assert.match(participantSync, /clubSnapshot\.tournamentHistory/);
+  assert.match(participantSync, /TOURNAMENT_HISTORY_PROFILE_MISSING/);
+  assert.match(participantSync, /db\.runTransaction\(async \(t: any\) =>/);
 
   const cycleStart = source.indexOf('export async function runTournamentCycle');
   const cycle = source.slice(cycleStart);
