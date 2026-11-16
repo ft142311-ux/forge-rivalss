@@ -60,4 +60,5 @@ test('new special-market bids validate existing escrow before charging or replac
   const charge = block.indexOf('const chargeAmount =');
   assert.ok(guard >= 0 && charge > guard);
   assert.match(block, /highestBidderId \|\| lot\.highestBidderUid/);
+  assert.match(block, /resolveAuctionPrice\(lot\.currentBid, lot\.startingPrice, 0\)/);
 });
