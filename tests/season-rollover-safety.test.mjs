@@ -71,6 +71,14 @@ test('an expired worker with a reused owner id cannot release the replacement le
   assert.equal(currentRelease.released, true);
 });
 
+test('rollover lock cannot be released without presenting its fencing token', async () => {
+  const db = mockDb();
+  const lease = await acquireSeasonRolloverLock(db, 1, 2, { ownerId: 'worker', nowMs: 100 });
+  const result = await releaseSeasonRolloverLock(db, lease.ownerId);
+  assert.equal(result.released, false);
+  assert.equal(db.read().token, lease.token);
+});
+
 test('expired rollover lock can be recovered by a new owner', async () => {
   const db = mockDb();
   await acquireSeasonRolloverLock(db, 1, 2, { ownerId: 'old', nowMs: 100, ttlMs: 10 });
