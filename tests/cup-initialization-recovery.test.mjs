@@ -38,3 +38,27 @@ test('Pyramid Cup cycle repairs fixtures before attempting to resolve the curren
   const round = cycle.indexOf('const round = Number(cup.data.currentRound || 1)');
   assert.ok(repair >= 0 && round > repair);
 });
+
+test('Pyramid Cup uses the active season config instead of the hard-coded global calendar', () => {
+  const contextStart = source.indexOf('async function readActiveCupSeasonContext');
+  const contextEnd = source.indexOf('function cupId', contextStart);
+  assert.ok(contextStart >= 0 && contextEnd > contextStart);
+  const context = source.slice(contextStart, contextEnd);
+  assert.match(context, /collection\('system_v1'\)\.doc\('season_config'\)/);
+  assert.match(context, /config\.activeSeasonNumber/);
+  assert.match(context, /config\.seasonStart/);
+  assert.match(context, /config\.worldReady !== true/);
+  assert.match(context, /\['REGULAR_SEASON', 'ACTIVE'\]/);
+  assert.match(context, /Math\.floor\(\(nowMs - seasonStart\.getTime\(\)\) \/ 86400000\) \+ 1/);
+  assert.doesNotMatch(source, /getGlobalSeasonInfo|GLOBAL_EPOCH_ISO|FIRST_SEASON_NEXT_START_ISO/);
+});
+
+test('Pyramid Cup generation refuses to target a season other than the active world', () => {
+  const start = source.indexOf('export async function generatePyramidCup');
+  const end = source.indexOf('async function loadCup', start);
+  const generation = source.slice(start, end);
+  assert.match(generation, /readActiveCupSeasonContext\(db\)/);
+  assert.match(generation, /season !== context\.season/);
+  assert.match(generation, /CUP_TARGET_SEASON_NOT_ACTIVE/);
+  assert.match(generation, /const seasonStart = context\.seasonStart/);
+});
