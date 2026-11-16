@@ -6,7 +6,6 @@ import { getMatchWinnerId } from '@/app/lib/match-winner';
 import { aggregatePlayerCombatStats } from '@/app/lib/player-combat-stats';
 import { resolveSeasonLifecycleWindow } from './season-boundary';
 import { isSeasonRolloverLockStale, SEASON_ROLLOVER_LOCK_ID } from './season-rollover-lock';
-import { resolveAuctionPrice } from '@/app/lib/auction-settlement';
 import { runTransferMarketExpirySweepWithDb } from '@/app/lib/auction-expiry-sweep';
 
 /**
