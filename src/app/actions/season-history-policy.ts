@@ -155,6 +155,29 @@ export function resolveHistoryCleanupCompletion(config: any, targetSeason: numbe
 }
 
 /**
+ * Cleanup is complete only after a fresh read confirms that no obsolete
+ * archives or rollover plans remain and every skipped-season marker is final.
+ * This is a postflight gate, not a substitute for the per-write lease checks.
+ */
+export function resolveHistoryCleanupPostflight(input: {
+  archivePlan: { ready: boolean; pruneIds?: string[] };
+  rolloverPlan: { ready: boolean; pruneIds?: string[] };
+  skippedHistoryMarkers: Array<{ ready: boolean; shouldWrite: boolean }>;
+}) {
+  if (input.archivePlan?.ready !== true || (input.archivePlan.pruneIds || []).length > 0) {
+    return { ready: false as const, reason: 'HISTORY_CLEANUP_ARCHIVES_REMAIN' };
+  }
+  if (input.rolloverPlan?.ready !== true || (input.rolloverPlan.pruneIds || []).length > 0) {
+    return { ready: false as const, reason: 'HISTORY_CLEANUP_ROLLOVER_PLANS_REMAIN' };
+  }
+  if (input.skippedHistoryMarkers.some(marker => marker?.ready !== true || marker.shouldWrite !== false)) {
+    return { ready: false as const, reason: 'HISTORY_CLEANUP_SKIPPED_MARKERS_INCOMPLETE' };
+  }
+  return { ready: true as const, reason: null };
+}
+
+
+/**
  * Validate the pre-activation marker for a skipped season. A retry may reuse
  * the exact marker it first published, but it must never overwrite a marker
  * belonging to another target or a different lifecycle outcome.
