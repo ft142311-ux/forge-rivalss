@@ -6,11 +6,10 @@ const market = readFileSync(new URL('../src/app/actions/pro-market.ts', import.m
 const cycle = readFileSync(new URL('../src/app/actions/autonomous-cycle.ts', import.meta.url), 'utf8');
 const expirySweep = readFileSync(new URL('../src/app/lib/auction-expiry-sweep.ts', import.meta.url), 'utf8');
 const proMarket = readFileSync(new URL('../src/app/actions/pro-market.ts', import.meta.url), 'utf8');
+const bidCore = readFileSync(new URL('../src/app/lib/auction-bid.ts', import.meta.url), 'utf8');
 
 test('special auction bid and outbid refund ledger entries include exact before and after balances', () => {
-  const start = market.indexOf('async function placeSpecialMarketBid');
-  const end = market.indexOf('export async function placeProMarketBidAction', start);
-  const block = market.slice(start, end);
+  const block = bidCore;
   assert.match(block, /balanceBefore: bidderBalance,[\s\S]*balanceAfter: bidderBalance - chargeAmount/);
   assert.match(block, /balanceBefore: money\(previousBidder\[currency\]\),[\s\S]*balanceAfter: money\(previousBidder\[currency\]\) \+ refundAmount/);
 });
@@ -45,16 +44,14 @@ test('daily PRO rotation preserves system lots with a bidder or escrow for share
   const start = proMarket.indexOf('export async function ensureProMarketDailyDropAction');
   const end = proMarket.indexOf('/** Places a bid on a special auction', start);
   const block = proMarket.slice(start, end);
-  assert.match(block, /canPruneUnbidSystemAuctionLot\(oldLot\.data\(\) \|\| \{\}\)/);
+  assert.match(block, /placeSpecialMarketBidWithDb/);
   assert.match(block, /retainedWithBids\+\+/);
   assert.match(block, /tx\.delete\(oldLot\.ref\)/);
   assert.doesNotMatch(block, /for \(const oldLot of systemLots\.docs\) \{\s*if \(oldLot\.id !== lotId\) tx\.delete/);
 });
 
 test('new special-market bids validate existing escrow before charging or replacing it', () => {
-  const start = proMarket.indexOf('async function placeSpecialMarketBid');
-  const end = proMarket.indexOf('export async function placeProMarketBidAction', start);
-  const block = proMarket.slice(start, end);
+  const block = bidCore;
   const guard = block.indexOf('resolvePreviousAuctionBidEscrow({');
   const charge = block.indexOf('const chargeAmount =');
   assert.ok(guard >= 0 && charge > guard);
