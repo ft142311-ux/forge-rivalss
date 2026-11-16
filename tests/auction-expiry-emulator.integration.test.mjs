@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { deleteApp, initializeApp } from 'firebase-admin/app';
-import { FieldPath, getFirestore } from 'firebase-admin/firestore';
+import { getFirestore } from 'firebase-admin/firestore';
 import { runTransferMarketExpirySweepWithDb } from '../src/app/lib/auction-expiry-sweep.ts';
 
 const emulatorHost = process.env.FIRESTORE_EMULATOR_HOST;
