@@ -34,3 +34,16 @@ test('association directory is signed-in readable but never client writable', ()
   assert.match(match[1], /allow read: if signedIn\(\)/);
   assert.match(match[1], /allow create, update, delete: if false/);
 });
+
+test('association request processing rejects non-boolean decisions and malformed identifiers', () => {
+  const start = actions.indexOf('export async function processAssociationRequestAction');
+  const end = actions.indexOf('export async function leaveAssociationAction', start);
+  assert.ok(start >= 0 && end > start);
+  const action = actions.slice(start, end);
+  assert.match(action, /typeof accept !== 'boolean'/);
+  assert.match(action, /INVALID_ASSOCIATION_DECISION/);
+  assert.match(action, /typeof associationId !== 'string'/);
+  assert.match(action, /INVALID_ASSOCIATION_ID/);
+  assert.match(action, /typeof applicantId !== 'string'/);
+  assert.match(action, /INVALID_APPLICANT_ID/);
+});
