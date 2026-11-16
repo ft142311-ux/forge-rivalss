@@ -192,9 +192,9 @@ export default function Home() {
   const nowMs = now.getTime();
   const isWithinCurrentSeasonWindow = nowMs >= seasonStartMs && nowMs < nextSeasonStartMs;
   const effectiveSeasonWindowIsActive = isWithinCurrentSeasonWindow || (!Number.isFinite(configSeasonStartMs) && !Number.isFinite(configNextSeasonStartMs));
-  // Canonical game rule: offseason begins after round 14 and the new season
-  // starts on Day 15 at 16:00 MSK. MSK is UTC+3, therefore +14d+13h UTC.
-  const offseasonTargetMs = seasonStartMs + 14 * 24 * 60 * 60 * 1000 + 13 * 60 * 60 * 1000;
+  // Match the server lifecycle policy: finalization starts 2 hours before
+  // the Day-15 boundary (seasonStart + 14 days), using the same UTC instant.
+  const offseasonTargetMs = seasonStartMs + 14 * 24 * 60 * 60 * 1000 - 2 * 60 * 60 * 1000;
   // The 17-day S1 calendar window includes the offseason and preparation gap.
   // Do not treat that entire interval as active league play in the home card.
   const offseasonDisplayWindowActive = Number.isFinite(nextSeasonStartMs) &&
