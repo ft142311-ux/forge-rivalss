@@ -195,6 +195,10 @@ export default function Home() {
   // Canonical game rule: offseason begins after round 14 and the new season
   // starts on Day 15 at 16:00 MSK. MSK is UTC+3, therefore +14d+13h UTC.
   const offseasonTargetMs = seasonStartMs + 14 * 24 * 60 * 60 * 1000 + 13 * 60 * 60 * 1000;
+  // The 17-day S1 calendar window includes the offseason and preparation gap.
+  // Do not treat that entire interval as active league play in the home card.
+  const offseasonDisplayWindowActive = Number.isFinite(nextSeasonStartMs) &&
+    nowMs >= offseasonTargetMs && nowMs < nextSeasonStartMs;
   const myCurrentSeasonMatches = (allSeasonMatches || []).filter((m: any) => {
     const mine = Number(m.homeRank) === Number(rank) || Number(m.awayRank) === Number(rank);
     const tour = Number(m.tour);
@@ -206,11 +210,11 @@ export default function Home() {
   const seasonTransitionPending = Boolean(seasonConfig) && (
     (seasonConfig as any).worldReady === false || offseasonPhases.includes(configPhase)
   );
-  const shouldTreatAsOffseason = !effectiveSeasonWindowIsActive && (
+  const shouldTreatAsOffseason = offseasonDisplayWindowActive || (!effectiveSeasonWindowIsActive && (
     seasonTransitionPending || seasonInfo.dayOfCycle >= 14 || seasonInfo.isOffseason ||
     (regularSeasonFinished && !currentNextMatch) ||
     (nowMs < offseasonTargetMs && offseasonPhases.includes(configPhase))
-  );
+  ));
   const showOffseason = shouldTreatAsOffseason;
   const cardCountdown = showOffseason
     ? (seasonTransitionPending || nowMs >= offseasonTargetMs
