@@ -6,7 +6,6 @@ import { getAdminDb } from '@/lib/firebase-admin';
 import { getTableId, MAX_LEVELS, TEAMS_PER_GROUP, TOTAL_GROUPS } from '@/app/lib/leagues-data';
 import { resolveUniversalMatchDocument } from '@/app/actions/universal-match-resolver';
 import { MATCH_COLLECTIONS } from '@/app/lib/match-storage';
-import { getGlobalSeasonInfo } from '@/app/lib/time-utils';
 
 const LEAGUE_ID = 'ALPHA';
 const CUP_COLLECTION = 'cup_pyramid_v1';
@@ -17,6 +16,36 @@ const CUP_START_HOUR_UTC = 4; // 07:00 Moscow time
 
 type Team = { id: string; name: string; level: number; group: number; rank: number; isBot: boolean; seed: number };
 type Pairing = { id: string; index: number; home: Team | null; away: Team | null; status: 'scheduled' | 'bye' | 'finished'; matchId?: string | null; winnerId?: string | null; scoreA?: number | null; scoreB?: number | null; technicalDecision?: boolean };
+
+function resolveCupDate(value: any): Date {
+  const date = value instanceof Date
+    ? new Date(value.getTime())
+    : value && typeof value.toDate === 'function'
+      ? value.toDate()
+      : new Date(value);
+  if (!(date instanceof Date) || !Number.isFinite(date.getTime())) {
+    throw new Error('CUP_SEASON_START_INVALID');
+  }
+  return date;
+}
+
+async function readActiveCupSeasonContext(db: any, nowMs = Date.now()) {
+  const configSnap = await db.collection('system_v1').doc('season_config').get();
+  if (!configSnap.exists) return { ready: false as const, reason: 'SEASON_CONFIG_MISSING' };
+  const config = configSnap.data() || {};
+  const season = Number(config.activeSeasonNumber);
+  if (!Number.isSafeInteger(season) || season < 1) {
+    return { ready: false as const, reason: 'ACTIVE_SEASON_INVALID' };
+  }
+  const phase = String(config.phase || '').toUpperCase();
+  if (config.worldReady !== true || !['REGULAR_SEASON', 'ACTIVE'].includes(phase)) {
+    return { ready: false as const, reason: 'ACTIVE_SEASON_NOT_READY', season, phase };
+  }
+  const seasonStart = resolveCupDate(config.seasonStart);
+  if (!Number.isFinite(nowMs)) throw new Error('CUP_CLOCK_INVALID');
+  const seasonDay = Math.floor((nowMs - seasonStart.getTime()) / 86400000) + 1;
+  return { ready: true as const, season, phase, seasonStart, seasonDay };
+}
 
 function cupId(season: number) { return `cup_s${season}_l${LEAGUE_ID}`; }
 function matchId(season: number, round: number, index: number) { return `cup_S${season}_R${round}_M${String(index).padStart(2, '0')}`; }
@@ -174,13 +203,15 @@ async function commitCupRoundState(
 
 export async function generatePyramidCup(targetSeasonNumber?: number) {
   const db = getAdminDb();
-  const info = getGlobalSeasonInfo();
-  const season = Number(targetSeasonNumber || info.seasonNumber || 1);
+  const context = await readActiveCupSeasonContext(db);
+  if (!context.ready) throw new Error(context.reason);
+  const season = Number(targetSeasonNumber || context.season);
+  if (season !== context.season) throw new Error('CUP_TARGET_SEASON_NOT_ACTIVE');
   const id = cupId(season);
   const ref = db.collection(CUP_COLLECTION).doc(id);
   if ((await ref.get()).exists) return { success: true, alreadyExists: true, cupId: id };
   const teams = await loadAllLeagueTeams(db, season);
-  const seasonStart = info.currentSeasonStart;
+  const seasonStart = context.seasonStart;
   const first = createPreliminary(teams);
   const batch = db.batch();
   const scheduledAt = Timestamp.fromDate(roundDate(seasonStart, ROUND_DAYS[0]));
@@ -321,7 +352,7 @@ async function finishTechnically(db: any, season: number, round: number, pairing
  * fixture document. The transaction creates only missing deterministic IDs;
  * existing results are never overwritten by a retry.
  */
-async function repairCurrentRoundFixtures(db: any, cup: { ref: any; data: any }) {
+async function repairCurrentRoundFixtures(db: any, cup: { ref: any; data: any }, activeSeasonStart: Date) {
   return db.runTransaction(async (tx: any) => {
     const cupSnap = await tx.get(cup.ref);
     if (!cupSnap.exists) return { repaired: 0, changed: false };
@@ -360,7 +391,7 @@ async function repairCurrentRoundFixtures(db: any, cup: { ref: any; data: any })
     })));
     let repaired = 0;
     const scheduledAt = Timestamp.fromDate(roundDate(
-      new Date(String(data.seasonStart || getGlobalSeasonInfo().currentSeasonStart.toISOString())),
+      resolveCupDate(data.seasonStart || activeSeasonStart),
       ROUND_DAYS[round - 1],
     ));
     entries.forEach((entry, index) => {
@@ -380,11 +411,14 @@ async function repairCurrentRoundFixtures(db: any, cup: { ref: any; data: any })
 
 export async function runPyramidCupCycle() {
   const db = getAdminDb();
-  const info = getGlobalSeasonInfo();
-  const season = Number(info.seasonNumber || 1);
+  const context = await readActiveCupSeasonContext(db);
+  if (!context.ready) {
+    return { generated: false, resolved: 0, advanced: 0, waitingForSeason: true, reason: context.reason };
+  }
+  const season = context.season;
   let cup = await loadCup(db, season);
   if (!cup) {
-    if (info.seasonDay < 1 || info.seasonDay > 13) return { generated: false, resolved: 0, advanced: 0, waiting: true };
+    if (context.seasonDay < 1 || context.seasonDay > 13) return { generated: false, resolved: 0, advanced: 0, waiting: true };
     try { await generatePyramidCup(season); return { generated: true, resolved: 0, advanced: 0 }; }
     catch (error: any) {
       if (String(error?.message || '').startsWith('CUP_LEAGUE_TABLE_MISSING')) return { generated: false, resolved: 0, advanced: 0, waitingForLeague: true };
@@ -393,7 +427,8 @@ export async function runPyramidCupCycle() {
   }
   if (cup.data.status === 'completed') return { generated: false, resolved: 0, advanced: 0, completed: true };
 
-  const fixtureRepair = await repairCurrentRoundFixtures(db, cup);
+  const activeSeasonStart = resolveCupDate(cup.data.seasonStart || context.seasonStart);
+  const fixtureRepair = await repairCurrentRoundFixtures(db, cup, activeSeasonStart);
   if (fixtureRepair.repaired > 0 || fixtureRepair.changed) {
     console.warn('[PYRAMID CUP] Recovered interrupted round fixtures', { cupId: cup.data.id, ...fixtureRepair });
     cup = await loadCup(db, season);
@@ -404,7 +439,7 @@ export async function runPyramidCupCycle() {
   const rounds: Record<string, any[]> = { ...(cup.data.rounds || {}) };
   const pairings: Pairing[] = Array.isArray(rounds[roundKey(round)]) ? rounds[roundKey(round)] : [];
   const now = Date.now();
-  const seasonStart = new Date(String(cup.data.seasonStart || info.currentSeasonStart.toISOString()));
+  const seasonStart = resolveCupDate(cup.data.seasonStart || activeSeasonStart);
   const nextRoundDeadline = round < ROUND_COUNT ? roundDate(seasonStart, ROUND_DAYS[round]) .getTime() : Number.POSITIVE_INFINITY;
   let resolved = 0;
 
