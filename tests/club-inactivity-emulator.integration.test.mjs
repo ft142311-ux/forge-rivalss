@@ -335,6 +335,8 @@ test('inactive club replacement is atomic and preserves completed match results'
   const matchRefs = [];
   const botRef = db.collection('players_v14').doc(botId);
   const marketRef = db.collection('market_v7').doc(`active_bid_${uid}`);
+  const sellerMarketRef = db.collection('market_v7').doc(`active_seller_${uid}`);
+  const legacyBidMarketRef = db.collection('market_v7').doc(`active_legacy_bid_${uid}`);
 
   t.after(async () => {
     await playerRef.delete().catch(() => undefined);
@@ -345,6 +347,8 @@ test('inactive club replacement is atomic and preserves completed match results'
     await pendingRef.delete().catch(() => undefined);
     await botRef.delete().catch(() => undefined);
     await marketRef.delete().catch(() => undefined);
+    await sellerMarketRef.delete().catch(() => undefined);
+    await legacyBidMarketRef.delete().catch(() => undefined);
     await configRef.delete().catch(() => undefined);
     for (const ref of matchRefs) await ref.delete().catch(() => undefined);
     await deleteApp(app);
@@ -502,9 +506,21 @@ test('inactive club replacement is atomic and preserves completed match results'
   assert.equal((await marketRef.get()).exists, true);
   assert.equal((await pendingRef.get()).exists, false);
 
-  // Once the auction lot is settled/removed, the next inactivity sweep may
-  // safely retire the account without losing its refundable escrow balance.
+  await sellerMarketRef.set({ status: 'active', sellerId: uid, highestBidderId: null });
+  await legacyBidMarketRef.set({ status: 'active', sellerId: 'another-seller', highestBidderUid: uid, escrowedAmount: 250 });
+  const deferredByAllMarketRoles = await retireInactiveClub({
+    db, auth, userRecord, now: new Date(recoveryNow.getTime() + 30 * 1000),
+  });
+  assert.equal(deferredByAllMarketRoles.action, 'DEFERRED_MARKET_ACTIVITY');
+  assert.equal(deferredByAllMarketRoles.activeMarketLotCount, 3);
+  assert.equal(disabled, false);
+  assert.equal((await playerRef.get()).exists, true);
+
+  // Once all active lots are settled/removed, the next inactivity sweep may
+  // safely retire the account without losing a seller listing or bidder escrow.
   await marketRef.delete();
+  await sellerMarketRef.delete();
+  await legacyBidMarketRef.delete();
   const result = await retireInactiveClub({ db, auth, userRecord, now: new Date(recoveryNow.getTime() + 60 * 1000) });
   assert.equal(result.action, 'RETIRED_AND_REPLACED');
   assert.equal(disabled, true);
