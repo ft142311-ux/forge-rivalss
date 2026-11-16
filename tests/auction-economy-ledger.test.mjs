@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 
 const market = readFileSync(new URL('../src/app/actions/pro-market.ts', import.meta.url), 'utf8');
 const cycle = readFileSync(new URL('../src/app/actions/autonomous-cycle.ts', import.meta.url), 'utf8');
+const expirySweep = readFileSync(new URL('../src/app/lib/auction-expiry-sweep.ts', import.meta.url), 'utf8');
 const proMarket = readFileSync(new URL('../src/app/actions/pro-market.ts', import.meta.url), 'utf8');
 
 test('special auction bid and outbid refund ledger entries include exact before and after balances', () => {
@@ -15,9 +16,8 @@ test('special auction bid and outbid refund ledger entries include exact before 
 });
 
 test('auction settlement records fallback debit, seller proceeds and escrow refund with balances', () => {
-  const start = cycle.indexOf('export async function runTransferMarketExpirySweep');
-  const end = cycle.indexOf('export async function runPlayerAuctionSettlementSweep', start);
-  const block = cycle.slice(start, end);
+  const start = expirySweep.indexOf('export async function runTransferMarketExpirySweepWithDb');
+  const block = expirySweep.slice(start);
   assert.match(block, /SPECIAL_AUCTION_SETTLEMENT_DEBIT[\s\S]*balanceBefore: buyerBalance,[\s\S]*balanceAfter: buyerBalance - price/);
   assert.match(block, /SPECIAL_AUCTION_SETTLEMENT_CREDIT[\s\S]*balanceBefore: sellerBefore,[\s\S]*balanceAfter: sellerAfter/);
   assert.match(block, /SPECIAL_AUCTION_SETTLEMENT_REFUND[\s\S]*balanceBefore: buyerBalance,[\s\S]*balanceAfter: refundedBalance/);
@@ -26,7 +26,7 @@ test('auction settlement records fallback debit, seller proceeds and escrow refu
 });
 
 test('expired auction settlement uses strict price validation before any transaction writes', () => {
-  assert.match(cycle, /resolveAuctionPrice\(lot\.currentBid, lot\.startingPrice, lot\.price\)/);
+  assert.match(expirySweep, /resolveAuctionPrice\(lot\.currentBid, lot\.startingPrice, lot\.price\)/);
   assert.match(cycle, /import \{ resolveAuctionPrice \} from '\@\/app\/lib\/auction-settlement'/);
 });
 
