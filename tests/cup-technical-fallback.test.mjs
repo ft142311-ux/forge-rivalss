@@ -20,3 +20,9 @@ test('cup technical fallback re-reads the match inside a transaction before writ
   assert.match(fallback, /tx\.set\(ref, \{/);
   assert.doesNotMatch(fallback, /await ref\.set\(/);
 });
+
+test('Pyramid Cup final has a bounded technical fallback deadline', () => {
+  assert.match(source, /const deadlineDay = ROUND_DAYS\[round\] \?\? \(ROUND_DAYS\[ROUND_COUNT - 1\] \+ 1\)/);
+  assert.match(source, /const nextRoundDeadline = roundDate\(seasonStart, deadlineDay\)\.getTime\(\)/);
+  assert.doesNotMatch(source, /round < ROUND_COUNT \? roundDate\(seasonStart, ROUND_DAYS\[round\]\).*POSITIVE_INFINITY/);
+});
