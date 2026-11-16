@@ -707,27 +707,42 @@ async function advanceTournament(db: any, tournament: any, now: number) {
     const finalSnap = await ref.collection('matches').where('stage', '==', 'final').limit(1).get();
     const finalMatch = finalSnap.docs[0]?.data();
     if (!finalMatch?.winnerId) return false;
-    const finishedAt = Date.now();
-    const completedTournament = {
-      ...tournament,
-      id: tournament.id,
-      name: tournament.name,
-      status: 'completed',
-      stage: 'completed',
-      winnerId: finalMatch.winnerId,
-      winnerName: finalMatch.winnerName,
-      finishedAt,
-      historySyncStatus: 'pending',
-    };
-    await ref.update({
-      stage: 'completed',
-      status: 'completed',
-      winnerId: finalMatch.winnerId,
-      winnerName: finalMatch.winnerName,
-      finishedAt,
-      historySyncStatus: 'pending',
-      updatedAt: FieldValue.serverTimestamp(),
+    const completedTournament = await db.runTransaction(async (t: any) => {
+      const fresh = await t.get(ref);
+      if (!fresh.exists) return null;
+      const current = fresh.data() || {};
+
+      // If another cron invocation already committed the final result, reuse
+      // its stable timestamp and only resume the pending profile sync.
+      if (current.status === 'completed') {
+        if (current.historySyncStatus !== 'pending') return null;
+        return { id: tournament.id, ...current };
+      }
+      if (current.stage !== 'final' || current.status === 'completed') return null;
+
+      const finishedAt = Date.now();
+      const completed = {
+        ...current,
+        id: tournament.id,
+        status: 'completed',
+        stage: 'completed',
+        winnerId: finalMatch.winnerId,
+        winnerName: finalMatch.winnerName,
+        finishedAt,
+        historySyncStatus: 'pending',
+      };
+      t.update(ref, {
+        stage: 'completed',
+        status: 'completed',
+        winnerId: finalMatch.winnerId,
+        winnerName: finalMatch.winnerName,
+        finishedAt,
+        historySyncStatus: 'pending',
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+      return completed;
     });
+    if (!completedTournament) return false;
 
     await syncCompletedTournamentHistory(db, completedTournament);
     return true;
