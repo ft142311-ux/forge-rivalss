@@ -2,7 +2,7 @@ const functions = require('firebase-functions');
 const admin = require('firebase-admin');
 const { isEligibleRegistrationSlot, validateRegistrationSchedule, generateStartingSquad, buildRegistrationMatchPlan, transferBotStandingToUser } = require('./registration-core');
 const { recordUserActivityUnlessRetiring } = require('./club-activity-fence');
-const { invokeSeasonOrchestrator } = require('./season-orchestrator-scheduler');
+const { invokeSeasonOrchestrator, invokeMarketExpirySweep } = require('./season-orchestrator-scheduler');
 
 /**
  * @fileOverview Р•РґРёРЅРѕРµ СЃРµСЂРІРµСЂРЅРѕРµ СЏРґСЂРѕ СЂРµРіРёСЃС‚СЂР°С†РёРё v165.
@@ -430,5 +430,28 @@ exports.runSeasonOrchestrator = functions
       secret: process.env.CRON_SECRET,
     });
     console.log('[SEASON ORCHESTRATOR SCHEDULE]', JSON.stringify(result));
+    return result;
+  });
+
+
+// Finalizes expired transfer listings and auctions on the same five-minute
+// cadence as the season scheduler. The protected route reports partial failures
+// so Cloud Scheduler retries the sweep; the Firestore settlement is idempotent.
+exports.runMarketExpirySweep = functions
+  .region('us-central1')
+  .runWith({
+    timeoutSeconds: 540,
+    memory: '256MB',
+    maxInstances: 1,
+    secrets: ['CRON_SECRET'],
+  })
+  .pubsub.schedule('every 5 minutes')
+  .timeZone('UTC')
+  .onRun(async () => {
+    const result = await invokeMarketExpirySweep({
+      seasonOrchestratorUrl: process.env.SEASON_ORCHESTRATOR_URL,
+      secret: process.env.CRON_SECRET,
+    });
+    console.log('[MARKET EXPIRY SCHEDULE]', JSON.stringify(result));
     return result;
   });
