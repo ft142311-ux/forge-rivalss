@@ -146,18 +146,64 @@ export async function registerFoundationTournamentAction(idToken: string, tourna
 export async function recordFoundationTournamentResultAction(idToken: string, tournamentId: string, matchId: string, winnerId: string, loserId: string, winnerPoints = 1, loserPoints = 0) {
   try {
     const { uid } = await requireServerActor(idToken);
+    const ids = [tournamentId, matchId, winnerId, loserId];
+    if (ids.some(value => typeof value !== 'string' || !value.trim() || value.length > 128)) {
+      throw new Error('INVALID_TOURNAMENT_RESULT_ID');
+    }
+    if (winnerId === loserId) throw new Error('INVALID_TOURNAMENT_RESULT_PARTICIPANTS');
+    const homePoints = Number(winnerPoints);
+    const awayPoints = Number(loserPoints);
+    if (!Number.isSafeInteger(homePoints) || !Number.isSafeInteger(awayPoints) ||
+        homePoints < 0 || awayPoints < 0 || homePoints > 100 || awayPoints > 100 ||
+        homePoints <= awayPoints) {
+      throw new Error('INVALID_TOURNAMENT_RESULT_SCORE');
+    }
+
     const db = getAdminDb();
     const tournamentRef = db.collection(FOUNDATION_COLLECTIONS.tournaments).doc(tournamentId);
     const matchRef = db.collection(FOUNDATION_COLLECTIONS.tournamentMatches).doc(matchId);
-    await db.runTransaction(async t => {
-      const tournament = await t.get(tournamentRef);
+    const result = await db.runTransaction(async t => {
+      const [tournament, match] = await Promise.all([t.get(tournamentRef), t.get(matchRef)]);
       if (!tournament.exists) throw new Error('TOURNAMENT_NOT_FOUND');
+      if (!match.exists) throw new Error('TOURNAMENT_MATCH_NOT_FOUND');
       const data = tournament.data() || {};
-      if (!Array.isArray(data.participants) || !data.participants.includes(uid)) throw new Error('NOT_PARTICIPANT');
-      t.set(matchRef, { matchId, tournamentId, winnerId, loserId, winnerPoints, loserPoints, resolvedBy: uid, resolvedAt: FieldValue.serverTimestamp() }, { merge: true });
+      if (data.status !== 'active') throw new Error('TOURNAMENT_NOT_ACTIVE');
+      if (!Array.isArray(data.participants) ||
+          !data.participants.includes(winnerId) || !data.participants.includes(loserId)) {
+        throw new Error('RESULT_PARTICIPANTS_NOT_IN_TOURNAMENT');
+      }
+      const fixture = match.data() || {};
+      if (String(fixture.tournamentId || '') !== tournamentId) throw new Error('TOURNAMENT_MATCH_MISMATCH');
+      if (fixture.status === 'bye' || fixture.homeId === 'BYE' || fixture.awayId === 'BYE' ||
+          ![fixture.homeId, fixture.awayId].includes(winnerId) ||
+          ![fixture.homeId, fixture.awayId].includes(loserId)) {
+        throw new Error('RESULT_PARTICIPANTS_MISMATCH');
+      }
+      if (uid !== winnerId && uid !== loserId && data.createdBy !== uid) {
+        throw new Error('MATCH_RESULT_ACCESS_DENIED');
+      }
+      if (fixture.status === 'finished' || fixture.resolvedAt) {
+        if (fixture.winnerId === winnerId && fixture.loserId === loserId &&
+            Number(fixture.winnerPoints) === homePoints && Number(fixture.loserPoints) === awayPoints) {
+          return { alreadyResolved: true };
+        }
+        throw new Error('TOURNAMENT_MATCH_ALREADY_RESOLVED');
+      }
+      if (fixture.status !== 'scheduled') throw new Error('TOURNAMENT_MATCH_NOT_SCHEDULED');
+      t.update(matchRef, {
+        winnerId,
+        loserId,
+        winnerPoints: homePoints,
+        loserPoints: awayPoints,
+        status: 'finished',
+        resolvedBy: uid,
+        resolvedAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
+      });
       t.update(tournamentRef, { lastMatchId: matchId, updatedAt: FieldValue.serverTimestamp() });
+      return { alreadyResolved: false };
     });
-    return { success: true };
+    return { success: true, ...result };
   } catch (e) { return { success: false, error: errorOf(e) }; }
 }
 
