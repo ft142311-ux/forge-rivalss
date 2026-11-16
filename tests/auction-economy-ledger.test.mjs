@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 
 const market = readFileSync(new URL('../src/app/actions/pro-market.ts', import.meta.url), 'utf8');
 const cycle = readFileSync(new URL('../src/app/actions/autonomous-cycle.ts', import.meta.url), 'utf8');
+const proMarket = readFileSync(new URL('../src/app/actions/pro-market.ts', import.meta.url), 'utf8');
 
 test('special auction bid and outbid refund ledger entries include exact before and after balances', () => {
   const start = market.indexOf('async function placeSpecialMarketBid');
@@ -33,4 +34,25 @@ test('ambiguous auction escrow is rejected before the expired lot can be deleted
   assert.ok(escrowGuard >= 0, 'settlement must validate recorded escrow');
   assert.ok(firstLotDelete > escrowGuard, 'lot deletion must follow escrow validation');
   assert.match(block, /if \(hasRecordedEscrow && buyerRef && buyerSnap\?\.exists\)/);
+});
+
+
+test('daily PRO rotation preserves system lots with a bidder or escrow for shared settlement', () => {
+  const start = proMarket.indexOf('export async function ensureProMarketDailyDropAction');
+  const end = proMarket.indexOf('/** Places a bid on a special auction', start);
+  const block = proMarket.slice(start, end);
+  assert.match(block, /canPruneUnbidSystemAuctionLot\(oldLot\.data\(\) \|\| \{\}\)/);
+  assert.match(block, /retainedWithBids\+\+/);
+  assert.match(block, /tx\.delete\(oldLot\.ref\)/);
+  assert.doesNotMatch(block, /for \(const oldLot of systemLots\.docs\) \{\s*if \(oldLot\.id !== lotId\) tx\.delete/);
+});
+
+test('new special-market bids validate existing escrow before charging or replacing it', () => {
+  const start = proMarket.indexOf('async function placeSpecialMarketBid');
+  const end = proMarket.indexOf('export async function placeProMarketBidAction', start);
+  const block = proMarket.slice(start, end);
+  const guard = block.indexOf('resolvePreviousAuctionBidEscrow({');
+  const charge = block.indexOf('const chargeAmount =');
+  assert.ok(guard >= 0 && charge > guard);
+  assert.match(block, /highestBidderId \|\| lot\.highestBidderUid/);
 });
