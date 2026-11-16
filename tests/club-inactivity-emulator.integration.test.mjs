@@ -334,6 +334,7 @@ test('inactive club replacement is atomic and preserves completed match results'
   const configRef = db.collection('system_v1').doc('season_config');
   const matchRefs = [];
   const botRef = db.collection('players_v14').doc(botId);
+  const marketRef = db.collection('market_v7').doc(`active_bid_${uid}`);
 
   t.after(async () => {
     await playerRef.delete().catch(() => undefined);
@@ -343,6 +344,7 @@ test('inactive club replacement is atomic and preserves completed match results'
     await archiveRef.delete().catch(() => undefined);
     await pendingRef.delete().catch(() => undefined);
     await botRef.delete().catch(() => undefined);
+    await marketRef.delete().catch(() => undefined);
     await configRef.delete().catch(() => undefined);
     for (const ref of matchRefs) await ref.delete().catch(() => undefined);
     await deleteApp(app);
@@ -481,10 +483,32 @@ test('inactive club replacement is atomic and preserves completed match results'
   assert.equal((await pendingRef.get()).get('phase'), 'PENDING_AUTH_DISABLE');
 
   const recoveryNow = new Date(now.getTime() + 22 * 60 * 1000);
-  const result = await retireInactiveClub({ db, auth, userRecord, now: recoveryNow });
+  await marketRef.set({
+    status: 'active',
+    sellerId: 'seller-test-account',
+    highestBidderId: uid,
+    currentBid: 500,
+    currency: 'credits',
+    escrowCurrency: 'credits',
+    escrowedAmount: 500,
+    expiresAt: new Date(recoveryNow.getTime() + 60 * 60 * 1000),
+  });
+  const deferredByMarket = await retireInactiveClub({ db, auth, userRecord, now: recoveryNow });
+  assert.equal(deferredByMarket.action, 'DEFERRED_MARKET_ACTIVITY');
+  assert.equal(deferredByMarket.activeMarketLotCount, 1);
+  assert.equal(disabled, false);
+  assert.equal((await playerRef.get()).exists, true);
+  assert.equal((await slotRef.get()).get('status'), 'OCCUPIED');
+  assert.equal((await marketRef.get()).exists, true);
+  assert.equal((await pendingRef.get()).exists, false);
+
+  // Once the auction lot is settled/removed, the next inactivity sweep may
+  // safely retire the account without losing its refundable escrow balance.
+  await marketRef.delete();
+  const result = await retireInactiveClub({ db, auth, userRecord, now: new Date(recoveryNow.getTime() + 60 * 1000) });
   assert.equal(result.action, 'RETIRED_AND_REPLACED');
   assert.equal(disabled, true);
-  assert.equal(revokedTokenCalls, 1);
+  assert.equal(revokedTokenCalls, 2);
   assert.equal((await playerRef.get()).exists, false);
   assert.equal((await pendingRef.get()).exists, false);
   const archivedClub = (await archiveRef.get()).data();
