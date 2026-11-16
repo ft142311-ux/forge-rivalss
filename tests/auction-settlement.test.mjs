@@ -6,6 +6,7 @@ import {
   resolveAuctionCurrency,
   resolveAuctionEscrow,
   resolvePreviousAuctionBidEscrow,
+  resolveAuctionPrice,
   canPruneUnbidSystemAuctionLot,
 } from '../src/app/lib/auction-settlement.ts';
 
@@ -34,6 +35,15 @@ test('auction balances are normalized to non-negative integer amounts', () => {
   assert.equal(normalizeAuctionBalance('12.9'), 12);
   assert.equal(normalizeAuctionBalance(-5), 0);
   assert.equal(normalizeAuctionBalance('invalid'), 0);
+});
+
+test('auction price accepts valid integer values and rejects malformed recorded prices', () => {
+  assert.equal(resolveAuctionPrice(750, 500, 400), 750);
+  assert.equal(resolveAuctionPrice(0, 500, 400), 500);
+  assert.equal(resolveAuctionPrice(undefined, undefined, '250'), 250);
+  for (const value of [-1, 1.5, 'corrupt', Number.MAX_SAFE_INTEGER + 1]) {
+    assert.throws(() => resolveAuctionPrice(value, 500, 400), /AUCTION_PRICE_INVALID/);
+  }
 });
 
 test('auction escrow requires an exact amount and matching currency', () => {
