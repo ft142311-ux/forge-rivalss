@@ -84,6 +84,59 @@ test('Firestore Emulator refunds the outbid manager and charges only the increme
 });
 
 
+
+test('Firestore Emulator completes a PRO bid, outbid, incremental raise and expiry settlement as one economy flow', {
+  skip: !emulatorHost,
+}, async t => {
+  const { db } = await withIsolatedFirestore(t);
+  const now = Date.now();
+  await db.collection('players_v14').doc('seller-1').set({
+    crystals: 100,
+    ownedPlayers: [{ id: 'pro-player', name: 'Pro Player', onTransferUntil: 'reserved', transferMarketId: 'pro-flow' }],
+  });
+  await db.collection('players_v14').doc('bidder-1').set({ crystals: 1000, ownedPlayers: [] });
+  await db.collection('players_v14').doc('bidder-2').set({ crystals: 1000, ownedPlayers: [] });
+  const lotRef = db.collection('market_v7').doc('pro-flow');
+  await lotRef.set({
+    sellerId: 'seller-1', isPro: true, currency: 'crystals',
+    currentBid: 200, startingPrice: 200, highestBidderId: null,
+    bidders: [], expiresAt: new Date(now + 60 * 60 * 1000).toISOString(),
+    heroData: { id: 'pro-player', name: 'Pro Player' },
+  });
+
+  await placeSpecialMarketBidWithDb(db, 'bidder-1', 'pro-flow', 300, 'pro', now);
+  await placeSpecialMarketBidWithDb(db, 'bidder-2', 'pro-flow', 500, 'pro', now);
+  await placeSpecialMarketBidWithDb(db, 'bidder-2', 'pro-flow', 600, 'pro', now);
+
+  assert.equal((await db.collection('players_v14').doc('bidder-1').get()).get('crystals'), 1000);
+  assert.equal((await db.collection('players_v14').doc('bidder-2').get()).get('crystals'), 400);
+  await lotRef.update({ expiresAt: new Date(now - 1).toISOString() });
+
+  const result = await runTransferMarketExpirySweepWithDb(db);
+  assert.equal(result.success, true);
+  assert.equal(result.sold, 1);
+  assert.equal(result.expiredWithoutSale, 0);
+  assert.equal((await lotRef.get()).exists, false);
+
+  const seller = await db.collection('players_v14').doc('seller-1').get();
+  const firstBidder = await db.collection('players_v14').doc('bidder-1').get();
+  const winner = await db.collection('players_v14').doc('bidder-2').get();
+  assert.equal(seller.get('crystals'), 670, 'seller receives 600 less the 5% commission');
+  assert.deepEqual(seller.get('ownedPlayers'), []);
+  assert.equal(firstBidder.get('crystals'), 1000, 'outbid manager receives the full escrow refund');
+  assert.equal(winner.get('crystals'), 400, 'winner is not charged a second time at settlement');
+  assert.deepEqual(winner.get('ownedPlayers').map(player => player.id), ['pro-player']);
+
+  const ledger = await db.collection('economy_transactions').where('referenceId', '==', 'pro-flow').get();
+  const rows = ledger.docs.map(doc => doc.data());
+  assert.equal(rows.filter(row => row.type === 'SPECIAL_AUCTION_BID_ESCROW').reduce((sum, row) => sum - row.amount, 0), 900);
+  assert.equal(rows.filter(row => row.type === 'SPECIAL_AUCTION_OUTBID_REFUND').reduce((sum, row) => sum + row.amount, 0), 300);
+  assert.equal(rows.filter(row => row.type === 'SPECIAL_AUCTION_SETTLEMENT_CREDIT').reduce((sum, row) => sum + row.amount, 0), 570);
+  assert.equal(rows.some(row => row.type === 'SPECIAL_AUCTION_SETTLEMENT_DEBIT'), false);
+  assert.equal((await db.collection('transfer_history').get()).size, 1);
+});
+
+
 test('Firestore Emulator aborts a new bid when the previous bidder account is missing or escrow is corrupt', {
   skip: !emulatorHost,
 }, async t => {
