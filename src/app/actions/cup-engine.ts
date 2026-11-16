@@ -145,41 +145,74 @@ function buildCupRoundMatchData(season: number, round: number, pairing: Pairing,
   };
 }
 
-async function createRoundMatches(db: any, season: number, round: number, pairings: Pairing[], seasonStart: Date) {
-  const scheduledAt = Timestamp.fromDate(roundDate(seasonStart, ROUND_DAYS[round - 1]));
-  const entries = pairings.filter(pairing => pairing.home && pairing.away).map(pairing => {
-    pairing.matchId = matchId(season, round, pairing.index);
-    return {
-      pairing,
-      dedicatedRef: db.collection(MATCH_COLLECTIONS.cup).doc(pairing.matchId),
-      legacyRef: db.collection('matches_v2').doc(pairing.matchId),
-    };
-  });
+async function commitCupRoundTransition(
+  db: any,
+  cupRef: any,
+  season: number,
+  seasonStart: Date,
+  expectedRound: number,
+  pairings: Pairing[],
+  nextRound: number,
+  nextPairings: Pairing[],
+) {
+  return db.runTransaction(async (tx: any) => {
+    const cupSnap = await tx.get(cupRef);
+    if (!cupSnap.exists) throw new Error('CUP_NOT_FOUND_DURING_ROUND_TRANSITION');
+    const current = cupSnap.data() || {};
+    if (current.status === 'completed' || Number(current.currentRound || 1) !== expectedRound) {
+      return false;
+    }
 
-  // Read before writing and create only absent fixtures. A delayed worker must
-  // never reset an already-started or completed match with a merge-set retry.
-  await db.runTransaction(async (tx: any) => {
+    const scheduledAt = Timestamp.fromDate(roundDate(seasonStart, ROUND_DAYS[nextRound - 1]));
+    const entries = nextPairings
+      .filter(pairing => pairing.home && pairing.away)
+      .map(pairing => {
+        const expectedId = matchId(season, nextRound, Number(pairing.index));
+        if (pairing.matchId && pairing.matchId !== expectedId) {
+          throw new Error('CUP_STAGE_FIXTURE_ID_CONFLICT');
+        }
+        pairing.matchId = expectedId;
+        return {
+          pairing,
+          dedicatedRef: db.collection(MATCH_COLLECTIONS.cup).doc(expectedId),
+          legacyRef: db.collection('matches_v2').doc(expectedId),
+        };
+      });
+
+    // All reads precede every write. Fixture creation and the bracket pointer
+    // advance share this transaction, so a stale worker cannot seed a future
+    // round after another worker has already advanced the cup.
     const snapshots = await Promise.all(entries.map(async entry => ({
       dedicated: await tx.get(entry.dedicatedRef),
       legacy: await tx.get(entry.legacyRef),
     })));
+
     entries.forEach((entry, index) => {
       const existing = snapshots[index].dedicated.exists
         ? snapshots[index].dedicated.data() || {}
         : snapshots[index].legacy.exists ? snapshots[index].legacy.data() || {} : null;
       if (existing) {
         if ((existing.cupId && existing.cupId !== cupId(season)) ||
-            (Number.isFinite(Number(existing.cupRound)) && Number(existing.cupRound) !== round) ||
+            (Number.isFinite(Number(existing.cupRound)) && Number(existing.cupRound) !== nextRound) ||
             existing.homeId !== entry.pairing.home!.id ||
             existing.awayId !== entry.pairing.away!.id) {
           throw new Error('CUP_STAGE_FIXTURE_CONFLICT');
         }
         return;
       }
-      tx.create(entry.dedicatedRef, buildCupRoundMatchData(season, round, entry.pairing, scheduledAt));
+      tx.create(entry.dedicatedRef, buildCupRoundMatchData(season, nextRound, entry.pairing, scheduledAt));
     });
+
+    const rounds: Record<string, any[]> = { ...(current.rounds || {}) };
+    rounds[roundKey(expectedRound)] = pairings;
+    rounds[roundKey(nextRound)] = nextPairings;
+    tx.update(cupRef, {
+      rounds,
+      currentRound: nextRound,
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+    return true;
   });
-  return pairings;
 }
 
 async function commitCupRoundState(
@@ -571,10 +604,8 @@ export async function runPyramidCupCycle() {
   if (winners.length !== expectedWinners) throw new Error(`CUP_WINNER_COUNT_INVALID:R${round}:${winners.length}:EXPECTED:${expectedWinners}`);
   const nextRound = round + 1;
   const nextPairs = buildRoundPairings(nextRound, winners);
-  await createRoundMatches(db, season, nextRound, nextPairs, seasonStart);
-  const committed = await commitCupRoundState(db, cup.ref, round, pairings, {
-    nextRound,
-    nextPairings: nextPairs,
-  });
+  const committed = await commitCupRoundTransition(
+    db, cup.ref, season, seasonStart, round, pairings, nextRound, nextPairs,
+  );
   return { generated: false, resolved, advanced: committed ? 1 : 0, currentRound: committed ? nextRound : round, stale: !committed, advancingTeams: winners.length };
 }
