@@ -508,8 +508,15 @@ async function retireInactiveClub({ db, auth, userRecord, now = new Date(), cloc
     .where('groupId', '==', group)
     .where('version', '==', 140);
 
+  // Do not retire a manager while an active market lot still references the
+  // account as seller or winning bidder. In particular, bidder escrow must
+  // remain refundable before the player document can be archived/deleted.
+  const marketAsSellerQuery = db.collection('market_v7').where('sellerId', '==', uid);
+  const marketAsBidderQuery = db.collection('market_v7').where('highestBidderId', '==', uid);
+  const marketAsLegacyBidderQuery = db.collection('market_v7').where('highestBidderUid', '==', uid);
+
   const result = await db.runTransaction(async (transaction) => {
-    const [freshPlayer, slots, table, bot, archive, matches, pending, latestActivity, activeConfig, history] = await Promise.all([
+    const [freshPlayer, slots, table, bot, archive, matches, pending, latestActivity, activeConfig, history, marketAsSeller, marketAsBidder, marketAsLegacyBidder] = await Promise.all([
       transaction.get(playerRef),
       transaction.get(slotQuery),
       transaction.get(tableRef),
@@ -520,6 +527,9 @@ async function retireInactiveClub({ db, auth, userRecord, now = new Date(), cloc
       transaction.get(activityRef),
       transaction.get(configRef),
       transaction.get(historyRef),
+      transaction.get(marketAsSellerQuery),
+      transaction.get(marketAsBidderQuery),
+      transaction.get(marketAsLegacyBidderQuery),
     ]);
 
     if (archive.exists && !freshPlayer.exists) {
@@ -588,6 +598,17 @@ async function retireInactiveClub({ db, auth, userRecord, now = new Date(), cloc
     const rowsAtRank = Object.entries(stats).filter(([, row]) => Number(row && row.rank) === rank);
     if (userRows.length !== 1 || rowsAtRank.length !== 1 || rowsAtRank[0][0] !== userRows[0][0]) {
       return { action: 'BLOCKED_TABLE_IDENTITY_CONFLICT' };
+    }
+
+    const activeMarketLots = new Map();
+    for (const marketSnapshot of [marketAsSeller, marketAsBidder, marketAsLegacyBidder]) {
+      for (const lotDoc of marketSnapshot.docs) {
+        const status = String((lotDoc.data() || {}).status || '').toLowerCase();
+        if (status !== 'settled' && status !== 'expired') activeMarketLots.set(lotDoc.id, lotDoc);
+      }
+    }
+    if (activeMarketLots.size > 0) {
+      return { action: 'DEFERRED_MARKET_ACTIVITY', activeMarketLotCount: activeMarketLots.size };
     }
 
     for (const matchDoc of matches.docs) {
