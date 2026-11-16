@@ -16,6 +16,15 @@ export function normalizeAuctionBalance(value: unknown): number {
   return Math.max(0, Math.floor(Number(value) || 0));
 }
 
+function resolveRecordedEscrowAmount(value: unknown): number {
+  if (value === undefined || value === null || value === '') return 0;
+  const amount = Number(value);
+  if (!Number.isSafeInteger(amount) || amount < 0) {
+    throw new Error('AUCTION_ESCROW_AMOUNT_INVALID');
+  }
+  return amount;
+}
+
 export function resolveAuctionEscrow({
   currency,
   escrowCurrency,
@@ -31,7 +40,7 @@ export function resolveAuctionEscrow({
   bidderId: string;
   buyerExists: boolean;
 }) {
-  const amount = normalizeAuctionBalance(escrowedAmount);
+  const amount = resolveRecordedEscrowAmount(escrowedAmount);
   if (amount <= 0) {
     return { amount: 0, hasRecordedEscrow: false, hasValidEscrow: false };
   }
@@ -41,18 +50,15 @@ export function resolveAuctionEscrow({
   if (!bidderId || !buyerExists) {
     throw new Error('AUCTION_ESCROW_BIDDER_UNAVAILABLE');
   }
-  // A recorded escrow must exactly match the winning bid. Never silently
-  // debit the buyer again or discard a partial/excess escrow amount.
-  if (price > 0 && amount !== price) {
+  if (!Number.isSafeInteger(price) || price <= 0 || amount !== price) {
     throw new Error('AUCTION_ESCROW_AMOUNT_MISMATCH');
   }
   return {
     amount,
     hasRecordedEscrow: true,
-    hasValidEscrow: price > 0 && amount === price,
+    hasValidEscrow: true,
   };
 }
-
 
 /** Validate the escrow already attached to a lot before accepting another bid. */
 export function resolvePreviousAuctionBidEscrow({
@@ -68,13 +74,8 @@ export function resolvePreviousAuctionBidEscrow({
   currentBid: number;
   previousBidderId: string;
 }) {
-  if (escrowedAmount === undefined || escrowedAmount === null || escrowedAmount === 0 || escrowedAmount === '0' || escrowedAmount === '') {
-    return 0;
-  }
-  const amount = Number(escrowedAmount);
-  if (!Number.isSafeInteger(amount) || amount <= 0) {
-    throw new Error('AUCTION_ESCROW_AMOUNT_INVALID');
-  }
+  const amount = resolveRecordedEscrowAmount(escrowedAmount);
+  if (amount <= 0) return 0;
   if (escrowCurrency !== currency) {
     throw new Error('AUCTION_ESCROW_CURRENCY_MISMATCH');
   }
