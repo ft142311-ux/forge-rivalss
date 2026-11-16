@@ -36,6 +36,8 @@ The existing canonical-world backup/export is retained as the recovery point. Do
 
 ## Scheduled server tasks
 
+These schedules are defined in the Firebase Functions code. They become active only after an approved Functions deployment; CI does not deploy or activate them.
+
 - Season orchestrator: every 5 minutes UTC
 - Inactive-club retirement sweep: daily at 03:15 UTC
 - Transfer-market and player-auction expiry: every 5 minutes UTC
