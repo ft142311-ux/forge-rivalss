@@ -487,6 +487,9 @@ export async function runPyramidCupCycle() {
   }
 
   const round = Number(cup.data.currentRound || 1);
+  if (!Number.isSafeInteger(round) || round < 1 || round > ROUND_COUNT) {
+    throw new Error('CUP_CURRENT_ROUND_INVALID');
+  }
   const rounds: Record<string, any[]> = { ...(cup.data.rounds || {}) };
   const pairings: Pairing[] = Array.isArray(rounds[roundKey(round)]) ? rounds[roundKey(round)] : [];
   assertValidCupRoundPairings(pairings, round);
