@@ -420,6 +420,46 @@ async function repairCurrentRoundFixtures(db: any, cup: { ref: any; data: any },
   });
 }
 
+function assertValidCupRoundPairings(pairings: Pairing[], round: number) {
+  const expectedCount = round === 1 ? 64 : Math.pow(2, ROUND_COUNT - round);
+  if (!Array.isArray(pairings) || pairings.length !== expectedCount) {
+    throw new Error('CUP_ROUND_PAIRING_COUNT_INVALID');
+  }
+  const pairingIds = new Set<string>();
+  const indexes = new Set<number>();
+  const teamIds = new Set<string>();
+  let byes = 0;
+  for (const pairing of pairings) {
+    if (!pairing || typeof pairing.id !== 'string' || !pairing.id ||
+        !Number.isSafeInteger(Number(pairing.index)) || Number(pairing.index) < 1 ||
+        pairingIds.has(pairing.id) || indexes.has(Number(pairing.index))) {
+      throw new Error('CUP_ROUND_PAIRING_IDENTITY_INVALID');
+    }
+    pairingIds.add(pairing.id);
+    indexes.add(Number(pairing.index));
+    if (pairing.status === 'bye') {
+      if (round !== 1 || !pairing.home || pairing.away || pairing.winnerId !== pairing.home.id ||
+          teamIds.has(pairing.home.id)) {
+        throw new Error('CUP_ROUND_BYE_INVALID');
+      }
+      teamIds.add(pairing.home.id);
+      byes++;
+      continue;
+    }
+    if (!['scheduled', 'finished'].includes(String(pairing.status)) ||
+        !pairing.home?.id || !pairing.away?.id || pairing.home.id === pairing.away.id ||
+        teamIds.has(pairing.home.id) || teamIds.has(pairing.away.id)) {
+      throw new Error('CUP_ROUND_PARTICIPANTS_INVALID');
+    }
+    teamIds.add(pairing.home.id);
+    teamIds.add(pairing.away.id);
+  }
+  if ((round === 1 && byes !== 8) || (round > 1 && byes !== 0)) {
+    throw new Error('CUP_ROUND_BYE_COUNT_INVALID');
+  }
+  return { pairings: pairings.length, byes, teams: teamIds.size };
+}
+
 export async function runPyramidCupCycle() {
   const db = getAdminDb();
   const context = await readActiveCupSeasonContext(db);
@@ -449,6 +489,7 @@ export async function runPyramidCupCycle() {
   const round = Number(cup.data.currentRound || 1);
   const rounds: Record<string, any[]> = { ...(cup.data.rounds || {}) };
   const pairings: Pairing[] = Array.isArray(rounds[roundKey(round)]) ? rounds[roundKey(round)] : [];
+  assertValidCupRoundPairings(pairings, round);
   const now = Date.now();
   const seasonStart = resolveCupDate(cup.data.seasonStart || activeSeasonStart);
   const deadlineDay = ROUND_DAYS[round] ?? (ROUND_DAYS[ROUND_COUNT - 1] + 1);
