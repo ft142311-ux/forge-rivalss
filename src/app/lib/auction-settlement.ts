@@ -18,8 +18,15 @@ export function normalizeAuctionBalance(value: unknown): number {
 
 /** Resolve the authoritative auction price without silently flooring corrupt values. */
 export function resolveAuctionPrice(currentBid: unknown, startingPrice: unknown, price: unknown): number {
-  const raw = currentBid || startingPrice || price;
-  if (raw === undefined || raw === null || raw === '') return 0;
+  const isAbsent = (value: unknown) => value === undefined || value === null || value === '' || value === 0;
+  const raw = !isAbsent(currentBid) ? currentBid : !isAbsent(startingPrice) ? startingPrice : price;
+  if (isAbsent(raw)) return 0;
+  if (typeof raw !== 'number' && typeof raw !== 'string') {
+    throw new Error('AUCTION_PRICE_INVALID');
+  }
+  if (typeof raw === 'string' && raw.trim() === '') {
+    throw new Error('AUCTION_PRICE_INVALID');
+  }
   const amount = Number(raw);
   if (!Number.isSafeInteger(amount) || amount < 0) {
     throw new Error('AUCTION_PRICE_INVALID');
