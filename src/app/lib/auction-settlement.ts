@@ -15,3 +15,40 @@ export function isSystemAuctionSeller(sellerId: unknown, isSystem: unknown): boo
 export function normalizeAuctionBalance(value: unknown): number {
   return Math.max(0, Math.floor(Number(value) || 0));
 }
+
+export function resolveAuctionEscrow({
+  currency,
+  escrowCurrency,
+  escrowedAmount,
+  price,
+  bidderId,
+  buyerExists,
+}: {
+  currency: string;
+  escrowCurrency: unknown;
+  escrowedAmount: unknown;
+  price: number;
+  bidderId: string;
+  buyerExists: boolean;
+}) {
+  const amount = normalizeAuctionBalance(escrowedAmount);
+  if (amount <= 0) {
+    return { amount: 0, hasRecordedEscrow: false, hasValidEscrow: false };
+  }
+  if (escrowCurrency !== currency) {
+    throw new Error('AUCTION_ESCROW_CURRENCY_MISMATCH');
+  }
+  if (!bidderId || !buyerExists) {
+    throw new Error('AUCTION_ESCROW_BIDDER_UNAVAILABLE');
+  }
+  // A recorded escrow must exactly match the winning bid. Never silently
+  // debit the buyer again or discard a partial/excess escrow amount.
+  if (price > 0 && amount !== price) {
+    throw new Error('AUCTION_ESCROW_AMOUNT_MISMATCH');
+  }
+  return {
+    amount,
+    hasRecordedEscrow: true,
+    hasValidEscrow: price > 0 && amount === price,
+  };
+}
