@@ -649,7 +649,7 @@ async function commitTournamentStageTransition(
     const tournamentSnap = await t.get(tournamentRef);
     if (!tournamentSnap.exists) return false;
     const current = tournamentSnap.data() || {};
-    if (current.stage !== expectedStage || current.status !== 'active') return false;
+    if (current.stage !== expectedStage || !['groups', 'active'].includes(String(current.status))) return false;
     const fixtureRefs = fixtures.map(fixture => tournamentRef.collection('matches').doc(String(fixture.id)));
     const existingSnaps = await Promise.all(fixtureRefs.map((ref: any) => t.get(ref)));
     for (let index = 0; index < fixtures.length; index++) {
