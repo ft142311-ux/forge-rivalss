@@ -31,3 +31,14 @@ test('completed tournament history sync is retried and finalized only after idem
   assert.match(cycle, /syncCompletedTournamentHistory\(db, pendingTournament\)/);
   assert.match(cycle, /historiesSynced/);
 });
+
+test('concurrent final-stage workers reuse one committed completion timestamp', () => {
+  const finalStart = source.indexOf("if (stage === 'final')");
+  const finalEnd = source.indexOf('\n  return false;', finalStart);
+  const finalizer = source.slice(finalStart, finalEnd);
+  assert.match(finalizer, /db\.runTransaction\(async \(t: any\) =>/);
+  assert.match(finalizer, /current\.status === 'completed'/);
+  assert.match(finalizer, /current\.historySyncStatus !== 'pending'/);
+  assert.match(finalizer, /return \{ id: tournament\.id, \.\.\.current \}/);
+  assert.match(finalizer, /const finishedAt = Date\.now\(\)/);
+});
