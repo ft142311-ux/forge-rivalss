@@ -270,8 +270,13 @@ async function initializeTournament(db: any, tournamentId: string, now: number) 
     if (!snap.exists) return null;
     const data = snap.data() || {};
     const isRegistrationDue = data.status === 'registration' && now >= Number(data.startAt);
+    // Legacy initializing records created before tokenized leases have no
+    // active owner to fence, so they are safe to reclaim immediately.
+    const hasInitializationOwner = typeof data.initializationToken === 'string' &&
+      data.initializationToken.trim().length > 0;
     const isExpiredInitialization = data.status === 'initializing' &&
-      isTournamentMatchLeaseExpired(data.initializingAt, now, TOURNAMENT_MATCH_LEASE_MS);
+      (!hasInitializationOwner ||
+        isTournamentMatchLeaseExpired(data.initializingAt, now, TOURNAMENT_MATCH_LEASE_MS));
     if (!isRegistrationDue && !isExpiredInitialization) return null;
 
     t.update(ref, {
