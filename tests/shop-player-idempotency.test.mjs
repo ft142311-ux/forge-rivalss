@@ -63,3 +63,22 @@ test('premium purchase retry is rejected while the first purchase remains active
   assert.match(premium, /t\.set\(tx,[\s\S]*type: 'PREMIUM_PURCHASE'/);
   assert.ok(premium.indexOf('PREMIUM_ALREADY_ACTIVE') < premium.indexOf('crystals: crystals - cost'));
 });
+
+test('diamond pack retries reject reuse of an operation id for a different product', () => {
+  const start = action.indexOf('export async function purchaseDiamondPackAction');
+  const end = action.indexOf('export async function exchangeCrystalsForCreditsAction', start);
+  const purchase = action.slice(start, end);
+  assert.match(purchase, /receipt\.productId !== pack\.productId/);
+  assert.match(purchase, /Number\(receipt\.amount\) !== Number\(amount\)/);
+  assert.match(purchase, /operation: 'DIAMOND_PACK_ORDER',[\s\S]*productId: pack\.productId,[\s\S]*amount: Number\(amount\)/);
+  assert.match(purchase, /operation: 'DIAMOND_PACK_TEST_PURCHASE',[\s\S]*productId: pack\.productId,[\s\S]*amount: Number\(amount\)/);
+});
+
+test('crystal exchange retries reject reuse of an operation id for different amounts', () => {
+  const start = action.indexOf('export async function exchangeCrystalsForCreditsAction');
+  const end = action.indexOf('export async function changeClubNameAction', start);
+  const exchange = action.slice(start, end);
+  assert.match(exchange, /Number\(receipt\.crystalsAmount\) !== amount/);
+  assert.match(exchange, /Number\(receipt\.creditsAmount\) !== creditsAmount/);
+  assert.match(exchange, /crystalsAmount: amount,[\s\S]*creditsAmount,/);
+});
