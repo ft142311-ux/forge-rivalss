@@ -1,4 +1,4 @@
-import { FieldValue } from 'firebase-admin/firestore';
+import { FieldValue, type DocumentReference } from 'firebase-admin/firestore';
 import { resolveAuctionPrice, resolvePreviousAuctionBidEscrow } from './auction-settlement';
 
 function money(value: unknown) {
