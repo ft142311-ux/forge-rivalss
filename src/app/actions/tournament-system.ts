@@ -261,22 +261,28 @@ export async function unregisterFromTournamentAction(idToken: string, tournament
 
 async function initializeTournament(db: any, tournamentId: string, now: number) {
   const ref = db.collection('tournaments_v1').doc(tournamentId);
+  const initializationToken = randomUUID();
 
-  // Claim initialization transactionally so two cron/API invocations cannot
-  // create the same groups and fixtures at the same time.
+  // A fresh initialization lease is exclusive. If its owner crashed, a later
+  // cron cycle may reclaim it after the bounded lease expires.
   const tournament = await db.runTransaction(async (t: any) => {
     const snap = await t.get(ref);
     if (!snap.exists) return null;
     const data = snap.data() || {};
-    if (data.status !== 'registration' || now < Number(data.startAt)) return null;
+    const isRegistrationDue = data.status === 'registration' && now >= Number(data.startAt);
+    const isExpiredInitialization = data.status === 'initializing' &&
+      isTournamentMatchLeaseExpired(data.initializingAt, now, TOURNAMENT_MATCH_LEASE_MS);
+    if (!isRegistrationDue && !isExpiredInitialization) return null;
+
     t.update(ref, {
       status: 'initializing',
       stage: 'initializing',
       initializingAt: FieldValue.serverTimestamp(),
+      initializationToken,
       updatedAt: FieldValue.serverTimestamp(),
       initializationError: FieldValue.delete(),
     });
-    return { id: snap.id, ...data };
+    return { id: snap.id, ...data, initializationToken };
   });
   if (!tournament) return false;
 
@@ -295,8 +301,6 @@ async function initializeTournament(db: any, tournamentId: string, now: number) 
     const uniqueRealTeams = Array.from(new Map(realTeams.map(team => [team.id, team])).values());
     const teams: Team[] = [...uniqueRealTeams];
     for (let i = teams.length; i < maxParticipants; i++) {
-      // Bot IDs are based on the actual slot, not on the original registration
-      // array index, so missing/deleted managers cannot create duplicate bots.
       teams.push(botTeam(tournamentId, i));
     }
     if (teams.length !== maxParticipants || new Set(teams.map(team => team.id)).size !== maxParticipants) {
@@ -305,72 +309,95 @@ async function initializeTournament(db: any, tournamentId: string, now: number) 
 
     const shuffled = shuffle(teams, tournamentId);
     const groups = groupCount(maxParticipants);
-    const batch = db.batch();
+    const participantWrites: Array<{ id: string; data: Record<string, any> }> = [];
+    const groupWrites: Array<{ id: string; data: Record<string, any> }> = [];
+    const matchWrites: Array<{ id: string; data: Record<string, any> }> = [];
 
     for (let i = 0; i < shuffled.length; i++) {
       const groupIndex = Math.floor(i / 4);
       const groupId = String.fromCharCode(65 + groupIndex);
       const team = shuffled[i];
-      batch.set(ref.collection('participants').doc(team.id), {
-        ...team,
-        groupId,
-        seed: i + 1,
-        tournamentId,
-        createdAt: FieldValue.serverTimestamp(),
+      participantWrites.push({
+        id: team.id,
+        data: { ...team, groupId, seed: i + 1, tournamentId, createdAt: FieldValue.serverTimestamp() },
       });
     }
 
     for (let g = 0; g < groups; g++) {
       const groupId = String.fromCharCode(65 + g);
       const groupTeams = shuffled.slice(g * 4, g * 4 + 4);
-      const standings = groupTeams.map(team => ({ id: team.id, name: team.name, isBot: team.isBot, played: 0, wins: 0, draws: 0, losses: 0, for: 0, against: 0, diff: 0, points: 0 }));
-      batch.set(ref.collection('groups').doc(groupId), { groupId, teams: standings, status: 'active', updatedAt: FieldValue.serverTimestamp() });
+      const standings = groupTeams.map(team => ({
+        id: team.id, name: team.name, isBot: team.isBot, played: 0, wins: 0,
+        draws: 0, losses: 0, for: 0, against: 0, diff: 0, points: 0,
+      }));
+      groupWrites.push({
+        id: groupId,
+        data: { groupId, teams: standings, status: 'active', updatedAt: FieldValue.serverTimestamp() },
+      });
       for (let round = 0; round < 3; round++) {
-        const pairs = groupRoundPairs(groupTeams.map(t => t.id), round);
+        const pairs = groupRoundPairs(groupTeams.map(team => team.id), round);
         for (let pairIndex = 0; pairIndex < pairs.length; pairIndex++) {
           const [homeId, awayId] = pairs[pairIndex];
           const matchId = `groups_${groupId}_${round + 1}_${pairIndex + 1}`;
-          batch.set(ref.collection('matches').doc(matchId), {
+          matchWrites.push({
             id: matchId,
-            tournamentId,
-            stage: 'groups',
-            groupId,
-            round: round + 1,
-            index: pairIndex + 1,
-            homeId,
-            awayId,
-            homeName: groupTeams.find(t => t.id === homeId)?.name || homeId,
-            awayName: groupTeams.find(t => t.id === awayId)?.name || awayId,
-            bestOf: 2,
-            scheduledAt: addMinutes(Number(tournament.startAt), round * GROUP_ROUND_MINUTES),
-            status: 'scheduled',
-            attemptCount: 0,
-            createdAt: FieldValue.serverTimestamp(),
+            data: {
+              id: matchId, tournamentId, stage: 'groups', groupId,
+              round: round + 1, index: pairIndex + 1, homeId, awayId,
+              homeName: groupTeams.find(team => team.id === homeId)?.name || homeId,
+              awayName: groupTeams.find(team => team.id === awayId)?.name || awayId,
+              bestOf: 2,
+              scheduledAt: addMinutes(Number(tournament.startAt), round * GROUP_ROUND_MINUTES),
+              status: 'scheduled', attemptCount: 0, createdAt: FieldValue.serverTimestamp(),
+            },
           });
         }
       }
     }
 
-    batch.update(ref, {
-      status: 'groups',
-      stage: 'groups',
-      registeredIds,
-      participantCount: teams.length,
-      realParticipantCount: uniqueRealTeams.length,
-      botParticipantCount: teams.length - uniqueRealTeams.length,
-      initializedAt: FieldValue.serverTimestamp(),
-      updatedAt: FieldValue.serverTimestamp(),
-      initializationError: FieldValue.delete(),
+    // All participant, group, fixture and stage writes commit atomically after
+    // the initialization token is revalidated. A reclaimed worker is fenced.
+    await db.runTransaction(async (t: any) => {
+      const fresh = await t.get(ref);
+      const current = fresh.data() || {};
+      if (!fresh.exists || current.status !== 'initializing' ||
+          current.initializationToken !== initializationToken) {
+        throw new Error('TOURNAMENT_INITIALIZATION_LEASE_LOST');
+      }
+
+      participantWrites.forEach(item => t.create(ref.collection('participants').doc(item.id), item.data));
+      groupWrites.forEach(item => t.create(ref.collection('groups').doc(item.id), item.data));
+      matchWrites.forEach(item => t.create(ref.collection('matches').doc(item.id), item.data));
+      t.update(ref, {
+        status: 'groups',
+        stage: 'groups',
+        registeredIds,
+        participantCount: teams.length,
+        realParticipantCount: uniqueRealTeams.length,
+        botParticipantCount: teams.length - uniqueRealTeams.length,
+        initializedAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
+        initializationToken: FieldValue.delete(),
+        initializingAt: FieldValue.delete(),
+        initializationError: FieldValue.delete(),
+      });
     });
-    await batch.commit();
     return true;
   } catch (error: any) {
-    // Do not leave the tournament permanently locked if setup fails.
-    await ref.update({
-      status: 'registration',
-      stage: 'registration',
-      initializationError: String(error?.message || error || 'TOURNAMENT_INITIALIZATION_FAILED'),
-      updatedAt: FieldValue.serverTimestamp(),
+    // A stale worker must not reset a newer worker's initialization lease.
+    await db.runTransaction(async (t: any) => {
+      const fresh = await t.get(ref);
+      const current = fresh.data() || {};
+      if (!fresh.exists || current.status !== 'initializing' ||
+          current.initializationToken !== initializationToken) return;
+      t.update(ref, {
+        status: 'registration',
+        stage: 'registration',
+        initializationToken: FieldValue.delete(),
+        initializingAt: FieldValue.delete(),
+        initializationError: String(error?.message || error || 'TOURNAMENT_INITIALIZATION_FAILED'),
+        updatedAt: FieldValue.serverTimestamp(),
+      });
     }).catch(() => undefined);
     throw error;
   }
@@ -804,14 +831,14 @@ export async function runTournamentCycle(cronToken: string) {
     }
   }
 
-  const snap = await db.collection('tournaments_v1').where('status', 'in', ['registration', 'groups', 'active']).get();
+  const snap = await db.collection('tournaments_v1').where('status', 'in', ['registration', 'initializing', 'groups', 'active']).get();
   let initialized = 0;
   let resolved = 0;
   let advanced = 0;
 
   for (const doc of snap.docs) {
     const tournament = { id: doc.id, ...doc.data() } as any;
-    if (tournament.status === 'registration' && now >= Number(tournament.startAt)) {
+    if ((tournament.status === 'registration' && now >= Number(tournament.startAt)) || tournament.status === 'initializing') {
       if (await initializeTournament(db, tournament.id, now)) initialized++;
       continue;
     }
