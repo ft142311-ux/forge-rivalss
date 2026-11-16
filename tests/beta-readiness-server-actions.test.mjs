@@ -11,7 +11,7 @@ const youthTransferPage = read('../src/app/youth-academy/transfers/page.tsx');
 const youthSquadPage = read('../src/app/youth-academy/squad/page.tsx');
 const specialMarketAction = read('../src/app/actions/pro-market.ts');
 const auctionPolicy = read('../src/app/lib/auction-settlement.ts');
-const settlement = read('../src/app/actions/autonomous-cycle.ts');
+const settlement = read('../src/app/lib/auction-expiry-sweep.ts');
 
 function blockBetween(source, start, end) {
   const from = source.indexOf(start);
