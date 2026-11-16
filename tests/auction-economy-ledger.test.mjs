@@ -44,7 +44,7 @@ test('daily PRO rotation preserves system lots with a bidder or escrow for share
   const start = proMarket.indexOf('export async function ensureProMarketDailyDropAction');
   const end = proMarket.indexOf('/** Places a bid on a special auction', start);
   const block = proMarket.slice(start, end);
-  assert.match(block, /placeSpecialMarketBidWithDb/);
+  assert.match(block, /canPruneUnbidSystemAuctionLot\(oldLot\.data\(\) \|\| \{\}\)/);
   assert.match(block, /retainedWithBids\+\+/);
   assert.match(block, /tx\.delete\(oldLot\.ref\)/);
   assert.doesNotMatch(block, /for \(const oldLot of systemLots\.docs\) \{\s*if \(oldLot\.id !== lotId\) tx\.delete/);
