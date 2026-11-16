@@ -44,7 +44,7 @@ test('PRO and youth market mutations are routed through authenticated server act
 test('special market server actions validate market type, authoritative balance and existing escrow', () => {
   assert.match(specialMarketAction, /lot\.isPro === true && lot\.currency === 'crystals'/);
   assert.match(specialMarketAction, /lot\.isYouth === true/);
-  assert.match(specialMarketAction, /bidder\[currency\]/);
+  assert.match(auctionBid, /bidder\[currency\]/);
   assert.match(auctionBid, /SPECIAL_AUCTION_BID_ESCROW/);
   assert.match(auctionBid, /SPECIAL_AUCTION_OUTBID_REFUND/);
   assert.match(specialMarketAction, /placeSpecialMarketBidWithDb/);
