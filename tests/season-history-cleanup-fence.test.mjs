@@ -53,6 +53,8 @@ function validState(overrides = {}) {
     lock: {
       ownerId: 'cleanup-worker',
       token: 'fencing-token',
+      sourceSeason: 3,
+      targetSeason: 4,
       expiresAtMs: now + 60_000,
     },
     config: {
@@ -102,6 +104,21 @@ test('a stale or replaced cleanup lease blocks every mutation', async () => {
       /SEASON_CALENDAR_BUILD_LOCK_LOST/,
     );
     assert.equal(db.state.has(markerRef.id), false);
+  }
+});
+
+test('cleanup refuses a live lease issued for a different season transition', async () => {
+  for (const lock of [
+    { ...validState().lock, sourceSeason: 2, targetSeason: 3 },
+    { ...validState().lock, sourceSeason: 3, targetSeason: 5 },
+  ]) {
+    const db = makeDb(validState({ lock }));
+    const archiveRef = { id: 'league_season_archives_v1/S1' };
+    await assert.rejects(
+      commitSeasonHistoryCleanupWrites(db, 'cleanup-worker', 'fencing-token', 4, [], [archiveRef]),
+      /SEASON_CALENDAR_BUILD_LOCK_TARGET_CHANGED/,
+    );
+    assert.equal(db.state.has(archiveRef.id), false);
   }
 });
 
