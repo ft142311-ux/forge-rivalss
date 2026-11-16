@@ -106,19 +106,70 @@ function buildCupRoundMatchData(season: number, round: number, pairing: Pairing,
 }
 
 async function createRoundMatches(db: any, season: number, round: number, pairings: Pairing[], seasonStart: Date) {
-  const batch = db.batch();
   const scheduledAt = Timestamp.fromDate(roundDate(seasonStart, ROUND_DAYS[round - 1]));
-  for (const pairing of pairings) {
-    if (!pairing.home || !pairing.away) continue;
+  const entries = pairings.filter(pairing => pairing.home && pairing.away).map(pairing => {
     pairing.matchId = matchId(season, round, pairing.index);
-    batch.set(
-      db.collection(MATCH_COLLECTIONS.cup).doc(pairing.matchId),
-      buildCupRoundMatchData(season, round, pairing, scheduledAt),
-      { merge: true },
-    );
-  }
-  await batch.commit();
+    return {
+      pairing,
+      dedicatedRef: db.collection(MATCH_COLLECTIONS.cup).doc(pairing.matchId),
+      legacyRef: db.collection('matches_v2').doc(pairing.matchId),
+    };
+  });
+
+  // Read before writing and create only absent fixtures. A delayed worker must
+  // never reset an already-started or completed match with a merge-set retry.
+  await db.runTransaction(async (tx: any) => {
+    const snapshots = await Promise.all(entries.map(async entry => ({
+      dedicated: await tx.get(entry.dedicatedRef),
+      legacy: await tx.get(entry.legacyRef),
+    })));
+    entries.forEach((entry, index) => {
+      const existing = snapshots[index].dedicated.exists
+        ? snapshots[index].dedicated.data() || {}
+        : snapshots[index].legacy.exists ? snapshots[index].legacy.data() || {} : null;
+      if (existing) {
+        if ((existing.cupId && existing.cupId !== cupId(season)) ||
+            (Number.isFinite(Number(existing.cupRound)) && Number(existing.cupRound) !== round) ||
+            existing.homeId !== entry.pairing.home!.id ||
+            existing.awayId !== entry.pairing.away!.id) {
+          throw new Error('CUP_STAGE_FIXTURE_CONFLICT');
+        }
+        return;
+      }
+      tx.create(entry.dedicatedRef, buildCupRoundMatchData(season, round, entry.pairing, scheduledAt));
+    });
+  });
   return pairings;
+}
+
+async function commitCupRoundState(
+  db: any,
+  cupRef: any,
+  expectedRound: number,
+  pairings: Pairing[],
+  options: { nextRound?: number; nextPairings?: Pairing[]; completion?: Record<string, any> } = {},
+) {
+  return db.runTransaction(async (tx: any) => {
+    const snap = await tx.get(cupRef);
+    if (!snap.exists) throw new Error('CUP_NOT_FOUND_DURING_ROUND_COMMIT');
+    const current = snap.data() || {};
+    if (current.status === 'completed' || Number(current.currentRound || 1) !== expectedRound) {
+      return false;
+    }
+    const rounds: Record<string, any[]> = { ...(current.rounds || {}) };
+    rounds[roundKey(expectedRound)] = pairings;
+    if (options.nextRound && options.nextPairings) {
+      rounds[roundKey(options.nextRound)] = options.nextPairings;
+    }
+    const patch: Record<string, any> = {
+      rounds,
+      updatedAt: FieldValue.serverTimestamp(),
+      ...(options.completion || {}),
+    };
+    if (options.nextRound) patch.currentRound = options.nextRound;
+    tx.update(cupRef, patch);
+    return true;
+  });
 }
 
 export async function generatePyramidCup(targetSeasonNumber?: number) {
@@ -388,8 +439,8 @@ export async function runPyramidCupCycle() {
   }
 
   if (pairings.some(p => p?.home && p?.away && p.status === 'scheduled')) {
-    await cup.ref.update({ rounds, updatedAt: FieldValue.serverTimestamp() });
-    return { generated: false, resolved, advanced: 0, waitingForMatches: true };
+    const committed = await commitCupRoundState(db, cup.ref, round, pairings);
+    return { generated: false, resolved, advanced: 0, waitingForMatches: true, stale: !committed };
   }
   if (round >= ROUND_COUNT) {
     const finalPair = pairings.find(p => p?.home && p?.away && p.winnerId);
@@ -400,8 +451,19 @@ export async function runPyramidCupCycle() {
       payCupPrize(db, season, winner ? teamFromPublic(winner) : null, 'champion'),
       payCupPrize(db, season, finalist ? teamFromPublic(finalist) : null, 'finalist'),
     ]);
-    await cup.ref.update({ rounds, currentRound: ROUND_COUNT, status: 'completed', winnerId, winnerName: winner?.name || null, finalistId: finalist?.id || null, finalistName: finalist?.name || null, championPrize, finalistPrize, finishedAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp() });
-    return { generated: false, resolved, advanced: 1, completed: true, winnerId, championPrize, finalistPrize };
+    const committed = await commitCupRoundState(db, cup.ref, round, pairings, {
+      completion: {
+        status: 'completed',
+        winnerId,
+        winnerName: winner?.name || null,
+        finalistId: finalist?.id || null,
+        finalistName: finalist?.name || null,
+        championPrize,
+        finalistPrize,
+        finishedAt: FieldValue.serverTimestamp(),
+      },
+    });
+    return { generated: false, resolved, advanced: committed ? 1 : 0, completed: committed, stale: !committed, winnerId, championPrize, finalistPrize };
   }
 
   const winners: Team[] = [];
@@ -417,8 +479,10 @@ export async function runPyramidCupCycle() {
   if (winners.length !== expectedWinners) throw new Error(`CUP_WINNER_COUNT_INVALID:R${round}:${winners.length}:EXPECTED:${expectedWinners}`);
   const nextRound = round + 1;
   const nextPairs = buildRoundPairings(nextRound, winners);
-  rounds[roundKey(round)] = pairings; rounds[roundKey(nextRound)] = nextPairs;
   await createRoundMatches(db, season, nextRound, nextPairs, seasonStart);
-  await cup.ref.update({ rounds, currentRound: nextRound, updatedAt: FieldValue.serverTimestamp() });
-  return { generated: false, resolved, advanced: 1, currentRound: nextRound, advancingTeams: winners.length };
+  const committed = await commitCupRoundState(db, cup.ref, round, pairings, {
+    nextRound,
+    nextPairings: nextPairs,
+  });
+  return { generated: false, resolved, advanced: committed ? 1 : 0, currentRound: committed ? nextRound : round, stale: !committed, advancingTeams: winners.length };
 }
