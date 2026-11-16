@@ -120,6 +120,18 @@ test('retry after committed activation cannot activate the same target twice', a
   assert.equal(db.updateCount(), 1);
 });
 
+test('activation is blocked while the previous season history cleanup marker is pending', async () => {
+  const config = { ...preparedConfig(), historyCleanupPending: true, historyCleanupTargetSeason: 2 };
+  const db = activationDb({ config });
+
+  const result = await commitSeasonActivation(db, configRef, planRef, expected());
+
+  assert.deepEqual(result, { success: false, reason: 'ACTIVATION_STATE_CHANGED' });
+  assert.equal(db.read('season_config').activeSeasonNumber, 1);
+  assert.equal(db.read('season_config').historyCleanupPending, true);
+  assert.equal(db.updateCount(), 0);
+});
+
 test('invalid or changed rollover plan blocks activation without config writes', async () => {
   const db = activationDb({ plan: { ready: false } });
   const result = await commitSeasonActivation(db, configRef, planRef, expected());
