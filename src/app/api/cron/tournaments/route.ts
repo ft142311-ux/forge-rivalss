@@ -13,7 +13,8 @@ export async function GET(request: Request) {
   try {
     const result = await runTournamentCycle(cronSecret);
     const pyramidCup = await runPyramidCupCycle();
-    const success = result?.success !== false && pyramidCup?.success !== false;
+    const pyramidCupFailed = 'success' in pyramidCup && pyramidCup.success === false;
+    const success = result?.success !== false && !pyramidCupFailed;
     return NextResponse.json(
       { timestamp: new Date().toISOString(), ...result, pyramidCup, success },
       { status: success ? 200 : 207 },
