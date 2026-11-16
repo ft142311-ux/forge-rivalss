@@ -16,6 +16,17 @@ export function normalizeAuctionBalance(value: unknown): number {
   return Math.max(0, Math.floor(Number(value) || 0));
 }
 
+/** Resolve the authoritative auction price without silently flooring corrupt values. */
+export function resolveAuctionPrice(currentBid: unknown, startingPrice: unknown, price: unknown): number {
+  const raw = currentBid || startingPrice || price;
+  if (raw === undefined || raw === null || raw === '') return 0;
+  const amount = Number(raw);
+  if (!Number.isSafeInteger(amount) || amount < 0) {
+    throw new Error('AUCTION_PRICE_INVALID');
+  }
+  return amount;
+}
+
 function resolveRecordedEscrowAmount(value: unknown): number {
   if (value === undefined || value === null || value === '') return 0;
   const amount = Number(value);
