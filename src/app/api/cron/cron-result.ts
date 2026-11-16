@@ -24,6 +24,7 @@ export function isSeasonOrchestratorSuccessful(result: any) {
     && result?.worldReady === true
     && result?.matchSettlement?.success !== false
     && result?.tournaments?.success !== false
+    && result?.pyramidCup?.success !== false
     && result?.publication?.success !== false
     && result?.activation?.success !== false
     && result?.activation?.historyCleanup?.pending !== true;
