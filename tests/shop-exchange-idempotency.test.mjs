@@ -11,10 +11,10 @@ test('exchange uses a persisted operation receipt inside the balance transaction
   const end = action.indexOf('export async function changeClubNameAction', start);
   const exchange = action.slice(start, end);
   assert.match(exchange, /const receiptSnap = await t[.]get[(]receiptRef[)]/);
-  assert.match(exchange, /receipt\\.operation !== 'CRYSTAL_TO_CREDITS'/);
-  assert.match(exchange, /Number\\(receipt\\.crystalsAmount\\) !== amount/);
-  assert.match(exchange, /Number\\(receipt\\.creditsAmount\\) !== creditsAmount/);
-  assert.match(exchange, /return receipt\\.result/);
+  assert.match(exchange, /receipt[.]operation !== 'CRYSTAL_TO_CREDITS'/);
+  assert.match(exchange, /Number[(]receipt[.]crystalsAmount[)] !== amount/);
+  assert.match(exchange, /Number[(]receipt[.]creditsAmount[)] !== creditsAmount/);
+  assert.match(exchange, /return receipt[.]result/);
   assert.match(action, /t\.create\(receiptRef,[\s\S]*operation: 'CRYSTAL_TO_CREDITS'/);
 });
 
