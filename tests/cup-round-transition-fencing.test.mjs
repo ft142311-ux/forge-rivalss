@@ -38,5 +38,6 @@ test('cup waiting, advancing and final branches use the fenced state commit', ()
   assert.match(cycle, /commitCupRoundState\(db, cup\.ref, round, pairings\)/);
   assert.match(cycle, /commitCupRoundTransition\([\s\S]*?round, pairings, nextRound, nextPairs/);
   assert.match(cycle, /completion: \{/);
-  assert.doesNotMatch(cycle, /createRoundMatches\(/);\n  assert.doesNotMatch(cycle, /cup\.ref\.update\(\{ rounds/);
+  assert.doesNotMatch(cycle, /createRoundMatches\(/);
+  assert.doesNotMatch(cycle, /cup\.ref\.update\(\{ rounds/);
 });
