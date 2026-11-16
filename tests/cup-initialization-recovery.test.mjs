@@ -47,6 +47,9 @@ test('Pyramid Cup uses the active season config instead of the hard-coded global
   assert.match(context, /collection\('system_v1'\)\.doc\('season_config'\)/);
   assert.match(context, /config\.activeSeasonNumber/);
   assert.match(context, /config\.seasonStart/);
+  assert.match(context, /config\.nextSeasonStart/);
+  assert.match(context, /resolveSeasonLifecycleWindow\(/);
+  assert.match(context, /lifecycle\.leagueMatchesPaused/);
   assert.match(context, /config\.worldReady !== true/);
   assert.match(context, /\['REGULAR_SEASON', 'ACTIVE'\]/);
   assert.match(context, /Math\.floor\(\(nowMs - seasonStart\.getTime\(\)\) \/ 86400000\) \+ 1/);
