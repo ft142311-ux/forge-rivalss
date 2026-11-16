@@ -10,6 +10,7 @@ import {
   releaseSeasonCalendarBuildLock,
   SEASON_CALENDAR_BUILD_LOCK_ID,
 } from '../src/app/actions/season-rollover-lock.ts';
+import { completeSeasonHistoryCleanup } from '../src/app/actions/season-history-cleanup.ts';
 
 const emulatorHost = process.env.FIRESTORE_EMULATOR_HOST;
 const projectId = process.env.GCLOUD_PROJECT || 'demo-forge-rivals';
@@ -152,4 +153,49 @@ test('Firestore Emulator history cleanup rejects stale workers and changed activ
   } finally {
     await releaseSeasonCalendarBuildLock(db, lease.ownerId, lease.token);
   }
+});
+
+
+test('Firestore Emulator clears the cleanup marker only for the active target and only once', {
+  skip: !emulatorHost,
+}, async t => {
+  const { db, doc } = await withIsolatedFirestore(t);
+  const configRef = doc('season_config');
+  await configRef.set({
+    activeSeasonNumber: 3,
+    worldReady: true,
+    historyCleanupPending: true,
+    historyCleanupTargetSeason: 2,
+  });
+
+  const wrongTarget = await completeSeasonHistoryCleanup(db, 2);
+  assert.deepEqual(wrongTarget, {
+    ready: false,
+    reason: 'HISTORY_CLEANUP_TARGET_CHANGED',
+    shouldMarkComplete: false,
+  });
+  assert.equal((await configRef.get()).get('historyCleanupPending'), true);
+  assert.equal((await configRef.get()).get('historyCleanupCompletedAt'), undefined);
+
+  await configRef.update({ activeSeasonNumber: 2 });
+  const concurrent = await Promise.all([
+    completeSeasonHistoryCleanup(db, 2),
+    completeSeasonHistoryCleanup(db, 2),
+  ]);
+  assert.equal(concurrent.every(result => result.ready), true);
+  assert.equal(concurrent.filter(result => result.shouldMarkComplete).length, 1);
+
+  const completed = await configRef.get();
+  assert.equal(completed.get('activeSeasonNumber'), 2);
+  assert.equal(completed.get('worldReady'), true);
+  assert.equal(completed.get('historyCleanupPending'), false);
+  assert.ok(completed.get('historyCleanupCompletedAt'));
+
+  const retry = await completeSeasonHistoryCleanup(db, 2);
+  assert.deepEqual(retry, {
+    ready: true,
+    reason: null,
+    shouldMarkComplete: false,
+  });
+  assert.equal((await configRef.get()).get('historyCleanupPending'), false);
 });
