@@ -5,7 +5,7 @@ import { getAdminDb } from '@/lib/firebase-admin';
 import { requireServerActor } from '@/lib/server-auth';
 import { generateVtunePlayer } from '@/app/lib/moba-data';
 import { getMoscowDateString, getMoscowTime } from '@/app/lib/time-utils';
-import { canPruneUnbidSystemAuctionLot, resolvePreviousAuctionBidEscrow } from '@/app/lib/auction-settlement';
+import { canPruneUnbidSystemAuctionLot, resolveAuctionPrice, resolvePreviousAuctionBidEscrow } from '@/app/lib/auction-settlement';
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error || 'PRO_MARKET_FAILED');
@@ -118,7 +118,7 @@ async function placeSpecialMarketBid(
     const expiryMs = rawExpiry?.toMillis?.() ?? (typeof rawExpiry === 'number' ? rawExpiry : Date.parse(String(rawExpiry || '')));
     if (!Number.isFinite(expiryMs) || expiryMs <= Date.now()) throw new Error('MARKET_LOT_EXPIRED');
 
-    const currentBid = money(lot.currentBid || lot.startingPrice || 0);
+    const currentBid = resolveAuctionPrice(lot.currentBid, lot.startingPrice, 0);
     if (bid <= currentBid) throw new Error('BID_TOO_LOW');
     const currency = marketKind === 'pro' ? 'crystals' : 'credits';
     const previousBidderId = String(lot.highestBidderId || lot.highestBidderUid || '');
