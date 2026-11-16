@@ -111,7 +111,7 @@ test('Firestore Emulator refunds recorded escrow when the seller no longer owns 
   assert.equal(ledger.docs[0].get('balanceAfter'), 1000);
 });
 
-test('Firestore Emulator leaves a lot untouched when its recorded escrow is malformed', {
+test('Firestore Emulator leaves lots untouched when recorded escrow or price is malformed', {
   skip: !emulatorHost,
 }, async t => {
   const { db } = await withIsolatedFirestore(t);
@@ -120,14 +120,19 @@ test('Firestore Emulator leaves a lot untouched when its recorded escrow is malf
     ownedPlayers: [{ id: 'hero-1', name: 'Test Hero' }],
   });
   await db.collection('players_v14').doc('buyer-1').set({ credits: 700, ownedPlayers: [] });
-  await db.collection('market_v7').doc('lot-corrupt').set(expiredLot({
+  await db.collection('market_v7').doc('lot-corrupt-escrow').set(expiredLot({
     escrowedAmount: 'corrupt',
+  }));
+  await db.collection('market_v7').doc('lot-corrupt-price').set(expiredLot({
+    currentBid: 'corrupt',
   }));
 
   const result = await runTransferMarketExpirySweepWithDb(db);
   assert.equal(result.success, false);
-  assert.match(result.errors[0].error, /AUCTION_ESCROW_AMOUNT_INVALID/);
-  assert.equal((await db.collection('market_v7').doc('lot-corrupt').get()).exists, true);
+  assert.ok(result.errors.some(error => /AUCTION_ESCROW_AMOUNT_INVALID/.test(error.error)));
+  assert.ok(result.errors.some(error => /AUCTION_PRICE_INVALID/.test(error.error)));
+  assert.equal((await db.collection('market_v7').doc('lot-corrupt-escrow').get()).exists, true);
+  assert.equal((await db.collection('market_v7').doc('lot-corrupt-price').get()).exists, true);
   assert.equal((await db.collection('players_v14').doc('buyer-1').get()).get('credits'), 700);
   assert.equal((await db.collection('players_v14').doc('seller-1').get()).get('credits'), 200);
   assert.equal((await db.collection('economy_transactions').get()).size, 0);
