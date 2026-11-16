@@ -10,6 +10,7 @@ const proPage = read('../src/app/transfers/pro/page.tsx');
 const youthTransferPage = read('../src/app/youth-academy/transfers/page.tsx');
 const youthSquadPage = read('../src/app/youth-academy/squad/page.tsx');
 const specialMarketAction = read('../src/app/actions/pro-market.ts');
+const auctionBid = read('../src/app/lib/auction-bid.ts');
 const auctionPolicy = read('../src/app/lib/auction-settlement.ts');
 const settlement = read('../src/app/lib/auction-expiry-sweep.ts');
 
@@ -44,9 +45,10 @@ test('special market server actions validate market type, authoritative balance 
   assert.match(specialMarketAction, /lot\.isPro === true && lot\.currency === 'crystals'/);
   assert.match(specialMarketAction, /lot\.isYouth === true/);
   assert.match(specialMarketAction, /bidder\[currency\]/);
-  assert.match(specialMarketAction, /SPECIAL_AUCTION_BID_ESCROW/);
-  assert.match(specialMarketAction, /SPECIAL_AUCTION_OUTBID_REFUND/);
-  assert.match(specialMarketAction, /resolvePreviousAuctionBidEscrow\(/);
+  assert.match(auctionBid, /SPECIAL_AUCTION_BID_ESCROW/);
+  assert.match(auctionBid, /SPECIAL_AUCTION_OUTBID_REFUND/);
+  assert.match(specialMarketAction, /placeSpecialMarketBidWithDb/);
+  assert.match(auctionBid, /resolvePreviousAuctionBidEscrow\(/);
   assert.match(specialMarketAction, /requireServerActor\(idToken\)/);
   assert.match(auctionPolicy, /AUCTION_ESCROW_CURRENCY_MISMATCH/);
   assert.match(auctionPolicy, /AUCTION_ESCROW_AMOUNT_MISMATCH/);
