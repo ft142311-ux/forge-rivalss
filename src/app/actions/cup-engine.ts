@@ -448,7 +448,8 @@ function assertValidCupRoundPairings(pairings: Pairing[], round: number) {
     }
     if (!['scheduled', 'finished'].includes(String(pairing.status)) ||
         !pairing.home?.id || !pairing.away?.id || pairing.home.id === pairing.away.id ||
-        teamIds.has(pairing.home.id) || teamIds.has(pairing.away.id)) {
+        teamIds.has(pairing.home.id) || teamIds.has(pairing.away.id) ||
+        (pairing.status === 'finished' && ![pairing.home.id, pairing.away.id].includes(String(pairing.winnerId || '')))) {
       throw new Error('CUP_ROUND_PARTICIPANTS_INVALID');
     }
     teamIds.add(pairing.home.id);
