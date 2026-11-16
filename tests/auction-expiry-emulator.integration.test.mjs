@@ -83,6 +83,66 @@ test('Firestore Emulator refunds the outbid manager and charges only the increme
   assert.equal((await db.collection('notifications_v7').where('userId', '==', 'bidder-1').get()).size, 1);
 });
 
+
+test('Firestore Emulator aborts a new bid when the previous bidder account is missing or escrow is corrupt', {
+  skip: !emulatorHost,
+}, async t => {
+  const { db } = await withIsolatedFirestore(t);
+  const now = Date.now();
+  await db.collection('players_v14').doc('seller-1').set({ crystals: 0 });
+  await db.collection('players_v14').doc('new-bidder').set({ crystals: 1000 });
+  await db.collection('market_v7').doc('missing-previous-bidder').set({
+    sellerId: 'seller-1', isPro: true, currency: 'crystals',
+    currentBid: 300, startingPrice: 200, highestBidderId: 'deleted-bidder',
+    escrowCurrency: 'crystals', escrowedAmount: 300,
+    bidders: [], expiresAt: new Date(now + 60 * 60 * 1000).toISOString(),
+  });
+  await db.collection('market_v7').doc('corrupt-previous-escrow').set({
+    sellerId: 'seller-1', isPro: true, currency: 'crystals',
+    currentBid: 300, startingPrice: 200, highestBidderId: 'old-bidder',
+    escrowCurrency: 'credits', escrowedAmount: 300,
+    bidders: [], expiresAt: new Date(now + 60 * 60 * 1000).toISOString(),
+  });
+  await db.collection('players_v14').doc('old-bidder').set({ crystals: 1000 });
+
+  await assert.rejects(
+    placeSpecialMarketBidWithDb(db, 'new-bidder', 'missing-previous-bidder', 400, 'pro', now),
+    /PREVIOUS_BIDDER_NOT_FOUND/,
+  );
+  await assert.rejects(
+    placeSpecialMarketBidWithDb(db, 'new-bidder', 'corrupt-previous-escrow', 400, 'pro', now),
+    /AUCTION_ESCROW_CURRENCY_MISMATCH/,
+  );
+  assert.equal((await db.collection('players_v14').doc('new-bidder').get()).get('crystals'), 1000);
+  assert.equal((await db.collection('players_v14').doc('old-bidder').get()).get('crystals'), 1000);
+  assert.equal((await db.collection('market_v7').doc('missing-previous-bidder').get()).get('highestBidderId'), 'deleted-bidder');
+  assert.equal((await db.collection('market_v7').doc('corrupt-previous-escrow').get()).get('highestBidderId'), 'old-bidder');
+  assert.equal((await db.collection('economy_transactions').get()).size, 0);
+});
+
+test('Firestore Emulator keeps Youth bids in credits and applies the same escrow rules', {
+  skip: !emulatorHost,
+}, async t => {
+  const { db } = await withIsolatedFirestore(t);
+  const now = Date.now();
+  await db.collection('players_v14').doc('seller-1').set({ credits: 0 });
+  await db.collection('players_v14').doc('youth-bidder').set({ credits: 800, crystals: 500 });
+  await db.collection('market_v7').doc('youth-lot').set({
+    sellerId: 'seller-1', isYouth: true, currency: 'credits',
+    currentBid: 100, startingPrice: 100, highestBidderId: null,
+    bidders: [], expiresAt: new Date(now + 60 * 60 * 1000).toISOString(),
+  });
+
+  await placeSpecialMarketBidWithDb(db, 'youth-bidder', 'youth-lot', 250, 'youth', now);
+  const bidder = await db.collection('players_v14').doc('youth-bidder').get();
+  assert.equal(bidder.get('credits'), 550);
+  assert.equal(bidder.get('crystals'), 500);
+  const lot = await db.collection('market_v7').doc('youth-lot').get();
+  assert.equal(lot.get('currency'), 'credits');
+  assert.equal(lot.get('escrowCurrency'), 'credits');
+  assert.equal(lot.get('escrowedAmount'), 250);
+});
+
 test('Firestore Emulator serializes concurrent bids and rejects a stale lower bid without overcharging', {
   skip: !emulatorHost,
 }, async t => {
