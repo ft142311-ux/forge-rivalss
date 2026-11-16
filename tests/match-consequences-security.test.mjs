@@ -34,3 +34,13 @@ test('training minutes are derived from persisted game durations rather than cal
   assert.match(action, /verifiedMinutesPlayed \/ 90/);
   assert.doesNotMatch(action, /Math\.max\(0, Math\.min\(1\.25, Number\(minutesPlayed\) \/ 90\)\)/);
 });
+
+test('match consequences are applied at most once per user and match', () => {
+  const start = source.indexOf('export async function applyMatchConsequencesAction');
+  const action = source.slice(start);
+  assert.match(action, /match_consequence_receipts/);
+  assert.match(action, /const \[matchSnap, profileSnap, receiptSnap\] = await Promise\.all/);
+  assert.match(action, /if \(receiptSnap\.exists\) return \{ duplicate: true \}/);
+  assert.match(action, /t\.create\(receiptRef/);
+  assert.match(action, /duplicate: transactionResult\.duplicate/);
+});
