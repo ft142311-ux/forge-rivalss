@@ -52,3 +52,52 @@ export function resolveAuctionEscrow({
     hasValidEscrow: price > 0 && amount === price,
   };
 }
+
+
+/** Validate the escrow already attached to a lot before accepting another bid. */
+export function resolvePreviousAuctionBidEscrow({
+  currency,
+  escrowCurrency,
+  escrowedAmount,
+  currentBid,
+  previousBidderId,
+}: {
+  currency: string;
+  escrowCurrency: unknown;
+  escrowedAmount: unknown;
+  currentBid: number;
+  previousBidderId: string;
+}) {
+  if (escrowedAmount === undefined || escrowedAmount === null || escrowedAmount === 0 || escrowedAmount === '0' || escrowedAmount === '') {
+    return 0;
+  }
+  const amount = Number(escrowedAmount);
+  if (!Number.isSafeInteger(amount) || amount <= 0) {
+    throw new Error('AUCTION_ESCROW_AMOUNT_INVALID');
+  }
+  if (escrowCurrency !== currency) {
+    throw new Error('AUCTION_ESCROW_CURRENCY_MISMATCH');
+  }
+  if (!previousBidderId) {
+    throw new Error('AUCTION_ESCROW_BIDDER_UNAVAILABLE');
+  }
+  if (!Number.isSafeInteger(currentBid) || currentBid <= 0 || amount !== currentBid) {
+    throw new Error('AUCTION_ESCROW_AMOUNT_MISMATCH');
+  }
+  return amount;
+}
+
+/**
+ * Daily system-lot rotation may remove only lots that have never reserved
+ * bidder funds. Any bidder or escrow record must remain for normal settlement.
+ */
+export function canPruneUnbidSystemAuctionLot(lot: any): boolean {
+  if (!lot || typeof lot !== 'object') return false;
+  if (String(lot.highestBidderId || lot.highestBidderUid || '').trim()) return false;
+  const rawEscrow = lot.escrowedAmount;
+  if (rawEscrow === undefined || rawEscrow === null || rawEscrow === 0 || rawEscrow === '0' || rawEscrow === '') {
+    return true;
+  }
+  const amount = Number(rawEscrow);
+  return Number.isSafeInteger(amount) && amount === 0;
+}
