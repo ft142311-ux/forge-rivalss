@@ -6,6 +6,7 @@ import { getAdminDb } from '@/lib/firebase-admin';
 import { getTableId, MAX_LEVELS, TEAMS_PER_GROUP, TOTAL_GROUPS } from '@/app/lib/leagues-data';
 import { resolveUniversalMatchDocument } from '@/app/actions/universal-match-resolver';
 import { MATCH_COLLECTIONS } from '@/app/lib/match-storage';
+import { resolveSeasonLifecycleWindow } from './season-boundary';
 
 const LEAGUE_ID = 'ALPHA';
 const CUP_COLLECTION = 'cup_pyramid_v1';
@@ -43,7 +44,16 @@ async function readActiveCupSeasonContext(db: any, nowMs = Date.now()) {
     return { ready: false as const, reason: 'ACTIVE_SEASON_NOT_READY', season, phase };
   }
   const seasonStart = resolveCupDate(config.seasonStart);
+  const nextSeasonStart = resolveCupDate(config.nextSeasonStart);
   if (!Number.isFinite(nowMs)) throw new Error('CUP_CLOCK_INVALID');
+  const lifecycle = resolveSeasonLifecycleWindow({
+    seasonStart,
+    nextSeasonStart,
+    now: new Date(nowMs),
+  });
+  if (lifecycle.leagueMatchesPaused) {
+    return { ready: false as const, reason: 'OFFSEASON_CUP_MATCHES_DISABLED', season, phase };
+  }
   const seasonDay = Math.floor((nowMs - seasonStart.getTime()) / 86400000) + 1;
   return { ready: true as const, season, phase, seasonStart, seasonDay };
 }
