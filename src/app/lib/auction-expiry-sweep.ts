@@ -181,6 +181,11 @@ export async function runTransferMarketExpirySweepWithDb(db: any) {
   let cursor: any = null;
   let scanned = 0;
   let dueCount = 0;
+  let settled = 0;
+  let sold = 0;
+  let expiredWithoutSale = 0;
+  let skipped = 0;
+  const errors: Array<{ id: string; error: string }> = [];
   // Avoid an unbounded collection read while still scanning every listing.
   // Document-ID pagination is stable even when lots are deleted as they settle.
   while (true) {
@@ -224,11 +229,6 @@ export async function runTransferMarketExpirySweepWithDb(db: any) {
     if (page.size < pageSize) break;
   }
 
-  let settled = 0;
-  let sold = 0;
-  let expiredWithoutSale = 0;
-  let skipped = 0;
-  const errors: Array<{ id: string; error: string }> = [];
 
   return {
     success: errors.length === 0,
