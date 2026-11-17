@@ -85,10 +85,20 @@ export async function runTransferMarketExpirySweepWithDb(db: any) {
         const seller: any = sellerSnap?.exists ? sellerSnap.data() || {} : {};
         const buyer: any = buyerSnap?.exists ? buyerSnap.data() || {} : {};
         const playerArrayKey = lot.isYouth === true ? 'youthAcademyPlayers' : 'ownedPlayers';
-        const sellerPlayers: any[] = Array.isArray(seller[playerArrayKey]) ? [...seller[playerArrayKey]] : [];
+        const rawSellerPlayers = seller[playerArrayKey];
+        const rawBuyerPlayers = buyer[playerArrayKey];
+        if (sellerSnap?.exists && rawSellerPlayers !== undefined && rawSellerPlayers !== null && !Array.isArray(rawSellerPlayers)) {
+          throw new Error('AUCTION_SELLER_ROSTER_INVALID');
+        }
+        if (buyerSnap?.exists && rawBuyerPlayers !== undefined && rawBuyerPlayers !== null && !Array.isArray(rawBuyerPlayers)) {
+          throw new Error('AUCTION_BUYER_ROSTER_INVALID');
+        }
+        const sellerPlayers: any[] = Array.isArray(rawSellerPlayers) ? [...rawSellerPlayers] : [];
+        const sellerMatches = sellerPlayers.filter((player: any) => String(player?.id) === playerId).length;
+        if (sellerMatches > 1) throw new Error('AUCTION_SELLER_PLAYER_DUPLICATE');
         const sellerIndex = sellerPlayers.findIndex((player: any) => String(player?.id) === playerId);
         const systemPlayer: any = isSystemSeller && lot.heroData?.id === playerId ? lot.heroData : null;
-        const buyerPlayers: any[] = Array.isArray(buyer[playerArrayKey]) ? [...buyer[playerArrayKey]] : [];
+        const buyerPlayers: any[] = Array.isArray(rawBuyerPlayers) ? [...rawBuyerPlayers] : [];
         const buyerBalance = normalizeAuctionBalance(buyer[currency]);
         const escrow = resolveAuctionEscrow({
           currency,
@@ -101,7 +111,7 @@ export async function runTransferMarketExpirySweepWithDb(db: any) {
         const escrowedAmount = escrow.amount;
         const hasRecordedEscrow = escrow.hasRecordedEscrow;
         const hasValidEscrow = escrow.hasValidEscrow;
-        const sellerExists = isSystemSeller ? Boolean(systemPlayer) : Boolean(sellerSnap?.exists && sellerIndex >= 0);
+        const sellerExists = isSystemSeller ? Boolean(systemPlayer) : Boolean(sellerSnap?.exists && sellerMatches === 1);
         const validSale = Boolean(
           sellerExists && buyerSnap?.exists && buyerRef && bidderId !== sellerId && price > 0 &&
           (hasValidEscrow || buyerBalance >= price) &&
