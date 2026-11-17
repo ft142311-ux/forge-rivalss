@@ -637,3 +637,72 @@ test('Firestore Emulator refunds escrow when the seller account has disappeared'
   assert.equal(ledger.docs[0].get('type'), 'SPECIAL_AUCTION_SETTLEMENT_REFUND');
   assert.equal((await db.collection('transfer_history').get()).size, 0);
 });
+
+
+test('Firestore Emulator expires a legacy no-escrow lot without charging a winner who cannot afford it', {
+  skip: !emulatorHost,
+}, async t => {
+  const { db } = await withIsolatedFirestore(t);
+  await db.collection('players_v14').doc('legacy-poor-seller').set({
+    credits: 20,
+    ownedPlayers: [{ id: 'legacy-poor-player', name: 'Legacy Poor Player', onTransferUntil: 'reserved', transferMarketId: 'legacy-poor-lot' }],
+  });
+  await db.collection('players_v14').doc('legacy-poor-buyer').set({ credits: 100, ownedPlayers: [] });
+  const lotRef = db.collection('market_v7').doc('legacy-poor-lot');
+  await lotRef.set({
+    sellerId: 'legacy-poor-seller',
+    highestBidderUid: 'legacy-poor-buyer',
+    currentBid: 400,
+    startingPrice: 200,
+    currency: 'credits',
+    expiresAt: new Date(Date.now() - 1000).toISOString(),
+    heroData: { id: 'legacy-poor-player', name: 'Legacy Poor Player' },
+  });
+
+  const result = await runTransferMarketExpirySweepWithDb(db);
+  assert.equal(result.success, true);
+  assert.equal(result.expiredWithoutSale, 1);
+  assert.equal((await db.collection('players_v14').doc('legacy-poor-buyer').get()).get('credits'), 100);
+  const seller = await db.collection('players_v14').doc('legacy-poor-seller').get();
+  assert.equal(seller.get('credits'), 20);
+  assert.equal(seller.get('ownedPlayers')[0].onTransferUntil, null);
+  assert.equal((await lotRef.get()).exists, false);
+  assert.equal((await db.collection('economy_transactions').get()).size, 0);
+  assert.equal((await db.collection('transfer_history').get()).size, 0);
+});
+
+test('Firestore Emulator refunds a valid escrow when the buyer already owns the listed player', {
+  skip: !emulatorHost,
+}, async t => {
+  const { db } = await withIsolatedFirestore(t);
+  await db.collection('players_v14').doc('duplicate-owner-seller').set({
+    credits: 10,
+    ownedPlayers: [{ id: 'duplicate-player', name: 'Duplicate Player', onTransferUntil: 'reserved', transferMarketId: 'duplicate-owner-lot' }],
+  });
+  await db.collection('players_v14').doc('duplicate-owner-buyer').set({
+    credits: 500,
+    ownedPlayers: [{ id: 'duplicate-player', name: 'Duplicate Player' }],
+  });
+  const lotRef = db.collection('market_v7').doc('duplicate-owner-lot');
+  await lotRef.set(expiredLot({
+    sellerId: 'duplicate-owner-seller',
+    highestBidderId: 'duplicate-owner-buyer',
+    currentBid: 400,
+    startingPrice: 200,
+    escrowedAmount: 400,
+    heroData: { id: 'duplicate-player', name: 'Duplicate Player' },
+  }));
+
+  const result = await runTransferMarketExpirySweepWithDb(db);
+  assert.equal(result.success, true);
+  assert.equal(result.expiredWithoutSale, 1);
+  assert.equal((await db.collection('players_v14').doc('duplicate-owner-buyer').get()).get('credits'), 900);
+  const seller = await db.collection('players_v14').doc('duplicate-owner-seller').get();
+  assert.equal(seller.get('credits'), 10);
+  assert.equal(seller.get('ownedPlayers')[0].onTransferUntil, null);
+  assert.equal((await lotRef.get()).exists, false);
+  const ledger = await db.collection('economy_transactions').where('referenceId', '==', 'duplicate-owner-lot').get();
+  assert.equal(ledger.size, 1);
+  assert.equal(ledger.docs[0].get('type'), 'SPECIAL_AUCTION_SETTLEMENT_REFUND');
+  assert.equal((await db.collection('transfer_history').get()).size, 0);
+});
