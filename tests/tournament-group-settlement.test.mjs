@@ -4,14 +4,19 @@ import { readFileSync } from 'node:fs';
 
 const source = readFileSync(new URL('../src/app/actions/tournament-system.ts', import.meta.url), 'utf8');
 
-test('group stage accepts completed BO2 draws while knockout stages require a winner', () => {
+test('tournament stage readiness requires the canonical fixture matrix and completed outcomes', () => {
   const start = source.indexOf('async function stageMatchesDone');
   const end = source.indexOf('function expectedStageMatchCount', start);
   assert.ok(start >= 0 && end > start);
   const stageCheck = source.slice(start, end);
-  assert.match(stageCheck, /isTournamentStageMatchComplete\(match, stage\)/);
-  assert.match(stageCheck, /getTournamentStageMatchKey\(match, stage, doc\.id\)/);
-  assert.match(stageCheck, /if \(!key \|\| ids\.has\(key\)\) return false/);
+  assert.match(stageCheck, /snap\\.docs\\.length !== expectedCount/);
+  assert.match(stageCheck, /isTournamentStageMatchSetComplete\\(/);
+  assert.match(stageCheck, /maxParticipants/);
+
+  const helper = readFileSync(new URL('../src/app/lib/tournament-stage-utils.ts', import.meta.url), 'utf8');
+  assert.match(helper, /isTournamentStageMatchComplete\\(match, stage\\)/);
+  assert.match(helper, /if \\(stage !== 'groups' && !match\\.winnerId\\) return false/);
+  assert.match(helper, /expected\\.delete\\(key\\)/);
 });
 
 test('group match settlement validates standings rows before atomically publishing result and report', () => {
