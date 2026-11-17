@@ -71,7 +71,7 @@ test('standard market bid action fails closed before writing when expiry or pric
   assert.ok(action.includes("resolvePreviousAuctionBidEscrow({"));
   assert.ok(action.includes("bidderBalance < chargeAmount"));
   assert.ok(action.includes("const minimumBid = Math.ceil(currentBid * 1.03)"));
-  assert.ok(action.includes("if (bid > maxBid) throw new Error('BID_TOO_HIGH')"));
+  assert.ok(action.includes("if (amount > maxBid) throw new Error('BID_TOO_HIGH')"));
   assert.ok(action.includes("escrowedAmount: bid"));
   assert.ok(action.includes("escrowCurrency: currency"));
   assert.ok(action.includes("SPECIAL_AUCTION_BID_ESCROW"));
