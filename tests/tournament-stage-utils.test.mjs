@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   getTournamentStageMatchKey,
   isTournamentStageMatchComplete,
+  isTournamentStageMatchSetComplete,
 } from '../src/app/lib/tournament-stage-utils.ts';
 
 test('completed group draws count as completed while knockout draws do not', () => {
@@ -31,4 +32,35 @@ test('group fixture identity includes group and round so repeated pair indices r
 test('knockout fixture identity remains stable by stage and index', () => {
   assert.equal(getTournamentStageMatchKey({ index: 2 }, 'semifinal', 'doc-a'), 'semifinal:2');
   assert.equal(getTournamentStageMatchKey({}, 'final', 'doc-final'), 'final:doc-final');
+});
+
+
+test('group stage requires the exact A-D group, round and pair-index fixture matrix', () => {
+  const complete = [];
+  for (const groupId of ['A', 'B', 'C', 'D']) {
+    for (let round = 1; round <= 3; round++) {
+      for (let index = 1; index <= 2; index++) {
+        complete.push({
+          id: `groups_${groupId}_${round}_${index}`,
+          data: { stage: 'groups', status: 'finished', groupId, round, index, homeId: `h_${groupId}_${round}_${index}`, awayId: `a_${groupId}_${round}_${index}`, winnerId: null },
+        });
+      }
+    }
+  }
+  assert.equal(isTournamentStageMatchSetComplete(complete, 'groups', 16), true);
+  const malformed = complete.map(entry => ({ ...entry, data: { ...entry.data } }));
+  malformed[0].data.groupId = 'Z';
+  assert.equal(isTournamentStageMatchSetComplete(malformed, 'groups', 16), false);
+  assert.equal(isTournamentStageMatchSetComplete(complete.slice(1), 'groups', 16), false);
+});
+
+test('knockout stage requires every expected index exactly once', () => {
+  const complete = Array.from({ length: 4 }, (_, index) => ({
+    id: `quarterfinal_${index + 1}`,
+    data: { stage: 'quarterfinal', status: 'finished', index: index + 1, homeId: `h${index}`, awayId: `a${index}`, winnerId: `h${index}` },
+  }));
+  assert.equal(isTournamentStageMatchSetComplete(complete, 'quarterfinal', 32), true);
+  const wrongIndex = complete.map(entry => ({ ...entry, data: { ...entry.data } }));
+  wrongIndex[3].data.index = 5;
+  assert.equal(isTournamentStageMatchSetComplete(wrongIndex, 'quarterfinal', 32), false);
 });
