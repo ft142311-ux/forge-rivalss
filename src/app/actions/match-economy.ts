@@ -107,6 +107,11 @@ export async function recordMatchEconomy(
 
     const player = playerSnap.data() || {};
     const rawBalance = player.credits;
+    if (rawBalance !== undefined && rawBalance !== null &&
+        ((typeof rawBalance !== 'number' && typeof rawBalance !== 'string') ||
+         (typeof rawBalance === 'string' && rawBalance.trim().length === 0))) {
+      throw new Error('INVALID_MATCH_ECONOMY_BALANCE');
+    }
     const before = rawBalance === undefined || rawBalance === null ? 0 : Number(rawBalance);
     if (!Number.isSafeInteger(before) || before < 0) {
       throw new Error('INVALID_MATCH_ECONOMY_BALANCE');
