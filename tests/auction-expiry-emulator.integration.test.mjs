@@ -753,3 +753,54 @@ test('Firestore Emulator refunds a malformed self-bid and unlocks the seller pla
   assert.equal(refund.docs[0].get('amount'), 300);
   assert.equal((await db.collection('transfer_history').get()).size, 0);
 });
+
+
+test('Firestore Emulator rejects malformed fractional auction balances without partial bid or refund writes', {
+  skip: !emulatorHost,
+}, async t => {
+  const { db } = await withIsolatedFirestore(t);
+  const now = Date.now();
+  await db.collection('players_v14').doc('fractional-bidder').set({ credits: 1000.5, ownedPlayers: [] });
+  await db.collection('players_v14').doc('fractional-seller').set({
+    credits: 20,
+    ownedPlayers: [{ id: 'fractional-player', name: 'Fractional Player', onTransferUntil: 'reserved', transferMarketId: 'fractional-lot' }],
+  });
+  const bidLot = db.collection('market_v7').doc('fractional-bid');
+  await bidLot.set({
+    sellerId: 'fractional-seller',
+    marketType: 'player',
+    currency: 'credits',
+    currentBid: 200,
+    startingPrice: 200,
+    highestBidderId: null,
+    bidders: [],
+    expiresAt: new Date(now + 60 * 60 * 1000).toISOString(),
+    heroData: { id: 'fractional-player', name: 'Fractional Player' },
+    isPro: false,
+    isYouth: false,
+  });
+
+  await assert.rejects(
+    placeStandardMarketBidWithDb(db, 'fractional-bidder', 'fractional-bid', 300),
+    /AUCTION_BALANCE_INVALID/,
+  );
+  assert.equal((await db.collection('players_v14').doc('fractional-bidder').get()).get('credits'), 1000.5);
+  assert.equal((await bidLot.get()).get('highestBidderId'), null);
+
+  const refundLot = db.collection('market_v7').doc('fractional-refund');
+  await refundLot.set(expiredLot({
+    sellerId: 'fractional-seller',
+    highestBidderId: 'fractional-bidder',
+    currentBid: 300,
+    startingPrice: 200,
+    escrowCurrency: 'credits',
+    escrowedAmount: 300,
+    heroData: { id: 'missing-player', name: 'Missing Player' },
+  }));
+  const result = await runTransferMarketExpirySweepWithDb(db);
+  assert.equal(result.success, false);
+  assert.ok(result.errors.some(error => error.id === 'fractional-refund' && /AUCTION_BALANCE_INVALID/.test(error.error)));
+  assert.equal((await refundLot.get()).exists, true);
+  assert.equal((await db.collection('players_v14').doc('fractional-bidder').get()).get('credits'), 1000.5);
+  assert.equal((await db.collection('economy_transactions').get()).size, 0);
+});
