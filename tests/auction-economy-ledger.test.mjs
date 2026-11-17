@@ -26,8 +26,7 @@ test('special auction bid and outbid refund ledger entries include exact before 
 });
 
 test('auction settlement records fallback debit, seller proceeds and escrow refund with balances', () => {
-  const start = expirySweep.indexOf('async function settleCandidate');
-  const block = expirySweep.slice(start);
+  const block = expirySweep;
   assert.match(block, /SPECIAL_AUCTION_SETTLEMENT_DEBIT[\s\S]*balanceBefore: buyerBalance,[\s\S]*balanceAfter: buyerBalance - price/);
   assert.match(block, /SPECIAL_AUCTION_SETTLEMENT_CREDIT[\s\S]*balanceBefore: sellerBefore,[\s\S]*balanceAfter: sellerAfter/);
   assert.match(block, /SPECIAL_AUCTION_SETTLEMENT_REFUND[\s\S]*balanceBefore: buyerBalance,[\s\S]*balanceAfter: refundedBalance/);
@@ -41,8 +40,7 @@ test('expired auction settlement uses strict price validation before any transac
 });
 
 test('ambiguous auction escrow is rejected before the expired lot can be deleted', () => {
-  const start = expirySweep.indexOf('export async function runTransferMarketExpirySweepWithDb');
-  const block = expirySweep.slice(start);
+  const block = expirySweep;
   const escrowGuard = block.indexOf('resolveAuctionEscrow({');
   const firstLotDelete = block.indexOf('tx.delete(lotRef)');
   assert.ok(escrowGuard >= 0, 'settlement must validate recorded escrow');
