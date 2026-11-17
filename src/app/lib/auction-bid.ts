@@ -1,5 +1,5 @@
 import { FieldValue, type DocumentReference } from 'firebase-admin/firestore';
-import { resolveAuctionPrice, resolvePreviousAuctionBidEscrow, normalizeAuctionBalance, resolveAuctionCurrency } from './auction-settlement';
+import { resolveAuctionPrice, resolvePreviousAuctionBidEscrow, normalizeAuctionBalance, resolveAuctionCurrency, resolveAuctionMaxBid } from './auction-settlement';
 import { resolveMarketBidExpiryMs, resolveMarketBidPrice } from './market-bid-guards';
 
 function money(value: unknown) {
@@ -43,7 +43,7 @@ export async function placeSpecialMarketBidWithDb(
 
     const currentBid = resolveAuctionPrice(lot.currentBid, lot.startingPrice, 0);
     const minimumBid = Math.ceil(currentBid * 1.03);
-    const maxBid = Math.floor(Number(lot.maxBid || (marketKind === 'youth' ? currentBid * 4 : Number(lot.startingPrice || currentBid) * 3)));
+    const maxBid = resolveAuctionMaxBid(lot.maxBid, marketKind === 'youth' ? currentBid * 4 : Number(lot.startingPrice || currentBid) * 3);
     if (!Number.isSafeInteger(minimumBid) || !Number.isSafeInteger(maxBid) || maxBid < minimumBid) {
       throw new Error('MARKET_BID_LIMITS_INVALID');
     }
@@ -191,7 +191,7 @@ export async function placeStandardMarketBidWithDb(
     const currentBid = resolveMarketBidPrice(lot.currentBid, lot.startingPrice);
     if (currentBid === null) throw new Error('MARKET_PRICE_INVALID');
     const minimumBid = Math.ceil(currentBid * 1.03);
-    const maxBid = Math.floor(Number(lot.maxBid || Number(lot.startingPrice || currentBid) * 3));
+    const maxBid = resolveAuctionMaxBid(lot.maxBid, Number(lot.startingPrice || currentBid) * 3);
     if (!Number.isSafeInteger(minimumBid) || !Number.isSafeInteger(maxBid) || maxBid < minimumBid) {
       throw new Error('MARKET_BID_LIMITS_INVALID');
     }
