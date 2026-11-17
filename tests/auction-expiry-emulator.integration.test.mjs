@@ -804,3 +804,59 @@ test('Firestore Emulator rejects malformed fractional auction balances without p
   assert.equal((await db.collection('players_v14').doc('fractional-bidder').get()).get('credits'), 1000.5);
   assert.equal((await db.collection('economy_transactions').get()).size, 0);
 });
+
+test('Firestore Emulator preserves escrow and lots when seller or buyer rosters are malformed', {
+  skip: !emulatorHost,
+}, async t => {
+  const { db } = await withIsolatedFirestore(t);
+  await db.collection('players_v14').doc('duplicate-roster-seller').set({
+    credits: 25,
+    ownedPlayers: [
+      { id: 'duplicate-roster-player', name: 'Duplicate Player', onTransferUntil: 'reserved', transferMarketId: 'duplicate-roster-lot' },
+      { id: 'duplicate-roster-player', name: 'Duplicate Player Copy', onTransferUntil: 'reserved', transferMarketId: 'duplicate-roster-lot' },
+    ],
+  });
+  await db.collection('players_v14').doc('duplicate-roster-buyer').set({
+    credits: 600,
+    ownedPlayers: [],
+  });
+  await db.collection('market_v7').doc('duplicate-roster-lot').set(expiredLot({
+    sellerId: 'duplicate-roster-seller',
+    highestBidderId: 'duplicate-roster-buyer',
+    currentBid: 400,
+    escrowedAmount: 400,
+    heroData: { id: 'duplicate-roster-player', name: 'Duplicate Player' },
+  }));
+
+  await db.collection('players_v14').doc('malformed-roster-seller').set({
+    credits: 25,
+    ownedPlayers: [{ id: 'malformed-roster-player', name: 'Malformed Roster Player' }],
+  });
+  await db.collection('players_v14').doc('malformed-roster-buyer').set({
+    credits: 600,
+    ownedPlayers: { corrupted: true },
+  });
+  await db.collection('market_v7').doc('malformed-roster-lot').set(expiredLot({
+    sellerId: 'malformed-roster-seller',
+    highestBidderId: 'malformed-roster-buyer',
+    currentBid: 400,
+    escrowedAmount: 400,
+    heroData: { id: 'malformed-roster-player', name: 'Malformed Roster Player' },
+  }));
+
+  const result = await runTransferMarketExpirySweepWithDb(db);
+  assert.equal(result.success, false);
+  assert.ok(result.errors.some(error => error.id === 'duplicate-roster-lot' && /AUCTION_SELLER_PLAYER_DUPLICATE/.test(error.error)));
+  assert.ok(result.errors.some(error => error.id === 'malformed-roster-lot' && /AUCTION_BUYER_ROSTER_INVALID/.test(error.error)));
+
+  for (const lotId of ['duplicate-roster-lot', 'malformed-roster-lot']) {
+    assert.equal((await db.collection('market_v7').doc(lotId).get()).exists, true);
+  }
+  assert.equal((await db.collection('players_v14').doc('duplicate-roster-buyer').get()).get('credits'), 600);
+  assert.equal((await db.collection('players_v14').doc('malformed-roster-buyer').get()).get('credits'), 600);
+  assert.equal((await db.collection('players_v14').doc('duplicate-roster-seller').get()).get('credits'), 25);
+  assert.equal((await db.collection('players_v14').doc('malformed-roster-seller').get()).get('credits'), 25);
+  assert.equal((await db.collection('economy_transactions').get()).size, 0);
+  assert.equal((await db.collection('transfer_history').get()).size, 0);
+});
+
