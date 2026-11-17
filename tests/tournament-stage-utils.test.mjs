@@ -64,3 +64,52 @@ test('knockout stage requires every expected index exactly once', () => {
   wrongIndex[3].data.index = 5;
   assert.equal(isTournamentStageMatchSetComplete(wrongIndex, 'quarterfinal', 32), false);
 });
+
+test('32-team group stage requires all eight groups and all 48 fixtures', () => {
+  const entries = [];
+  for (const groupId of ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']) {
+    for (let round = 1; round <= 3; round++) {
+      for (let index = 1; index <= 2; index++) {
+        entries.push({
+          id: `groups_${groupId}_${round}_${index}`,
+          data: {
+            status: 'finished',
+            groupId,
+            round,
+            index,
+            homeId: `home_${groupId}_${round}_${index}`,
+            awayId: `away_${groupId}_${round}_${index}`,
+            winnerId: null,
+          },
+        });
+      }
+    }
+  }
+
+  assert.equal(entries.length, 48);
+  assert.equal(isTournamentStageMatchSetComplete(entries, 'groups', 32), true);
+
+  const missingHFixture = entries.filter(entry => entry.id !== 'groups_H_3_2');
+  assert.equal(isTournamentStageMatchSetComplete(missingHFixture, 'groups', 32), false);
+
+  const duplicatePair = entries.map(entry => ({ ...entry, data: { ...entry.data } }));
+  duplicatePair[47].data.index = 1;
+  assert.equal(isTournamentStageMatchSetComplete(duplicatePair, 'groups', 32), false);
+});
+
+test('16-team tournaments skip round of 16 while 32-team tournaments require it', () => {
+  const roundOf16 = Array.from({ length: 8 }, (_, index) => ({
+    id: `round_of_16_${index + 1}`,
+    data: {
+      status: 'finished',
+      index: index + 1,
+      homeId: `home_${index}`,
+      awayId: `away_${index}`,
+      winnerId: `home_${index}`,
+    },
+  }));
+
+  assert.equal(isTournamentStageMatchSetComplete(roundOf16, 'round_of_16', 16), false);
+  assert.equal(isTournamentStageMatchSetComplete(roundOf16, 'round_of_16', 32), true);
+});
+
