@@ -26,7 +26,7 @@ test('special auction bid and outbid refund ledger entries include exact before 
 });
 
 test('auction settlement records fallback debit, seller proceeds and escrow refund with balances', () => {
-  const start = expirySweep.indexOf('export async function runTransferMarketExpirySweepWithDb');
+  const start = expirySweep.indexOf('async function settleCandidate');
   const block = expirySweep.slice(start);
   assert.match(block, /SPECIAL_AUCTION_SETTLEMENT_DEBIT[\s\S]*balanceBefore: buyerBalance,[\s\S]*balanceAfter: buyerBalance - price/);
   assert.match(block, /SPECIAL_AUCTION_SETTLEMENT_CREDIT[\s\S]*balanceBefore: sellerBefore,[\s\S]*balanceAfter: sellerAfter/);
