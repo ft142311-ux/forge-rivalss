@@ -860,3 +860,39 @@ test('Firestore Emulator preserves escrow and lots when seller or buyer rosters 
   assert.equal((await db.collection('transfer_history').get()).size, 0);
 });
 
+test('Firestore Emulator rejects bids on explicitly settled or expired lots without changing escrow or balances', {
+  skip: !emulatorHost,
+}, async t => {
+  const { db } = await withIsolatedFirestore(t);
+  const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+
+  for (const status of ['settled', 'expired']) {
+    const standardLotId = `terminal-standard-${status}`;
+    const specialLotId = `terminal-pro-${status}`;
+    await db.collection('players_v14').doc(`standard-buyer-${status}`).set({ credits: 1000 });
+    await db.collection('players_v14').doc(`pro-buyer-${status}`).set({ crystals: 1000 });
+    await db.collection('market_v7').doc(standardLotId).set({
+      status, sellerId: 'seller', currency: 'credits', currentBid: 100, startingPrice: 100,
+      highestBidderId: null, expiresAt,
+    });
+    await db.collection('market_v7').doc(specialLotId).set({
+      status, sellerId: 'seller', isPro: true, currency: 'crystals', currentBid: 100,
+      startingPrice: 100, highestBidderId: null, expiresAt,
+    });
+
+    await assert.rejects(
+      placeStandardMarketBidWithDb(db, `standard-buyer-${status}`, standardLotId, 103),
+      /MARKET_LOT_NOT_ACTIVE/,
+    );
+    await assert.rejects(
+      placeSpecialMarketBidWithDb(db, `pro-buyer-${status}`, specialLotId, 103, 'pro'),
+      /MARKET_LOT_NOT_ACTIVE/,
+    );
+
+    assert.equal((await db.collection('players_v14').doc(`standard-buyer-${status}`).get()).get('credits'), 1000);
+    assert.equal((await db.collection('players_v14').doc(`pro-buyer-${status}`).get()).get('crystals'), 1000);
+    assert.equal((await db.collection('market_v7').doc(standardLotId).get()).get('status'), status);
+    assert.equal((await db.collection('market_v7').doc(specialLotId).get()).get('status'), status);
+    assert.equal((await db.collection('economy_transactions').where('referenceId', 'in', [standardLotId, specialLotId]).get()).size, 0);
+  }
+});
