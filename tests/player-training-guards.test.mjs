@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { resolveTrainingFinishTimeMs } from '../src/app/lib/player-training-guards.ts';
+import { readFileSync } from 'node:fs';
 
 test('training deadline parser accepts ISO strings, numbers, Dates and Firestore-like timestamps', () => {
   const expected = Date.parse('2026-11-17T12:00:00.000Z');
@@ -23,7 +24,6 @@ test('training deadline readiness is based on a finite timestamp', () => {
   assert.equal(deadline !== null && deadline <= now, true);
   assert.equal(future !== null && future <= now, false);
 });
-import { readFileSync } from 'node:fs';
 
 test('training completion validates both deadline and canonical skill before applying progress', () => {
   const source = readFileSync(new URL('../src/app/actions/foundation-management.ts', import.meta.url), 'utf8');
