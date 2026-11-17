@@ -386,7 +386,9 @@ async function finishTechnically(db: any, season: number, round: number, pairing
       homeId: pairing.home!.id, awayId: pairing.away!.id, homeName: pairing.home!.name, awayName: pairing.away!.name,
       bestOf, matchFormat: `BO${bestOf}`, scoreA, scoreB, homeScore: scoreA, awayScore: scoreB,
       seriesScore: `${scoreA}-${scoreB}`, score: `${scoreA}-${scoreB}`, winner: homeWon ? pairing.home!.name : pairing.away!.name,
-      winnerId, isFinished: true, status: 'finished', reportStatus: 'new', seen: false, technicalDecision: true,
+      winnerId, isFinished: true, status: 'finished', isProcessing: false,
+      processingToken: FieldValue.delete(), processingAt: FieldValue.delete(),
+      reportStatus: 'new', seen: false, technicalDecision: true,
       technicalDecisionReason: 'Cup round deadline reached before match core completed',
       resolvedAt: Timestamp.now(), playedAt: Timestamp.now(), updatedAt: FieldValue.serverTimestamp(), affectsLeagueStandings: false,
     }, { merge: true });
