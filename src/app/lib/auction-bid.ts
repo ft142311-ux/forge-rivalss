@@ -13,9 +13,9 @@ export async function placeSpecialMarketBidWithDb(
   marketKind: 'pro' | 'youth',
   now = Date.now(),
 ) {
-  if (!marketId || marketId.length > 180) throw new Error('INVALID_MARKET_LOT');
-  const bid = Number(amount);
-  if (!Number.isSafeInteger(bid) || bid <= 0) throw new Error('INVALID_BID');
+  if (typeof marketId !== 'string' || !marketId.trim() || marketId.length > 180) throw new Error('INVALID_MARKET_LOT');
+  if (typeof amount !== 'number' || !Number.isSafeInteger(amount) || amount <= 0) throw new Error('INVALID_BID');
+  const bid = amount;
 
   const lotRef = db.collection('market_v7').doc(marketId);
   const bidderRef = db.collection('players_v14').doc(uid);
