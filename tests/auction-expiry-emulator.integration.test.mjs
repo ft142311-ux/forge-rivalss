@@ -451,8 +451,8 @@ test('Firestore Emulator standard transfer-market bids reserve, refund and settl
   });
 
   await placeStandardMarketBidWithDb(db, 'standard-bidder-1', 'standard-flow', 300);
-  await placeStandardMarketBidWithDb(db, 'standard-bidder-2', 'standard-flow', 500);
   await placeStandardMarketBidWithDb(db, 'standard-bidder-2', 'standard-flow', 400);
+  await placeStandardMarketBidWithDb(db, 'standard-bidder-2', 'standard-flow', 500);
 
   assert.equal((await db.collection('players_v14').doc('standard-bidder-1').get()).get('credits'), 1000);
   assert.equal((await db.collection('players_v14').doc('standard-bidder-2').get()).get('credits'), 500);
@@ -477,7 +477,7 @@ test('Firestore Emulator standard transfer-market bids reserve, refund and settl
   const seller = await db.collection('players_v14').doc('standard-seller').get();
   const firstBidder = await db.collection('players_v14').doc('standard-bidder-1').get();
   const winner = await db.collection('players_v14').doc('standard-bidder-2').get();
-  assert.equal(seller.get('credits'), 575, 'seller receives 400 less the 5% commission');
+  assert.equal(seller.get('credits'), 575, 'seller receives 500 less the 5% commission');
   assert.equal(firstBidder.get('credits'), 1000, 'outbid manager receives the full refund');
   assert.equal(winner.get('credits'), 500, 'settlement must not charge the escrowed winner twice');
   assert.deepEqual(seller.get('ownedPlayers'), []);
