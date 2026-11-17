@@ -137,6 +137,56 @@ test('Firestore Emulator completes a PRO bid, outbid, incremental raise and expi
 });
 
 
+test('Firestore Emulator settles a system PRO drop without requiring or crediting a manager seller', {
+  skip: !emulatorHost,
+}, async t => {
+  const { db } = await withIsolatedFirestore(t);
+  const now = Date.now();
+  await db.collection('players_v14').doc('system-buyer').set({
+    crystals: 700,
+    credits: 1200,
+    ownedPlayers: [],
+  });
+  const lotRef = db.collection('market_v7').doc('system-pro-drop');
+  await lotRef.set({
+    sellerId: 'system',
+    sellerName: 'System',
+    isSystem: true,
+    isPro: true,
+    currency: 'crystals',
+    currentBid: 300,
+    startingPrice: 200,
+    highestBidderId: null,
+    bidders: [],
+    expiresAt: new Date(now + 60 * 60 * 1000).toISOString(),
+    heroData: { id: 'system-pro-player', name: 'System PRO Player', isBot: true },
+  });
+
+  await placeSpecialMarketBidWithDb(db, 'system-buyer', 'system-pro-drop', 300, 'pro', now);
+  assert.equal((await db.collection('players_v14').doc('system-buyer').get()).get('crystals'), 400);
+  await lotRef.update({ expiresAt: new Date(now - 1).toISOString() });
+
+  const result = await runTransferMarketExpirySweepWithDb(db);
+  assert.equal(result.success, true);
+  assert.equal(result.sold, 1);
+  assert.equal((await lotRef.get()).exists, false);
+
+  const buyer = await db.collection('players_v14').doc('system-buyer').get();
+  assert.equal(buyer.get('crystals'), 400, 'system auction winner is not charged twice');
+  assert.equal(buyer.get('credits'), 1200, 'system PRO auction never touches credits');
+  assert.deepEqual(buyer.get('ownedPlayers').map(player => player.id), ['system-pro-player']);
+
+  const ledger = await db.collection('economy_transactions').where('referenceId', '==', 'system-pro-drop').get();
+  const rows = ledger.docs.map(doc => doc.data());
+  assert.equal(rows.filter(row => row.type === 'SPECIAL_AUCTION_BID_ESCROW').reduce((sum, row) => sum - row.amount, 0), 300);
+  assert.equal(rows.some(row => row.type === 'SPECIAL_AUCTION_SETTLEMENT_CREDIT'), false);
+  assert.equal(rows.some(row => row.type === 'SPECIAL_AUCTION_SETTLEMENT_DEBIT'), false);
+  const transfer = (await db.collection('transfer_history').get()).docs[0];
+  assert.equal(transfer.get('sellerType'), 'system');
+  assert.equal(transfer.get('commission'), 0);
+});
+
+
 test('Firestore Emulator aborts a new bid when the previous bidder account is missing or escrow is corrupt', {
   skip: !emulatorHost,
 }, async t => {
