@@ -31,10 +31,14 @@ test('system seller requires both the reserved seller id and system marker', () 
   assert.equal(isSystemAuctionSeller('manager-1', true), false);
 });
 
-test('auction balances are normalized to non-negative integer amounts', () => {
-  assert.equal(normalizeAuctionBalance('12.9'), 12);
-  assert.equal(normalizeAuctionBalance(-5), 0);
-  assert.equal(normalizeAuctionBalance('invalid'), 0);
+test('auction balances accept only non-negative safe integers and reject corrupt values', () => {
+  assert.equal(normalizeAuctionBalance('12'), 12);
+  assert.equal(normalizeAuctionBalance(12), 12);
+  assert.equal(normalizeAuctionBalance(undefined), 0);
+  assert.equal(normalizeAuctionBalance(null), 0);
+  for (const value of ['12.9', -5, 'invalid', true, Number.MAX_SAFE_INTEGER + 1]) {
+    assert.throws(() => normalizeAuctionBalance(value), /AUCTION_BALANCE_INVALID/);
+  }
 });
 
 test('auction price accepts valid integer values and rejects malformed recorded prices', () => {
