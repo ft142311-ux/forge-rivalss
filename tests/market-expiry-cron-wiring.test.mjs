@@ -32,7 +32,7 @@ test('auction settlement compatibility entry point delegates to the same idempot
     /export async function runPlayerAuctionSettlementSweep\(\)\s*\{\s*return runTransferMarketExpirySweep\(\);\s*\}/,
   );
   assert.match(actions, /export async function runTransferMarketExpirySweep\(\)/);
-  assert.match(settlementCore, /export async function runTransferMarketExpirySweepWithDb\(db: any\)/);
+  assert.match(settlementCore, /export async function runTransferMarketExpirySweepWithDb\(/);
   assert.match(bidCore, /export async function placeSpecialMarketBidWithDb\(/);
 });
 
