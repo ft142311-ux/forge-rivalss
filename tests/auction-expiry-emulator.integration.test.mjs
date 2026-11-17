@@ -706,3 +706,50 @@ test('Firestore Emulator refunds a valid escrow when the buyer already owns the 
   assert.equal(ledger.docs[0].get('type'), 'SPECIAL_AUCTION_SETTLEMENT_REFUND');
   assert.equal((await db.collection('transfer_history').get()).size, 0);
 });
+
+
+test('Firestore Emulator refunds a malformed self-bid and unlocks the seller player without transferring it', {
+  skip: !emulatorHost,
+}, async t => {
+  const { db } = await withIsolatedFirestore(t);
+  const sellerId = 'self-bidding-seller';
+  const lotId = 'legacy-self-bid-lot';
+  await db.collection('players_v14').doc(sellerId).set({
+    credits: 100,
+    ownedPlayers: [{
+      id: 'self-bid-player',
+      name: 'Locked Player',
+      onTransferUntil: 'reserved',
+      transferMarketId: lotId,
+    }],
+  });
+  const lotRef = db.collection('market_v7').doc(lotId);
+  await lotRef.set(expiredLot({
+    sellerId,
+    highestBidderId: sellerId,
+    currentBid: 300,
+    startingPrice: 200,
+    escrowCurrency: 'credits',
+    escrowedAmount: 300,
+    heroData: { id: 'self-bid-player', name: 'Locked Player' },
+  }));
+
+  const result = await runTransferMarketExpirySweepWithDb(db);
+  assert.equal(result.success, true);
+  assert.equal(result.sold, 0);
+  assert.equal(result.expiredWithoutSale, 1);
+  assert.equal((await lotRef.get()).exists, false);
+
+  const seller = await db.collection('players_v14').doc(sellerId).get();
+  assert.equal(seller.get('credits'), 400, 'the malformed self-bid escrow is returned exactly once');
+  assert.deepEqual(seller.get('ownedPlayers'), [{
+    id: 'self-bid-player',
+    name: 'Locked Player',
+    onTransferUntil: null,
+    transferMarketId: null,
+  }]);
+  const refund = await db.collection('economy_transactions').where('referenceId', '==', lotId).get();
+  assert.equal(refund.size, 1);
+  assert.equal(refund.docs[0].get('amount'), 300);
+  assert.equal((await db.collection('transfer_history').get()).size, 0);
+});
