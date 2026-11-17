@@ -52,14 +52,15 @@ test('match revenue credits and ledger receipt use the same validated integer am
 
 const autonomous = readFileSync(new URL('../src/app/actions/autonomous-cycle.ts', import.meta.url), 'utf8');
 
-test('authoritative autonomous match settlement rejects malformed and overflowing balances before writes', () => {
+test('authoritative autonomous match settlement validates stored balance before writes', () => {
   const start = autonomous.indexOf('if (homeRef && homeSnap?.exists && !economyTxSnap?.exists)');
   const action = autonomous.slice(start);
-  const balanceRead = action.indexOf('const rawBalance = homePlayerData.credits');
-  const balanceGuard = action.indexOf("throw new Error('INVALID_MATCH_ECONOMY_BALANCE')");
+  const balanceRead = action.indexOf("readSafeNonNegativeBalance(homePlayerData.credits, 'INVALID_MATCH_ECONOMY_BALANCE')");
   const firstWrite = action.indexOf('Object.assign(homeUpdate');
-  assert.ok(balanceRead >= 0 && balanceGuard > balanceRead && firstWrite > balanceGuard);
-  assert.match(action, /Number\.isSafeInteger\(before\) \|\| before < 0/);
+  assert.ok(balanceRead >= 0 && firstWrite > balanceRead);
+  assert.match(autonomous, /typeof value !== 'number' && typeof value !== 'string'/);
+  assert.match(autonomous, /typeof value === 'string' && value\.trim\(\)\.length === 0/);
+  assert.match(action, /const after = before \+ homeEconomy\.totalRevenue/);
   assert.match(action, /Number\.isSafeInteger\(after\) \|\| after < 0/);
 });
 
