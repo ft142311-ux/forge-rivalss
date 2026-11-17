@@ -871,8 +871,15 @@ export async function resolveDailyMatches() {
         }
 
         if (homeRef && homeSnap?.exists && !economyTxSnap?.exists) {
-          const before = Number(homePlayerData.credits || 0);
+          const rawBalance = homePlayerData.credits;
+          const before = rawBalance === undefined || rawBalance === null ? 0 : Number(rawBalance);
+          if (!Number.isSafeInteger(before) || before < 0) {
+            throw new Error('INVALID_MATCH_ECONOMY_BALANCE');
+          }
           const after = before + homeEconomy.totalRevenue;
+          if (!Number.isSafeInteger(after) || after < 0) {
+            throw new Error('INVALID_MATCH_ECONOMY_BALANCE');
+          }
           Object.assign(homeUpdate, {
             credits: after,
             lastMatchEconomy: homeEconomy,

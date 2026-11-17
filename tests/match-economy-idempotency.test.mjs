@@ -47,3 +47,16 @@ test('match revenue credits and ledger receipt use the same validated integer am
   assert.match(action, /amount,/);
   assert.doesNotMatch(action, /before \+ economy\.totalRevenue/);
 });
+
+const autonomous = readFileSync(new URL('../src/app/actions/autonomous-cycle.ts', import.meta.url), 'utf8');
+
+test('authoritative autonomous match settlement rejects malformed and overflowing balances before writes', () => {
+  const start = autonomous.indexOf('if (homeRef && homeSnap?.exists && !economyTxSnap?.exists)');
+  const action = autonomous.slice(start);
+  const balanceRead = action.indexOf('const rawBalance = homePlayerData.credits');
+  const balanceGuard = action.indexOf("throw new Error('INVALID_MATCH_ECONOMY_BALANCE')");
+  const firstWrite = action.indexOf('Object.assign(homeUpdate');
+  assert.ok(balanceRead >= 0 && balanceGuard > balanceRead && firstWrite > balanceGuard);
+  assert.match(action, /Number\.isSafeInteger\(before\) \|\| before < 0/);
+  assert.match(action, /Number\.isSafeInteger\(after\) \|\| after < 0/);
+});
