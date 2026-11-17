@@ -79,7 +79,7 @@ export async function runTransferMarketExpirySweepWithDb(db: any) {
         const isSystemSeller = isSystemAuctionSeller(sellerId, lot.isSystem);
         const currency = resolveAuctionCurrency(lot.currency);
         const sellerRef = isSystemSeller || !sellerId ? null : db.collection('players_v14').doc(sellerId);
-        const buyerRef = bidderId && bidderId !== sellerId ? db.collection('players_v14').doc(bidderId) : null;
+        const buyerRef = bidderId ? db.collection('players_v14').doc(bidderId) : null;
         const sellerSnap = sellerRef ? await tx.get(sellerRef) : null;
         const buyerSnap = buyerRef ? await tx.get(buyerRef) : null;
         const seller: any = sellerSnap?.exists ? sellerSnap.data() || {} : {};
@@ -159,17 +159,25 @@ export async function runTransferMarketExpirySweepWithDb(db: any) {
           return 'SOLD';
         }
 
-        // No valid winner: unlock a manager-owned player when present, then remove the expired listing.
-        if (sellerRef && sellerSnap?.exists && sellerIndex >= 0) {
-          sellerPlayers[sellerIndex] = { ...sellerPlayers[sellerIndex], onTransferUntil: null, transferMarketId: null };
-          tx.update(sellerRef, { [playerArrayKey]: sellerPlayers, updatedAt: FieldValue.serverTimestamp() });
-        }
+        // No valid winner: unlock the seller's player and refund any recorded escrow.
+        // A malformed/legacy lot can name the seller as its own bidder. In that
+        // case the buyer and seller references are the same document, so combine
+        // the refund and unlock into one update rather than leaving the escrow stuck.
+        const shouldUnlockSellerPlayer = Boolean(sellerRef && sellerSnap?.exists && sellerIndex >= 0);
         if (hasRecordedEscrow && buyerRef && buyerSnap?.exists) {
           const refundedBalance = buyerBalance + escrowedAmount;
-          tx.update(buyerRef, {
+          const buyerPatch: any = {
             [currency]: refundedBalance,
             updatedAt: FieldValue.serverTimestamp(),
-          });
+          };
+          if (shouldUnlockSellerPlayer && sellerRef!.path === buyerRef.path) {
+            sellerPlayers[sellerIndex] = { ...sellerPlayers[sellerIndex], onTransferUntil: null, transferMarketId: null };
+            buyerPatch[playerArrayKey] = sellerPlayers;
+          } else if (shouldUnlockSellerPlayer) {
+            sellerPlayers[sellerIndex] = { ...sellerPlayers[sellerIndex], onTransferUntil: null, transferMarketId: null };
+            tx.update(sellerRef!, { [playerArrayKey]: sellerPlayers, updatedAt: FieldValue.serverTimestamp() });
+          }
+          tx.update(buyerRef, buyerPatch);
           const refundRef = db.collection('economy_transactions').doc(`auction_settlement_${candidate.id}_refund`);
           tx.set(refundRef, {
             userId: bidderId,
@@ -182,6 +190,9 @@ export async function runTransferMarketExpirySweepWithDb(db: any) {
             balanceAfter: refundedBalance,
             timestamp: FieldValue.serverTimestamp(),
           });
+        } else if (shouldUnlockSellerPlayer) {
+          sellerPlayers[sellerIndex] = { ...sellerPlayers[sellerIndex], onTransferUntil: null, transferMarketId: null };
+          tx.update(sellerRef!, { [playerArrayKey]: sellerPlayers, updatedAt: FieldValue.serverTimestamp() });
         }
         tx.delete(lotRef);
         return 'EXPIRED';
