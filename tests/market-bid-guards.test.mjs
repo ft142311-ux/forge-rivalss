@@ -47,7 +47,7 @@ test('standard market bids are indexed by UID for the My Bids array-contains que
   assert.ok(start >= 0 && end > start);
   const block = helper.slice(start, end);
   assert.ok(action.includes('placeStandardMarketBidWithDb(getAdminDb(), userId, marketId, amount)'));
-  assert.ok(block.includes('bidders.push(userId)'));
+  assert.ok(block.includes('bidders.push(uid)'));
   assert.ok(!block.includes('bidders.push({'));
   assert.ok(page.includes("where('bidders', 'array-contains', user.uid)"));
 });
@@ -72,7 +72,7 @@ test('standard market bid action fails closed before writing when expiry or pric
   assert.ok(action.includes("bidderBalance < chargeAmount"));
   assert.ok(action.includes("const minimumBid = Math.ceil(currentBid * 1.03)"));
   assert.ok(action.includes("if (amount > maxBid) throw new Error('BID_TOO_HIGH')"));
-  assert.ok(action.includes("escrowedAmount: bid"));
+  assert.ok(action.includes("escrowedAmount: amount"));
   assert.ok(action.includes("escrowCurrency: currency"));
   assert.ok(action.includes("SPECIAL_AUCTION_BID_ESCROW"));
   assert.ok(action.includes("SPECIAL_AUCTION_OUTBID_REFUND"));
