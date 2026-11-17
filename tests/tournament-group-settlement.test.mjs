@@ -9,14 +9,14 @@ test('tournament stage readiness requires the canonical fixture matrix and compl
   const end = source.indexOf('function expectedStageMatchCount', start);
   assert.ok(start >= 0 && end > start);
   const stageCheck = source.slice(start, end);
-  assert.match(stageCheck, /snap\\.docs\\.length !== expectedCount/);
-  assert.match(stageCheck, /isTournamentStageMatchSetComplete\\(/);
-  assert.match(stageCheck, /maxParticipants/);
+  assert.ok(stageCheck.includes('snap.docs.length !== expectedCount'));
+  assert.ok(stageCheck.includes('isTournamentStageMatchSetComplete('));
+  assert.ok(stageCheck.includes('maxParticipants'));
 
   const helper = readFileSync(new URL('../src/app/lib/tournament-stage-utils.ts', import.meta.url), 'utf8');
-  assert.match(helper, /isTournamentStageMatchComplete\\(match, stage\\)/);
-  assert.match(helper, /if \\(stage !== 'groups' && !match\\.winnerId\\) return false/);
-  assert.match(helper, /expected\\.delete\\(key\\)/);
+  assert.ok(helper.includes('isTournamentStageMatchComplete(match, stage)'));
+  assert.ok(helper.includes("if (stage !== 'groups' && !match.winnerId) return false"));
+  assert.ok(helper.includes('expected.delete(key)'));
 });
 
 test('group match settlement validates standings rows before atomically publishing result and report', () => {
