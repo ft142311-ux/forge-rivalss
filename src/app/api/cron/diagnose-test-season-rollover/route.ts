@@ -12,6 +12,19 @@ export async function GET(request: Request) {
     return new NextResponse('Unauthorized', { status: 401 });
   }
 
+  // This diagnostic belongs only to the disposable local Season 1 test world.
+  // Never allow it to inspect a shared staging or Production Firestore project.
+  const emulatorHost = process.env.FIRESTORE_EMULATOR_HOST || '';
+  const projectId = process.env.GCLOUD_PROJECT || process.env.GOOGLE_CLOUD_PROJECT || '';
+  if (!/^(127\\.0\\.0\\.1|localhost):[0-9]+$/.test(emulatorHost) || projectId !== 'demo-forge-rivals') {
+    return NextResponse.json({
+      success: false,
+      readOnly: true,
+      action: 'LOCAL_EMULATOR_ONLY',
+      writesStarted: false,
+    }, { status: 404 });
+  }
+
   try {
     const db = getAdminDb();
     const diagnostic = await diagnoseSeasonRolloverPreflight(db, 1, true);
