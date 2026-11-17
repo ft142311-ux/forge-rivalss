@@ -16,7 +16,7 @@ export async function GET(request: Request) {
   // Never allow it to inspect a shared staging or Production Firestore project.
   const emulatorHost = process.env.FIRESTORE_EMULATOR_HOST || '';
   const projectId = process.env.GCLOUD_PROJECT || process.env.GOOGLE_CLOUD_PROJECT || '';
-  if (!/^(127\\.0\\.0\\.1|localhost):[0-9]+$/.test(emulatorHost) || projectId !== 'demo-forge-rivals') {
+  if (!/^(127[.]0[.]0[.]1|localhost):[0-9]+$/.test(emulatorHost) || projectId !== 'demo-forge-rivals') {
     return NextResponse.json({
       success: false,
       readOnly: true,
