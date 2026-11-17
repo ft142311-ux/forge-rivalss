@@ -43,3 +43,58 @@ test('market expiry route fails closed when the sweep reports partial errors', (
   assert.match(route, /catch \(error: any\)/);
   assert.match(route, /status: 500/);
 });
+
+
+test('market expiry scheduler accepts a bounded continuation and forwards the protected request', async () => {
+  const scheduler = await import('../functions/season-orchestrator-scheduler.js');
+  let capturedUrl;
+  let capturedOptions;
+  const result = await scheduler.default.invokeMarketExpirySweep({
+    seasonOrchestratorUrl: 'https://game.example/api/cron/season-orchestrator',
+    secret: 's'.repeat(40),
+    fetchImpl: async (url, options) => {
+      capturedUrl = String(url);
+      capturedOptions = options;
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ success: true, continuation: true, complete: false, settled: 12 }),
+      };
+    },
+  });
+
+  assert.equal(capturedUrl, 'https://game.example/api/cron/market-expiry');
+  assert.equal(capturedOptions.method, 'GET');
+  assert.equal(capturedOptions.headers.authorization, `Bearer ${'s'.repeat(40)}`);
+  assert.equal(capturedOptions.headers.accept, 'application/json');
+  assert.equal(capturedOptions.redirect, 'error');
+  assert.ok(capturedOptions.signal);
+  assert.deepEqual(result, { success: true, status: 200, settled: 12 });
+});
+
+test('market expiry scheduler rejects HTTP failures and unsuccessful route payloads', async () => {
+  const scheduler = await import('../functions/season-orchestrator-scheduler.js');
+  const common = {
+    seasonOrchestratorUrl: 'https://game.example/api/cron/season-orchestrator',
+    secret: 's'.repeat(40),
+  };
+
+  await assert.rejects(
+    scheduler.default.invokeMarketExpirySweep({
+      ...common,
+      fetchImpl: async () => ({ ok: false, status: 503 }),
+    }),
+    /MARKET_EXPIRY_HTTP_503/,
+  );
+  await assert.rejects(
+    scheduler.default.invokeMarketExpirySweep({
+      ...common,
+      fetchImpl: async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({ success: false, continuation: true }),
+      }),
+    }),
+    /MARKET_EXPIRY_UNSUCCESSFUL/,
+  );
+});
