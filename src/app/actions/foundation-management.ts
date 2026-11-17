@@ -13,6 +13,22 @@ import { deterministicDailyEvent } from '@/game/foundation/events';
 import { isFoundationSkill } from '@/game/foundation/skills';
 import { resolveTrainingFinishTimeMs } from '@/app/lib/player-training-guards';
 
+function readCreditsBalance(value: unknown) {
+  const balance = value === undefined || value === null
+    ? 0
+    : (typeof value === 'number' || typeof value === 'string') ? Number(value) : NaN;
+  if (!Number.isSafeInteger(balance) || balance < 0) throw new Error('INVALID_BALANCE');
+  return balance;
+}
+
+function readTreasuryBalance(value: unknown) {
+  const balance = value === undefined || value === null
+    ? 0
+    : (typeof value === 'number' || typeof value === 'string') ? Number(value) : NaN;
+  if (!Number.isSafeInteger(balance) || balance < 0) throw new Error('INVALID_TREASURY_BALANCE');
+  return balance;
+}
+
 function errorOf(e: any) { return e?.message || 'FOUNDATION_ACTION_FAILED'; }
 
 export async function setFoundationTrainingFocusAction(idToken: string, playerId: string, skill: string | null) {
@@ -323,16 +339,19 @@ export async function associationTreasuryPaymentAction(idToken: string, amount: 
       const data = snap.data() || {};
       const associationId = data.associationId;
       if (!associationId) throw new Error('NO_ASSOCIATION');
-      const payment = Math.max(0, Math.round(Number(amount || 0)));
-      if (!payment) throw new Error('INVALID_AMOUNT');
-      const balance = Math.max(0, Number(data.credits || 0));
+      if (typeof amount !== 'number' || !Number.isSafeInteger(amount) || amount <= 0) throw new Error('INVALID_AMOUNT');
+      const payment = amount;
+      const balance = readCreditsBalance(data.credits);
       if (balance < payment) throw new Error('INSUFFICIENT_FUNDS');
       const assocRef = db.collection(FOUNDATION_COLLECTIONS.associations).doc(associationId);
       const assocSnap = await t.get(assocRef);
       if (!assocSnap.exists) throw new Error('ASSOCIATION_NOT_FOUND');
       const assoc = assocSnap.data() || {};
+      const treasuryBefore = readTreasuryBalance(assoc.treasury);
+      const treasuryAfter = treasuryBefore + payment;
+      if (!Number.isSafeInteger(treasuryAfter)) throw new Error('INVALID_TREASURY_BALANCE');
       t.update(managerRef, { credits: balance-payment, updatedAt: FieldValue.serverTimestamp() });
-      t.update(assocRef, { treasury: Math.max(0, Number(assoc.treasury || 0))+payment, updatedAt: FieldValue.serverTimestamp() });
+      t.update(assocRef, { treasury: treasuryAfter, updatedAt: FieldValue.serverTimestamp() });
       t.set(db.collection(FOUNDATION_COLLECTIONS.economy).doc(), {
         userId: uid,
         associationId,
@@ -344,7 +363,7 @@ export async function associationTreasuryPaymentAction(idToken: string, amount: 
         timestamp: FieldValue.serverTimestamp(),
       });
     });
-    return { success:true, amount:Math.round(Number(amount||0)) };
+    return { success:true, amount };
   } catch(e) { return { success:false, error:errorOf(e) }; }
 }
 

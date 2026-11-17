@@ -10,6 +10,14 @@ import { FinancialOpSchema } from '@/app/lib/validation-schemas';
 import { logger } from '@/app/lib/logger';
 import { requireServerActor } from '@/lib/server-auth';
 
+function readFinancialBalance(value: unknown) {
+  const balance = value === undefined || value === null
+    ? 0
+    : (typeof value === 'number' || typeof value === 'string') ? Number(value) : NaN;
+  if (!Number.isSafeInteger(balance) || balance < 0) throw new Error('INVALID_BALANCE');
+  return balance;
+}
+
 /**
  * Выполняет финансовую операцию с постоянным ключом идемпотентности,
  * scoped к пользователю. Баланс, receipt и economy ledger фиксируются атомарно.
@@ -42,7 +50,7 @@ export async function processFinancialOperation(idToken: string, data: unknown) 
       if (!playerSnap.exists) throw new Error('PLAYER_NOT_FOUND');
 
       const player = playerSnap.data() || {};
-      const balanceBefore = Number(player[type] || 0);
+      const balanceBefore = readFinancialBalance(player[type]);
       if (!Number.isSafeInteger(balanceBefore) || balanceBefore < 0) throw new Error('INVALID_BALANCE');
       if (amount < 0 && balanceBefore < Math.abs(amount)) throw new Error('INSUFFICIENT_FUNDS');
 
