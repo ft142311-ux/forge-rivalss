@@ -40,7 +40,9 @@ test('expired auction settlement uses strict price validation before any transac
 });
 
 test('ambiguous auction escrow is rejected before the expired lot can be deleted', () => {
-  const block = expirySweep;
+  const start = expirySweep.indexOf('async function settleCandidate');
+  const end = expirySweep.indexOf('export async function runTransferMarketExpirySweepWithDb', start);
+  const block = expirySweep.slice(start, end);
   const escrowGuard = block.indexOf('resolveAuctionEscrow({');
   const firstLotDelete = block.indexOf('tx.delete(lotRef)');
   assert.ok(escrowGuard >= 0, 'settlement must validate recorded escrow');
