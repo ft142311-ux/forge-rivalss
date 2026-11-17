@@ -27,6 +27,12 @@ function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : 'SHOP_ACTION_FAILED';
 }
 
+function readCurrencyBalance(value: unknown) {
+  const balance = value === undefined || value === null ? 0 : Number(value);
+  if (!Number.isSafeInteger(balance) || balance < 0) throw new Error('INVALID_BALANCE');
+  return balance;
+}
+
 
 export async function purchaseLicenseAction(idToken: string, requestedTier: number) {
   try {
@@ -43,7 +49,7 @@ export async function purchaseLicenseAction(idToken: string, requestedTier: numb
       const data = snap.data() || {};
       const current = Number(data.activeLicenseTier ?? 4);
       if (tier !== current - 1) throw new Error('LICENSE_MUST_BE_PURCHASED_SEQUENTIALLY');
-      const crystals = Number(data.crystals || 0);
+      const crystals = readCurrencyBalance(data.crystals);
       if (crystals < cost) throw new Error('INSUFFICIENT_FUNDS');
 
       t.update(ref, {
@@ -84,7 +90,7 @@ export async function purchasePremiumShopAction(idToken: string) {
       if (data.isPremium === true && currentUntil > now) throw new Error('PREMIUM_ALREADY_ACTIVE');
 
       const cost = 5000;
-      const crystals = Number(data.crystals || 0);
+      const crystals = readCurrencyBalance(data.crystals);
       if (crystals < cost) throw new Error('INSUFFICIENT_FUNDS');
       const premiumUntil = new Date(now + 30 * 24 * 60 * 60 * 1000).toISOString();
 
@@ -177,8 +183,9 @@ export async function purchaseDiamondPackAction(idToken: string, amount: number,
       const snap = await t.get(ref);
       if (!snap.exists) throw new Error('PLAYER_NOT_FOUND');
       const data = snap.data() || {};
-      const before = Number(data.crystals || 0);
+      const before = readCurrencyBalance(data.crystals);
       const after = before + Number(amount);
+      if (!Number.isSafeInteger(after)) throw new Error('INVALID_BALANCE');
       t.update(ref, { crystals: after, updatedAt: FieldValue.serverTimestamp() });
       const tx = db.collection('economy_transactions').doc();
       t.set(tx, {
@@ -232,10 +239,12 @@ export async function exchangeCrystalsForCreditsAction(idToken: string, crystals
       const snap = await t.get(ref);
       if (!snap.exists) throw new Error('PLAYER_NOT_FOUND');
       const data = snap.data() || {};
-      const crystals = Number(data.crystals || 0);
-      const credits = Number(data.credits || 0);
+      const crystals = readCurrencyBalance(data.crystals);
+      const credits = readCurrencyBalance(data.credits);
       if (crystals < amount) throw new Error('INSUFFICIENT_FUNDS');
-      t.update(ref, { crystals: crystals - amount, credits: credits + creditsAmount, updatedAt: FieldValue.serverTimestamp() });
+      const creditsAfter = credits + creditsAmount;
+      if (!Number.isSafeInteger(creditsAfter)) throw new Error('INVALID_BALANCE');
+      t.update(ref, { crystals: crystals - amount, credits: creditsAfter, updatedAt: FieldValue.serverTimestamp() });
       const tx = db.collection('economy_transactions').doc();
       t.set(tx, {
         userId: uid,
@@ -248,7 +257,7 @@ export async function exchangeCrystalsForCreditsAction(idToken: string, crystals
         balanceAfter: crystals - amount,
         timestamp: FieldValue.serverTimestamp(),
       });
-      const result = { success: true, crystals: crystals - amount, credits: credits + creditsAmount };
+      const result = { success: true, crystals: crystals - amount, credits: creditsAfter };
       t.create(receiptRef, {
         userId: uid,
         operation: 'CRYSTAL_TO_CREDITS',
@@ -276,9 +285,9 @@ export async function changeClubNameAction(idToken: string, name: string) {
       if (!snap.exists) throw new Error('PLAYER_NOT_FOUND');
       const data = snap.data() || {};
       if (String(data.clubName || '').trim().replace(/\s+/g, ' ').toLowerCase() === clean.toLowerCase()) {
-        return { success: true, unchanged: true, clubName: String(data.clubName || clean), crystals: Number(data.crystals || 0) };
+        return { success: true, unchanged: true, clubName: String(data.clubName || clean), crystals: readCurrencyBalance(data.crystals) };
       }
-      const crystals = Number(data.crystals || 0);
+      const crystals = readCurrencyBalance(data.crystals);
       if (crystals < 100) throw new Error('INSUFFICIENT_FUNDS');
       t.update(ref, { crystals: crystals - 100, clubName: clean, updatedAt: FieldValue.serverTimestamp() });
       const tx = db.collection('economy_transactions').doc();
@@ -301,9 +310,9 @@ export async function changeClubCountryAction(idToken: string, country: unknown)
       if (!snap.exists) throw new Error('PLAYER_NOT_FOUND');
       const data = snap.data() || {};
       if (String(data.countryCode || '').toUpperCase() === parsed.code.toUpperCase()) {
-        return { success: true, unchanged: true, country: String(data.country || parsed.name), crystals: Number(data.crystals || 0) };
+        return { success: true, unchanged: true, country: String(data.country || parsed.name), crystals: readCurrencyBalance(data.crystals) };
       }
-      const crystals = Number(data.crystals || 0);
+      const crystals = readCurrencyBalance(data.crystals);
       if (crystals < 100) throw new Error('INSUFFICIENT_FUNDS');
       t.update(ref, { crystals: crystals - 100, country: parsed.name, countryCode: parsed.code, countryFlag: parsed.flag, updatedAt: FieldValue.serverTimestamp() });
       const tx = db.collection('economy_transactions').doc();
@@ -367,7 +376,7 @@ export async function createShopPlayerAction(
       const snap = await t.get(ref);
       if (!snap.exists) throw new Error('PLAYER_NOT_FOUND');
       const data = snap.data() || {};
-      const crystals = Number(data.crystals || 0);
+      const crystals = readCurrencyBalance(data.crystals);
       if (crystals < creationCost) throw new Error('INSUFFICIENT_FUNDS');
       const owned: Player[] = Array.isArray(data.ownedPlayers) ? data.ownedPlayers : [];
       const youth: Player[] = Array.isArray(data.youthAcademyPlayers) ? data.youthAcademyPlayers : [];
