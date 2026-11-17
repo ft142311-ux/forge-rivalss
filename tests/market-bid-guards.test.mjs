@@ -40,20 +40,22 @@ test('standard player listings are discoverable by the quick-search market query
 
 test('standard market bids are indexed by UID for the My Bids array-contains query', () => {
   const action = readFileSync(new URL('../src/app/actions/gameplay.ts', import.meta.url), 'utf8');
+  const helper = readFileSync(new URL('../src/app/lib/auction-bid.ts', import.meta.url), 'utf8');
   const page = readFileSync(new URL('../src/app/transfers/my-bids/page.tsx', import.meta.url), 'utf8');
-  const start = action.indexOf('export async function placePlayerBidAction');
-  const end = action.indexOf('\n}\n', start);
+  const start = helper.indexOf('export async function placeStandardMarketBidWithDb');
+  const end = helper.indexOf('\n}', start);
   assert.ok(start >= 0 && end > start);
-  const block = action.slice(start, end);
+  const block = helper.slice(start, end);
+  assert.ok(action.includes('placeStandardMarketBidWithDb(getAdminDb(), userId, marketId, amount)'));
   assert.ok(block.includes('bidders.push(userId)'));
   assert.ok(!block.includes('bidders.push({'));
   assert.ok(page.includes("where('bidders', 'array-contains', user.uid)"));
 });
 
 test('standard market bid action fails closed before writing when expiry or price is invalid', () => {
-  const source = readFileSync(new URL('../src/app/actions/gameplay.ts', import.meta.url), 'utf8');
-  const start = source.indexOf('export async function placePlayerBidAction');
-  const end = source.indexOf('\n}\n', start);
+  const source = readFileSync(new URL('../src/app/lib/auction-bid.ts', import.meta.url), 'utf8');
+  const start = source.indexOf('export async function placeStandardMarketBidWithDb');
+  const end = source.indexOf('\n}', start);
   assert.ok(start >= 0 && end > start);
   const action = source.slice(start, end);
   assert.ok(action.includes("typeof bid !== 'number'"));
