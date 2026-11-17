@@ -23,3 +23,26 @@ test('tournament cron entry points share constant-time cron secret validation', 
     assert.doesNotMatch(action, /cronToken\s*!==?\s*cronSecret|process\.env\.CRON_SECRET/);
   }
 });
+
+const routeSource = readFileSync(
+  new URL('../src/app/api/cron/tournaments/route.ts', import.meta.url),
+  'utf8',
+);
+const cupEngineSource = readFileSync(
+  new URL('../src/app/actions/cup-engine.ts', import.meta.url),
+  'utf8',
+);
+
+test('tournament HTTP cron authenticates before invoking either tournament engine', () => {
+  const guard = routeSource.indexOf("if (!cronSecret || !isCronAuthorized(request, cronSecret))");
+  const leagueCycle = routeSource.indexOf('runTournamentCycle(cronSecret)');
+  const cupCycle = routeSource.indexOf('runPyramidCupCycle()');
+  assert.ok(guard >= 0 && leagueCycle > guard && cupCycle > guard);
+  assert.match(routeSource, /new NextResponse\('Unauthorized', \{ status: 401 \}\)/);
+  assert.match(routeSource, /const cronSecret = process\.env\.CRON_SECRET/);
+});
+
+test('Pyramid Cup cycle remains a server-only worker rather than an exposed Server Action module', () => {
+  assert.match(cupEngineSource, /^import ['"]server-only['"]/);
+  assert.doesNotMatch(cupEngineSource, /^['"]use server['"]/);
+});
