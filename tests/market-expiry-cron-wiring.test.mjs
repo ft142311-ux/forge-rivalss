@@ -69,7 +69,7 @@ test('market expiry scheduler accepts a bounded continuation and forwards the pr
   assert.equal(capturedOptions.headers.accept, 'application/json');
   assert.equal(capturedOptions.redirect, 'error');
   assert.ok(capturedOptions.signal);
-  assert.deepEqual(result, { success: true, status: 200, settled: 12 });
+  assert.deepEqual(result, { success: true, status: 200, settled: 12, complete: false, continuation: true, busy: false });
 });
 
 test('market expiry scheduler rejects HTTP failures and unsuccessful route payloads', async () => {
