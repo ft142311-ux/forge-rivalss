@@ -144,13 +144,13 @@ test('market expiry scheduler derives the protected route from the validated App
     fetchImpl: async (target, options) => {
       requestedUrl = target;
       requestedOptions = options;
-      return { ok: true, status: 200, json: async () => ({ success: true, settled: 3 }) };
+      return { ok: true, status: 200, json: async () => ({ success: true, complete: false, continuation: true, settled: 3 }) };
     },
   });
   assert.equal(requestedUrl, 'https://forge-rivals.example.com/api/cron/market-expiry');
   assert.equal(requestedOptions.headers.authorization, `Bearer ${secret}`);
   assert.equal(requestedOptions.redirect, 'error');
-  assert.deepEqual(result, { success: true, status: 200, settled: 3 });
+  assert.deepEqual(result, { success: true, status: 200, settled: 3, complete: false, continuation: true, busy: false });
 });
 
 test('market expiry scheduler fails closed on HTTP and unsuccessful payloads', async () => {
