@@ -36,6 +36,7 @@ test('standard market bid action fails closed before writing when expiry or pric
   const end = source.indexOf('\n}\n', start);
   assert.ok(start >= 0 && end > start);
   const action = source.slice(start, end);
+  assert.ok(action.includes("typeof bid !== 'number'"));
   assert.ok(action.includes('Number.isSafeInteger(bid)'));
   assert.ok(action.includes('resolveMarketBidExpiryMs(lot.expiresAt)'));
   assert.ok(action.includes("if (expiresAt === null) throw new Error('MARKET_EXPIRY_INVALID')"));
