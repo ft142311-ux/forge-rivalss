@@ -54,9 +54,19 @@ export async function completePlayerTrainingAction(idToken: string, playerId: st
       const index = players.findIndex(p => p.id === playerId);
       if (index < 0) throw new Error('UNIT_NOT_FOUND');
       const player = players[index];
-      if (!player.dailyTrainingFinishTime || new Date(player.dailyTrainingFinishTime).getTime() > Date.now()) throw new Error('TRAINING_NOT_READY');
+      const rawFinishTime = player.dailyTrainingFinishTime;
+      const finishAtMs = rawFinishTime && typeof rawFinishTime.toMillis === 'function'
+        ? rawFinishTime.toMillis()
+        : rawFinishTime instanceof Date
+          ? rawFinishTime.getTime()
+          : typeof rawFinishTime === 'number'
+            ? rawFinishTime
+            : Date.parse(String(rawFinishTime ?? ''));
+      if (!Number.isFinite(finishAtMs)) throw new Error('TRAINING_FINISH_TIME_INVALID');
+      if (finishAtMs > Date.now()) throw new Error('TRAINING_NOT_READY');
       const focus = player.dailyTrainingFocus || player.trainingFocus;
       if (!focus) throw new Error('TRAINING_FOCUS_MISSING');
+      if (!isFoundationSkill(focus)) throw new Error('INVALID_TRAINING_SKILL');
       const staffBonus = data.staff?.coach ? 1.08 : 1;
       const result = applyTraining(player, focus, Math.round(90 * staffBonus));
       players[index] = { ...result.player, dailyTrainingFinishTime: null, lastTrainingCompletedAt: new Date().toISOString() };
