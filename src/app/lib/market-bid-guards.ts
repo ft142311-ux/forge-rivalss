@@ -19,7 +19,8 @@ export function resolveMarketBidExpiryMs(value: unknown): number | null {
 }
 
 export function resolveMarketBidPrice(currentBid: unknown, startingPrice: unknown): number | null {
-  const raw = currentBid === null || currentBid === undefined ? startingPrice : currentBid;
+  // A zero currentBid is an uninitialized opening value; enforce the listing's starting price.
+  const raw = currentBid === null || currentBid === undefined || currentBid === 0 ? startingPrice : currentBid;
   if (typeof raw !== 'number' && (typeof raw !== 'string' || !raw.trim())) return null;
   const price = Number(raw);
   return Number.isSafeInteger(price) && price >= 0 ? price : null;
