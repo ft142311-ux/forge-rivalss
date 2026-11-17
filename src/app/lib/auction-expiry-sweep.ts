@@ -9,48 +9,7 @@ import { isSystemAuctionSeller, normalizeAuctionBalance, resolveAuctionCurrency,
  * reconciled. If the leading bidder is no longer eligible, the lot expires
  * without a sale and the seller's player is unlocked.
  */
-export async function runTransferMarketExpirySweepWithDb(db: any) {
-  const now = Date.now();
-  const market = db.collection('market_v7');
-  const pageSize = 200;
-  let cursor: any = null;
-  let scanned = 0;
-  const due: any[] = [];
-
-  // Avoid an unbounded collection read while still scanning every listing.
-  // Document-ID pagination is stable even when lots are deleted as they settle.
-  while (true) {
-    let query = market.orderBy(FieldPath.documentId()).limit(pageSize);
-    if (cursor) query = query.startAfter(cursor);
-    const page = await query.get();
-    if (page.empty) break;
-    scanned += page.size;
-    for (const doc of page.docs) {
-      const lot = doc.data() || {};
-      if (lot.status === 'settled' || lot.status === 'expired') continue;
-      const raw = lot.expiresAt;
-      const expiresAt = raw && typeof raw.toMillis === 'function'
-        ? raw.toMillis()
-        : raw instanceof Date
-          ? raw.getTime()
-          : typeof raw === 'number'
-            ? raw
-            : typeof raw === 'string'
-              ? Date.parse(raw)
-              : NaN;
-      if (Number.isFinite(expiresAt) && expiresAt <= now) due.push(doc);
-    }
-    cursor = page.docs[page.docs.length - 1];
-    if (page.size < pageSize) break;
-  }
-
-  let settled = 0;
-  let sold = 0;
-  let expiredWithoutSale = 0;
-  let skipped = 0;
-  const errors: Array<{ id: string; error: string }> = [];
-
-  for (const candidate of due) {
+async function settleCandidate(candidate: any, db: any) {
     const transferRef = db.collection('transfer_history').doc();
     try {
       const result = await db.runTransaction(async (tx: any) => {
@@ -209,18 +168,72 @@ export async function runTransferMarketExpirySweepWithDb(db: any) {
         tx.delete(lotRef);
         return 'EXPIRED';
       });
-      if (result === 'SOLD') { settled++; sold++; }
-      else if (result === 'EXPIRED') { settled++; expiredWithoutSale++; }
-      else skipped++;
+      return { result };
     } catch (error: any) {
-      errors.push({ id: candidate.id, error: error?.message || 'MARKET_SETTLEMENT_FAILED' });
+      return { error: { id: candidate.id, error: error?.message || 'MARKET_SETTLEMENT_FAILED' } };
     }
+}
+
+export async function runTransferMarketExpirySweepWithDb(db: any) {
+  const now = Date.now();
+  const market = db.collection('market_v7');
+  const pageSize = 200;
+  let cursor: any = null;
+  let scanned = 0;
+  let dueCount = 0;
+  // Avoid an unbounded collection read while still scanning every listing.
+  // Document-ID pagination is stable even when lots are deleted as they settle.
+  while (true) {
+    let query = market.orderBy(FieldPath.documentId()).limit(pageSize);
+    if (cursor) query = query.startAfter(cursor);
+    const page = await query.get();
+    if (page.empty) break;
+    scanned += page.size;
+    const pageDue: any[] = [];
+    for (const doc of page.docs) {
+      const lot = doc.data() || {};
+      if (lot.status === 'settled' || lot.status === 'expired') continue;
+      const raw = lot.expiresAt;
+      const expiresAt = raw && typeof raw.toMillis === 'function'
+        ? raw.toMillis()
+        : raw instanceof Date
+          ? raw.getTime()
+          : typeof raw === 'number'
+            ? raw
+            : typeof raw === 'string'
+              ? Date.parse(raw)
+              : NaN;
+      if (Number.isFinite(expiresAt) && expiresAt <= now) pageDue.push(doc);
+    }
+    // Keep only one Firestore page of due lots in memory. A small concurrency
+    // bound improves throughput without creating an unbounded transaction fan-out.
+    dueCount += pageDue.length;
+    const concurrency = 4;
+    for (let offset = 0; offset < pageDue.length; offset += concurrency) {
+      const outcomes = await Promise.all(
+        pageDue.slice(offset, offset + concurrency).map((candidate) => settleCandidate(candidate, db)),
+      );
+      for (const outcome of outcomes) {
+        if (outcome.error) errors.push(outcome.error);
+        else if (outcome.result === 'SOLD') { settled++; sold++; }
+        else if (outcome.result === 'EXPIRED') { settled++; expiredWithoutSale++; }
+        else skipped++;
+      }
+    }
+    cursor = page.docs[page.docs.length - 1];
+    if (page.size < pageSize) break;
   }
+
+  let settled = 0;
+  let sold = 0;
+  let expiredWithoutSale = 0;
+  let skipped = 0;
+  const errors: Array<{ id: string; error: string }> = [];
 
   return {
     success: errors.length === 0,
     scanned,
-    due: due.length,
+    due: dueCount,
     settled,
     sold,
     expiredWithoutSale,
