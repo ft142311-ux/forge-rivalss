@@ -58,14 +58,14 @@ test('standard market bid action fails closed before writing when expiry or pric
   const end = source.indexOf('\n}', start);
   assert.ok(start >= 0 && end > start);
   const action = source.slice(start, end);
-  assert.ok(action.includes("typeof bid !== 'number'"));
-  assert.ok(action.includes('Number.isSafeInteger(bid)'));
+  assert.ok(action.includes("typeof amount !== 'number'"));
+  assert.ok(action.includes('Number.isSafeInteger(amount)'));
   assert.ok(action.includes('resolveMarketBidExpiryMs(lot.expiresAt)'));
   assert.ok(action.includes("if (expiresAt === null) throw new Error('MARKET_EXPIRY_INVALID')"));
   assert.ok(action.includes('resolveMarketBidPrice(lot.currentBid, lot.startingPrice)'));
   assert.ok(action.includes("if (currentBid === null) throw new Error('MARKET_PRICE_INVALID')"));
-  assert.ok(action.indexOf('MARKET_EXPIRY_INVALID') < action.indexOf('t.update(marketRef'));
-  assert.ok(action.indexOf('MARKET_PRICE_INVALID') < action.indexOf('t.update(marketRef'));
+  assert.ok(action.indexOf('MARKET_EXPIRY_INVALID') < action.indexOf('tx.update(marketRef'));
+  assert.ok(action.indexOf('MARKET_PRICE_INVALID') < action.indexOf('tx.update(marketRef'));
   assert.ok(action.includes("lot.isPro === true || lot.isYouth === true"));
   assert.ok(action.includes("resolveAuctionCurrency(lot.currency)"));
   assert.ok(action.includes("resolvePreviousAuctionBidEscrow({"));
