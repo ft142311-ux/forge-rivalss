@@ -106,8 +106,15 @@ export async function recordMatchEconomy(
     }
 
     const player = playerSnap.data() || {};
-    const before = n(player.credits);
+    const rawBalance = player.credits;
+    const before = rawBalance === undefined || rawBalance === null ? 0 : Number(rawBalance);
+    if (!Number.isSafeInteger(before) || before < 0) {
+      throw new Error('INVALID_MATCH_ECONOMY_BALANCE');
+    }
     const after = before + amount;
+    if (!Number.isSafeInteger(after) || after < 0) {
+      throw new Error('INVALID_MATCH_ECONOMY_BALANCE');
+    }
 
     t.update(playerRef, {
       credits: after,
