@@ -244,13 +244,13 @@ export async function runTransferMarketExpirySweepWithDb(
       if (state.leaseOwner !== ownerToken) throw new Error('MARKET_EXPIRY_LEASE_LOST');
       tx.set(stateRef, {
         cursorId: finished ? null : nextCursorId,
-        leaseOwner: null,
-        leaseUntilMs: 0,
+        leaseOwner: finished ? null : ownerToken,
+        leaseUntilMs: finished ? 0 : now() + leaseMs,
         updatedAt: FieldValue.serverTimestamp(),
         ...(finished ? { lastCompletedAt: FieldValue.serverTimestamp() } : {}),
       }, { merge: true });
     });
-    leaseAcquired = false;
+    leaseAcquired = !finished;
   };
 
   try {
@@ -326,21 +326,6 @@ export async function runTransferMarketExpirySweepWithDb(
         break;
       }
       await saveProgress(cursorId, false);
-      leaseAcquired = true;
-      // saveProgress releases the short lease; reacquire it before continuing
-      // so another invocation cannot take over between pages.
-      const renewed = await db.runTransaction(async (tx: any) => {
-        const snapshot = await tx.get(stateRef);
-        const state = snapshot.exists ? snapshot.data() || {} : {};
-        if (state.leaseOwner && state.leaseOwner !== ownerToken && state.leaseUntilMs > now()) return false;
-        tx.set(stateRef, {
-          leaseOwner: ownerToken,
-          leaseUntilMs: now() + leaseMs,
-          updatedAt: FieldValue.serverTimestamp(),
-        }, { merge: true });
-        return true;
-      });
-      if (!renewed) throw new Error('MARKET_EXPIRY_LEASE_LOST');
     }
   } finally {
     if (leaseAcquired) {
