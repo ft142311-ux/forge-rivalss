@@ -6,7 +6,6 @@ import { requireServerActor } from '@/lib/server-auth';
 import { getFoundationManagerRef } from './foundation-manager-ref';
 import { applyTraining } from '@/game/foundation/training';
 import { calculateTeamSynergy } from '@/game/foundation/synergy';
-import { expectedAttendance, updateFansAfterHomeMatch } from '@/game/foundation/fans';
 import { associationExperienceGain, validateSingleAssociation, qualifiesForAssociationCup } from '@/game/foundation/associations';
 import { getTournamentRuleSet, canEnterTournament, buildOlympicPairs } from '@/game/foundation/tournaments';
 import { FOUNDATION_COLLECTIONS } from '@/game/foundation/config';
@@ -84,19 +83,18 @@ export async function recalculateTeamSynergyAction(idToken: string) {
   } catch (e) { return { success: false, error: errorOf(e) }; }
 }
 
-export async function updateFansAfterOfficialHomeMatchAction(idToken: string, won: boolean, capacity = 10000) {
+/**
+ * Deprecated compatibility endpoint.
+ *
+ * Match outcomes and attendance are authoritative match-engine data. A client
+ * must never be able to submit a boolean win/loss or stadium capacity to grant
+ * fan growth. Official match settlement owns this update; this legacy action
+ * intentionally fails closed until it can resolve a verified finished fixture.
+ */
+export async function updateFansAfterOfficialHomeMatchAction(idToken: string, _won: boolean, _capacity = 10000) {
   try {
-    const { uid } = await requireServerActor(idToken);
-    const db = getAdminDb();
-    const ref = getFoundationManagerRef(db, uid);
-    const snap = await ref.get();
-    if (!snap.exists) throw new Error('PLAYER_NOT_FOUND');
-    const data = snap.data() || {};
-    const attendance = expectedAttendance(data.fans, capacity);
-    const fans = updateFansAfterHomeMatch(data.fans, attendance, won);
-    await ref.update({ fans, updatedAt: FieldValue.serverTimestamp() });
-    await db.collection(FOUNDATION_COLLECTIONS.fanSnapshots).add({ userId: uid, attendance, fans, createdAt: FieldValue.serverTimestamp() });
-    return { success: true, fans, attendance };
+    await requireServerActor(idToken);
+    throw new Error('OFFICIAL_MATCH_RESULT_REQUIRED');
   } catch (e) { return { success: false, error: errorOf(e) }; }
 }
 
