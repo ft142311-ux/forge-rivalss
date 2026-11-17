@@ -105,3 +105,17 @@ test('season cron reports Pyramid Cup failures instead of accepting a partial sc
     pyramidCup: { success: false, error: 'CUP_FIXTURE_FAILED' },
   }), false);
 });
+
+
+test('disposable Season 1 rollover diagnostics are restricted to the local demo emulator', () => {
+  const route = readFileSync(
+    resolve(import.meta.dirname, '../src/app/api/cron/diagnose-test-season-rollover/route.ts'),
+    'utf8',
+  );
+  const guard = route.indexOf("action: 'LOCAL_EMULATOR_ONLY'");
+  const database = route.indexOf('const db = getAdminDb()');
+  assert.ok(guard >= 0 && database > guard, 'non-emulator requests must be rejected before Firestore is accessed');
+  assert.match(route, /FIRESTORE_EMULATOR_HOST/);
+  assert.match(route, /projectId !== 'demo-forge-rivals'/);
+  assert.match(route, /writesStarted: false/);
+});
