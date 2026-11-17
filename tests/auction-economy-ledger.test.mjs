@@ -8,6 +8,13 @@ const expirySweep = readFileSync(new URL('../src/app/lib/auction-expiry-sweep.ts
 const proMarket = readFileSync(new URL('../src/app/actions/pro-market.ts', import.meta.url), 'utf8');
 const bidCore = readFileSync(new URL('../src/app/lib/auction-bid.ts', import.meta.url), 'utf8');
 
+test('PRO and Youth auction bid ceilings are enforced by the server to match their interfaces', () => {
+  assert.match(bidCore, /const minimumBid = Math\.ceil\(currentBid \* 1\.03\)/);
+  assert.match(bidCore, /marketKind === 'youth' \? currentBid \* 4 : Number\(lot\.startingPrice \|\| currentBid\) \* 3/);
+  assert.match(bidCore, /if \(bid < minimumBid\) throw new Error\('BID_TOO_LOW'\)/);
+  assert.match(bidCore, /if \(bid > maxBid\) throw new Error\('BID_TOO_HIGH'\)/);
+});
+
 test('special auction bid and outbid refund ledger entries include exact before and after balances', () => {
   const block = bidCore;
   assert.match(block, /balanceBefore: bidderBalance,[\s\S]*balanceAfter: bidderBalance - chargeAmount/);
