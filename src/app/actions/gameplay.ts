@@ -344,13 +344,8 @@ export async function placePlayerBidAction(idToken: string, marketId: string, am
         const id = typeof entry === 'string' ? entry : entry?.userId || entry?.bidderId || entry?.uid;
         return id !== userId;
       });
-      bidders.push({
-        userId,
-        bidderId: userId,
-        bidderName: displayName,
-        amount: bid,
-        createdAt: new Date(now).toISOString(),
-      });
+      // My Bids uses Firestore array-contains on the UID; keep this field string-based.
+      bidders.push(userId);
 
       const nextExpiry = expiresAt - now < 10 * 60 * 1000 ? now + 10 * 60 * 1000 : expiresAt;
       t.update(bidderRef, {
