@@ -132,6 +132,7 @@ export async function runTransferMarketExpirySweepWithDb(db: any) {
           if (sellerRef) {
             const sellerBefore = normalizeAuctionBalance(seller[currency]);
             const sellerAfter = sellerBefore + sellerIncome;
+            if (!Number.isSafeInteger(sellerAfter)) throw new Error('AUCTION_BALANCE_INVALID');
             tx.update(sellerRef, {
               [currency]: sellerAfter,
               [playerArrayKey]: sellerPlayers,
@@ -166,6 +167,7 @@ export async function runTransferMarketExpirySweepWithDb(db: any) {
         const shouldUnlockSellerPlayer = Boolean(sellerRef && sellerSnap?.exists && sellerIndex >= 0);
         if (hasRecordedEscrow && buyerRef && buyerSnap?.exists) {
           const refundedBalance = buyerBalance + escrowedAmount;
+          if (!Number.isSafeInteger(refundedBalance)) throw new Error('AUCTION_BALANCE_INVALID');
           const buyerPatch: any = {
             [currency]: refundedBalance,
             updatedAt: FieldValue.serverTimestamp(),
