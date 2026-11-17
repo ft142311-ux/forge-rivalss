@@ -9,7 +9,7 @@ import { requireServerActor } from '@/lib/server-auth';
 import { hash32 } from '@/app/lib/hash-utils';
 import { MATCH_REPORT_COLLECTIONS } from '@/app/lib/match-storage';
 import { resolveMarketBidExpiryMs, resolveMarketBidPrice } from '@/app/lib/market-bid-guards';
-import { normalizeAuctionBalance, resolveAuctionCurrency, resolvePreviousAuctionBidEscrow } from '@/app/lib/auction-settlement';
+import { placeStandardMarketBidWithDb } from '@/app/lib/auction-bid';
 
 /**
  * @fileOverview Защищенный слой игровых действий.
@@ -271,138 +271,8 @@ export async function listPlayerOnMarketAction(idToken: string, playerId: string
  */
 export async function placePlayerBidAction(idToken: string, marketId: string, amount: number) {
   const { uid: userId } = await requireServerActor(idToken);
-  const db = getAdminDb();
-
   try {
-    const bid = amount;
-    if (typeof marketId !== 'string' || !marketId.trim() || marketId.length > 180 ||
-        typeof bid !== 'number' || !Number.isSafeInteger(bid) || bid <= 0) {
-      throw new Error('INVALID_BID');
-    }
-
-    // Stable ledger references survive Firestore transaction retries.
-    const bidderLedgerRef = db.collection('economy_transactions').doc();
-    const refundLedgerRef = db.collection('economy_transactions').doc();
-
-    return await db.runTransaction(async (t) => {
-      const marketRef = db.collection('market_v7').doc(marketId);
-      const bidderRef = db.collection('players_v14').doc(userId);
-      const marketSnap = await t.get(marketRef);
-      if (!marketSnap.exists) throw new Error('MARKET_LOT_NOT_FOUND');
-
-      const lot: any = marketSnap.data() || {};
-      if (lot.isPro === true || lot.isYouth === true) throw new Error('INVALID_MARKET_LOT_TYPE');
-      if (lot.sellerId === userId) throw new Error('SELLER_CANNOT_BID');
-
-      const currency = resolveAuctionCurrency(lot.currency);
-      if (currency !== 'credits') throw new Error('INVALID_MARKET_CURRENCY');
-
-      const expiresAt = resolveMarketBidExpiryMs(lot.expiresAt);
-      if (expiresAt === null) throw new Error('MARKET_EXPIRY_INVALID');
-      const now = Date.now();
-      if (expiresAt <= now) throw new Error('MARKET_LOT_EXPIRED');
-
-      const currentBid = resolveMarketBidPrice(lot.currentBid, lot.startingPrice);
-      if (currentBid === null) throw new Error('MARKET_PRICE_INVALID');
-      const minimumBid = Math.ceil(currentBid * 1.03);
-      const maxBid = Math.floor(Number(lot.maxBid || Number(lot.startingPrice || currentBid) * 3));
-      if (!Number.isSafeInteger(minimumBid) || !Number.isSafeInteger(maxBid) || maxBid < minimumBid) {
-        throw new Error('MARKET_BID_LIMITS_INVALID');
-      }
-      if (bid < minimumBid) throw new Error('BID_TOO_LOW');
-      if (bid > maxBid) throw new Error('BID_TOO_HIGH');
-
-      const bidderSnap = await t.get(bidderRef);
-      if (!bidderSnap.exists) throw new Error('PLAYER_NOT_FOUND');
-      const bidderData: any = bidderSnap.data() || {};
-
-      const previousBidderId = String(lot.highestBidderId || lot.highestBidderUid || '');
-      const previousEscrow = resolvePreviousAuctionBidEscrow({
-        currency,
-        escrowCurrency: lot.escrowCurrency,
-        escrowedAmount: lot.escrowedAmount,
-        currentBid,
-        previousBidderId,
-      });
-      const sameEscrowedBidder = previousBidderId === userId && previousEscrow === currentBid;
-      const chargeAmount = sameEscrowedBidder ? bid - currentBid : bid;
-      const bidderBalance = normalizeAuctionBalance(bidderData.credits);
-      if (bidderBalance < chargeAmount) throw new Error('INSUFFICIENT_FUNDS');
-
-      let previousBidderRef: DocumentReference | null = null;
-      let previousBidder: any = null;
-      if (previousBidderId && previousBidderId !== userId && previousEscrow > 0) {
-        previousBidderRef = db.collection('players_v14').doc(previousBidderId);
-        const previousBidderSnap = await t.get(previousBidderRef);
-        if (!previousBidderSnap.exists) throw new Error('PREVIOUS_BIDDER_NOT_FOUND');
-        previousBidder = previousBidderSnap.data() || {};
-      }
-
-      const displayName = String(bidderData.displayName || bidderData.name || 'Manager').slice(0, 80);
-      const previousBidders = Array.isArray(lot.bidders) ? [...lot.bidders] : [];
-      const bidders = previousBidders.filter((entry: any) => {
-        const id = typeof entry === 'string' ? entry : entry?.userId || entry?.bidderId || entry?.uid;
-        return id !== userId;
-      });
-      // My Bids uses Firestore array-contains on the UID; keep this field string-based.
-      bidders.push(userId);
-
-      const nextExpiry = expiresAt - now < 10 * 60 * 1000 ? now + 10 * 60 * 1000 : expiresAt;
-      t.update(bidderRef, {
-        credits: bidderBalance - chargeAmount,
-        updatedAt: FieldValue.serverTimestamp(),
-      });
-      t.set(bidderLedgerRef, {
-        userId,
-        amount: -chargeAmount,
-        currency,
-        type: 'SPECIAL_AUCTION_BID_ESCROW',
-        referenceId: marketId,
-        description: 'Escrow for standard transfer-market bid',
-        balanceBefore: bidderBalance,
-        balanceAfter: bidderBalance - chargeAmount,
-        timestamp: FieldValue.serverTimestamp(),
-      });
-
-      if (previousBidderRef && previousBidder) {
-        const previousBalance = normalizeAuctionBalance(previousBidder.credits);
-        const refundedBalance = previousBalance + previousEscrow;
-        t.update(previousBidderRef, {
-          credits: refundedBalance,
-          updatedAt: FieldValue.serverTimestamp(),
-        });
-        t.set(refundLedgerRef, {
-          userId: previousBidderId,
-          amount: previousEscrow,
-          currency,
-          type: 'SPECIAL_AUCTION_OUTBID_REFUND',
-          referenceId: marketId,
-          description: 'Refund after being outbid in standard transfer market',
-          balanceBefore: previousBalance,
-          balanceAfter: refundedBalance,
-          timestamp: FieldValue.serverTimestamp(),
-        });
-      }
-
-      t.update(marketRef, {
-        currentBid: bid,
-        highestBidderId: userId,
-        highestBidderName: displayName,
-        bidders,
-        escrowedAmount: bid,
-        escrowCurrency: currency,
-        expiresAt: new Date(nextExpiry).toISOString(),
-        updatedAt: FieldValue.serverTimestamp(),
-      });
-
-      return {
-        success: true,
-        marketId,
-        currentBid: bid,
-        highestBidderId: userId,
-        expiresAt: new Date(nextExpiry).toISOString(),
-      };
-    });
+    return await placeStandardMarketBidWithDb(getAdminDb(), userId, marketId, amount);
   } catch (e: any) {
     return { success: false, error: e?.message || 'BID_FAILED' };
   }
