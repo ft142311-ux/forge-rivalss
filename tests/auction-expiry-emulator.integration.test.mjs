@@ -154,7 +154,7 @@ test('Firestore Emulator settles a system PRO drop without requiring or creditin
     isSystem: true,
     isPro: true,
     currency: 'crystals',
-    currentBid: 300,
+    currentBid: 200,
     startingPrice: 200,
     highestBidderId: null,
     bidders: [],
