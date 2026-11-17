@@ -13,7 +13,12 @@ export function isSystemAuctionSeller(sellerId: unknown, isSystem: unknown): boo
 }
 
 export function normalizeAuctionBalance(value: unknown): number {
-  return Math.max(0, Math.floor(Number(value) || 0));
+  if (value === undefined || value === null || value === '') return 0;
+  if (typeof value !== 'number' && typeof value !== 'string') throw new Error('AUCTION_BALANCE_INVALID');
+  if (typeof value === 'string' && value.trim() === '') return 0;
+  const balance = Number(value);
+  if (!Number.isSafeInteger(balance) || balance < 0) throw new Error('AUCTION_BALANCE_INVALID');
+  return balance;
 }
 
 /** Resolve the authoritative auction price without silently flooring corrupt values. */
