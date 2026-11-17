@@ -13,6 +13,8 @@ test('PRO and Youth auction bid ceilings are enforced by the server to match the
   assert.match(bidCore, /marketKind === 'youth' \? currentBid \* 4 : Number\(lot\.startingPrice \|\| currentBid\) \* 3/);
   assert.match(bidCore, /if \(bid < minimumBid\) throw new Error\('BID_TOO_LOW'\)/);
   assert.match(bidCore, /if \(bid > maxBid\) throw new Error\('BID_TOO_HIGH'\)/);
+  assert.match(bidCore, /typeof amount !== 'number'/);
+  assert.match(bidCore, /typeof marketId !== 'string'/);
 });
 
 test('special auction bid and outbid refund ledger entries include exact before and after balances', () => {
