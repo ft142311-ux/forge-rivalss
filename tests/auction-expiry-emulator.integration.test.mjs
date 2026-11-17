@@ -490,3 +490,81 @@ test('Firestore Emulator standard transfer-market bids reserve, refund and settl
   assert.equal(rows.filter(row => row.type === 'SPECIAL_AUCTION_SETTLEMENT_CREDIT').reduce((sum, row) => sum + row.amount, 0), 475);
   assert.equal((await db.collection('transfer_history').get()).size, 1);
 });
+
+
+test('Firestore Emulator standard transfer-market concurrent bids serialize without double-charging', {
+  skip: !emulatorHost,
+}, async t => {
+  const { db } = await withIsolatedFirestore(t);
+  const now = Date.now();
+  await db.collection('players_v14').doc('standard-race-seller').set({ credits: 0 });
+  await db.collection('players_v14').doc('standard-race-bidder').set({ credits: 1000, displayName: 'Race Bidder' });
+  const lotRef = db.collection('market_v7').doc('standard-race');
+  await lotRef.set({
+    sellerId: 'standard-race-seller',
+    marketType: 'player',
+    currency: 'credits',
+    currentBid: 200,
+    startingPrice: 200,
+    highestBidderId: null,
+    bidders: [],
+    expiresAt: new Date(now + 60 * 60 * 1000).toISOString(),
+    heroData: { id: 'standard-race-player', name: 'Race Player' },
+    isPro: false,
+    isYouth: false,
+  });
+
+  const outcomes = await Promise.allSettled([
+    placeStandardMarketBidWithDb(db, 'standard-race-bidder', 'standard-race', 300),
+    placeStandardMarketBidWithDb(db, 'standard-race-bidder', 'standard-race', 400),
+  ]);
+  assert.ok(outcomes.some(result => result.status === 'fulfilled'));
+  const rejected = outcomes.find(result => result.status === 'rejected');
+  if (rejected) assert.match(String(rejected.reason?.message || ''), /BID_TOO_LOW/);
+
+  const bidder = await db.collection('players_v14').doc('standard-race-bidder').get();
+  const lot = await lotRef.get();
+  assert.equal(bidder.get('credits'), 600);
+  assert.equal(lot.get('highestBidderId'), 'standard-race-bidder');
+  assert.equal(lot.get('currentBid'), 400);
+  assert.equal(lot.get('escrowedAmount'), 400);
+  const ledger = await db.collection('economy_transactions').where('referenceId', '==', 'standard-race').get();
+  const rows = ledger.docs.map(doc => doc.data());
+  assert.equal(rows.filter(row => row.type === 'SPECIAL_AUCTION_BID_ESCROW').reduce((sum, row) => sum - row.amount, 0), 400);
+  assert.equal(rows.filter(row => row.type === 'SPECIAL_AUCTION_OUTBID_REFUND').length, 0);
+});
+
+test('Firestore Emulator standard transfer-market insufficient funds leave no partial writes', {
+  skip: !emulatorHost,
+}, async t => {
+  const { db } = await withIsolatedFirestore(t);
+  const now = Date.now();
+  await db.collection('players_v14').doc('standard-poor-seller').set({ credits: 0 });
+  await db.collection('players_v14').doc('standard-poor-bidder').set({ credits: 250 });
+  const lotRef = db.collection('market_v7').doc('standard-poor-lot');
+  await lotRef.set({
+    sellerId: 'standard-poor-seller',
+    marketType: 'player',
+    currency: 'credits',
+    currentBid: 200,
+    startingPrice: 200,
+    highestBidderId: null,
+    bidders: [],
+    expiresAt: new Date(now + 60 * 60 * 1000).toISOString(),
+    heroData: { id: 'standard-poor-player', name: 'Poor Bidder Player' },
+    isPro: false,
+    isYouth: false,
+  });
+
+  await assert.rejects(
+    placeStandardMarketBidWithDb(db, 'standard-poor-bidder', 'standard-poor-lot', 300),
+    /INSUFFICIENT_FUNDS/,
+  );
+  assert.equal((await db.collection('players_v14').doc('standard-poor-bidder').get()).get('credits'), 250);
+  const lot = await lotRef.get();
+  assert.equal(lot.get('highestBidderId'), null);
+  assert.equal(lot.get('currentBid'), 200);
+  assert.equal(lot.get('escrowedAmount'), undefined);
+  assert.deepEqual(lot.get('bidders'), []);
+  assert.equal((await db.collection('economy_transactions').get()).size, 0);
+});
