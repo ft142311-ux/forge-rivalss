@@ -168,9 +168,9 @@ async function settleCandidate(candidate: any, db: any) {
         tx.delete(lotRef);
         return 'EXPIRED';
       });
-      return { result };
+      return { result, error: null as null };
     } catch (error: any) {
-      return { error: { id: candidate.id, error: error?.message || 'MARKET_SETTLEMENT_FAILED' } };
+      return { result: null as null, error: { id: candidate.id, error: error?.message || 'MARKET_SETTLEMENT_FAILED' } };
     }
 }
 
