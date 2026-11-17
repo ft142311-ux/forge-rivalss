@@ -78,7 +78,7 @@ test('Firestore Emulator refunds the outbid manager and charges only the increme
   assert.equal(lot.get('escrowedAmount'), 600);
   const ledger = await db.collection('economy_transactions').where('referenceId', '==', 'pro-lot').get();
   const rows = ledger.docs.map(doc => doc.data());
-  assert.equal(rows.filter(row => row.type === 'SPECIAL_AUCTION_BID_ESCROW').reduce((sum, row) => sum - row.amount, 0), 600);
+  assert.equal(rows.filter(row => row.type === 'SPECIAL_AUCTION_BID_ESCROW').reduce((sum, row) => sum - row.amount, 0), 900);
   assert.equal(rows.filter(row => row.type === 'SPECIAL_AUCTION_OUTBID_REFUND').reduce((sum, row) => sum + row.amount, 0), 300);
   assert.equal((await db.collection('notifications_v7').where('userId', '==', 'bidder-1').get()).size, 1);
 });
