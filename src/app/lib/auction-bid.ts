@@ -30,6 +30,7 @@ export async function placeSpecialMarketBidWithDb(
     if (!bidderSnap.exists) throw new Error('PLAYER_NOT_FOUND');
 
     const lot: any = lotSnap.data() || {};
+    if (lot.status === 'settled' || lot.status === 'expired') throw new Error('MARKET_LOT_NOT_ACTIVE');
     const bidder: any = bidderSnap.data() || {};
     const isExpectedLot = marketKind === 'pro'
       ? lot.isPro === true && lot.currency === 'crystals'
@@ -181,6 +182,7 @@ export async function placeStandardMarketBidWithDb(
     if (!marketSnap.exists) throw new Error('MARKET_LOT_NOT_FOUND');
 
     const lot: any = marketSnap.data() || {};
+    if (lot.status === 'settled' || lot.status === 'expired') throw new Error('MARKET_LOT_NOT_ACTIVE');
     if (lot.isPro === true || lot.isYouth === true) throw new Error('INVALID_MARKET_LOT_TYPE');
     if (lot.sellerId === uid) throw new Error('SELLER_CANNOT_BID');
 
