@@ -23,3 +23,17 @@ test('training deadline readiness is based on a finite timestamp', () => {
   assert.equal(deadline !== null && deadline <= now, true);
   assert.equal(future !== null && future <= now, false);
 });
+import { readFileSync } from 'node:fs';
+
+test('training completion validates both deadline and canonical skill before applying progress', () => {
+  const source = readFileSync(new URL('../src/app/actions/foundation-management.ts', import.meta.url), 'utf8');
+  const completion = source.slice(
+    source.indexOf('export async function completePlayerTrainingAction'),
+    source.indexOf('export async function recalculateTeamSynergyAction'),
+  );
+  assert.match(completion, /resolveTrainingFinishTimeMs\(player\.dailyTrainingFinishTime\)/);
+  assert.match(completion, /if \(finishAtMs === null\) throw new Error\('TRAINING_FINISH_TIME_INVALID'\)/);
+  assert.match(completion, /if \(finishAtMs > Date\.now\(\)\) throw new Error\('TRAINING_NOT_READY'\)/);
+  assert.match(completion, /if \(!isFoundationSkill\(focus\)\) throw new Error\('INVALID_TRAINING_SKILL'\)/);
+  assert.ok(completion.indexOf('isFoundationSkill(focus)') < completion.indexOf('applyTraining(player, focus'));
+});
