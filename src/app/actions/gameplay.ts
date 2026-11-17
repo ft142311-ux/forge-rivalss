@@ -8,7 +8,6 @@ import { Player, calculatePlayerMarketValue } from '@/app/lib/moba-data';
 import { requireServerActor } from '@/lib/server-auth';
 import { hash32 } from '@/app/lib/hash-utils';
 import { MATCH_REPORT_COLLECTIONS } from '@/app/lib/match-storage';
-import { resolveMarketBidExpiryMs, resolveMarketBidPrice } from '@/app/lib/market-bid-guards';
 import { placeStandardMarketBidWithDb } from '@/app/lib/auction-bid';
 
 /**
