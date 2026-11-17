@@ -620,6 +620,7 @@ test('Firestore Emulator refunds escrow when the seller account has disappeared'
   const lotRef = db.collection('market_v7').doc('missing-seller');
   await lotRef.set(expiredLot({
     sellerId: 'deleted-seller',
+    highestBidderId: null,
     highestBidderUid: 'legacy-buyer',
     currentBid: 400,
     escrowedAmount: 400,
