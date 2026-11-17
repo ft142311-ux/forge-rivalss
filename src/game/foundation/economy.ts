@@ -3,9 +3,9 @@ import { calculateSalary } from './player-system';
 
 export function calculateDailyPlayerSalary(players: FoundationPlayerState[]) {
   return players.reduce((sum, player) => {
-    const salary = player.salary === undefined || player.salary === null || player.salary === '' || player.salary === 0
+    const salary = player.salary === undefined || player.salary === null || player.salary === 0
       ? calculateSalary(player)
-      : Number(player.salary);
+      : player.salary;
     if (!Number.isSafeInteger(salary) || salary < 0) throw new Error('FOUNDATION_SALARY_INVALID');
     const total = sum + salary;
     if (!Number.isSafeInteger(total)) throw new Error('FOUNDATION_SALARY_INVALID');

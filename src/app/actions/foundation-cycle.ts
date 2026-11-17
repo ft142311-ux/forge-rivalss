@@ -33,7 +33,7 @@ function normalizePlayers(players: any[]) {
       physical: Number.isFinite(Number(player.physical)) ? Number(player.physical) : 50,
       resilience: Number.isFinite(Number(player.resilience)) ? Number(player.resilience) : 50,
     };
-    const salary = Number(player.salary);
+    const salary = typeof player.salary === 'number' ? player.salary : NaN;
     normalized.salary = Number.isSafeInteger(salary) && salary > 0 ? salary : calculateSalary(normalized);
     normalized.marketValue = calculateMarketValue(normalized);
     normalized.price = normalized.marketValue;
@@ -56,9 +56,10 @@ async function processManager(db: any, ref: DocumentReference, now: Date) {
     const staff = data.staff && typeof data.staff === 'object' ? data.staff : {};
     const staffSalary = Object.values(staff).reduce((sum: number, member: any) => {
       if (!member) return sum;
-      const salary = member.salary === undefined || member.salary === null || member.salary === ''
+      const rawSalary = member.salary;
+      const salary = rawSalary === undefined || rawSalary === null || rawSalary === ''
         ? 0
-        : Number(member.salary);
+        : (typeof rawSalary === 'number' || typeof rawSalary === 'string') ? Number(rawSalary) : NaN;
       if (!Number.isSafeInteger(salary) || salary < 0) throw new Error('FOUNDATION_SALARY_INVALID');
       const next = sum + salary;
       if (!Number.isSafeInteger(next)) throw new Error('FOUNDATION_SALARY_INVALID');
@@ -67,7 +68,9 @@ async function processManager(db: any, ref: DocumentReference, now: Date) {
     const totalDue = grossPlayerSalary + staffSalary;
     if (!Number.isSafeInteger(totalDue) || totalDue < 0) throw new Error('FOUNDATION_SALARY_INVALID');
     const rawCredits = data.credits;
-    const before = rawCredits === undefined || rawCredits === null || rawCredits === '' ? 0 : Number(rawCredits);
+    const before = rawCredits === undefined || rawCredits === null || rawCredits === ''
+      ? 0
+      : (typeof rawCredits === 'number' || typeof rawCredits === 'string') ? Number(rawCredits) : NaN;
     if (!Number.isSafeInteger(before) || before < 0) throw new Error('FOUNDATION_BALANCE_INVALID');
     const paid = Math.min(before, totalDue);
     const unpaid = totalDue - paid;
