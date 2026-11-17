@@ -15,7 +15,7 @@ test('cup technical fallback re-reads the match inside a transaction before writ
   assert.match(fallback, /\['finished', 'completed'\]\.includes\(String\(existing\.status \|\| ''\)\.toLowerCase\(\)\)/);
   assert.match(fallback, /if \(terminal && existing\.winnerId\) \{/);
   assert.equal((fallback.match(/processingToken: FieldValue\.delete\(\)/g) || []).length, 3,
-    'both terminal-result repair paths must clear stale processing leases');
+    'every terminal-repair and deadline-fallback path must clear stale processing leases');
   assert.equal((fallback.match(/isProcessing: false/g) || []).length, 3);
   assert.equal((fallback.match(/processingAt: FieldValue\.delete\(\)/g) || []).length, 3);
   assert.match(fallback, /reportStatus: existing\.reportStatus === 'viewed' \? 'viewed' : 'new'/);
