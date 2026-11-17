@@ -44,4 +44,13 @@ test('standard market bid action fails closed before writing when expiry or pric
   assert.ok(action.includes("if (currentBid === null) throw new Error('MARKET_PRICE_INVALID')"));
   assert.ok(action.indexOf('MARKET_EXPIRY_INVALID') < action.indexOf('t.update(marketRef'));
   assert.ok(action.indexOf('MARKET_PRICE_INVALID') < action.indexOf('t.update(marketRef'));
+  assert.ok(action.includes("lot.isPro === true || lot.isYouth === true"));
+  assert.ok(action.includes("resolveAuctionCurrency(lot.currency)"));
+  assert.ok(action.includes("resolvePreviousAuctionBidEscrow({"));
+  assert.ok(action.includes("bidderBalance < chargeAmount"));
+  assert.ok(action.includes("escrowedAmount: bid"));
+  assert.ok(action.includes("escrowCurrency: currency"));
+  assert.ok(action.includes("SPECIAL_AUCTION_BID_ESCROW"));
+  assert.ok(action.includes("SPECIAL_AUCTION_OUTBID_REFUND"));
+  assert.ok(action.includes("const nextExpiry = expiresAt - now < 10 * 60 * 1000"));
 });
