@@ -6,6 +6,8 @@ const source = readFileSync(new URL('../src/app/actions/shop.ts', import.meta.ur
 
 test('shop balance reader rejects non-integer, negative and unsafe currency balances', () => {
   assert.match(source, /function readCurrencyBalance\(value: unknown\)/);
+  assert.match(source, /typeof value !== 'number' && typeof value !== 'string'/);
+  assert.match(source, /typeof value === 'string' && value\.trim\(\)\.length === 0/);
   assert.match(source, /!Number\.isSafeInteger\(balance\) \|\| balance < 0/);
   assert.doesNotMatch(source, /Number\(data\.(?:credits|crystals)\s*\|\|\s*0\)/);
 });
