@@ -11,6 +11,7 @@ test('legacy recovery endpoints that advance to S3 are disabled fail-closed', ()
     'src/app/api/cron/recover-season-gap/route.ts',
     'src/app/api/cron/reconstruct-sequential-seasons/route.ts',
     'src/app/api/cron/complete-recovered-season-two/route.ts',
+    'src/app/api/cron/finish-test-season/route.ts',
   ];
   for (const path of routes) {
     const source = read(path);
