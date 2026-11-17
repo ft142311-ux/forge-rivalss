@@ -219,7 +219,10 @@ export async function runTransferMarketExpirySweepWithDb(db: any) {
         pageDue.slice(offset, offset + concurrency).map((candidate) => settleCandidate(candidate, db)),
       );
       for (const outcome of outcomes) {
-        if (outcome.error) errors.push(outcome.error);
+        if (outcome.error) {
+          // Keep diagnostics bounded even if a large batch of lots is malformed.
+          if (errors.length < 50) errors.push(outcome.error);
+        }
         else if (outcome.result === 'SOLD') { settled++; sold++; }
         else if (outcome.result === 'EXPIRED') { settled++; expiredWithoutSale++; }
         else skipped++;
