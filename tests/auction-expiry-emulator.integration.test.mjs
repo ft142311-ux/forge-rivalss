@@ -572,3 +572,67 @@ test('Firestore Emulator standard transfer-market insufficient funds leave no pa
   assert.deepEqual(lot.get('bidders'), []);
   assert.equal((await db.collection('economy_transactions').get()).size, 0);
 });
+
+
+test('Firestore Emulator settles legacy listings without escrow by charging the winner exactly once', {
+  skip: !emulatorHost,
+}, async t => {
+  const { db } = await withIsolatedFirestore(t);
+  await db.collection('players_v14').doc('legacy-seller').set({
+    credits: 50,
+    ownedPlayers: [{ id: 'legacy-player', name: 'Legacy Player', onTransferUntil: 'reserved', transferMarketId: 'legacy-no-escrow' }],
+  });
+  await db.collection('players_v14').doc('legacy-buyer').set({ credits: 1000, ownedPlayers: [] });
+  const lotRef = db.collection('market_v7').doc('legacy-no-escrow');
+  await lotRef.set({
+    sellerId: 'legacy-seller',
+    highestBidderUid: 'legacy-buyer',
+    currentBid: 400,
+    startingPrice: 200,
+    currency: 'credits',
+    expiresAt: new Date(Date.now() - 1000).toISOString(),
+    heroData: { id: 'legacy-player', name: 'Legacy Player' },
+    isYouth: false,
+  });
+
+  const result = await runTransferMarketExpirySweepWithDb(db);
+  assert.equal(result.success, true);
+  assert.equal(result.sold, 1);
+  assert.equal((await lotRef.get()).exists, false);
+  assert.equal((await db.collection('players_v14').doc('legacy-buyer').get()).get('credits'), 600);
+  assert.equal((await db.collection('players_v14').doc('legacy-seller').get()).get('credits'), 430);
+  assert.deepEqual((await db.collection('players_v14').doc('legacy-seller').get()).get('ownedPlayers'), []);
+  assert.deepEqual(
+    (await db.collection('players_v14').doc('legacy-buyer').get()).get('ownedPlayers').map(player => player.id),
+    ['legacy-player'],
+  );
+  const ledger = await db.collection('economy_transactions').where('referenceId', '==', 'legacy-no-escrow').get();
+  assert.equal(ledger.docs.filter(doc => doc.get('type') === 'SPECIAL_AUCTION_SETTLEMENT_DEBIT').length, 1);
+  assert.equal(ledger.docs.filter(doc => doc.get('type') === 'SPECIAL_AUCTION_SETTLEMENT_CREDIT').length, 1);
+  assert.equal((await db.collection('transfer_history').get()).size, 1);
+});
+
+test('Firestore Emulator refunds escrow when the seller account has disappeared', {
+  skip: !emulatorHost,
+}, async t => {
+  const { db } = await withIsolatedFirestore(t);
+  await db.collection('players_v14').doc('legacy-buyer').set({ credits: 600, ownedPlayers: [] });
+  const lotRef = db.collection('market_v7').doc('missing-seller');
+  await lotRef.set(expiredLot({
+    sellerId: 'deleted-seller',
+    highestBidderUid: 'legacy-buyer',
+    currentBid: 400,
+    escrowedAmount: 400,
+    heroData: { id: 'unavailable-player', name: 'Unavailable Player' },
+  }));
+
+  const result = await runTransferMarketExpirySweepWithDb(db);
+  assert.equal(result.success, true);
+  assert.equal(result.expiredWithoutSale, 1);
+  assert.equal((await db.collection('players_v14').doc('legacy-buyer').get()).get('credits'), 1000);
+  assert.equal((await lotRef.get()).exists, false);
+  const ledger = await db.collection('economy_transactions').where('referenceId', '==', 'missing-seller').get();
+  assert.equal(ledger.size, 1);
+  assert.equal(ledger.docs[0].get('type'), 'SPECIAL_AUCTION_SETTLEMENT_REFUND');
+  assert.equal((await db.collection('transfer_history').get()).size, 0);
+});
