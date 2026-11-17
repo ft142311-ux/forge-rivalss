@@ -11,6 +11,7 @@ import { getTournamentRuleSet, canEnterTournament, buildOlympicPairs } from '@/g
 import { FOUNDATION_COLLECTIONS } from '@/game/foundation/config';
 import { deterministicDailyEvent } from '@/game/foundation/events';
 import { isFoundationSkill } from '@/game/foundation/skills';
+import { resolveTrainingFinishTimeMs } from '@/app/lib/player-training-guards';
 
 function errorOf(e: any) { return e?.message || 'FOUNDATION_ACTION_FAILED'; }
 
@@ -54,15 +55,8 @@ export async function completePlayerTrainingAction(idToken: string, playerId: st
       const index = players.findIndex(p => p.id === playerId);
       if (index < 0) throw new Error('UNIT_NOT_FOUND');
       const player = players[index];
-      const rawFinishTime = player.dailyTrainingFinishTime;
-      const finishAtMs = rawFinishTime && typeof rawFinishTime.toMillis === 'function'
-        ? rawFinishTime.toMillis()
-        : rawFinishTime instanceof Date
-          ? rawFinishTime.getTime()
-          : typeof rawFinishTime === 'number'
-            ? rawFinishTime
-            : Date.parse(String(rawFinishTime ?? ''));
-      if (!Number.isFinite(finishAtMs)) throw new Error('TRAINING_FINISH_TIME_INVALID');
+      const finishAtMs = resolveTrainingFinishTimeMs(player.dailyTrainingFinishTime);
+      if (finishAtMs === null) throw new Error('TRAINING_FINISH_TIME_INVALID');
       if (finishAtMs > Date.now()) throw new Error('TRAINING_NOT_READY');
       const focus = player.dailyTrainingFocus || player.trainingFocus;
       if (!focus) throw new Error('TRAINING_FOCUS_MISSING');
