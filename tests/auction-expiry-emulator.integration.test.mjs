@@ -469,9 +469,13 @@ test('Firestore Emulator standard transfer-market bids reserve, refund and settl
   assert.equal(bidRows.filter(row => row.type === 'SPECIAL_AUCTION_OUTBID_REFUND').reduce((sum, row) => sum + row.amount, 0), 300);
 
   await lotRef.update({ expiresAt: new Date(now - 1).toISOString() });
-  const settlement = await runTransferMarketExpirySweepWithDb(db);
-  assert.equal(settlement.success, true);
-  assert.equal(settlement.sold, 1);
+  const settlementRuns = await Promise.all([
+    runTransferMarketExpirySweepWithDb(db),
+    runTransferMarketExpirySweepWithDb(db),
+  ]);
+  assert.ok(settlementRuns.every(result => result.success));
+  assert.equal(settlementRuns.reduce((sum, result) => sum + result.sold, 0), 1);
+  assert.equal(settlementRuns.reduce((sum, result) => sum + result.settled, 0), 1);
   assert.equal((await lotRef.get()).exists, false);
 
   const seller = await db.collection('players_v14').doc('standard-seller').get();
