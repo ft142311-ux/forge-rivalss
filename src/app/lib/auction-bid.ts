@@ -41,7 +41,13 @@ export async function placeSpecialMarketBidWithDb(
     if (!Number.isFinite(expiryMs) || expiryMs <= now) throw new Error('MARKET_LOT_EXPIRED');
 
     const currentBid = resolveAuctionPrice(lot.currentBid, lot.startingPrice, 0);
-    if (bid <= currentBid) throw new Error('BID_TOO_LOW');
+    const minimumBid = Math.ceil(currentBid * 1.03);
+    const maxBid = Math.floor(Number(lot.maxBid || Number(lot.startingPrice || currentBid) * 3));
+    if (!Number.isSafeInteger(minimumBid) || !Number.isSafeInteger(maxBid) || maxBid < minimumBid) {
+      throw new Error('MARKET_BID_LIMITS_INVALID');
+    }
+    if (bid < minimumBid) throw new Error('BID_TOO_LOW');
+    if (bid > maxBid) throw new Error('BID_TOO_HIGH');
     const currency = marketKind === 'pro' ? 'crystals' : 'credits';
     const previousBidderId = String(lot.highestBidderId || lot.highestBidderUid || '');
     const previousEscrow = resolvePreviousAuctionBidEscrow({
