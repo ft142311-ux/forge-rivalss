@@ -12,6 +12,12 @@ import { requireServerActor } from '@/lib/server-auth';
  * Все изменения баланса проходят через этот модуль.
  */
 
+function readCurrencyBalance(value: unknown) {
+  const balance = value === undefined || value === null ? 0 : Number(value);
+  if (!Number.isSafeInteger(balance) || balance < 0) throw new Error('INVALID_BALANCE');
+  return balance;
+}
+
 /**
  * Публичный экшн для получения ежедневной награды.
  */
@@ -39,10 +45,13 @@ export async function claimDailyRewardAction(idToken: string) {
       const premiumUntilMs = p.premiumUntil ? new Date(String(p.premiumUntil)).getTime() : 0;
       const premiumBonus = getPremiumDailyCrystalBonus(p.isPremium === true && premiumUntilMs > Date.now());
       const crystals = baseCrystals + premiumBonus;
-      const creditsBefore = Number(p.credits || 0);
-      const crystalsBefore = Number(p.crystals || 0);
+      const creditsBefore = readCurrencyBalance(p.credits);
+      const crystalsBefore = readCurrencyBalance(p.crystals);
       const creditsAfter = creditsBefore + credits;
       const crystalsAfter = crystalsBefore + crystals;
+      if (!Number.isSafeInteger(creditsAfter) || !Number.isSafeInteger(crystalsAfter)) {
+        throw new Error('INVALID_BALANCE');
+      }
       const result = { success: true, credits, crystals, premiumBonus };
 
       t.update(playerRef, {
@@ -112,7 +121,7 @@ export async function purchasePremiumAction(idToken: string) {
       if (player.isPremium === true && currentUntil > now) throw new Error('PREMIUM_ALREADY_ACTIVE');
 
       const cost = 5000;
-      const crystals = Number(player.crystals || 0);
+      const crystals = readCurrencyBalance(player.crystals);
       if (crystals < cost) throw new Error('INSUFFICIENT_FUNDS');
       const premiumUntil = new Date(now + 30 * 24 * 60 * 60 * 1000).toISOString();
 
