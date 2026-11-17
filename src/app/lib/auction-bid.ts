@@ -42,7 +42,7 @@ export async function placeSpecialMarketBidWithDb(
 
     const currentBid = resolveAuctionPrice(lot.currentBid, lot.startingPrice, 0);
     const minimumBid = Math.ceil(currentBid * 1.03);
-    const maxBid = Math.floor(Number(lot.maxBid || Number(lot.startingPrice || currentBid) * 3));
+    const maxBid = Math.floor(Number(lot.maxBid || (marketKind === 'youth' ? currentBid * 4 : Number(lot.startingPrice || currentBid) * 3)));
     if (!Number.isSafeInteger(minimumBid) || !Number.isSafeInteger(maxBid) || maxBid < minimumBid) {
       throw new Error('MARKET_BID_LIMITS_INVALID');
     }
