@@ -10,7 +10,8 @@ const bidCore = readFileSync(new URL('../src/app/lib/auction-bid.ts', import.met
 
 test('PRO and Youth auction bid ceilings are enforced by the server to match their interfaces', () => {
   assert.match(bidCore, /const minimumBid = Math\.ceil\(currentBid \* 1\.03\)/);
-  assert.match(bidCore, /const maxBidBase = marketKind === 'youth'[\\s\\S]*const defaultMaxBid = marketKind === 'youth' \\? currentBid \\* 4 : maxBidBase \\* 3/);\n  assert.equal((bidCore.match(/resolveAuctionMaxBid\\(lot\\.startingPrice, currentBid\\)/g) || []).length, 2);
+  assert.match(bidCore, /const maxBidBase = marketKind === 'youth'[\s\S]*const defaultMaxBid = marketKind === 'youth' \? currentBid \* 4 : maxBidBase \* 3/);
+  assert.equal((bidCore.match(/resolveAuctionMaxBid\(lot\.startingPrice, currentBid\)/g) || []).length, 2);
   assert.match(bidCore, /if \(bid < minimumBid\) throw new Error\('BID_TOO_LOW'\)/);
   assert.match(bidCore, /if \(bid > maxBid\) throw new Error\('BID_TOO_HIGH'\)/);
   assert.match(bidCore, /typeof amount !== 'number'/);
