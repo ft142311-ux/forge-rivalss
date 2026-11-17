@@ -20,7 +20,8 @@ test('PRO and Youth auction bid ceilings are enforced by the server to match the
 test('special auction bid and outbid refund ledger entries include exact before and after balances', () => {
   const block = bidCore;
   assert.match(block, /balanceBefore: bidderBalance,[\s\S]*balanceAfter: bidderBalance - chargeAmount/);
-  assert.match(block, /balanceBefore: money\(previousBidder\[currency\]\),[\s\S]*balanceAfter: money\(previousBidder\[currency\]\) \+ refundAmount/);
+  assert.match(block, /const previousBalance = money\(previousBidder\[currency\]\);[\s\S]*const refundedBalance = previousBalance \+ refundAmount;/);
+  assert.match(block, /balanceBefore: previousBalance,[\s\S]*balanceAfter: refundedBalance/);
 });
 
 test('auction settlement records fallback debit, seller proceeds and escrow refund with balances', () => {
