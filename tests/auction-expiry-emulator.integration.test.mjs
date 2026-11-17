@@ -896,3 +896,36 @@ test('Firestore Emulator rejects bids on explicitly settled or expired lots with
     assert.equal((await db.collection('economy_transactions').where('referenceId', 'in', [standardLotId, specialLotId]).get()).size, 0);
   }
 });
+
+test('Firestore Emulator processes expired auction lots page-by-page beyond the 200-document scan boundary', {
+  skip: !emulatorHost,
+}, async t => {
+  const { db } = await withIsolatedFirestore(t);
+  const firestore = db.collection('market_v7').firestore;
+  const batch = firestore.batch();
+  const now = new Date(Date.now() - 60_000).toISOString();
+  const lotIds = Array.from({ length: 205 }, (_, index) => `page-lot-${String(index).padStart(3, '0')}`);
+
+  for (const id of lotIds) {
+    batch.set(db.collection('market_v7').doc(id), {
+      sellerId: '',
+      highestBidderId: null,
+      currentBid: 0,
+      startingPrice: 0,
+      currency: 'credits',
+      escrowedAmount: 0,
+      expiresAt: now,
+      heroData: { id: `player-${id}`, name: 'Expired Player' },
+      isYouth: false,
+    });
+  }
+  await batch.commit();
+
+  const result = await runTransferMarketExpirySweepWithDb(db);
+  assert.equal(result.success, true);
+  assert.equal(result.scanned, 205);
+  assert.equal(result.due, 205);
+  assert.equal(result.settled, 205);
+  assert.equal(result.expiredWithoutSale, 205);
+  assert.equal((await db.collection('market_v7').get()).size, 0);
+});
