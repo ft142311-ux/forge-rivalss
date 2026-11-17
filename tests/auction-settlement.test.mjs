@@ -143,7 +143,7 @@ test('daily system-lot rotation prunes only lots with no bidder and no escrow', 
   assert.equal(canPruneUnbidSystemAuctionLot({ escrowedAmount: true }), false);
 });
 
-test('standard, PRO and youth bids use strict configured max-bid validation', async () => {
+test('standard bids and shared PRO/youth bid handler use strict configured max-bid validation', async () => {
   const source = readFileSync(new URL('../src/app/lib/auction-bid.ts', import.meta.url), 'utf8');
   assert.equal((source.match(/resolveAuctionMaxBid\(/g) || []).length, 3);
 });
