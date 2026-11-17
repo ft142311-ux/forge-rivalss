@@ -440,8 +440,8 @@ test('Firestore Emulator standard transfer-market bids reserve, refund and settl
     sellerId: 'standard-seller',
     marketType: 'player',
     currency: 'credits',
-    currentBid: 100,
-    startingPrice: 100,
+    currentBid: 200,
+    startingPrice: 200,
     highestBidderId: null,
     bidders: [],
     expiresAt: new Date(now + 60 * 60 * 1000).toISOString(),
@@ -450,23 +450,23 @@ test('Firestore Emulator standard transfer-market bids reserve, refund and settl
     isYouth: false,
   });
 
-  await placeStandardMarketBidWithDb(db, 'standard-bidder-1', 'standard-flow', 200);
-  await placeStandardMarketBidWithDb(db, 'standard-bidder-2', 'standard-flow', 300);
+  await placeStandardMarketBidWithDb(db, 'standard-bidder-1', 'standard-flow', 300);
+  await placeStandardMarketBidWithDb(db, 'standard-bidder-2', 'standard-flow', 500);
   await placeStandardMarketBidWithDb(db, 'standard-bidder-2', 'standard-flow', 400);
 
   assert.equal((await db.collection('players_v14').doc('standard-bidder-1').get()).get('credits'), 1000);
-  assert.equal((await db.collection('players_v14').doc('standard-bidder-2').get()).get('credits'), 600);
+  assert.equal((await db.collection('players_v14').doc('standard-bidder-2').get()).get('credits'), 500);
   const activeLot = await lotRef.get();
   assert.equal(activeLot.get('highestBidderId'), 'standard-bidder-2');
-  assert.equal(activeLot.get('currentBid'), 400);
-  assert.equal(activeLot.get('escrowedAmount'), 400);
+  assert.equal(activeLot.get('currentBid'), 500);
+  assert.equal(activeLot.get('escrowedAmount'), 500);
   assert.equal(activeLot.get('escrowCurrency'), 'credits');
   assert.ok(activeLot.get('bidders').includes('standard-bidder-2'));
 
   const bidLedger = await db.collection('economy_transactions').where('referenceId', '==', 'standard-flow').get();
   const bidRows = bidLedger.docs.map(doc => doc.data());
-  assert.equal(bidRows.filter(row => row.type === 'SPECIAL_AUCTION_BID_ESCROW').reduce((sum, row) => sum - row.amount, 0), 600);
-  assert.equal(bidRows.filter(row => row.type === 'SPECIAL_AUCTION_OUTBID_REFUND').reduce((sum, row) => sum + row.amount, 0), 200);
+  assert.equal(bidRows.filter(row => row.type === 'SPECIAL_AUCTION_BID_ESCROW').reduce((sum, row) => sum - row.amount, 0), 800);
+  assert.equal(bidRows.filter(row => row.type === 'SPECIAL_AUCTION_OUTBID_REFUND').reduce((sum, row) => sum + row.amount, 0), 300);
 
   await lotRef.update({ expiresAt: new Date(now - 1).toISOString() });
   const settlement = await runTransferMarketExpirySweepWithDb(db);
@@ -477,16 +477,16 @@ test('Firestore Emulator standard transfer-market bids reserve, refund and settl
   const seller = await db.collection('players_v14').doc('standard-seller').get();
   const firstBidder = await db.collection('players_v14').doc('standard-bidder-1').get();
   const winner = await db.collection('players_v14').doc('standard-bidder-2').get();
-  assert.equal(seller.get('credits'), 480, 'seller receives 400 less the 5% commission');
+  assert.equal(seller.get('credits'), 575, 'seller receives 400 less the 5% commission');
   assert.equal(firstBidder.get('credits'), 1000, 'outbid manager receives the full refund');
-  assert.equal(winner.get('credits'), 600, 'settlement must not charge the escrowed winner twice');
+  assert.equal(winner.get('credits'), 500, 'settlement must not charge the escrowed winner twice');
   assert.deepEqual(seller.get('ownedPlayers'), []);
   assert.deepEqual(winner.get('ownedPlayers').map(player => player.id), ['standard-player']);
 
   const finalLedger = await db.collection('economy_transactions').where('referenceId', '==', 'standard-flow').get();
   const rows = finalLedger.docs.map(doc => doc.data());
-  assert.equal(rows.filter(row => row.type === 'SPECIAL_AUCTION_BID_ESCROW').reduce((sum, row) => sum - row.amount, 0), 600);
-  assert.equal(rows.filter(row => row.type === 'SPECIAL_AUCTION_OUTBID_REFUND').reduce((sum, row) => sum + row.amount, 0), 200);
-  assert.equal(rows.filter(row => row.type === 'SPECIAL_AUCTION_SETTLEMENT_CREDIT').reduce((sum, row) => sum + row.amount, 0), 380);
+  assert.equal(rows.filter(row => row.type === 'SPECIAL_AUCTION_BID_ESCROW').reduce((sum, row) => sum - row.amount, 0), 800);
+  assert.equal(rows.filter(row => row.type === 'SPECIAL_AUCTION_OUTBID_REFUND').reduce((sum, row) => sum + row.amount, 0), 300);
+  assert.equal(rows.filter(row => row.type === 'SPECIAL_AUCTION_SETTLEMENT_CREDIT').reduce((sum, row) => sum + row.amount, 0), 475);
   assert.equal((await db.collection('transfer_history').get()).size, 1);
 });
