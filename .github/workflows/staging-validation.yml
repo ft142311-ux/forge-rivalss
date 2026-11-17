@@ -4,10 +4,12 @@ on:
   push:
     branches:
       - hosting/vercel-free-staging
+      - hosting/vercel-staging
       - feature/season-lifecycle-autonomy
   pull_request:
     branches:
       - hosting/vercel-free-staging
+      - hosting/vercel-staging
   workflow_dispatch:
 
 permissions:
