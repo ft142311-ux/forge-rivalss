@@ -273,9 +273,9 @@ export async function placePlayerBidAction(idToken: string, marketId: string, am
   const db = getAdminDb();
 
   try {
-    const bid = Number(amount);
+    const bid = amount;
     if (typeof marketId !== 'string' || !marketId.trim() || marketId.length > 180 ||
-        !Number.isSafeInteger(bid) || bid <= 0) {
+        typeof bid !== 'number' || !Number.isSafeInteger(bid) || bid <= 0) {
       throw new Error('INVALID_BID');
     }
 
