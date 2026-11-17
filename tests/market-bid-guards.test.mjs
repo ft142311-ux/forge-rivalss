@@ -25,6 +25,7 @@ test('standard market price accepts only non-negative safe integer values', () =
   assert.equal(resolveMarketBidPrice(500, 100), 500);
   assert.equal(resolveMarketBidPrice(undefined, 100), 100);
   assert.equal(resolveMarketBidPrice(null, 100), 100);
+  assert.equal(resolveMarketBidPrice(0, 100), 100, 'zero current bid must not bypass the opening price');
   for (const value of [-1, 1.5, 'corrupt', '', NaN, Infinity, Number.MAX_SAFE_INTEGER + 1, false]) {
     assert.equal(resolveMarketBidPrice(value, 100), null);
   }
