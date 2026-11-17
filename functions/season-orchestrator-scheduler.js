@@ -111,7 +111,14 @@ async function invokeMarketExpirySweep({
     throw new Error('MARKET_EXPIRY_INVALID_RESPONSE');
   }
   if (payload?.success !== true) throw new Error('MARKET_EXPIRY_UNSUCCESSFUL');
-  return { success: true, status: response.status, settled: Number(payload.settled || 0) };
+  return {
+    success: true,
+    status: response.status,
+    settled: Number(payload.settled || 0),
+    complete: payload.complete === true,
+    continuation: payload.continuation === true,
+    busy: payload.busy === true,
+  };
 }
 
 module.exports = {
