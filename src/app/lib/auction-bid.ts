@@ -43,7 +43,11 @@ export async function placeSpecialMarketBidWithDb(
 
     const currentBid = resolveAuctionPrice(lot.currentBid, lot.startingPrice, 0);
     const minimumBid = Math.ceil(currentBid * 1.03);
-    const maxBid = resolveAuctionMaxBid(lot.maxBid, marketKind === 'youth' ? currentBid * 4 : Number(lot.startingPrice || currentBid) * 3);
+    const maxBidBase = marketKind === 'youth'
+      ? currentBid
+      : resolveAuctionMaxBid(lot.startingPrice, currentBid);
+    const defaultMaxBid = marketKind === 'youth' ? currentBid * 4 : maxBidBase * 3;
+    const maxBid = resolveAuctionMaxBid(lot.maxBid, defaultMaxBid);
     if (!Number.isSafeInteger(minimumBid) || !Number.isSafeInteger(maxBid) || maxBid < minimumBid) {
       throw new Error('MARKET_BID_LIMITS_INVALID');
     }
@@ -191,7 +195,8 @@ export async function placeStandardMarketBidWithDb(
     const currentBid = resolveMarketBidPrice(lot.currentBid, lot.startingPrice);
     if (currentBid === null) throw new Error('MARKET_PRICE_INVALID');
     const minimumBid = Math.ceil(currentBid * 1.03);
-    const maxBid = resolveAuctionMaxBid(lot.maxBid, Number(lot.startingPrice || currentBid) * 3);
+    const maxBidBase = resolveAuctionMaxBid(lot.startingPrice, currentBid);
+    const maxBid = resolveAuctionMaxBid(lot.maxBid, maxBidBase * 3);
     if (!Number.isSafeInteger(minimumBid) || !Number.isSafeInteger(maxBid) || maxBid < minimumBid) {
       throw new Error('MARKET_BID_LIMITS_INVALID');
     }
