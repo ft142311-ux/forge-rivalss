@@ -248,7 +248,9 @@ export async function listPlayerOnMarketAction(idToken: string, playerId: string
         expiresAt: expiry,
         bidders: [],
         createdAt: FieldValue.serverTimestamp(),
-        version: 140      });      // 2. Блокируем игрока у владельца
+        version: 140
+      });
+      // 2. Блокируем игрока у владельца
       players[idx] = { ...player, onTransferUntil: expiry, transferMarketId: agentId };
       t.update(playerRef, { ownedPlayers: players });
 
@@ -497,6 +499,7 @@ export async function applyMatchConsequencesAction(
         throw new Error('MATCH_MINUTES_UNAVAILABLE');
       }
       const verifiedMinutesPlayed = Math.min(120, Math.round(minutesPlayed));
+
       const data = profileSnap.data() || {};
       const players: Player[] = Array.isArray(data.ownedPlayers) ? data.ownedPlayers : [];
       const ownedIds = new Set(players.map(player => String(player.id)));
@@ -504,3 +507,75 @@ export async function applyMatchConsequencesAction(
       for (const id of ids) {
         if (!ownedIds.has(id)) throw new Error('MATCH_PLAYER_NOT_OWNED');
       }
+      const now = Date.now();
+      const hash = (value: string) => hash32(value) / 4294967296;
+
+      const updated = players.map(player => {
+        if (!ids.has(player.id)) return player;
+        const focus = player.trainingFocus || player.dailyTrainingFocus;
+        const progress = { ...(player.trainingProgress || {}) };
+        const caps = { ...(player.skillCaps || {}) };
+        const inclinations = { ...(player.skillInclinations || {}) };
+        const stats = { ...(player.proStats || {}) } as Record<string, number>;
+        const talents = { ...(player.proTalents || {}) } as Record<string, number>;
+        let nextFatigue = Math.max(0, Number(player.fatigue ?? 100) - (['league', 'cup', 'association'].includes(safeMatchType) ? 16 : 9));
+        let nextForm = Math.max(35, Math.min(100, Number(player.form ?? 100) + (verifiedMinutesPlayed >= 45 ? 1 : -1)));
+        let tilt = Math.max(0, Number(player.tilt || 0));
+
+        if (focus && Object.prototype.hasOwnProperty.call(stats, focus)) {
+          const current = Math.max(0, Number(stats[focus] || 0));
+          const talent = Math.max(0, Number(talents[focus] || 40));
+          const cap = Math.max(current + 1, Number(caps[focus] || Math.min(100, 45 + talent * 0.55)));
+          caps[focus] = cap;
+          const currentProgress = Number(progress[focus] || 0);
+          const age = Number(player.age || player.baseAge || 20);
+          const ageFactor = age < 22 ? 1.22 : age < 25 ? 1.08 : age < 29 ? 0.94 : 0.78;
+          const talentFactor = 0.70 + talent / 100;
+          const ceilingFactor = current >= cap * 0.90 ? 0.25 : current >= cap * 0.80 ? 0.55 : 1;
+          const minutesFactor = Math.max(0, Math.min(1.25, verifiedMinutesPlayed / 90));
+          const gain = 0.35 * ageFactor * talentFactor * ceilingFactor * minutesFactor;
+          const nextProgress = currentProgress + gain;
+          if (nextProgress >= 1 && current < cap) {
+            stats[focus] = Math.min(cap, current + Math.max(1, Math.floor(nextProgress)));
+            progress[focus] = nextProgress - Math.floor(nextProgress);
+          } else {
+            progress[focus] = nextProgress;
+          }
+        }
+
+        const tactics = data.tactics || {};
+        const risk = (tactics.aggression === 'high' ? 0.045 : 0.015) + (tactics.pressing === 'high' ? 0.02 : 0);
+        const resistance = Math.max(0, Math.min(100, Number(player.proStats?.tiltResistance || 0)));
+        const eventRoll = hash(`${safeMatchId}:${player.id}:discipline`);
+        if (eventRoll < risk * (1 - resistance / 180)) {
+          tilt = Math.min(100, tilt + 15);
+          if (['league', 'cup', 'association'].includes(safeMatchType) && eventRoll < risk * 0.22) {
+            const days = 1 + Math.floor(hash(`${safeMatchId}:${player.id}:ban`) * 3);
+            player = { ...player, suspensionUntil: new Date(now + days * 86400000).toISOString(), warningCount: Number(player.warningCount || 0) + 1 };
+          }
+        } else if (tilt > 0 && nextForm > 70) {
+          tilt = Math.max(0, tilt - 6);
+        }
+
+        return { ...player, proStats: stats, trainingProgress: progress, skillCaps: caps, skillInclinations: inclinations, fatigue: nextFatigue, form: nextForm, tilt };
+      });
+      t.update(profileRef, {
+        ownedPlayers: updated,
+        updatedAt: FieldValue.serverTimestamp(),
+        lastMatchConsequences: { matchId: safeMatchId, matchType: safeMatchType, minutesPlayed: verifiedMinutesPlayed },
+      });
+      t.create(receiptRef, {
+        userId,
+        matchId: safeMatchId,
+        matchType: safeMatchType,
+        playerIds: [...ids],
+        minutesPlayed: verifiedMinutesPlayed,
+        createdAt: FieldValue.serverTimestamp(),
+      });
+      return { duplicate: false };
+    });
+    return { success: true, duplicate: transactionResult.duplicate };
+  } catch (e: any) {
+    return { success: false, error: e?.message || 'MATCH_CONSEQUENCES_FAILED' };
+  }
+}
