@@ -7,6 +7,7 @@ import {
   resolveAuctionEscrow,
   resolvePreviousAuctionBidEscrow,
   resolveAuctionPrice,
+  resolveAuctionMaxBid,
   canPruneUnbidSystemAuctionLot,
 } from '../src/app/lib/auction-settlement.ts';
 
@@ -70,7 +71,7 @@ test('auction escrow requires an exact amount and matching currency', () => {
 });
 
 test('malformed recorded escrow fails closed instead of being treated as an empty legacy escrow', () => {
-  for (const escrowedAmount of ['corrupt', -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+  for (const escrowedAmount of ['corrupt', -1, 1.5, true, false, '   ', Number.MAX_SAFE_INTEGER + 1]) {
     assert.throws(() => resolveAuctionEscrow({
       currency: 'credits', escrowCurrency: 'credits', escrowedAmount,
       price: 500, bidderId: 'buyer-1', buyerExists: true,
@@ -121,6 +122,15 @@ test('new bids reject mismatched, incomplete, or unowned previous escrow', () =>
   }), /AUCTION_ESCROW_AMOUNT_INVALID/);
 });
 
+test('auction max bid rejects malformed and fractional configured limits without rounding', () => {
+  assert.equal(resolveAuctionMaxBid(undefined, 1200), 1200);
+  assert.equal(resolveAuctionMaxBid(0, 1200), 1200);
+  assert.equal(resolveAuctionMaxBid('1500', 1200), 1500);
+  for (const value of [true, false, 1.5, '1.5', '   ', 'invalid', -1, Number.MAX_SAFE_INTEGER + 1]) {
+    assert.throws(() => resolveAuctionMaxBid(value, 1200), /MARKET_BID_LIMITS_INVALID/);
+  }
+});
+
 test('daily system-lot rotation prunes only lots with no bidder and no escrow', () => {
   assert.equal(canPruneUnbidSystemAuctionLot({ highestBidderId: null, escrowedAmount: 0 }), true);
   assert.equal(canPruneUnbidSystemAuctionLot({}), true);
@@ -128,4 +138,11 @@ test('daily system-lot rotation prunes only lots with no bidder and no escrow', 
   assert.equal(canPruneUnbidSystemAuctionLot({ highestBidderUid: 'manager-1' }), false);
   assert.equal(canPruneUnbidSystemAuctionLot({ escrowedAmount: 500 }), false);
   assert.equal(canPruneUnbidSystemAuctionLot({ escrowedAmount: 'corrupt' }), false);
+  assert.equal(canPruneUnbidSystemAuctionLot({ escrowedAmount: false }), false);
+  assert.equal(canPruneUnbidSystemAuctionLot({ escrowedAmount: true }), false);
+});
+
+test('standard, PRO and youth bids use strict configured max-bid validation', async () => {
+  const source = readFileSync(new URL('../src/app/lib/auction-bid.ts', import.meta.url), 'utf8');
+  assert.equal((source.match(/resolveAuctionMaxBid\(/g) || []).length, 3);
 });
