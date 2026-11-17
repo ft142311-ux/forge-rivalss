@@ -921,11 +921,44 @@ test('Firestore Emulator processes expired auction lots page-by-page beyond the 
   }
   await batch.commit();
 
-  const result = await runTransferMarketExpirySweepWithDb(db);
-  assert.equal(result.success, true);
-  assert.equal(result.scanned, 205);
-  assert.equal(result.due, 205);
-  assert.equal(result.settled, 205);
-  assert.equal(result.expiredWithoutSale, 205);
+  const firstRun = await runTransferMarketExpirySweepWithDb(db, { maxPages: 1 });
+  assert.equal(firstRun.success, true);
+  assert.equal(firstRun.complete, false);
+  assert.equal(firstRun.continuation, true);
+  assert.equal(firstRun.scanned, 200);
+  assert.equal(firstRun.settled, 200);
+  assert.equal((await db.collection('market_v7').get()).size, 5);
+  const checkpoint = await db.collection('system_jobs_v1').doc('market_expiry_sweep').get();
+  assert.equal(checkpoint.get('cursorId'), 'page-lot-199');
+  assert.equal(checkpoint.get('leaseOwner'), null);
+
+  const secondRun = await runTransferMarketExpirySweepWithDb(db);
+  assert.equal(secondRun.success, true);
+  assert.equal(secondRun.complete, true);
+  assert.equal(secondRun.continuation, false);
+  assert.equal(secondRun.scanned, 5);
+  assert.equal(secondRun.due, 5);
+  assert.equal(secondRun.settled, 5);
+  assert.equal(secondRun.expiredWithoutSale, 5);
   assert.equal((await db.collection('market_v7').get()).size, 0);
+  assert.equal((await checkpoint.ref.get()).get('cursorId'), null);
+});
+
+test('Firestore Emulator prevents overlapping market expiry sweeps with an active lease', {
+  skip: !process.env.FIRESTORE_EMULATOR_HOST,
+}, async t => {
+  const { db } = await withIsolatedFirestore(t);
+  const lotRef = db.collection('market_v7').doc('lease-protected-lot');
+  await lotRef.set(expiredLot({ sellerId: '', highestBidderId: null }));
+  await db.collection('system_jobs_v1').doc('market_expiry_sweep').set({
+    leaseOwner: 'another-worker',
+    leaseUntilMs: Date.now() + 60_000,
+    cursorId: null,
+  });
+
+  const result = await runTransferMarketExpirySweepWithDb(db);
+  assert.equal(result.success, false);
+  assert.equal(result.busy, true);
+  assert.ok(result.errors.some(error => error.error === 'MARKET_EXPIRY_SWEEP_BUSY'));
+  assert.equal((await lotRef.get()).exists, true);
 });
