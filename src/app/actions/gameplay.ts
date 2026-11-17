@@ -244,11 +244,11 @@ export async function listPlayerOnMarketAction(idToken: string, playerId: string
         startingPrice: price,
         sellerId: userId,
         sellerName: pData.displayName || "Manager",
+        marketType: 'player',
         expiresAt: expiry,
         bidders: [],
         createdAt: FieldValue.serverTimestamp(),
-        version: 140      });
-      // 2. Блокируем игрока у владельца
+        version: 140      });      // 2. Блокируем игрока у владельца
       players[idx] = { ...player, onTransferUntil: expiry, transferMarketId: agentId };
       t.update(playerRef, { ownedPlayers: players });
 
@@ -497,7 +497,6 @@ export async function applyMatchConsequencesAction(
         throw new Error('MATCH_MINUTES_UNAVAILABLE');
       }
       const verifiedMinutesPlayed = Math.min(120, Math.round(minutesPlayed));
-
       const data = profileSnap.data() || {};
       const players: Player[] = Array.isArray(data.ownedPlayers) ? data.ownedPlayers : [];
       const ownedIds = new Set(players.map(player => String(player.id)));
