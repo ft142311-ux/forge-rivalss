@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useUser } from '@/firebase';
 import { useGameState } from '../lib/store';
@@ -10,6 +10,7 @@ import { Progress } from '@/components/ui/progress';
 import { ChevronLeft, Heart, Bus, Ticket, Mic2, Users, Loader2 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { foundationFanAction } from '@/app/actions/foundation-advanced';
+import { getFoundationFansAction } from '@/app/actions/foundation-management';
 import { LoadingScreen } from '@/components/game/LoadingScreen';
 
 export default function FansPage() {
@@ -18,7 +19,28 @@ export default function FansPage() {
   const { toast } = useToast();
   const [busy, setBusy] = useState<string|null>(null);
   const [fans, setFans] = useState({ mood:50, communitySize:1000, attendanceLast3:[] as number[], attendance:0 });
-  if (isUserLoading || !isLoaded || !user) return <LoadingScreen />;
+  const [isFansLoading, setIsFansLoading] = useState(true);
+
+  useEffect(() => {
+    if (!user) return;
+    let active = true;
+    const loadFans = async () => {
+      try {
+        const result = await getFoundationFansAction(await user.getIdToken(true));
+        if (!active) return;
+        if (!result.success || !('fans' in result)) throw new Error('FAN_DATA_LOAD_FAILED');
+        setFans(result.fans as any);
+      } catch (error: any) {
+        if (active) toast({ title: error?.message || 'FAN_DATA_LOAD_FAILED', variant: 'destructive' });
+      } finally {
+        if (active) setIsFansLoading(false);
+      }
+    };
+    void loadFans();
+    return () => { active = false; };
+  }, [user, toast]);
+
+  if (isUserLoading || !isLoaded || !user || isFansLoading) return <LoadingScreen />;
   const ru = language === 'ru';
   const actions = [
     ['fan_groups', ru?'Фан-группы':'Fan groups', ru?'Организовать группу из 1000 болельщиков':'Organize a 1,000-fan group', Users],
