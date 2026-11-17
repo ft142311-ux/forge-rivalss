@@ -30,6 +30,14 @@ test('standard market price accepts only non-negative safe integer values', () =
   }
 });
 
+test('standard player listings are discoverable by the quick-search market query', () => {
+  const source = readFileSync(new URL('../src/app/actions/gameplay.ts', import.meta.url), 'utf8');
+  const start = source.indexOf('export async function listPlayerOnMarketAction');
+  const end = source.indexOf('export async function placePlayerBidAction', start);
+  assert.ok(start >= 0 && end > start);
+  assert.ok(source.slice(start, end).includes("marketType: 'player'"));
+});
+
 test('standard market bid action fails closed before writing when expiry or price is invalid', () => {
   const source = readFileSync(new URL('../src/app/actions/gameplay.ts', import.meta.url), 'utf8');
   const start = source.indexOf('export async function placePlayerBidAction');
