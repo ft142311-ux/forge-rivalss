@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { FieldPath, FieldValue } from 'firebase-admin/firestore';
 import { isSystemAuctionSeller, normalizeAuctionBalance, resolveAuctionCurrency, resolveAuctionEscrow, resolveAuctionPrice } from './auction-settlement';
 
@@ -174,67 +175,194 @@ async function settleCandidate(candidate: any, db: any) {
     }
 }
 
-export async function runTransferMarketExpirySweepWithDb(db: any) {
-  const now = Date.now();
+export async function runTransferMarketExpirySweepWithDb(
+  db: any,
+  options: { maxRuntimeMs?: number; maxPages?: number; pageSize?: number; concurrency?: number; now?: () => number } = {},
+) {
+  const now = options.now || (() => Date.now());
+  const startedAt = now();
+  const maxRuntimeMs = Number.isSafeInteger(options.maxRuntimeMs) && options.maxRuntimeMs! > 0
+    ? options.maxRuntimeMs!
+    : 210_000;
+  const maxPages = Number.isSafeInteger(options.maxPages) && options.maxPages! > 0
+    ? options.maxPages!
+    : Number.POSITIVE_INFINITY;
+  const pageSize = Number.isSafeInteger(options.pageSize) && options.pageSize! > 0
+    ? options.pageSize!
+    : 200;
+  const concurrency = Number.isSafeInteger(options.concurrency) && options.concurrency! > 0
+    ? Math.min(options.concurrency!, 4)
+    : 4;
+  const leaseMs = 360_000;
   const market = db.collection('market_v7');
-  const pageSize = 200;
-  let cursor: any = null;
+  const stateRef = db.collection('system_jobs_v1').doc('market_expiry_sweep');
+  const ownerToken = randomUUID();
+  const errors: Array<{ id: string; error: string }> = [];
   let scanned = 0;
   let dueCount = 0;
   let settled = 0;
   let sold = 0;
   let expiredWithoutSale = 0;
   let skipped = 0;
-  const errors: Array<{ id: string; error: string }> = [];
-  // Avoid an unbounded collection read while still scanning every listing.
-  // Document-ID pagination is stable even when lots are deleted as they settle.
-  while (true) {
-    let query = market.orderBy(FieldPath.documentId()).limit(pageSize);
-    if (cursor) query = query.startAfter(cursor);
-    const page = await query.get();
-    if (page.empty) break;
-    scanned += page.size;
-    const pageDue: any[] = [];
-    for (const doc of page.docs) {
-      const lot = doc.data() || {};
-      if (lot.status === 'settled' || lot.status === 'expired') continue;
-      const raw = lot.expiresAt;
-      const expiresAt = raw && typeof raw.toMillis === 'function'
-        ? raw.toMillis()
-        : raw instanceof Date
-          ? raw.getTime()
-          : typeof raw === 'number'
-            ? raw
-            : typeof raw === 'string'
-              ? Date.parse(raw)
-              : NaN;
-      if (Number.isFinite(expiresAt) && expiresAt <= now) pageDue.push(doc);
+  let pages = 0;
+  let cursorId: string | null = null;
+  let leaseAcquired = false;
+  let complete = false;
+  let continuation = false;
+
+  const lease = await db.runTransaction(async (tx: any) => {
+    const snapshot = await tx.get(stateRef);
+    const state = snapshot.exists ? snapshot.data() || {} : {};
+    const activeUntil = typeof state.leaseUntilMs === 'number' ? state.leaseUntilMs : 0;
+    if (typeof state.leaseOwner === 'string' && state.leaseOwner && activeUntil > now()) {
+      return { acquired: false, cursorId: null };
     }
-    // Keep only one Firestore page of due lots in memory. A small concurrency
-    // bound improves throughput without creating an unbounded transaction fan-out.
-    dueCount += pageDue.length;
-    const concurrency = 4;
-    for (let offset = 0; offset < pageDue.length; offset += concurrency) {
-      const outcomes = await Promise.all(
-        pageDue.slice(offset, offset + concurrency).map((candidate) => settleCandidate(candidate, db)),
-      );
-      for (const outcome of outcomes) {
-        if (outcome.error) {
-          // Keep diagnostics bounded even if a large batch of lots is malformed.
-          if (errors.length < 50) errors.push(outcome.error);
-        }
-        else if (outcome.result === 'SOLD') { settled++; sold++; }
-        else if (outcome.result === 'EXPIRED') { settled++; expiredWithoutSale++; }
-        else skipped++;
-      }
-    }
-    cursor = page.docs[page.docs.length - 1];
-    if (page.size < pageSize) break;
+    const savedCursor = typeof state.cursorId === 'string' && state.cursorId ? state.cursorId : null;
+    tx.set(stateRef, {
+      leaseOwner: ownerToken,
+      leaseUntilMs: now() + leaseMs,
+      updatedAt: FieldValue.serverTimestamp(),
+    }, { merge: true });
+    return { acquired: true, cursorId: savedCursor };
+  });
+
+  if (!lease.acquired) {
+    return {
+      success: false, complete: false, continuation: true, busy: true,
+      scanned, due: dueCount, settled, sold, expiredWithoutSale, skipped,
+      errors: [{ id: 'market_expiry_sweep', error: 'MARKET_EXPIRY_SWEEP_BUSY' }],
+    };
   }
 
+  leaseAcquired = true;
+  cursorId = lease.cursorId;
+
+  const saveProgress = async (nextCursorId: string | null, finished: boolean) => {
+    await db.runTransaction(async (tx: any) => {
+      const snapshot = await tx.get(stateRef);
+      const state = snapshot.exists ? snapshot.data() || {} : {};
+      if (state.leaseOwner !== ownerToken) throw new Error('MARKET_EXPIRY_LEASE_LOST');
+      tx.set(stateRef, {
+        cursorId: finished ? null : nextCursorId,
+        leaseOwner: null,
+        leaseUntilMs: 0,
+        updatedAt: FieldValue.serverTimestamp(),
+        ...(finished ? { lastCompletedAt: FieldValue.serverTimestamp() } : {}),
+      }, { merge: true });
+    });
+    leaseAcquired = false;
+  };
+
+  try {
+    while (true) {
+      if (now() - startedAt >= maxRuntimeMs || pages >= maxPages) {
+        continuation = true;
+        break;
+      }
+
+      let query = market.orderBy(FieldPath.documentId()).limit(pageSize);
+      if (cursorId) query = query.startAfter(cursorId);
+      const page = await query.get();
+      if (page.empty) {
+        complete = true;
+        await saveProgress(null, true);
+        break;
+      }
+
+      scanned += page.size;
+      pages++;
+      const pageDue: any[] = [];
+      for (const doc of page.docs) {
+        const lot = doc.data() || {};
+        if (lot.status === 'settled' || lot.status === 'expired') continue;
+        const raw = lot.expiresAt;
+        const expiresAt = raw && typeof raw.toMillis === 'function'
+          ? raw.toMillis()
+          : raw instanceof Date
+            ? raw.getTime()
+            : typeof raw === 'number'
+              ? raw
+              : typeof raw === 'string'
+                ? Date.parse(raw)
+                : NaN;
+        if (Number.isFinite(expiresAt) && expiresAt <= now()) pageDue.push(doc);
+      }
+
+      dueCount += pageDue.length;
+      let pageCompleted = true;
+      for (let offset = 0; offset < pageDue.length; offset += concurrency) {
+        if (now() - startedAt >= maxRuntimeMs) {
+          pageCompleted = false;
+          continuation = true;
+          break;
+        }
+        const outcomes = await Promise.all(
+          pageDue.slice(offset, offset + concurrency).map((candidate) => settleCandidate(candidate, db)),
+        );
+        for (const outcome of outcomes) {
+          if (outcome.error) {
+            if (errors.length < 50) errors.push(outcome.error);
+          } else if (outcome.result === 'SOLD') {
+            settled++;
+            sold++;
+          } else if (outcome.result === 'EXPIRED') {
+            settled++;
+            expiredWithoutSale++;
+          } else {
+            skipped++;
+          }
+        }
+      }
+
+      // Never advance beyond a partially processed page. Settled lots are
+      // idempotently skipped on retry, while unprocessed lots remain reachable.
+      if (!pageCompleted) break;
+
+      cursorId = page.docs[page.docs.length - 1].id;
+      const lastPage = page.size < pageSize;
+      if (lastPage) {
+        complete = true;
+        await saveProgress(null, true);
+        break;
+      }
+      await saveProgress(cursorId, false);
+      leaseAcquired = true;
+      // saveProgress releases the short lease; reacquire it before continuing
+      // so another invocation cannot take over between pages.
+      const renewed = await db.runTransaction(async (tx: any) => {
+        const snapshot = await tx.get(stateRef);
+        const state = snapshot.exists ? snapshot.data() || {} : {};
+        if (state.leaseOwner && state.leaseOwner !== ownerToken && state.leaseUntilMs > now()) return false;
+        tx.set(stateRef, {
+          leaseOwner: ownerToken,
+          leaseUntilMs: now() + leaseMs,
+          updatedAt: FieldValue.serverTimestamp(),
+        }, { merge: true });
+        return true;
+      });
+      if (!renewed) throw new Error('MARKET_EXPIRY_LEASE_LOST');
+    }
+  } finally {
+    if (leaseAcquired) {
+      await db.runTransaction(async (tx: any) => {
+        const snapshot = await tx.get(stateRef);
+        const state = snapshot.exists ? snapshot.data() || {} : {};
+        if (state.leaseOwner === ownerToken) {
+          tx.set(stateRef, {
+            leaseOwner: null,
+            leaseUntilMs: 0,
+            updatedAt: FieldValue.serverTimestamp(),
+          }, { merge: true });
+        }
+      });
+    }
+  }
 
   return {
     success: errors.length === 0,
+    complete,
+    continuation: continuation || !complete,
+    busy: false,
     scanned,
     due: dueCount,
     settled,
