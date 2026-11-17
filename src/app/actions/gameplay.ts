@@ -8,6 +8,7 @@ import { Player, calculatePlayerMarketValue } from '@/app/lib/moba-data';
 import { requireServerActor } from '@/lib/server-auth';
 import { hash32 } from '@/app/lib/hash-utils';
 import { MATCH_REPORT_COLLECTIONS } from '@/app/lib/match-storage';
+import { resolveMarketBidExpiryMs, resolveMarketBidPrice } from '@/app/lib/market-bid-guards';
 
 /**
  * @fileOverview Защищенный слой игровых действий.
@@ -273,12 +274,13 @@ export async function placePlayerBidAction(idToken: string, marketId: string, am
 
   try {
     const bid = Number(amount);
-    if (!marketId || !Number.isFinite(bid) || bid <= 0) {
+    if (typeof marketId !== 'string' || !marketId.trim() || marketId.length > 180 ||
+        !Number.isSafeInteger(bid) || bid <= 0) {
       throw new Error('INVALID_BID');
     }
 
     return await db.runTransaction(async (t) => {
-      const marketRef = db.collection('market_v7').doc(String(marketId));
+      const marketRef = db.collection('market_v7').doc(marketId);
       const bidderRef = db.collection('players_v14').doc(userId);
       const marketSnap = await t.get(marketRef);
       if (!marketSnap.exists) throw new Error('MARKET_LOT_NOT_FOUND');
@@ -286,10 +288,12 @@ export async function placePlayerBidAction(idToken: string, marketId: string, am
       const lot: any = marketSnap.data() || {};
       if (lot.sellerId === userId) throw new Error('SELLER_CANNOT_BID');
 
-      const expiresAt = lot.expiresAt ? new Date(lot.expiresAt).getTime() : 0;
-      if (expiresAt && expiresAt <= Date.now()) throw new Error('MARKET_LOT_EXPIRED');
+      const expiresAt = resolveMarketBidExpiryMs(lot.expiresAt);
+      if (expiresAt === null) throw new Error('MARKET_EXPIRY_INVALID');
+      if (expiresAt <= Date.now()) throw new Error('MARKET_LOT_EXPIRED');
 
-      const currentBid = Number(lot.currentBid || lot.startingPrice || 0);
+      const currentBid = resolveMarketBidPrice(lot.currentBid, lot.startingPrice);
+      if (currentBid === null) throw new Error('MARKET_PRICE_INVALID');
       if (bid <= currentBid) throw new Error('BID_TOO_LOW');
 
       const bidderSnap = await t.get(bidderRef);
@@ -320,7 +324,7 @@ export async function placePlayerBidAction(idToken: string, marketId: string, am
 
       return {
         success: true,
-        marketId: String(marketId),
+        marketId,
         currentBid: bid,
         highestBidderId: userId,
       };
