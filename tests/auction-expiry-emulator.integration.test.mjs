@@ -196,6 +196,64 @@ test('Firestore Emulator keeps Youth bids in credits and applies the same escrow
   assert.equal(lot.get('escrowedAmount'), 250);
 });
 
+test('Firestore Emulator completes a Youth bid and expiry settlement in credits without touching crystals', {
+  skip: !emulatorHost,
+}, async t => {
+  const { db } = await withIsolatedFirestore(t);
+  const now = Date.now();
+  await db.collection('players_v14').doc('youth-seller').set({
+    credits: 100,
+    crystals: 900,
+    youthAcademyPlayers: [{ id: 'youth-player', name: 'Youth Player', onTransferUntil: 'reserved', transferMarketId: 'youth-flow' }],
+  });
+  await db.collection('players_v14').doc('youth-buyer').set({
+    credits: 800,
+    crystals: 500,
+    youthAcademyPlayers: [],
+  });
+  const lotRef = db.collection('market_v7').doc('youth-flow');
+  await lotRef.set({
+    sellerId: 'youth-seller',
+    isYouth: true,
+    currency: 'credits',
+    currentBid: 100,
+    startingPrice: 100,
+    highestBidderId: null,
+    bidders: [],
+    expiresAt: new Date(now + 60 * 60 * 1000).toISOString(),
+    heroData: { id: 'youth-player', name: 'Youth Player' },
+  });
+
+  await placeSpecialMarketBidWithDb(db, 'youth-buyer', 'youth-flow', 250, 'youth', now);
+  const afterBid = await db.collection('players_v14').doc('youth-buyer').get();
+  assert.equal(afterBid.get('credits'), 550);
+  assert.equal(afterBid.get('crystals'), 500);
+  await lotRef.update({ expiresAt: new Date(now - 1).toISOString() });
+
+  const result = await runTransferMarketExpirySweepWithDb(db);
+  assert.equal(result.success, true);
+  assert.equal(result.sold, 1);
+  assert.equal(result.expiredWithoutSale, 0);
+  assert.equal((await lotRef.get()).exists, false);
+
+  const seller = await db.collection('players_v14').doc('youth-seller').get();
+  const buyer = await db.collection('players_v14').doc('youth-buyer').get();
+  assert.equal(seller.get('credits'), 338, 'seller receives 250 less the 5% commission');
+  assert.equal(seller.get('crystals'), 900);
+  assert.deepEqual(seller.get('youthAcademyPlayers'), []);
+  assert.equal(buyer.get('credits'), 550, 'winner is not charged a second time');
+  assert.equal(buyer.get('crystals'), 500);
+  assert.deepEqual(buyer.get('youthAcademyPlayers').map(player => player.id), ['youth-player']);
+
+  const ledger = await db.collection('economy_transactions').where('referenceId', '==', 'youth-flow').get();
+  const rows = ledger.docs.map(doc => doc.data());
+  assert.equal(rows.filter(row => row.type === 'SPECIAL_AUCTION_BID_ESCROW').reduce((sum, row) => sum - row.amount, 0), 250);
+  assert.equal(rows.filter(row => row.type === 'SPECIAL_AUCTION_SETTLEMENT_CREDIT').reduce((sum, row) => sum + row.amount, 0), 238);
+  assert.equal(rows.some(row => row.currency !== 'credits'), false);
+  assert.equal((await db.collection('transfer_history').get()).size, 1);
+});
+
+
 test('Firestore Emulator serializes concurrent bids and rejects a stale lower bid without overcharging', {
   skip: !emulatorHost,
 }, async t => {
