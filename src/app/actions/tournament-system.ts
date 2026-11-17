@@ -11,7 +11,7 @@ import { buildMatchTeamSnapshot, createDeterministicBotSquad } from '@/app/lib/m
 import { runMatchEngine } from '@/app/lib/match-engine';
 import { MATCH_COLLECTIONS } from '@/app/lib/match-storage';
 import { isTournamentMatchLeaseExpired, TOURNAMENT_MATCH_LEASE_MS } from '@/app/lib/tournament-match-lease';
-import { getTournamentStageMatchKey, isTournamentStageMatchComplete } from '@/app/lib/tournament-stage-utils';
+import { isTournamentStageMatchSetComplete } from '@/app/lib/tournament-stage-utils';
 
 const TOURNAMENTS = [
   { id: 'iron-kettle', name: 'Чугунный чайник', type: 'Тов', maxParticipants: 16, start: '10:00' },
@@ -596,22 +596,16 @@ async function resolveTournamentMatch(db: any, tournamentId: string, matchId: st
   }
 }
 
-async function stageMatchesDone(tournamentRef: any, stage: string, expectedCount: number) {
+async function stageMatchesDone(tournamentRef: any, stage: string, expectedCount: number, maxParticipants: number) {
   const snap = await tournamentRef.collection('matches').where('stage', '==', stage).get();
-  // Этап завершён только при полном ожидаемом наборе уникальных матчей.
-  // Ошибка симуляции, пропущенный матч или дубликат не должны продвигать сетку.
+  // Count alone is insufficient: a malformed set can contain the right number
+  // of unique but out-of-range fixtures. Require the exact canonical matrix.
   if (snap.docs.length !== expectedCount) return false;
-  const ids = new Set<string>();
-  for (const doc of snap.docs) {
-    const match = doc.data() || {};
-    if (!isTournamentStageMatchComplete(match, stage)) return false;
-    // Group match indices repeat by group and round; the composite key must not
-    // mistake valid fixtures for duplicates or allow a duplicated fixture through.
-    const key = getTournamentStageMatchKey(match, stage, doc.id);
-    if (!key || ids.has(key)) return false;
-    ids.add(key);
-  }
-  return true;
+  return isTournamentStageMatchSetComplete(
+    snap.docs.map((doc: any) => ({ id: doc.id, data: doc.data() || {} })),
+    stage,
+    maxParticipants,
+  );
 }
 
 function expectedStageMatchCount(maxParticipants: number, stage: string) {
@@ -731,7 +725,7 @@ async function advanceTournament(db: any, tournament: any, now: number) {
   const ref = db.collection('tournaments_v1').doc(tournament.id);
   const stage = tournament.stage as Stage;
   if (stage === 'groups') {
-    if (!(await stageMatchesDone(ref, 'groups', expectedStageMatchCount(Number(tournament.maxParticipants), 'groups')))) return false;
+    if (!(await stageMatchesDone(ref, 'groups', expectedStageMatchCount(Number(tournament.maxParticipants), 'groups'), Number(tournament.maxParticipants)))) return false;
     const groupsSnap = await ref.collection('groups').get();
     const expectedGroups = Number(tournament.maxParticipants) / 4;
     if (groupsSnap.docs.length !== expectedGroups) return false;
@@ -768,7 +762,7 @@ async function advanceTournament(db: any, tournament: any, now: number) {
   }
 
   if (['round_of_16', 'quarterfinal', 'semifinal'].includes(stage)) {
-    if (!(await stageMatchesDone(ref, stage, expectedStageMatchCount(Number(tournament.maxParticipants), stage)))) return false;
+    if (!(await stageMatchesDone(ref, stage, expectedStageMatchCount(Number(tournament.maxParticipants), stage), Number(tournament.maxParticipants)))) return false;
     const matches = await ref.collection('matches').where('stage', '==', stage).get();
     const ordered = matches.docs.sort((a: any, b: any) => Number(a.data()?.index || 0) - Number(b.data()?.index || 0));
     const stageExpected = expectedStageMatchCount(Number(tournament.maxParticipants), stage);
@@ -790,7 +784,7 @@ async function advanceTournament(db: any, tournament: any, now: number) {
   }
 
   if (stage === 'final') {
-    if (!(await stageMatchesDone(ref, 'final', 1))) return false;
+    if (!(await stageMatchesDone(ref, 'final', 1, Number(tournament.maxParticipants)))) return false;
     const finalSnap = await ref.collection('matches').where('stage', '==', 'final').limit(1).get();
     const finalMatch = finalSnap.docs[0]?.data();
     if (!finalMatch?.winnerId) return false;
