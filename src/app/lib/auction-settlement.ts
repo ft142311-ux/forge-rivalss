@@ -41,9 +41,30 @@ export function resolveAuctionPrice(currentBid: unknown, startingPrice: unknown,
 
 function resolveRecordedEscrowAmount(value: unknown): number {
   if (value === undefined || value === null || value === '') return 0;
+  if (typeof value !== 'number' && typeof value !== 'string') {
+    throw new Error('AUCTION_ESCROW_AMOUNT_INVALID');
+  }
+  if (typeof value === 'string' && value.trim() === '') {
+    throw new Error('AUCTION_ESCROW_AMOUNT_INVALID');
+  }
   const amount = Number(value);
   if (!Number.isSafeInteger(amount) || amount < 0) {
     throw new Error('AUCTION_ESCROW_AMOUNT_INVALID');
+  }
+  return amount;
+}
+
+export function resolveAuctionMaxBid(value: unknown, fallback: number): number {
+  const raw = value === undefined || value === null || value === '' || value === 0 ? fallback : value;
+  if (typeof raw !== 'number' && typeof raw !== 'string') {
+    throw new Error('MARKET_BID_LIMITS_INVALID');
+  }
+  if (typeof raw === 'string' && raw.trim() === '') {
+    throw new Error('MARKET_BID_LIMITS_INVALID');
+  }
+  const amount = Number(raw);
+  if (!Number.isSafeInteger(amount) || amount < 0) {
+    throw new Error('MARKET_BID_LIMITS_INVALID');
   }
   return amount;
 }
@@ -122,6 +143,8 @@ export function canPruneUnbidSystemAuctionLot(lot: any): boolean {
   if (rawEscrow === undefined || rawEscrow === null || rawEscrow === 0 || rawEscrow === '0' || rawEscrow === '') {
     return true;
   }
+  if (typeof rawEscrow !== 'number' && typeof rawEscrow !== 'string') return false;
+  if (typeof rawEscrow === 'string' && rawEscrow.trim() === '') return false;
   const amount = Number(rawEscrow);
   return Number.isSafeInteger(amount) && amount === 0;
 }
