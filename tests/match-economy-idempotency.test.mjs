@@ -35,6 +35,8 @@ test('match revenue rejects malformed, negative, fractional and overflowing club
   const balanceGuard = action.indexOf("throw new Error('INVALID_MATCH_ECONOMY_BALANCE')");
   const firstWrite = action.indexOf('t.update(playerRef');
   assert.ok(balanceRead >= 0 && balanceGuard > balanceRead && firstWrite > balanceGuard);
+  assert.match(action, /typeof rawBalance !== 'number' && typeof rawBalance !== 'string'/);
+  assert.match(action, /typeof rawBalance === 'string' && rawBalance\.trim\(\)\.length === 0/);
   assert.match(action, /Number\.isSafeInteger\(before\) \|\| before < 0/);
   assert.match(action, /Number\.isSafeInteger\(after\) \|\| after < 0/);
   assert.match(action, /const after = before \+ amount/);
@@ -59,4 +61,11 @@ test('authoritative autonomous match settlement rejects malformed and overflowin
   assert.ok(balanceRead >= 0 && balanceGuard > balanceRead && firstWrite > balanceGuard);
   assert.match(action, /Number\.isSafeInteger\(before\) \|\| before < 0/);
   assert.match(action, /Number\.isSafeInteger\(after\) \|\| after < 0/);
+});
+
+test('autonomous salary and match settlement reject boolean or malformed stored balances', () => {
+  assert.match(autonomous, /function readSafeNonNegativeBalance\(value: unknown, errorCode: string\)/);
+  assert.match(autonomous, /readSafeNonNegativeBalance\(data\.credits, 'INVALID_SALARY_BALANCE'\)/);
+  assert.match(autonomous, /readSafeNonNegativeBalance\(homePlayerData\.credits, 'INVALID_MATCH_ECONOMY_BALANCE'\)/);
+  assert.doesNotMatch(autonomous, /Math\.max\(0, Number\(data\.credits \|\| 0\)\)/);
 });
