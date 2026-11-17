@@ -28,6 +28,18 @@ test('replayed match revenue receipts are accepted only for the same user, match
   assert.match(action, /throw new Error\('IDEMPOTENCY_KEY_REUSED'\)/);
 });
 
+test('match revenue rejects malformed, negative, fractional and overflowing club balances', () => {
+  const start = source.indexOf('export async function recordMatchEconomy');
+  const action = source.slice(start);
+  const balanceRead = action.indexOf('const rawBalance = player.credits');
+  const balanceGuard = action.indexOf("throw new Error('INVALID_MATCH_ECONOMY_BALANCE')");
+  const firstWrite = action.indexOf('t.update(playerRef');
+  assert.ok(balanceRead >= 0 && balanceGuard > balanceRead && firstWrite > balanceGuard);
+  assert.match(action, /Number\.isSafeInteger\(before\) \|\| before < 0/);
+  assert.match(action, /Number\.isSafeInteger\(after\) \|\| after < 0/);
+  assert.match(action, /const after = before \+ amount/);
+});
+
 test('match revenue credits and ledger receipt use the same validated integer amount', () => {
   const start = source.indexOf('export async function recordMatchEconomy');
   const action = source.slice(start);
