@@ -66,7 +66,7 @@ test('email verification uses a cryptographic code and caps failed attempts', ()
 test('transfer-market expiry sweep paginates instead of loading the full collection at once', () => {
   const source = read('src/app/lib/auction-expiry-sweep.ts');
   assert.match(source, /market\.orderBy\(FieldPath\.documentId\(\)\)\.limit\(pageSize\)/);
-  assert.match(source, /scanned,\s*due: due\.length/);
+  assert.match(source, /scanned,\s*due: dueCount/);
 });
 
 test('cron routes pass the configured secret into internal worker actions', () => {
