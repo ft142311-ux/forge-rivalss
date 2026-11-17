@@ -4,7 +4,8 @@
 import React, { createContext, useContext, ReactNode, useMemo, useState, useEffect } from 'react';
 import { FirebaseApp } from 'firebase/app';
 import { Firestore } from 'firebase/firestore';
-import { Auth, onAuthStateChanged, User, signOut } from 'firebase/auth';
+import { Auth, onIdTokenChanged, User, signOut } from 'firebase/auth';
+import { recordUserActivityAction } from '@/app/actions/user-activity';
 
 /**
  * ПРОВАЙДЕР FIREBASE v3.1 (Passive Mode).
@@ -48,7 +49,7 @@ export const FirebaseProvider: React.FC<{ children: ReactNode; firebaseApp: Fire
     }
 
     let authChangeSequence = 0;
-    const unsubscribe = onAuthStateChanged(
+    const unsubscribe = onIdTokenChanged(
       auth,
       async (user) => {
         const sequence = ++authChangeSequence;
@@ -58,11 +59,34 @@ export const FirebaseProvider: React.FC<{ children: ReactNode; firebaseApp: Fire
         }
 
         try {
-          // Force Firebase to issue/refresh the ID token on each new auth session.
-          // Do not mark the app as ready until the refresh has completed.
-          await user.getIdToken(true);
+          // onIdTokenChanged fires on initial sign-in and on scheduled token
+          // refreshes. Read the current token without forcing another refresh:
+          // forcing here would recursively trigger this listener.
+          // Each verified token event also refreshes the server-side activity
+          // heartbeat, so a long-lived active tab is not mistaken for inactivity.
+          const idToken = await user.getIdToken();
           if (sequence !== authChangeSequence || auth.currentUser?.uid !== user.uid) return;
-          setUserAuthState({ user, isUserLoading: false, userError: null });
+
+          // A persistent Firebase session can open the game without a new
+          // password login. Record each verified app entry, not just Auth's
+          // lastSignInTime, so active managers are never retired by mistake.
+          const activity = await recordUserActivityAction(idToken);
+          if (sequence !== authChangeSequence || auth.currentUser?.uid !== user.uid) return;
+          const terminalActivityError = [
+            'ACCOUNT_DISABLED',
+            'ACCOUNT_RETIRING',
+            'ACCOUNT_RETIRED',
+            'AUTH_TOKEN_REVOKED',
+            'AUTH_TOKEN_INVALID',
+          ].includes(String(activity?.error || ''));
+          if (terminalActivityError) {
+            try { await signOut(auth); } catch { /* Auth listener settles state. */ }
+            return;
+          }
+          if (!activity?.success) {
+            console.warn('[AUTH ACTIVITY] Session activity was not acknowledged:', activity?.error || 'UNKNOWN');
+          }
+          setUserAuthState({ user, isUserLoading: false, userError: activity?.success ? null : new Error('USER_ACTIVITY_NOT_RECORDED') });
         } catch (error: any) {
           if (sequence !== authChangeSequence) return;
           const code = String(error?.code || '').toLowerCase();

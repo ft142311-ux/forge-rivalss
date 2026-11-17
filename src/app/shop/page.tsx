@@ -39,6 +39,57 @@ import {
   createShopPlayerAction,
 } from '@/app/actions/shop';
 
+const DIAMOND_OPERATION_PREFIX = 'forge-rivals:shop-operation:diamonds';
+
+function getPendingDiamondOperationId(userId: string, amount: number): string {
+  const key = `${DIAMOND_OPERATION_PREFIX}:${userId}:${amount}`;
+  const existing = window.localStorage.getItem(key);
+  if (existing) return existing;
+  const operationId = typeof crypto !== 'undefined' && 'randomUUID' in crypto
+    ? crypto.randomUUID().replace(/-/g, '')
+    : `${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`;
+  window.localStorage.setItem(key, operationId);
+  return operationId;
+}
+
+function clearPendingDiamondOperationId(userId: string, amount: number): void {
+  window.localStorage.removeItem(`${DIAMOND_OPERATION_PREFIX}:${userId}:${amount}`);
+}
+
+const EXCHANGE_OPERATION_PREFIX = 'forge-rivals:shop-operation:exchange';
+
+function getPendingExchangeOperationId(userId: string, amount: number): string {
+  const key = `${EXCHANGE_OPERATION_PREFIX}:${userId}:${amount}`;
+  const existing = window.localStorage.getItem(key);
+  if (existing) return existing;
+  const operationId = typeof crypto !== 'undefined' && 'randomUUID' in crypto
+    ? crypto.randomUUID().replace(/-/g, '')
+    : `${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`;
+  window.localStorage.setItem(key, operationId);
+  return operationId;
+}
+
+function clearPendingExchangeOperationId(userId: string, amount: number): void {
+  window.localStorage.removeItem(`${EXCHANGE_OPERATION_PREFIX}:${userId}:${amount}`);
+}
+
+const PLAYER_CREATION_OPERATION_PREFIX = 'forge-rivals:shop-operation:player-creation';
+
+function getPendingPlayerCreationOperationId(userId: string, fingerprint: string): string {
+  const key = `${PLAYER_CREATION_OPERATION_PREFIX}:${userId}:${fingerprint}`;
+  const existing = window.localStorage.getItem(key);
+  if (existing) return existing;
+  const operationId = typeof crypto !== 'undefined' && 'randomUUID' in crypto
+    ? crypto.randomUUID().replace(/-/g, '')
+    : `${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`;
+  window.localStorage.setItem(key, operationId);
+  return operationId;
+}
+
+function clearPendingPlayerCreationOperationId(userId: string, fingerprint: string): void {
+  window.localStorage.removeItem(`${PLAYER_CREATION_OPERATION_PREFIX}:${userId}:${fingerprint}`);
+}
+
 type ShopTab = 
   | 'menu'
   | 'diamonds' 
@@ -59,6 +110,7 @@ export default function ShopPage() {
   const [isProcessing, setIsProcessing] = useState(false);
   const { toast } = useToast();
   const { user } = useUser();
+  const isPremiumActive = isPremium && Boolean(premiumUntil) && new Date(premiumUntil!).getTime() > Date.now();
 
   const [heroNickname, setHeroNickname] = useState('');
   const [heroRole, setHeroRole] = useState<Role>('Carry');
@@ -275,16 +327,24 @@ export default function ShopPage() {
 
   const handleCreatePlayer = async () => {
     const country = COUNTRIES.find(c => c.code === heroCountryCode) || COUNTRIES[0];
+    const nickname = heroNickname.trim().replace(/\s+/g, ' ');
+    const fingerprint = JSON.stringify([nickname, heroRole, Number(heroTalent), Number(heroAge), country.code, country.name, country.flag]);
+    const userId = user?.uid || 'unknown';
     try {
       setIsProcessing(true);
+      const operationId = getPendingPlayerCreationOperationId(userId, fingerprint);
       const res = await createShopPlayerAction(await getToken(), {
-        nickname: heroNickname.trim(),
+        nickname,
         role: heroRole,
         talent: Number(heroTalent),
         age: Number(heroAge),
         country: { code: country.code, name: country.name, flag: country.flag },
-      });
-      if ('error' in res) throw new Error(res.error || 'PLAYER_CREATION_FAILED');
+      }, operationId);
+      if (!res.success) {
+        clearPendingPlayerCreationOperationId(userId, fingerprint);
+        throw new Error(res.error || 'PLAYER_CREATION_FAILED');
+      }
+      clearPendingPlayerCreationOperationId(userId, fingerprint);
       toast({ title: ('isYouth' in res && res.isYouth) ? 'Игрок отправлен в Академию!' : 'Игрок добавлен в состав!' });
       setHeroNickname('');
       setActiveTab('menu');
@@ -298,8 +358,13 @@ export default function ShopPage() {
   const handleBuyDiamonds = async (amount: number) => {
     try {
       setIsProcessing(true);
-      const res = await purchaseDiamondPackAction(await getToken(), amount);
-      if ('error' in res && res.error) throw new Error(res.error || 'DIAMOND_PURCHASE_FAILED');
+      const operationId = getPendingDiamondOperationId(user?.uid || 'unknown', amount);
+      const res = await purchaseDiamondPackAction(await getToken(), amount, operationId);
+      if (!res.success) {
+        clearPendingDiamondOperationId(user?.uid || 'unknown', amount);
+        throw new Error(res.error || 'DIAMOND_PURCHASE_FAILED');
+      }
+      clearPendingDiamondOperationId(user?.uid || 'unknown', amount);
       toast({
         title: res.pending
           ? (language === 'ru' ? 'Заказ создан. Ожидается подтверждение платежа.' : 'Order created. Payment confirmation required.')
@@ -329,8 +394,13 @@ export default function ShopPage() {
   const handleExchange = async (amount: number) => {
     try {
       setIsProcessing(true);
-      const res = await exchangeCrystalsForCreditsAction(await getToken(), amount);
-      if ('error' in res) throw new Error(res.error || 'EXCHANGE_FAILED');
+      const operationId = getPendingExchangeOperationId(user?.uid || 'unknown', amount);
+      const res = await exchangeCrystalsForCreditsAction(await getToken(), amount, operationId);
+      if (!res.success) {
+        clearPendingExchangeOperationId(user?.uid || 'unknown', amount);
+        throw new Error(res.error || 'EXCHANGE_FAILED');
+      }
+      clearPendingExchangeOperationId(user?.uid || 'unknown', amount);
       toast({ title: language === 'ru' ? `Обменено ${amount} 💎 на €${(amount * 10000).toLocaleString()}` : 'Assets converted' });
     } catch (e: any) {
       toast({ title: e?.message || t.insufficient, variant: 'destructive' });
@@ -490,7 +560,7 @@ export default function ShopPage() {
             </div>
 
             <div className="pt-4">
-              {isPremium ? (
+              {isPremiumActive ? (
                 <div className="p-4 bg-green-500/10 border border-green-500/20 rounded-xl text-center space-y-2">
                   <p className="text-xs font-black text-green-400 uppercase tracking-widest">{t.premiumInfo.active}</p>
                   <p className="text-[10px] text-muted-foreground uppercase">{t.premiumInfo.expires}: {new Date(premiumUntil!).toLocaleDateString()}</p>

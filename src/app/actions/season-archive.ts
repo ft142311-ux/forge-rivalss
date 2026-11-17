@@ -1,5 +1,6 @@
 import { calculateGroupStandings, hasCompleteCanonicalFixtureSet } from './season-rollover-standings';
-import { expectedRolloverGroups, validateRolloverPlan } from './season-rollover-plan';
+import { buildCarryForwardGroups, buildPromotionRelegationGroups, expectedRolloverGroups, validateRolloverPlan } from './season-rollover-plan';
+import { isRolloverPlanPublicationReady } from './season-awards-policy';
 
 const MATCHES_PER_SEASON = 840;
 
@@ -63,6 +64,7 @@ export function validateSeasonArchiveSnapshot(archive: any, matches: any[]) {
   const standings = archive?.standings && typeof archive.standings === 'object' ? archive.standings : {};
   const expectedGroups = expectedRolloverGroups();
   if (Object.keys(standings).length !== expectedGroups.length) reasons.push('ARCHIVE_STANDINGS_GROUP_COUNT_INVALID');
+  const globalTeamIds = new Set<string>();
   for (const key of expectedGroups) {
     const fixtures = byGroup.get(key) || [];
     if (!hasCompleteCanonicalFixtureSet(fixtures, 8)) {
@@ -86,12 +88,17 @@ export function validateSeasonArchiveSnapshot(archive: any, matches: any[]) {
       const actual = computed[index];
       const id = String(saved.id || '');
       const rank = Number(saved.rank);
+      if (id && globalTeamIds.has(id)) {
+        reasons.push(`ARCHIVE_TEAM_ID_DUPLICATED:${key}:${id}`);
+        break;
+      }
       if (!id || ids.has(id) || !Number.isInteger(rank) || ranks.has(rank) || rank !== index + 1 || id !== String(actual.id) ||
           ['matchesPlayed', 'wins', 'draws', 'losses', 'points', 'diff'].some(field => Number(saved[field]) !== Number((actual as any)[field]))) {
         reasons.push(`ARCHIVE_STANDINGS_MISMATCH:${key}`);
         break;
       }
       ids.add(id);
+      globalTeamIds.add(id);
       ranks.add(rank);
     }
   }
@@ -99,12 +106,35 @@ export function validateSeasonArchiveSnapshot(archive: any, matches: any[]) {
   return { valid: reasons.length === 0, reasons: [...new Set(reasons)] };
 }
 
+/** Ensure a persisted rollover plan is the exact deterministic movement derived from its validated final archive. */
+export function validateSeasonArchiveRolloverPlan(archive: any, rolloverPlan: any) {
+  const sourceSeason = Number(archive?.sourceSeason);
+  const planValidation = validateRolloverPlan(rolloverPlan, sourceSeason, sourceSeason + 1);
+  if (!planValidation.valid) return planValidation;
+
+  const expected = buildPromotionRelegationGroups(archive?.standings || {});
+  if (!expected.ready) {
+    return { valid: false, reason: 'ARCHIVE_ROLLOVER_PLACEMENTS_INVALID', group: expected.group };
+  }
+  for (const key of expectedRolloverGroups()) {
+    const expectedRows = expected.groups[key] || [];
+    const savedRows = rolloverPlan?.groups?.[key] || [];
+    if (expectedRows.length !== 8 || savedRows.length !== 8 ||
+        expectedRows.some((row: any, index: number) =>
+          String(row?.id || '') !== String(savedRows[index]?.id || '') ||
+          Number(row?.rank) !== Number(savedRows[index]?.rank))) {
+      return { valid: false, reason: 'ARCHIVE_ROLLOVER_PLAN_MISMATCH', group: key };
+    }
+  }
+  return { valid: true };
+}
+
 /** An archive becomes visible only after the snapshot and its rollover plan are valid. */
 export function isSeasonArchiveReadyToComplete(archive: any, matches: any[], rolloverPlan: any): boolean {
   const snapshot = validateSeasonArchiveSnapshot(archive, matches);
-  const sourceSeason = Number(archive?.sourceSeason);
   return snapshot.valid &&
-    validateRolloverPlan(rolloverPlan, sourceSeason, sourceSeason + 1).valid;
+    validateSeasonArchiveRolloverPlan(archive, rolloverPlan).valid &&
+    isRolloverPlanPublicationReady(rolloverPlan);
 }
 
 /** Client list gate: unfinished, partial, or malformed archives stay hidden. */
@@ -136,28 +166,43 @@ export function isCompletedSeasonArchive(archive: any): boolean {
  * by the completed-season or rollover gates.
  */
 export function isRecoveredSeasonArchive(archive: any): boolean {
+  const sourceSeason = Number(archive?.sourceSeason);
+  const finishedMatches = Number(archive?.finishedMatches);
+  const unresolvedMatches = Number(archive?.unresolvedMatches);
+  const recoveredAt = Date.parse(String(archive?.recoveredAt || ''));
   if (archive?.status !== 'recovered' || archive?.recovery?.status !== 'incomplete' ||
-      archive?.recovery?.finalStandingsAvailable !== false || !archive?.recoveredAt ||
-      !Number.isSafeInteger(Number(archive?.sourceSeason)) || Number(archive.sourceSeason) < 1 ||
+      archive?.recovery?.finalStandingsAvailable !== false ||
+      !String(archive?.recovery?.reason || '').trim() ||
+      !Number.isSafeInteger(sourceSeason) || sourceSeason < 1 ||
+      !Number.isFinite(recoveredAt) ||
       archive?.leagueId !== 'ALPHA' || Number(archive?.archiveVersion) !== 1 ||
       Number(archive?.expectedMatches) !== MATCHES_PER_SEASON ||
-      !archive?.standings || typeof archive.standings !== 'object' || Object.keys(archive.standings).length !== 0) return false;
+      Number(archive?.groups) !== 15 || Number(archive?.teamCount) !== 120 ||
+      !Number.isInteger(finishedMatches) || finishedMatches < 0 || finishedMatches > MATCHES_PER_SEASON ||
+      !Number.isInteger(unresolvedMatches) || unresolvedMatches < 0 || unresolvedMatches > MATCHES_PER_SEASON ||
+      finishedMatches + unresolvedMatches !== MATCHES_PER_SEASON ||
+      !archive?.standings || typeof archive.standings !== 'object' || Array.isArray(archive.standings) ||
+      Object.keys(archive.standings).length !== 0) return false;
   const participants = archive?.startingParticipants;
-  if (!participants || typeof participants !== 'object') return false;
+  if (!participants || typeof participants !== 'object' || Array.isArray(participants)) return false;
   const expected = expectedRolloverGroups();
+  if (Object.keys(participants).length !== expected.length ||
+      Object.keys(participants).some(group => !expected.includes(group))) return false;
   const ids = new Set<string>();
   for (const group of expected) {
     const rows = participants[group];
     if (!Array.isArray(rows) || rows.length !== 8) return false;
+    const ranks = new Set<number>();
     for (const row of rows) {
       const id = String(row?.id || '');
       const rank = Number(row?.rank);
-      if (!id || ids.has(id) || !Number.isInteger(rank) || rank < 1 || rank > 8) return false;
+      if (!id || ids.has(id) || !Number.isInteger(rank) || rank < 1 || rank > 8 || ranks.has(rank)) return false;
       ids.add(id);
+      ranks.add(rank);
     }
+    if (ranks.size !== 8) return false;
   }
-  return ids.size === 120 && Number(archive.finishedMatches || 0) <= MATCHES_PER_SEASON &&
-    Number(archive.unresolvedMatches || 0) === MATCHES_PER_SEASON - Number(archive.finishedMatches || 0);
+  return ids.size === 120;
 }
 
 function getUniqueSeasonArchives(
@@ -182,4 +227,146 @@ export function getVisibleSeasonArchives(archives: any[]): any[] {
 
 export function getCompletedSeasonArchives(archives: any[]): any[] {
   return getUniqueSeasonArchives(archives, isCompletedSeasonArchive);
+}
+
+
+/**
+ * Validate the complete archive-retention set before deleting anything.
+ * A PRUNING marker is written only after this function has approved the set;
+ * it makes interrupted subcollection deletion safely resumable.
+ */
+export function resolveArchivePrunePlan(
+  archives: Array<{ id: string; archive: any; matches: any[]; historyStatus?: string | null }>,
+  targetSeason: number,
+  retainedArchiveSeason: number | null,
+) {
+  if (!Number.isSafeInteger(targetSeason) || targetSeason < 2 ||
+      (retainedArchiveSeason !== null && (!Number.isSafeInteger(retainedArchiveSeason) ||
+        retainedArchiveSeason < 1 || retainedArchiveSeason >= targetSeason))) {
+    return { ready: false as const, reason: 'ARCHIVE_PRUNE_TARGET_INVALID', pruneIds: [] as string[] };
+  }
+  const completedSeasons: number[] = [];
+  const pruneIds: string[] = [];
+  let retainedFound = retainedArchiveSeason === null;
+
+  for (const item of archives) {
+    const match = /^S([1-9]\d*)$/.exec(String(item.id || ''));
+    const season = match ? Number(match[1]) : NaN;
+    const archive = item.archive || {};
+    if (!Number.isSafeInteger(season) || season >= targetSeason ||
+        Number(archive.sourceSeason) !== season) {
+      return { ready: false as const, reason: 'ARCHIVE_PRUNE_IDENTITY_CONFLICT', archiveId: item.id, pruneIds: [] as string[] };
+    }
+
+    if (isCompletedSeasonArchive(archive)) {
+      completedSeasons.push(season);
+      if (season === retainedArchiveSeason) {
+        retainedFound = true;
+        if (archive.pruneStatus === 'PRUNING') {
+          return { ready: false as const, reason: 'RETAINED_ARCHIVE_MARKED_FOR_PRUNING', archiveId: item.id, pruneIds: [] as string[] };
+        }
+        const validation = validateSeasonArchiveSnapshot(archive, item.matches || []);
+        if (!validation.valid) {
+          return { ready: false as const, reason: 'RETAINED_ARCHIVE_INVALID', archiveId: item.id, details: validation.reasons, pruneIds: [] as string[] };
+        }
+        continue;
+      }
+      if (archive.pruneStatus === 'PRUNING') {
+        if (Number(archive.pruneTargetSeason) !== targetSeason ||
+            Number(archive.pruneRetainedArchiveSeason || 0) !== Number(retainedArchiveSeason || 0) ||
+            Number(archive.prunePolicyVersion) !== 1) {
+          return { ready: false as const, reason: 'ARCHIVE_PRUNE_MARKER_CONFLICT', archiveId: item.id, pruneIds: [] as string[] };
+        }
+      } else {
+        const validation = validateSeasonArchiveSnapshot(archive, item.matches || []);
+        if (!validation.valid) {
+          return { ready: false as const, reason: 'OBSOLETE_COMPLETED_ARCHIVE_INVALID', archiveId: item.id, details: validation.reasons, pruneIds: [] as string[] };
+        }
+      }
+      pruneIds.push(item.id);
+      continue;
+    }
+
+    if (isRecoveredSeasonArchive(archive)) {
+      if (archive.pruneStatus === 'PRUNING') {
+        if (Number(archive.pruneTargetSeason) !== targetSeason ||
+            Number(archive.pruneRetainedArchiveSeason || 0) !== Number(retainedArchiveSeason || 0) ||
+            Number(archive.prunePolicyVersion) !== 1) {
+          return { ready: false as const, reason: 'ARCHIVE_PRUNE_MARKER_CONFLICT', archiveId: item.id, pruneIds: [] as string[] };
+        }
+        // Older cleanup workers could persist PRUNING from a pending marker.
+        // Re-check the finalized history state before resuming that deletion.
+        if (String(item.historyStatus || '') !== 'SKIPPED') {
+          return { ready: false as const, reason: 'RECOVERED_ARCHIVE_SKIP_MARKER_MISSING', archiveId: item.id, pruneIds: [] as string[] };
+        }
+      } else if (String(item.historyStatus || '') !== 'SKIPPED') {
+        return { ready: false as const, reason: 'RECOVERED_ARCHIVE_SKIP_MARKER_MISSING', archiveId: item.id, pruneIds: [] as string[] };
+      }
+      pruneIds.push(item.id);
+      continue;
+    }
+
+    return { ready: false as const, reason: 'UNKNOWN_OR_INCOMPLETE_ARCHIVE_CANNOT_BE_PRUNED', archiveId: item.id, pruneIds: [] as string[] };
+  }
+
+  if (retainedArchiveSeason !== null && !retainedFound) {
+    return { ready: false as const, reason: 'RETAINED_ARCHIVE_MISSING', pruneIds: [] as string[] };
+  }
+  const latestCompleted = completedSeasons.length ? Math.max(...completedSeasons) : null;
+  if (latestCompleted !== retainedArchiveSeason) {
+    return { ready: false as const, reason: 'LATEST_COMPLETED_ARCHIVE_RETENTION_CONFLICT', latestCompleted, retainedArchiveSeason, pruneIds: [] as string[] };
+  }
+  return { ready: true as const, reason: null, pruneIds, retainedArchiveSeason };
+}
+
+
+/**
+ * Persist a truthful record for a season that could not be completed.
+ * This snapshot contains only its starting team placements; it deliberately
+ * has no final standings, match scores, rewards, or promotion decisions.
+ */
+export function buildRecoveredSeasonArchiveSnapshot(input: {
+  sourceSeason: number;
+  startingParticipants: Record<string, any[]>;
+  finishedMatches: number;
+  reason: string;
+  recoveredAt?: string;
+}) {
+  const sourceSeason = Number(input?.sourceSeason);
+  const finishedMatches = Number(input?.finishedMatches);
+  if (!Number.isSafeInteger(sourceSeason) || sourceSeason < 1 ||
+      !Number.isInteger(finishedMatches) || finishedMatches < 0 || finishedMatches > MATCHES_PER_SEASON ||
+      !String(input?.reason || '').trim()) {
+    return { ready: false as const, reason: 'RECOVERED_ARCHIVE_METADATA_INVALID' };
+  }
+  const participants = buildCarryForwardGroups(input.startingParticipants || {});
+  if (!participants.ready) {
+    return { ready: false as const, reason: participants.reason, group: participants.group };
+  }
+  const recoveredAt = input.recoveredAt || new Date().toISOString();
+  if (!Number.isFinite(Date.parse(recoveredAt))) {
+    return { ready: false as const, reason: 'RECOVERED_ARCHIVE_TIMESTAMP_INVALID' };
+  }
+  return {
+    ready: true as const,
+    archive: {
+      sourceSeason,
+      leagueId: 'ALPHA',
+      archiveVersion: 1,
+      status: 'recovered',
+      recoveredAt,
+      expectedMatches: MATCHES_PER_SEASON,
+      finishedMatches,
+      unresolvedMatches: MATCHES_PER_SEASON - finishedMatches,
+      groups: 15,
+      teamCount: 120,
+      standings: {},
+      startingParticipants: participants.groups,
+      recovery: {
+        status: 'incomplete',
+        finalStandingsAvailable: false,
+        reason: String(input.reason),
+      },
+    },
+  };
 }

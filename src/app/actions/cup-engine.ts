@@ -6,7 +6,7 @@ import { getAdminDb } from '@/lib/firebase-admin';
 import { getTableId, MAX_LEVELS, TEAMS_PER_GROUP, TOTAL_GROUPS } from '@/app/lib/leagues-data';
 import { resolveUniversalMatchDocument } from '@/app/actions/universal-match-resolver';
 import { MATCH_COLLECTIONS } from '@/app/lib/match-storage';
-import { getGlobalSeasonInfo } from '@/app/lib/time-utils';
+import { resolveSeasonLifecycleWindow } from './season-boundary';
 
 const LEAGUE_ID = 'ALPHA';
 const CUP_COLLECTION = 'cup_pyramid_v1';
@@ -17,6 +17,46 @@ const CUP_START_HOUR_UTC = 4; // 07:00 Moscow time
 
 type Team = { id: string; name: string; level: number; group: number; rank: number; isBot: boolean; seed: number };
 type Pairing = { id: string; index: number; home: Team | null; away: Team | null; status: 'scheduled' | 'bye' | 'finished'; matchId?: string | null; winnerId?: string | null; scoreA?: number | null; scoreB?: number | null; technicalDecision?: boolean };
+
+function resolveCupDate(value: any): Date {
+  if (value === null || value === undefined || value === '') throw new Error('CUP_SEASON_START_INVALID');
+  const date = value instanceof Date
+    ? new Date(value.getTime())
+    : value && typeof value.toDate === 'function'
+      ? value.toDate()
+      : new Date(value);
+  if (!(date instanceof Date) || !Number.isFinite(date.getTime())) {
+    throw new Error('CUP_SEASON_START_INVALID');
+  }
+  return date;
+}
+
+async function readActiveCupSeasonContext(db: any, nowMs = Date.now()) {
+  const configSnap = await db.collection('system_v1').doc('season_config').get();
+  if (!configSnap.exists) return { ready: false as const, reason: 'SEASON_CONFIG_MISSING' };
+  const config = configSnap.data() || {};
+  const season = Number(config.activeSeasonNumber);
+  if (!Number.isSafeInteger(season) || season < 1) {
+    return { ready: false as const, reason: 'ACTIVE_SEASON_INVALID' };
+  }
+  const phase = String(config.phase || '').toUpperCase();
+  if (config.worldReady !== true || !['REGULAR_SEASON', 'ACTIVE'].includes(phase)) {
+    return { ready: false as const, reason: 'ACTIVE_SEASON_NOT_READY', season, phase };
+  }
+  const seasonStart = resolveCupDate(config.seasonStart);
+  const nextSeasonStart = resolveCupDate(config.nextSeasonStart);
+  if (!Number.isFinite(nowMs)) throw new Error('CUP_CLOCK_INVALID');
+  const lifecycle = resolveSeasonLifecycleWindow({
+    seasonStart,
+    nextSeasonStart,
+    now: new Date(nowMs),
+  });
+  if (lifecycle.leagueMatchesPaused) {
+    return { ready: false as const, reason: 'OFFSEASON_CUP_MATCHES_DISABLED', season, phase };
+  }
+  const seasonDay = Math.floor((nowMs - seasonStart.getTime()) / 86400000) + 1;
+  return { ready: true as const, season, phase, seasonStart, seasonDay };
+}
 
 function cupId(season: number) { return `cup_s${season}_l${LEAGUE_ID}`; }
 function matchId(season: number, round: number, index: number) { return `cup_S${season}_R${round}_M${String(index).padStart(2, '0')}`; }
@@ -87,53 +127,154 @@ function buildRoundPairings(round: number, input: Team[]): Pairing[] {
   }
   return pairs;
 }
-async function createRoundMatches(db: any, season: number, round: number, pairings: Pairing[], seasonStart: Date) {
-  const batch = db.batch();
-  const scheduledAt = Timestamp.fromDate(roundDate(seasonStart, ROUND_DAYS[round - 1]));
-  for (const pairing of pairings) {
-    if (!pairing.home || !pairing.away) continue;
-    const id = matchId(season, round, pairing.index);
-    pairing.matchId = id;
-    const isFinal = round === ROUND_COUNT;
-    batch.set(db.collection(MATCH_COLLECTIONS.cup).doc(id), {
-      id, type: 'cup', matchType: 'cup', source: 'pyramid-cup', cupId: cupId(season), cupRound: round,
-      cupRoundLabel: isFinal ? 'final' : round === 1 ? 'preliminary' : `round_${round}`,
-      season, leagueId: LEAGUE_ID, homeId: pairing.home.id, awayId: pairing.away.id,
-      homeName: pairing.home.name, awayName: pairing.away.name,
-      homeRank: pairing.home.rank, awayRank: pairing.away.rank,
-      homeLevel: pairing.home.level, awayLevel: pairing.away.level,
-      homeGroup: pairing.home.group, awayGroup: pairing.away.group,
-      homeSeed: pairing.home.seed, awaySeed: pairing.away.seed,
-      bestOf: isFinal ? 3 : 1, scheduledAt, startTime: scheduledAt, scheduledStartAt: scheduledAt,
-      status: 'scheduled', isFinished: false, isProcessing: false, reportStatus: 'pending', seen: false,
-      affectsLeagueStandings: false, version: 141,
-      createdAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp(),
-    }, { merge: true });
-  }
-  await batch.commit();
-  return pairings;
+function buildCupRoundMatchData(season: number, round: number, pairing: Pairing, scheduledAt: any) {
+  const isFinal = round === ROUND_COUNT;
+  return {
+    id: pairing.matchId, type: 'cup', matchType: 'cup', source: 'pyramid-cup', cupId: cupId(season), cupRound: round,
+    cupRoundLabel: isFinal ? 'final' : round === 1 ? 'preliminary' : `round_${round}`,
+    season, leagueId: LEAGUE_ID, homeId: pairing.home!.id, awayId: pairing.away!.id,
+    homeName: pairing.home!.name, awayName: pairing.away!.name,
+    homeRank: pairing.home!.rank, awayRank: pairing.away!.rank,
+    homeLevel: pairing.home!.level, awayLevel: pairing.away!.level,
+    homeGroup: pairing.home!.group, awayGroup: pairing.away!.group,
+    homeSeed: pairing.home!.seed, awaySeed: pairing.away!.seed,
+    bestOf: isFinal ? 3 : 1, scheduledAt, startTime: scheduledAt, scheduledStartAt: scheduledAt,
+    status: 'scheduled', isFinished: false, isProcessing: false, reportStatus: 'pending', seen: false,
+    affectsLeagueStandings: false, version: 141,
+    createdAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp(),
+  };
+}
+
+async function commitCupRoundTransition(
+  db: any,
+  cupRef: any,
+  season: number,
+  seasonStart: Date,
+  expectedRound: number,
+  pairings: Pairing[],
+  nextRound: number,
+  nextPairings: Pairing[],
+) {
+  return db.runTransaction(async (tx: any) => {
+    const cupSnap = await tx.get(cupRef);
+    if (!cupSnap.exists) throw new Error('CUP_NOT_FOUND_DURING_ROUND_TRANSITION');
+    const current = cupSnap.data() || {};
+    if (current.status === 'completed' || Number(current.currentRound || 1) !== expectedRound) {
+      return false;
+    }
+
+    const scheduledAt = Timestamp.fromDate(roundDate(seasonStart, ROUND_DAYS[nextRound - 1]));
+    const entries = nextPairings
+      .filter(pairing => pairing.home && pairing.away)
+      .map(pairing => {
+        const expectedId = matchId(season, nextRound, Number(pairing.index));
+        if (pairing.matchId && pairing.matchId !== expectedId) {
+          throw new Error('CUP_STAGE_FIXTURE_ID_CONFLICT');
+        }
+        pairing.matchId = expectedId;
+        return {
+          pairing,
+          dedicatedRef: db.collection(MATCH_COLLECTIONS.cup).doc(expectedId),
+          legacyRef: db.collection('matches_v2').doc(expectedId),
+        };
+      });
+
+    // All reads precede every write. Fixture creation and the bracket pointer
+    // advance share this transaction, so a stale worker cannot seed a future
+    // round after another worker has already advanced the cup.
+    const snapshots = await Promise.all(entries.map(async entry => ({
+      dedicated: await tx.get(entry.dedicatedRef),
+      legacy: await tx.get(entry.legacyRef),
+    })));
+
+    entries.forEach((entry, index) => {
+      const existing = snapshots[index].dedicated.exists
+        ? snapshots[index].dedicated.data() || {}
+        : snapshots[index].legacy.exists ? snapshots[index].legacy.data() || {} : null;
+      if (existing) {
+        if ((existing.cupId && existing.cupId !== cupId(season)) ||
+            (Number.isFinite(Number(existing.cupRound)) && Number(existing.cupRound) !== nextRound) ||
+            existing.homeId !== entry.pairing.home!.id ||
+            existing.awayId !== entry.pairing.away!.id) {
+          throw new Error('CUP_STAGE_FIXTURE_CONFLICT');
+        }
+        return;
+      }
+      tx.create(entry.dedicatedRef, buildCupRoundMatchData(season, nextRound, entry.pairing, scheduledAt));
+    });
+
+    const rounds: Record<string, any[]> = { ...(current.rounds || {}) };
+    rounds[roundKey(expectedRound)] = pairings;
+    rounds[roundKey(nextRound)] = nextPairings;
+    tx.update(cupRef, {
+      rounds,
+      currentRound: nextRound,
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+    return true;
+  });
+}
+
+async function commitCupRoundState(
+  db: any,
+  cupRef: any,
+  expectedRound: number,
+  pairings: Pairing[],
+  options: { nextRound?: number; nextPairings?: Pairing[]; completion?: Record<string, any> } = {},
+) {
+  return db.runTransaction(async (tx: any) => {
+    const snap = await tx.get(cupRef);
+    if (!snap.exists) throw new Error('CUP_NOT_FOUND_DURING_ROUND_COMMIT');
+    const current = snap.data() || {};
+    if (current.status === 'completed' || Number(current.currentRound || 1) !== expectedRound) {
+      return false;
+    }
+    const rounds: Record<string, any[]> = { ...(current.rounds || {}) };
+    rounds[roundKey(expectedRound)] = pairings;
+    if (options.nextRound && options.nextPairings) {
+      rounds[roundKey(options.nextRound)] = options.nextPairings;
+    }
+    const patch: Record<string, any> = {
+      rounds,
+      updatedAt: FieldValue.serverTimestamp(),
+      ...(options.completion || {}),
+    };
+    if (options.nextRound) patch.currentRound = options.nextRound;
+    tx.update(cupRef, patch);
+    return true;
+  });
 }
 
 export async function generatePyramidCup(targetSeasonNumber?: number) {
   const db = getAdminDb();
-  const info = getGlobalSeasonInfo();
-  const season = Number(targetSeasonNumber || info.seasonNumber || 1);
+  const context = await readActiveCupSeasonContext(db);
+  if (!context.ready) throw new Error(context.reason);
+  const season = Number(targetSeasonNumber || context.season);
+  if (season !== context.season) throw new Error('CUP_TARGET_SEASON_NOT_ACTIVE');
   const id = cupId(season);
   const ref = db.collection(CUP_COLLECTION).doc(id);
   if ((await ref.get()).exists) return { success: true, alreadyExists: true, cupId: id };
   const teams = await loadAllLeagueTeams(db, season);
-  const seasonStart = info.currentSeasonStart;
+  const seasonStart = context.seasonStart;
   const first = createPreliminary(teams);
+  const batch = db.batch();
+  const scheduledAt = Timestamp.fromDate(roundDate(seasonStart, ROUND_DAYS[0]));
+  for (const pairing of first) {
+    if (!pairing.home || !pairing.away) continue;
+    pairing.matchId = matchId(season, 1, pairing.index);
+    batch.set(db.collection(MATCH_COLLECTIONS.cup).doc(pairing.matchId), buildCupRoundMatchData(season, 1, pairing, scheduledAt));
+  }
   const rounds: Record<string, any[]> = { [roundKey(1)]: first };
   for (let round = 2; round <= ROUND_COUNT; round++) rounds[roundKey(round)] = [];
-  await ref.create({
+  // The cup record and all 56 first-round fixtures commit together. A crash
+  // cannot leave an existing bracket with no match documents to process.
+  batch.create(ref, {
     id, season, leagueId: LEAGUE_ID, name: 'Кубок Пирамиды', status: 'active', currentRound: 1,
     totalRounds: ROUND_COUNT, totalParticipants: TOTAL_TEAMS, preliminaryMatches: 56, byeCount: 8,
     participants: teams.map(publicTeam), rounds, winnerId: null, winnerName: null,
     seasonStart: seasonStart.toISOString(), createdAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp(), version: 3,
   });
-  await createRoundMatches(db, season, 1, first, seasonStart);
-  await ref.update({ rounds: { ...rounds, [roundKey(1)]: first }, updatedAt: FieldValue.serverTimestamp() });
+  await batch.commit();
   return { success: true, created: true, cupId: id, participants: TOTAL_TEAMS, preliminaryMatches: 56 };
 }
 async function loadCup(db: any, season: number) {
@@ -156,13 +297,27 @@ async function payCupPrize(db: any, season: number, team: Team | null, place: 'c
   const ledgerRef = db.collection('economy_transactions').doc(`pyramid_cup_S${season}_${place}_${team.id}`);
   return db.runTransaction(async (tx: any) => {
     const [ledgerSnap, playerSnap] = await Promise.all([tx.get(ledgerRef), tx.get(playerRef)]);
-    if (ledgerSnap.exists || !playerSnap.exists) return 0;
+    const rewardType = place === 'champion' ? 'PYRAMID_CUP_CHAMPION_REWARD' : 'PYRAMID_CUP_FINALIST_REWARD';
+    const referenceId = `cup_s${season}_l${LEAGUE_ID}`;
+    if (ledgerSnap.exists) {
+      const receipt = ledgerSnap.data() || {};
+      const receiptMatchesReward =
+        receipt.userId === team.id &&
+        receipt.amount === amount &&
+        receipt.currency === 'credits' &&
+        receipt.type === rewardType &&
+        receipt.referenceId === referenceId &&
+        Number(receipt.division) === Number(team.level);
+      if (!receiptMatchesReward) throw new Error('CUP_PRIZE_RECEIPT_CONFLICT');
+      return 0;
+    }
+    if (!playerSnap.exists) return 0;
     const player = playerSnap.data() || {};
     const before = Math.max(0, Math.floor(Number(player.credits) || 0));
     tx.update(playerRef, { credits: before + amount, updatedAt: FieldValue.serverTimestamp() });
     tx.create(ledgerRef, {
-      userId: team.id, amount, currency: 'credits', type: place === 'champion' ? 'PYRAMID_CUP_CHAMPION_REWARD' : 'PYRAMID_CUP_FINALIST_REWARD',
-      referenceId: `cup_s${season}_l${LEAGUE_ID}`, description: `Pyramid Cup season ${season}: ${place}`,
+      userId: team.id, amount, currency: 'credits', type: rewardType,
+      referenceId, description: `Pyramid Cup season ${season}: ${place}`,
       division: team.level, balanceBefore: before, balanceAfter: before + amount, timestamp: FieldValue.serverTimestamp(),
     });
     return amount;
@@ -172,35 +327,188 @@ async function payCupPrize(db: any, season: number, team: Team | null, place: 'c
 async function finishTechnically(db: any, season: number, round: number, pairing: Pairing, collectionName: 'cup_matches' | 'matches_v2' = 'cup_matches') {
   if (!pairing.home || !pairing.away || !pairing.matchId) return false;
   const ref = db.collection(collectionName).doc(String(pairing.matchId));
-  const snap = await ref.get();
-  const existing: any = snap.data() || {};
-  if (existing.isFinished === true && existing.winnerId) return true;
-  // Deadline fallback only: the stronger seeded team advances if Match Core could not finish in time.
-  const stronger = pairing.home.seed < pairing.away.seed ? pairing.home : pairing.away;
-  const winnerId = stronger.id;
-  const homeWon = winnerId === pairing.home.id;
-  const bestOf = round === ROUND_COUNT ? 3 : 1;
-  const scoreA = bestOf === 3 ? (homeWon ? 2 : 0) : (homeWon ? 1 : 0);
-  const scoreB = bestOf === 3 ? (homeWon ? 0 : 2) : (homeWon ? 0 : 1);
-  await ref.set({
-    id: String(pairing.matchId), type: 'cup', matchType: 'cup', source: 'pyramid-cup', cupId: cupId(season), cupRound: round,
-    homeId: pairing.home.id, awayId: pairing.away.id, homeName: pairing.home.name, awayName: pairing.away.name,
-    bestOf, matchFormat: `BO${bestOf}`, scoreA, scoreB, homeScore: scoreA, awayScore: scoreB,
-    seriesScore: `${scoreA}-${scoreB}`, score: `${scoreA}-${scoreB}`, winner: homeWon ? pairing.home.name : pairing.away.name,
-    winnerId, isFinished: true, status: 'finished', reportStatus: 'new', seen: false, technicalDecision: true,
-    technicalDecisionReason: 'Cup round deadline reached before match core completed',
-    resolvedAt: Timestamp.now(), playedAt: Timestamp.now(), updatedAt: FieldValue.serverTimestamp(), affectsLeagueStandings: false,
-  }, { merge: true });
-  return true;
+  // The fallback races the Universal Match Core worker. Read and write in one
+  // transaction so whichever result commits first becomes authoritative.
+  return db.runTransaction(async (tx: any) => {
+    const snap = await tx.get(ref);
+    if (!snap.exists) return false;
+    const existing: any = snap.data() || {};
+    const terminal = existing.isFinished === true ||
+      ['finished', 'completed'].includes(String(existing.status || '').toLowerCase());
+    if (terminal && existing.winnerId) {
+      // Repair report/processing metadata without touching the authoritative result.
+      tx.set(ref, {
+        isFinished: true,
+        status: 'finished',
+        isProcessing: false,
+        processingToken: FieldValue.delete(),
+        processingAt: FieldValue.delete(),
+        reportStatus: existing.reportStatus === 'viewed' ? 'viewed' : 'new',
+        seen: existing.seen === true,
+        updatedAt: FieldValue.serverTimestamp(),
+      }, { merge: true });
+      return true;
+    }
+
+    // A completed knockout draw still needs a bracket winner. Preserve its real
+    // score/report and apply only the deterministic seed tie-break when no winner exists.
+    if (terminal) {
+      const stronger = pairing.home!.seed < pairing.away!.seed ? pairing.home! : pairing.away!;
+      tx.set(ref, {
+        winnerId: stronger.id,
+        winner: stronger.id === pairing.home!.id ? pairing.home!.name : pairing.away!.name,
+        isFinished: true,
+        status: 'finished',
+        technicalDecision: true,
+        technicalDecisionReason: 'Completed cup knockout draw resolved by deterministic seed tie-break',
+        isProcessing: false,
+        processingToken: FieldValue.delete(),
+        processingAt: FieldValue.delete(),
+        reportStatus: existing.reportStatus === 'viewed' ? 'viewed' : 'new',
+        seen: existing.seen === true,
+        finishedAt: existing.finishedAt || FieldValue.serverTimestamp(),
+        resolvedAt: existing.resolvedAt || FieldValue.serverTimestamp(),
+        playedAt: existing.playedAt || FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
+      }, { merge: true });
+      return true;
+    }
+
+    // Deadline fallback only: the stronger seeded team advances if Match Core could not finish in time.
+    const stronger = pairing.home!.seed < pairing.away!.seed ? pairing.home! : pairing.away!;
+    const winnerId = stronger.id;
+    const homeWon = winnerId === pairing.home!.id;
+    const bestOf = round === ROUND_COUNT ? 3 : 1;
+    const scoreA = bestOf === 3 ? (homeWon ? 2 : 0) : (homeWon ? 1 : 0);
+    const scoreB = bestOf === 3 ? (homeWon ? 0 : 2) : (homeWon ? 0 : 1);
+    tx.set(ref, {
+      id: String(pairing.matchId), type: 'cup', matchType: 'cup', source: 'pyramid-cup', cupId: cupId(season), cupRound: round,
+      homeId: pairing.home!.id, awayId: pairing.away!.id, homeName: pairing.home!.name, awayName: pairing.away!.name,
+      bestOf, matchFormat: `BO${bestOf}`, scoreA, scoreB, homeScore: scoreA, awayScore: scoreB,
+      seriesScore: `${scoreA}-${scoreB}`, score: `${scoreA}-${scoreB}`, winner: homeWon ? pairing.home!.name : pairing.away!.name,
+      winnerId, isFinished: true, status: 'finished', isProcessing: false,
+      processingToken: FieldValue.delete(), processingAt: FieldValue.delete(),
+      reportStatus: 'new', seen: false, technicalDecision: true,
+      technicalDecisionReason: 'Cup round deadline reached before match core completed',
+      resolvedAt: Timestamp.now(), playedAt: Timestamp.now(), updatedAt: FieldValue.serverTimestamp(), affectsLeagueStandings: false,
+    }, { merge: true });
+    return true;
+  });
+}
+
+/**
+ * Recover a legacy/interrupted round whose bracket was persisted before every
+ * fixture document. The transaction creates only missing deterministic IDs;
+ * existing results are never overwritten by a retry.
+ */
+async function repairCurrentRoundFixtures(db: any, cup: { ref: any; data: any }, activeSeasonStart: Date) {
+  return db.runTransaction(async (tx: any) => {
+    const cupSnap = await tx.get(cup.ref);
+    if (!cupSnap.exists) return { repaired: 0, changed: false };
+    const data = cupSnap.data() || {};
+    if (data.status === 'completed') return { repaired: 0, changed: false };
+    const season = Number(data.season);
+    const round = Number(data.currentRound || 1);
+    if (!Number.isSafeInteger(season) || season < 1 || !Number.isSafeInteger(round) || round < 1 || round > ROUND_COUNT) {
+      throw new Error('CUP_ROUND_IDENTITY_INVALID');
+    }
+    const rounds: Record<string, any[]> = { ...(data.rounds || {}) };
+    const rawPairings = rounds[roundKey(round)];
+    if (!Array.isArray(rawPairings)) return { repaired: 0, changed: false };
+    const pairings: Pairing[] = rawPairings.map((pairing: any) => ({ ...pairing }));
+    let changed = false;
+    const entries = pairings
+      .filter(pairing => pairing.home && pairing.away)
+      .map(pairing => {
+        const expectedId = matchId(season, round, Number(pairing.index));
+        if (pairing.matchId && pairing.matchId !== expectedId) {
+          throw new Error('CUP_FIXTURE_ID_CONFLICT');
+        }
+        if (pairing.matchId !== expectedId) {
+          pairing.matchId = expectedId;
+          changed = true;
+        }
+        return {
+          pairing,
+          dedicatedRef: db.collection(MATCH_COLLECTIONS.cup).doc(expectedId),
+          legacyRef: db.collection('matches_v2').doc(expectedId),
+        };
+      });
+    const snapshots = await Promise.all(entries.map(async entry => ({
+      dedicated: await tx.get(entry.dedicatedRef),
+      legacy: await tx.get(entry.legacyRef),
+    })));
+    let repaired = 0;
+    const scheduledAt = Timestamp.fromDate(roundDate(
+      resolveCupDate(data.seasonStart || activeSeasonStart),
+      ROUND_DAYS[round - 1],
+    ));
+    entries.forEach((entry, index) => {
+      // Older cup fixtures may already live in matches_v2. Preserve them and
+      // let the resolver's existing legacy fallback consume their results.
+      if (snapshots[index].dedicated.exists || snapshots[index].legacy.exists) return;
+      tx.create(entry.dedicatedRef, buildCupRoundMatchData(season, round, entry.pairing, scheduledAt));
+      repaired++;
+    });
+    if (changed || repaired > 0) {
+      rounds[roundKey(round)] = pairings;
+      tx.update(cup.ref, { rounds, updatedAt: FieldValue.serverTimestamp() });
+    }
+    return { repaired, changed };
+  });
+}
+
+function assertValidCupRoundPairings(pairings: Pairing[], round: number) {
+  const expectedCount = round === 1 ? 64 : Math.pow(2, ROUND_COUNT - round);
+  if (!Array.isArray(pairings) || pairings.length !== expectedCount) {
+    throw new Error('CUP_ROUND_PAIRING_COUNT_INVALID');
+  }
+  const pairingIds = new Set<string>();
+  const indexes = new Set<number>();
+  const teamIds = new Set<string>();
+  let byes = 0;
+  for (const pairing of pairings) {
+    if (!pairing || typeof pairing.id !== 'string' || !pairing.id ||
+        !Number.isSafeInteger(Number(pairing.index)) || Number(pairing.index) < 1 ||
+        pairingIds.has(pairing.id) || indexes.has(Number(pairing.index))) {
+      throw new Error('CUP_ROUND_PAIRING_IDENTITY_INVALID');
+    }
+    pairingIds.add(pairing.id);
+    indexes.add(Number(pairing.index));
+    if (pairing.status === 'bye') {
+      if (round !== 1 || !pairing.home || pairing.away || pairing.winnerId !== pairing.home.id ||
+          teamIds.has(pairing.home.id)) {
+        throw new Error('CUP_ROUND_BYE_INVALID');
+      }
+      teamIds.add(pairing.home.id);
+      byes++;
+      continue;
+    }
+    if (!['scheduled', 'finished'].includes(String(pairing.status)) ||
+        !pairing.home?.id || !pairing.away?.id || pairing.home.id === pairing.away.id ||
+        teamIds.has(pairing.home.id) || teamIds.has(pairing.away.id) ||
+        (pairing.status === 'finished' && ![pairing.home.id, pairing.away.id].includes(String(pairing.winnerId || '')))) {
+      throw new Error('CUP_ROUND_PARTICIPANTS_INVALID');
+    }
+    teamIds.add(pairing.home.id);
+    teamIds.add(pairing.away.id);
+  }
+  if ((round === 1 && byes !== 8) || (round > 1 && byes !== 0)) {
+    throw new Error('CUP_ROUND_BYE_COUNT_INVALID');
+  }
+  return { pairings: pairings.length, byes, teams: teamIds.size };
 }
 
 export async function runPyramidCupCycle() {
   const db = getAdminDb();
-  const info = getGlobalSeasonInfo();
-  const season = Number(info.seasonNumber || 1);
+  const context = await readActiveCupSeasonContext(db);
+  if (!context.ready) {
+    return { generated: false, resolved: 0, advanced: 0, waitingForSeason: true, reason: context.reason };
+  }
+  const season = context.season;
   let cup = await loadCup(db, season);
   if (!cup) {
-    if (info.seasonDay < 1 || info.seasonDay > 13) return { generated: false, resolved: 0, advanced: 0, waiting: true };
+    if (context.seasonDay < 1 || context.seasonDay > 13) return { generated: false, resolved: 0, advanced: 0, waiting: true };
     try { await generatePyramidCup(season); return { generated: true, resolved: 0, advanced: 0 }; }
     catch (error: any) {
       if (String(error?.message || '').startsWith('CUP_LEAGUE_TABLE_MISSING')) return { generated: false, resolved: 0, advanced: 0, waitingForLeague: true };
@@ -209,12 +517,25 @@ export async function runPyramidCupCycle() {
   }
   if (cup.data.status === 'completed') return { generated: false, resolved: 0, advanced: 0, completed: true };
 
+  const activeSeasonStart = resolveCupDate(cup.data.seasonStart || context.seasonStart);
+  const fixtureRepair = await repairCurrentRoundFixtures(db, cup, activeSeasonStart);
+  if (fixtureRepair.repaired > 0 || fixtureRepair.changed) {
+    console.warn('[PYRAMID CUP] Recovered interrupted round fixtures', { cupId: cup.data.id, ...fixtureRepair });
+    cup = await loadCup(db, season);
+    if (!cup) throw new Error('CUP_DISAPPEARED_DURING_FIXTURE_RECOVERY');
+  }
+
   const round = Number(cup.data.currentRound || 1);
+  if (!Number.isSafeInteger(round) || round < 1 || round > ROUND_COUNT) {
+    throw new Error('CUP_CURRENT_ROUND_INVALID');
+  }
   const rounds: Record<string, any[]> = { ...(cup.data.rounds || {}) };
   const pairings: Pairing[] = Array.isArray(rounds[roundKey(round)]) ? rounds[roundKey(round)] : [];
+  assertValidCupRoundPairings(pairings, round);
   const now = Date.now();
-  const seasonStart = new Date(String(cup.data.seasonStart || info.currentSeasonStart.toISOString()));
-  const nextRoundDeadline = round < ROUND_COUNT ? roundDate(seasonStart, ROUND_DAYS[round]) .getTime() : Number.POSITIVE_INFINITY;
+  const seasonStart = resolveCupDate(cup.data.seasonStart || activeSeasonStart);
+  const deadlineDay = ROUND_DAYS[round] ?? (ROUND_DAYS[ROUND_COUNT - 1] + 1);
+  const nextRoundDeadline = roundDate(seasonStart, deadlineDay).getTime();
   let resolved = 0;
 
   for (const pairing of pairings) {
@@ -248,8 +569,8 @@ export async function runPyramidCupCycle() {
   }
 
   if (pairings.some(p => p?.home && p?.away && p.status === 'scheduled')) {
-    await cup.ref.update({ rounds, updatedAt: FieldValue.serverTimestamp() });
-    return { generated: false, resolved, advanced: 0, waitingForMatches: true };
+    const committed = await commitCupRoundState(db, cup.ref, round, pairings);
+    return { generated: false, resolved, advanced: 0, waitingForMatches: true, stale: !committed };
   }
   if (round >= ROUND_COUNT) {
     const finalPair = pairings.find(p => p?.home && p?.away && p.winnerId);
@@ -260,8 +581,19 @@ export async function runPyramidCupCycle() {
       payCupPrize(db, season, winner ? teamFromPublic(winner) : null, 'champion'),
       payCupPrize(db, season, finalist ? teamFromPublic(finalist) : null, 'finalist'),
     ]);
-    await cup.ref.update({ rounds, currentRound: ROUND_COUNT, status: 'completed', winnerId, winnerName: winner?.name || null, finalistId: finalist?.id || null, finalistName: finalist?.name || null, championPrize, finalistPrize, finishedAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp() });
-    return { generated: false, resolved, advanced: 1, completed: true, winnerId, championPrize, finalistPrize };
+    const committed = await commitCupRoundState(db, cup.ref, round, pairings, {
+      completion: {
+        status: 'completed',
+        winnerId,
+        winnerName: winner?.name || null,
+        finalistId: finalist?.id || null,
+        finalistName: finalist?.name || null,
+        championPrize,
+        finalistPrize,
+        finishedAt: FieldValue.serverTimestamp(),
+      },
+    });
+    return { generated: false, resolved, advanced: committed ? 1 : 0, completed: committed, stale: !committed, winnerId, championPrize, finalistPrize };
   }
 
   const winners: Team[] = [];
@@ -277,8 +609,8 @@ export async function runPyramidCupCycle() {
   if (winners.length !== expectedWinners) throw new Error(`CUP_WINNER_COUNT_INVALID:R${round}:${winners.length}:EXPECTED:${expectedWinners}`);
   const nextRound = round + 1;
   const nextPairs = buildRoundPairings(nextRound, winners);
-  rounds[roundKey(round)] = pairings; rounds[roundKey(nextRound)] = nextPairs;
-  await createRoundMatches(db, season, nextRound, nextPairs, seasonStart);
-  await cup.ref.update({ rounds, currentRound: nextRound, updatedAt: FieldValue.serverTimestamp() });
-  return { generated: false, resolved, advanced: 1, currentRound: nextRound, advancingTeams: winners.length };
+  const committed = await commitCupRoundTransition(
+    db, cup.ref, season, seasonStart, round, pairings, nextRound, nextPairs,
+  );
+  return { generated: false, resolved, advanced: committed ? 1 : 0, currentRound: committed ? nextRound : round, stale: !committed, advancingTeams: winners.length };
 }

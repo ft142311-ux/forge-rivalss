@@ -68,8 +68,9 @@ export default function LoginPage() {
     try {
       await initiateEmailSignIn(auth, email.trim(), password);
     } catch (error: any) {
-      setIsProcessing(false);
       toast({ variant: "destructive", title: t.error });
+    } finally {
+      setIsProcessing(false);
     }
   };
 

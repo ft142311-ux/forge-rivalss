@@ -16,7 +16,7 @@ test('foundation manager references use the canonical collection helper', () => 
   assert.match(helper, /db\.collection\(FOUNDATION_COLLECTIONS\.managers\)\.doc\(uid\)/);
 
   const modules = [
-    ['src/app/actions/foundation-management.ts', 13],
+    ['src/app/actions/foundation-management.ts', 12],
     ['src/app/actions/foundation-staff.ts', 2],
     ['src/app/actions/foundation-cycle.ts', 1],
   ];

@@ -51,8 +51,8 @@ export function getLevelThreshold(level: number): number {
   return 3800 * Math.pow(2, level - 3);
 }
 
-export function getMoscowDateString(): string {
-  const msk = toMskDate(getMoscowTime());
+export function getMoscowDateString(now: Date = getMoscowTime()): string {
+  const msk = toMskDate(now);
   return `${msk.getUTCFullYear()}-${String(msk.getUTCMonth() + 1).padStart(2, '0')}-${String(msk.getUTCDate()).padStart(2, '0')}`;
 }
 

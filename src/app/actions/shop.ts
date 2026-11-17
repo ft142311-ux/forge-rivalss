@@ -1,6 +1,7 @@
 'use server';
 
 import { FieldValue } from 'firebase-admin/firestore';
+import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { requireServerActor } from '@/lib/server-auth';
@@ -26,6 +27,15 @@ function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : 'SHOP_ACTION_FAILED';
 }
 
+function readCurrencyBalance(value: unknown) {
+  if (value === undefined || value === null) return 0;
+  if (typeof value !== 'number' && typeof value !== 'string') throw new Error('INVALID_BALANCE');
+  if (typeof value === 'string' && value.trim().length === 0) throw new Error('INVALID_BALANCE');
+  const balance = Number(value);
+  if (!Number.isSafeInteger(balance) || balance < 0) throw new Error('INVALID_BALANCE');
+  return balance;
+}
+
 
 export async function purchaseLicenseAction(idToken: string, requestedTier: number) {
   try {
@@ -42,7 +52,7 @@ export async function purchaseLicenseAction(idToken: string, requestedTier: numb
       const data = snap.data() || {};
       const current = Number(data.activeLicenseTier ?? 4);
       if (tier !== current - 1) throw new Error('LICENSE_MUST_BE_PURCHASED_SEQUENTIALLY');
-      const crystals = Number(data.crystals || 0);
+      const crystals = readCurrencyBalance(data.crystals);
       if (crystals < cost) throw new Error('INSUFFICIENT_FUNDS');
 
       t.update(ref, {
@@ -83,7 +93,7 @@ export async function purchasePremiumShopAction(idToken: string) {
       if (data.isPremium === true && currentUntil > now) throw new Error('PREMIUM_ALREADY_ACTIVE');
 
       const cost = 5000;
-      const crystals = Number(data.crystals || 0);
+      const crystals = readCurrencyBalance(data.crystals);
       if (crystals < cost) throw new Error('INSUFFICIENT_FUNDS');
       const premiumUntil = new Date(now + 30 * 24 * 60 * 60 * 1000).toISOString();
 
@@ -118,34 +128,67 @@ export async function purchasePremiumShopAction(idToken: string) {
  * fully testable. In production we create a pending order instead; a payment
  * provider/webhook must mark it paid before crystals are granted.
  */
-export async function purchaseDiamondPackAction(idToken: string, amount: number) {
+export async function purchaseDiamondPackAction(idToken: string, amount: number, operationId: string) {
   try {
     const { uid } = await requireServerActor(idToken);
     const pack = DIAMOND_PACKS[Number(amount)];
     if (!pack) throw new Error('INVALID_DIAMOND_PACK');
+    const normalizedOperationId = String(operationId || '').trim();
+    if (!/^[a-zA-Z0-9_-]{16,80}$/.test(normalizedOperationId)) throw new Error('INVALID_OPERATION_ID');
     const db = getAdminDb();
+    const receiptRef = db.collection('shop_operation_receipts').doc(`${uid}_diamond_${normalizedOperationId}`);
     const isEmulator = Boolean(process.env.FIRESTORE_EMULATOR_HOST || process.env.FIREBASE_AUTH_EMULATOR_HOST);
 
     if (!isEmulator) {
-      const orderRef = db.collection('shop_orders').doc();
-      await orderRef.set({
-        userId: uid,
-        productId: pack.productId,
-        amount: Number(amount),
-        price: pack.price,
-        status: 'pending_payment',
-        createdAt: FieldValue.serverTimestamp(),
+      return await db.runTransaction(async (t) => {
+        const receiptSnap = await t.get(receiptRef);
+        if (receiptSnap.exists) {
+          const receipt = receiptSnap.data() || {};
+          if (receipt.userId !== uid || receipt.operation !== 'DIAMOND_PACK_ORDER' ||
+              receipt.productId !== pack.productId || Number(receipt.amount) !== Number(amount)) {
+            throw new Error('IDEMPOTENCY_KEY_REUSED');
+          }
+          return receipt.result;
+        }
+        const orderRef = db.collection('shop_orders').doc();
+        const result = { success: true, pending: true, orderId: orderRef.id };
+        t.create(orderRef, {
+          userId: uid,
+          productId: pack.productId,
+          amount: Number(amount),
+          price: pack.price,
+          status: 'pending_payment',
+          createdAt: FieldValue.serverTimestamp(),
+        });
+        t.create(receiptRef, {
+          userId: uid,
+          operation: 'DIAMOND_PACK_ORDER',
+          productId: pack.productId,
+          amount: Number(amount),
+          result,
+          createdAt: FieldValue.serverTimestamp(),
+        });
+        return result;
       });
-      return { success: true, pending: true, orderId: orderRef.id };
     }
 
     return await db.runTransaction(async (t) => {
+      const receiptSnap = await t.get(receiptRef);
+      if (receiptSnap.exists) {
+        const receipt = receiptSnap.data() || {};
+        if (receipt.userId !== uid || receipt.operation !== 'DIAMOND_PACK_TEST_PURCHASE' ||
+            receipt.productId !== pack.productId || Number(receipt.amount) !== Number(amount)) {
+          throw new Error('IDEMPOTENCY_KEY_REUSED');
+        }
+        return receipt.result;
+      }
       const ref = db.collection('players_v14').doc(uid);
       const snap = await t.get(ref);
       if (!snap.exists) throw new Error('PLAYER_NOT_FOUND');
       const data = snap.data() || {};
-      const before = Number(data.crystals || 0);
+      const before = readCurrencyBalance(data.crystals);
       const after = before + Number(amount);
+      if (!Number.isSafeInteger(after)) throw new Error('INVALID_BALANCE');
       t.update(ref, { crystals: after, updatedAt: FieldValue.serverTimestamp() });
       const tx = db.collection('economy_transactions').doc();
       t.set(tx, {
@@ -159,29 +202,52 @@ export async function purchaseDiamondPackAction(idToken: string, amount: number)
         balanceAfter: after,
         timestamp: FieldValue.serverTimestamp(),
       });
-      return { success: true, pending: false, crystals: after };
+      const result = { success: true, pending: false, crystals: after };
+      t.create(receiptRef, {
+        userId: uid,
+        operation: 'DIAMOND_PACK_TEST_PURCHASE',
+        productId: pack.productId,
+        amount: Number(amount),
+        result,
+        createdAt: FieldValue.serverTimestamp(),
+      });
+      return result;
     });
   } catch (e) {
     return { success: false, error: errorMessage(e) };
   }
 }
 
-export async function exchangeCrystalsForCreditsAction(idToken: string, crystalsAmount: number) {
+export async function exchangeCrystalsForCreditsAction(idToken: string, crystalsAmount: number, operationId: string) {
   try {
     const { uid } = await requireServerActor(idToken);
     const amount = Number(crystalsAmount);
     if (![100, 500, 1000].includes(amount)) throw new Error('INVALID_EXCHANGE_AMOUNT');
     const creditsAmount = amount * 10000;
+    const normalizedOperationId = String(operationId || '').trim();
+    if (!/^[a-zA-Z0-9_-]{16,80}$/.test(normalizedOperationId)) throw new Error('INVALID_OPERATION_ID');
     const db = getAdminDb();
+    const receiptRef = db.collection('shop_operation_receipts').doc(`${uid}_exchange_${normalizedOperationId}`);
     return await db.runTransaction(async (t) => {
+      const receiptSnap = await t.get(receiptRef);
+      if (receiptSnap.exists) {
+        const receipt = receiptSnap.data() || {};
+        if (receipt.userId !== uid || receipt.operation !== 'CRYSTAL_TO_CREDITS' ||
+            Number(receipt.crystalsAmount) !== amount || Number(receipt.creditsAmount) !== creditsAmount) {
+          throw new Error('IDEMPOTENCY_KEY_REUSED');
+        }
+        return receipt.result;
+      }
       const ref = db.collection('players_v14').doc(uid);
       const snap = await t.get(ref);
       if (!snap.exists) throw new Error('PLAYER_NOT_FOUND');
       const data = snap.data() || {};
-      const crystals = Number(data.crystals || 0);
-      const credits = Number(data.credits || 0);
+      const crystals = readCurrencyBalance(data.crystals);
+      const credits = readCurrencyBalance(data.credits);
       if (crystals < amount) throw new Error('INSUFFICIENT_FUNDS');
-      t.update(ref, { crystals: crystals - amount, credits: credits + creditsAmount, updatedAt: FieldValue.serverTimestamp() });
+      const creditsAfter = credits + creditsAmount;
+      if (!Number.isSafeInteger(creditsAfter)) throw new Error('INVALID_BALANCE');
+      t.update(ref, { crystals: crystals - amount, credits: creditsAfter, updatedAt: FieldValue.serverTimestamp() });
       const tx = db.collection('economy_transactions').doc();
       t.set(tx, {
         userId: uid,
@@ -194,7 +260,16 @@ export async function exchangeCrystalsForCreditsAction(idToken: string, crystals
         balanceAfter: crystals - amount,
         timestamp: FieldValue.serverTimestamp(),
       });
-      return { success: true, crystals: crystals - amount, credits: credits + creditsAmount };
+      const result = { success: true, crystals: crystals - amount, credits: creditsAfter };
+      t.create(receiptRef, {
+        userId: uid,
+        operation: 'CRYSTAL_TO_CREDITS',
+        crystalsAmount: amount,
+        creditsAmount,
+        result,
+        createdAt: FieldValue.serverTimestamp(),
+      });
+      return result;
     });
   } catch (e) {
     return { success: false, error: errorMessage(e) };
@@ -212,11 +287,14 @@ export async function changeClubNameAction(idToken: string, name: string) {
       const snap = await t.get(ref);
       if (!snap.exists) throw new Error('PLAYER_NOT_FOUND');
       const data = snap.data() || {};
-      const crystals = Number(data.crystals || 0);
+      if (String(data.clubName || '').trim().replace(/\s+/g, ' ').toLowerCase() === clean.toLowerCase()) {
+        return { success: true, unchanged: true, clubName: String(data.clubName || clean), crystals: readCurrencyBalance(data.crystals) };
+      }
+      const crystals = readCurrencyBalance(data.crystals);
       if (crystals < 100) throw new Error('INSUFFICIENT_FUNDS');
       t.update(ref, { crystals: crystals - 100, clubName: clean, updatedAt: FieldValue.serverTimestamp() });
       const tx = db.collection('economy_transactions').doc();
-      t.set(tx, { userId: uid, amount: -100, currency: 'crystals', type: 'CLUB_RENAME', referenceId: clean, description: `Rename club to ${clean}`, timestamp: FieldValue.serverTimestamp() });
+      t.set(tx, { userId: uid, amount: -100, currency: 'crystals', type: 'CLUB_RENAME', referenceId: clean, description: `Rename club to ${clean}`, balanceBefore: crystals, balanceAfter: crystals - 100, timestamp: FieldValue.serverTimestamp() });
       return { success: true, clubName: clean, crystals: crystals - 100 };
     });
   } catch (e) {
@@ -234,11 +312,14 @@ export async function changeClubCountryAction(idToken: string, country: unknown)
       const snap = await t.get(ref);
       if (!snap.exists) throw new Error('PLAYER_NOT_FOUND');
       const data = snap.data() || {};
-      const crystals = Number(data.crystals || 0);
+      if (String(data.countryCode || '').toUpperCase() === parsed.code.toUpperCase()) {
+        return { success: true, unchanged: true, country: String(data.country || parsed.name), crystals: readCurrencyBalance(data.crystals) };
+      }
+      const crystals = readCurrencyBalance(data.crystals);
       if (crystals < 100) throw new Error('INSUFFICIENT_FUNDS');
       t.update(ref, { crystals: crystals - 100, country: parsed.name, countryCode: parsed.code, countryFlag: parsed.flag, updatedAt: FieldValue.serverTimestamp() });
       const tx = db.collection('economy_transactions').doc();
-      t.set(tx, { userId: uid, amount: -100, currency: 'crystals', type: 'CLUB_COUNTRY_CHANGE', referenceId: parsed.code, description: `Change club country to ${parsed.name}`, timestamp: FieldValue.serverTimestamp() });
+      t.set(tx, { userId: uid, amount: -100, currency: 'crystals', type: 'CLUB_COUNTRY_CHANGE', referenceId: parsed.code, description: `Change club country to ${parsed.name}`, balanceBefore: crystals, balanceAfter: crystals - 100, timestamp: FieldValue.serverTimestamp() });
       return { success: true, country: parsed.name, crystals: crystals - 100 };
     });
   } catch (e) {
@@ -248,7 +329,8 @@ export async function changeClubCountryAction(idToken: string, country: unknown)
 
 export async function createShopPlayerAction(
   idToken: string,
-  input: { nickname: string; role: Role; talent: number; age: number; country: { code: string; name: string; flag: string } }
+  input: { nickname: string; role: Role; talent: number; age: number; country: { code: string; name: string; flag: string } },
+  operationId: string,
 ) {
   try {
     const { uid } = await requireServerActor(idToken);
@@ -261,6 +343,8 @@ export async function createShopPlayerAction(
     if (![3.5, 4, 4.5, 5].includes(talent)) throw new Error('INVALID_TALENT');
     if (!Number.isInteger(age) || age < 14 || age > 28) throw new Error('INVALID_AGE');
     const country = CountrySchema.parse(input.country);
+    const normalizedOperationId = String(operationId || '').trim();
+    if (!/^[a-zA-Z0-9_-]{16,80}$/.test(normalizedOperationId)) throw new Error('INVALID_OPERATION_ID');
 
     let creationCost = 200;
     if (talent === 3.5) creationCost += 150;
@@ -271,24 +355,43 @@ export async function createShopPlayerAction(
     else if (age < 22) creationCost += 100;
 
     const db = getAdminDb();
+    const receiptRef = db.collection('shop_operation_receipts').doc(`${uid}_player_${normalizedOperationId}`);
+    const playerId = `shop_${uid}_${randomUUID()}`;
     return await db.runTransaction(async (t) => {
+      const receiptSnap = await t.get(receiptRef);
+      if (receiptSnap.exists) {
+        const receipt = receiptSnap.data() || {};
+        const sameRequest =
+          receipt.userId === uid &&
+          receipt.operation === 'SHOP_PLAYER_CREATION' &&
+          receipt.nickname === nickname &&
+          receipt.role === parsedRole &&
+          Number(receipt.talent) === talent &&
+          Number(receipt.age) === age &&
+          receipt.country?.code === country.code &&
+          receipt.country?.name === country.name &&
+          receipt.country?.flag === country.flag;
+        if (!sameRequest) throw new Error('IDEMPOTENCY_KEY_REUSED');
+        return { ...(receipt.result || {}), duplicate: true };
+      }
+
       const ref = db.collection('players_v14').doc(uid);
       const snap = await t.get(ref);
       if (!snap.exists) throw new Error('PLAYER_NOT_FOUND');
       const data = snap.data() || {};
-      const crystals = Number(data.crystals || 0);
+      const crystals = readCurrencyBalance(data.crystals);
       if (crystals < creationCost) throw new Error('INSUFFICIENT_FUNDS');
       const owned: Player[] = Array.isArray(data.ownedPlayers) ? data.ownedPlayers : [];
       const youth: Player[] = Array.isArray(data.youthAcademyPlayers) ? data.youthAcademyPlayers : [];
       if ([...owned, ...youth].some((p: any) => String(p?.name || '').toLowerCase() === nickname.toLowerCase())) throw new Error('PLAYER_NAME_ALREADY_EXISTS');
 
-      const player = generateUniquePlayer(parsedRole, owned.length + youth.length, false, `shop_${uid}_${Date.now()}`);
+      const player = generateUniquePlayer(parsedRole, owned.length + youth.length, false, playerId);
       const overall = Math.round(30 + (talent - 3.5) * 20);
       const gameYearMs = 7 * 24 * 60 * 60 * 1000;
       const birthDate = new Date(Date.now() - age * gameYearMs).toISOString();
       const updated: Player = {
         ...player,
-        id: `shop_${uid}_${Date.now()}`,
+        id: playerId,
         name: nickname,
         overallRating: overall,
         price: overall * 2000 + 40000,
@@ -317,8 +420,30 @@ export async function createShopPlayerAction(
         updatedAt: FieldValue.serverTimestamp(),
       });
       const tx = db.collection('economy_transactions').doc();
-      t.set(tx, { userId: uid, amount: -creationCost, currency: 'crystals', type: 'SHOP_PLAYER_CREATION', referenceId: updated.id, description: `Create player ${nickname}`, timestamp: FieldValue.serverTimestamp() });
-      return { success: true, player: updated, creationCost, crystals: crystals - creationCost, isYouth: age < 18 };
+      t.set(tx, {
+        userId: uid,
+        amount: -creationCost,
+        currency: 'crystals',
+        type: 'SHOP_PLAYER_CREATION',
+        referenceId: updated.id,
+        description: `Create player ${nickname}`,
+        balanceBefore: crystals,
+        balanceAfter: crystals - creationCost,
+        timestamp: FieldValue.serverTimestamp(),
+      });
+      const result = { success: true, player: updated, creationCost, crystals: crystals - creationCost, isYouth: age < 18 };
+      t.create(receiptRef, {
+        userId: uid,
+        operation: 'SHOP_PLAYER_CREATION',
+        nickname,
+        role: parsedRole,
+        talent,
+        age,
+        country,
+        result,
+        createdAt: FieldValue.serverTimestamp(),
+      });
+      return result;
     });
   } catch (e) {
     return { success: false, error: errorMessage(e) };

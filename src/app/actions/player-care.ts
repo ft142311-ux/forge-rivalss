@@ -3,7 +3,11 @@
 import { FieldValue } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { requireServerActor } from '@/lib/server-auth';
-import { applyPlayerCareToOwnedPlayers, recoverAssignedSquadPlayers } from '@/app/lib/player-care-utils';
+import {
+  applyPlayerCareToOwnedPlayers,
+  isSamePlayerCareOperation,
+  recoverAssignedSquadPlayers,
+} from '@/app/lib/player-care-utils';
 
 type CareMode = 'energy' | 'form';
 type Currency = 'credits' | 'crystals';
@@ -23,6 +27,8 @@ async function commitCarePurchase(
   currency: Currency,
   cost: number,
   description: string,
+  operationType: string,
+  targetId: string,
   mutate: (profile: Record<string, any>) => { profilePatch: Record<string, unknown>; result: Record<string, unknown> }
 ) {
   const db = getAdminDb();
@@ -32,7 +38,18 @@ async function commitCarePurchase(
   return db.runTransaction(async (tx) => {
     const [profileSnap, ledgerSnap] = await Promise.all([tx.get(profileRef), tx.get(ledgerRef)]);
     if (!profileSnap.exists) throw new Error('PLAYER_NOT_FOUND');
-    if (ledgerSnap.exists) return { success: true, duplicate: true, ...(ledgerSnap.data()?.result || {}) };
+    if (ledgerSnap.exists) {
+      const receipt = ledgerSnap.data() || {};
+      if (!isSamePlayerCareOperation(receipt, {
+        currency,
+        amount: -cost,
+        operationType,
+        targetId,
+      })) {
+        throw new Error('IDEMPOTENCY_KEY_REUSED');
+      }
+      return { success: true, duplicate: true, ...(receipt.result || {}) };
+    }
 
     const profile = profileSnap.data() || {};
     const balance = safeNumber(profile[currency]);
@@ -51,6 +68,8 @@ async function commitCarePurchase(
       amount: -cost,
       currency,
       type: 'PLAYER_CARE',
+      operationType,
+      targetId,
       referenceId: operationId,
       description,
       balanceBefore: balance,
@@ -76,8 +95,14 @@ export async function purchasePlayerCareAction(
     if (!validOperationId(operationId)) throw new Error('INVALID_OPERATION_ID');
 
     const cost = mode === 'energy' ? 5_000 : 10_000;
-    return await commitCarePurchase(uid, operationId, 'credits', cost,
+    return await commitCarePurchase(
+      uid,
+      operationId,
+      'credits',
+      cost,
       mode === 'energy' ? 'Player energy recovery' : 'Player form boost',
+      `PLAYER_CARE_${mode.toUpperCase()}`,
+      playerId,
       (profile) => {
         const players = Array.isArray(profile.ownedPlayers) ? profile.ownedPlayers : [];
         const mutation = applyPlayerCareToOwnedPlayers(
@@ -109,8 +134,14 @@ export async function recoverSquadEnergyAction(
     if (!validOperationId(operationId)) throw new Error('INVALID_OPERATION_ID');
     const cost = currency === 'credits' ? 75_000 : 150;
 
-    return await commitCarePurchase(uid, operationId, currency, cost,
+    return await commitCarePurchase(
+      uid,
+      operationId,
+      currency,
+      cost,
       currency === 'credits' ? 'Squad energy recovery' : 'Squad instant energy regeneration',
+      'SQUAD_ENERGY_RECOVERY',
+      'assigned-squad',
       (profile) => {
         const players = Array.isArray(profile.ownedPlayers) ? profile.ownedPlayers : [];
         const lineup = profile.lineup && typeof profile.lineup === 'object' ? profile.lineup : {};

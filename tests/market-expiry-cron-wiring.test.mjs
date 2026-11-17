@@ -1,0 +1,100 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+
+const read = path => readFileSync(new URL(path, import.meta.url), 'utf8');
+
+test('five-minute Firebase schedule invokes the protected market-expiry route', () => {
+  const functions = read('../functions/index.js');
+  const scheduler = read('../functions/season-orchestrator-scheduler.js');
+  const route = read('../src/app/api/cron/market-expiry/route.ts');
+
+  const scheduledStart = functions.indexOf('exports.runMarketExpirySweep = functions');
+  assert.notEqual(scheduledStart, -1);
+  const scheduledBlock = functions.slice(scheduledStart);
+  assert.match(scheduledBlock, /\.schedule\('every 5 minutes'\)/);
+  assert.match(scheduledBlock, /invokeMarketExpirySweep\(/);
+  assert.match(scheduledBlock, /process\.env\.SEASON_ORCHESTRATOR_URL/);
+  assert.match(scheduledBlock, /process\.env\.CRON_SECRET/);
+
+  assert.match(scheduler, /endpoint\.pathname = '\/api\/cron\/market-expiry'/);
+  assert.match(route, /isCronAuthorized\(request\)/);
+  assert.match(route, /runTransferMarketExpirySweep\(\)/);
+  assert.match(route, /status: 503/);
+});
+
+test('auction settlement compatibility entry point delegates to the same idempotent sweep', () => {
+  const actions = read('../src/app/actions/autonomous-cycle.ts');
+  const settlementCore = read('../src/app/lib/auction-expiry-sweep.ts');
+  const bidCore = read('../src/app/lib/auction-bid.ts');
+  assert.match(
+    actions,
+    /export async function runPlayerAuctionSettlementSweep\(\)\s*\{\s*return runTransferMarketExpirySweep\(\);\s*\}/,
+  );
+  assert.match(actions, /export async function runTransferMarketExpirySweep\(\)/);
+  assert.match(settlementCore, /export async function runTransferMarketExpirySweepWithDb\(/);
+  assert.match(bidCore, /export async function placeSpecialMarketBidWithDb\(/);
+});
+
+test('market expiry route fails closed when the sweep reports partial errors', () => {
+  const route = read('../src/app/api/cron/market-expiry/route.ts');
+  assert.match(route, /if \(result\.success === false\)/);
+  assert.match(route, /NextResponse\.json\(\{ \.\.\.result, timestamp: new Date\(\)\.toISOString\(\) \}, \{ status: 503 \}\)/);
+  assert.match(route, /catch \(error: any\)/);
+  assert.match(route, /status: 500/);
+});
+
+
+test('market expiry scheduler accepts a bounded continuation and forwards the protected request', async () => {
+  const scheduler = await import('../functions/season-orchestrator-scheduler.js');
+  let capturedUrl;
+  let capturedOptions;
+  const result = await scheduler.default.invokeMarketExpirySweep({
+    seasonOrchestratorUrl: 'https://game.example/api/cron/season-orchestrator',
+    secret: 's'.repeat(40),
+    fetchImpl: async (url, options) => {
+      capturedUrl = String(url);
+      capturedOptions = options;
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ success: true, continuation: true, complete: false, settled: 12 }),
+      };
+    },
+  });
+
+  assert.equal(capturedUrl, 'https://game.example/api/cron/market-expiry');
+  assert.equal(capturedOptions.method, 'GET');
+  assert.equal(capturedOptions.headers.authorization, `Bearer ${'s'.repeat(40)}`);
+  assert.equal(capturedOptions.headers.accept, 'application/json');
+  assert.equal(capturedOptions.redirect, 'error');
+  assert.ok(capturedOptions.signal);
+  assert.deepEqual(result, { success: true, status: 200, settled: 12, complete: false, continuation: true, busy: false });
+});
+
+test('market expiry scheduler rejects HTTP failures and unsuccessful route payloads', async () => {
+  const scheduler = await import('../functions/season-orchestrator-scheduler.js');
+  const common = {
+    seasonOrchestratorUrl: 'https://game.example/api/cron/season-orchestrator',
+    secret: 's'.repeat(40),
+  };
+
+  await assert.rejects(
+    scheduler.default.invokeMarketExpirySweep({
+      ...common,
+      fetchImpl: async () => ({ ok: false, status: 503 }),
+    }),
+    /MARKET_EXPIRY_HTTP_503/,
+  );
+  await assert.rejects(
+    scheduler.default.invokeMarketExpirySweep({
+      ...common,
+      fetchImpl: async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({ success: false, continuation: true }),
+      }),
+    }),
+    /MARKET_EXPIRY_UNSUCCESSFUL/,
+  );
+});

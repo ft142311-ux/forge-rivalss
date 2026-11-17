@@ -3,7 +3,11 @@ import { getAdminDb } from '@/lib/firebase-admin';
 
 /**
  * @fileOverview Health endpoint for the local and deployed app.
+ * Keep responses uncached and avoid exposing backend exception details publicly.
  */
+
+export const dynamic = 'force-dynamic';
+
 export async function GET() {
   try {
     const db = getAdminDb();
@@ -13,13 +17,13 @@ export async function GET() {
       status: 'UP',
       services: { firestore: 'connected' },
       timestamp: new Date().toISOString(),
-    });
+    }, { headers: { 'Cache-Control': 'no-store' } });
   } catch (error: any) {
-    console.error('[HEALTH CHECK FAILED]:', error.message);
+    console.error('[HEALTH CHECK FAILED]:', error);
     return NextResponse.json({
       status: 'DOWN',
-      error: error.message,
+      error: 'FIRESTORE_UNAVAILABLE',
       timestamp: new Date().toISOString(),
-    }, { status: 503 });
+    }, { status: 503, headers: { 'Cache-Control': 'no-store' } });
   }
 }

@@ -14,7 +14,6 @@ test('authoritative match handlers route simulations through Match Engine', () =
     'src/app/actions/tournament-system.ts',
     'src/app/actions/trial-match-resolver.ts',
     'src/app/actions/season-recovery.ts',
-    'src/app/actions/season-sequential-recovery.ts',
   ];
   for (const file of files) {
     const source = read(file);
@@ -22,6 +21,13 @@ test('authoritative match handlers route simulations through Match Engine', () =
     assert.doesNotMatch(source, /simulateMatchCore\(/, `${file} must not call the low-level simulator directly`);
     assert.doesNotMatch(source, /import\s*\{[^}]*simulateMatchCore[^}]*\}/, `${file} must not import the low-level simulator`);
   }
+});
+
+test('legacy sequential recovery is disabled without database access', () => {
+  const source = read('src/app/actions/season-sequential-recovery.ts');
+  assert.match(source, /LEGACY_RECOVERY_DISABLED_USE_SEASON_ORCHESTRATOR/);
+  assert.match(source, /writesStarted:\s*false/);
+  assert.doesNotMatch(source, /getAdminDb|runMatchEngine|commitSeasonRolloverWrites|commitSeasonCalendarPublication/);
 });
 
 test('match modes have distinct Firestore collections', () => {
@@ -69,4 +75,21 @@ test('client compatibility paths and AI adapter also use the shared engine', () 
     assert.match(source, /runMatchEngine\(/, `${file} must use the shared engine`);
     assert.doesNotMatch(source, /simulateMatchCore\(/, `${file} must not bypass the shared engine`);
   }
+});
+
+
+test('shared match simulation stays deterministic for a stable match id and snapshots', () => {
+  const simulation = read('src/app/lib/match-simulation.ts');
+  // Snapshot construction may evaluate time-sensitive eligibility (for example,
+  // player suspensions). Once snapshots are supplied, the simulation core must
+  // not read clocks or random sources.
+  const snapshotBuilderStart = simulation.indexOf('export function buildMatchTeamSnapshot(');
+  const botFactoryStart = simulation.indexOf('export function createDeterministicBotSquad(', snapshotBuilderStart);
+  assert.ok(snapshotBuilderStart >= 0 && botFactoryStart > snapshotBuilderStart, 'snapshot builder boundaries must remain explicit');
+  const deterministicCore = simulation.slice(0, snapshotBuilderStart) + simulation.slice(botFactoryStart);
+  assert.doesNotMatch(deterministicCore, /Math\.random\s*\(|Date\.now\s*\(|randomUUID\s*\(/);
+  assert.match(simulation, /resolveMatchDraft\(teamA, teamB, input\.matchId\)/);
+  assert.match(simulation, /\`\$\{input\.matchId\}:g\$\{i\+1\}\`/);
+  assert.match(simulation, /hash32\(\`\$\{seed\}\|\$\{salt\}\`\)/);
+  assert.match(simulation, /seed:input\.matchId/);
 });

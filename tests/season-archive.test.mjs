@@ -1,14 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { calculateGroupStandings } from '../src/app/actions/season-rollover-standings.ts';
-import { expectedRolloverGroups } from '../src/app/actions/season-rollover-plan.ts';
+import { buildPromotionRelegationGroups, expectedRolloverGroups } from '../src/app/actions/season-rollover-plan.ts';
 import { getCompletedSeasonArchives, getVisibleSeasonArchives, isCompletedSeasonArchive, isRecoveredSeasonArchive, isSeasonArchiveReadyToComplete, validateSeasonArchiveSnapshot } from '../src/app/actions/season-archive.ts';
 
 function makeSeasonArchive(sourceSeason = 1) {
   const groups = expectedRolloverGroups();
   const matches = [];
   const standings = {};
-  const planGroups = {};
   for (const groupKey of groups) {
     const [, level, group] = /^D([1-4])-G(\d+)$/.exec(groupKey);
     const participantByRank = Object.fromEntries(Array.from({ length: 8 }, (_, index) => [index + 1, `${groupKey}-TEAM-${index + 1}`]));
@@ -33,8 +32,10 @@ function makeSeasonArchive(sourceSeason = 1) {
       }
     }
     standings[groupKey] = calculateGroupStandings({}, fixtures).map((row, index) => ({ ...row, rank: index + 1 }));
-    planGroups[groupKey] = standings[groupKey].map(row => ({ id: row.id, rank: row.rank }));
   }
+  const placement = buildPromotionRelegationGroups(standings);
+  assert.equal(placement.ready, true);
+  const planGroups = placement.groups;
   const archive = {
     sourceSeason, leagueId: 'ALPHA', archiveVersion: 1, status: 'preparing',
     expectedMatches: 840, finishedMatches: 840, groups: 15, teamCount: 120,
@@ -42,7 +43,7 @@ function makeSeasonArchive(sourceSeason = 1) {
     integrity: { complete: true, unfinishedMatches: 0, invalidResults: 0, canonicalMatches: 840, duplicateCanonicalFixtures: 0 },
     standings,
   };
-  const plan = { sourceSeason, targetSeason: sourceSeason + 1, ready: true, groups: planGroups };
+  const plan = { sourceSeason, targetSeason: sourceSeason + 1, ready: true, awards: { ready: true }, groups: planGroups };
   return { archive, matches, plan };
 }
 
@@ -64,6 +65,28 @@ test('late engine-reconstructed archive remains visibly completed only with full
   assert.equal(isSeasonArchiveReadyToComplete(archive, matches, plan), true);
   assert.equal(isCompletedSeasonArchive(archive), true);
   assert.equal(isSeasonArchiveReadyToComplete(archive, matches.slice(1), plan), false);
+});
+
+test('archive validation rejects a club duplicated across different groups before rewards can run', () => {
+  const { archive, matches } = makeSeasonArchive();
+  const groupKeys = Object.keys(archive.standings);
+  assert.ok(groupKeys.length >= 2, 'fixture must include at least two distinct groups');
+  const [firstGroup, secondGroup] = groupKeys;
+  assert.ok(archive.standings[firstGroup]?.[0]?.id, 'first group must include a ranked club');
+  assert.ok(archive.standings[secondGroup]?.[0], 'second group must include a ranked club');
+  const firstGroupId = archive.standings[firstGroup][0].id;
+  archive.standings[secondGroup][0].id = firstGroupId;
+  const result = validateSeasonArchiveSnapshot(archive, matches);
+  assert.equal(result.valid, false);
+  assert.equal(result.reasons.some(reason => reason.startsWith(`ARCHIVE_TEAM_ID_DUPLICATED:${secondGroup}:`)), true);
+});
+
+test('archive readiness rejects a valid-shaped rollover plan that does not match archived standings', () => {
+  const { archive, matches, plan } = makeSeasonArchive();
+  assert.equal(isSeasonArchiveReadyToComplete(archive, matches, plan), true);
+  const tampered = structuredClone(plan);
+  tampered.groups['D1-G1'][0].id = 'FOREIGN_OR_STALE_CLUB';
+  assert.equal(isSeasonArchiveReadyToComplete(archive, matches, tampered), false);
 });
 
 test('archive standings are checked against all 840 persisted match results', () => {
@@ -92,7 +115,7 @@ test('recovered archive is visible but never treated as a completed season or fi
     sourceSeason: 2, leagueId: 'ALPHA', archiveVersion: 1, status: 'recovered', recoveredAt: '2026-10-27T00:00:00.000Z',
     expectedMatches: 840, finishedMatches: 0, unresolvedMatches: 840, groups: 15, teamCount: 120,
     standings: {}, startingParticipants,
-    recovery: { status: 'incomplete', finalStandingsAvailable: false },
+    recovery: { status: 'incomplete', finalStandingsAvailable: false, reason: 'SEASON_INCOMPLETE' },
   };
   assert.equal(isRecoveredSeasonArchive(recovered), true);
   assert.equal(getCompletedSeasonArchives([recovered]).length, 0);
@@ -100,4 +123,226 @@ test('recovered archive is visible but never treated as a completed season or fi
   assert.equal(isRecoveredSeasonArchive({ ...recovered, standings: { 'D1-G1': [] } }), false);
   assert.equal(getVisibleSeasonArchives([{ ...recovered, finishedMatches: 1 }]).length, 0);
   assert.equal(getVisibleSeasonArchives([{ ...recovered, startingParticipants: {} }]).length, 0);
+});
+
+test('recovered archive rejects invalid counters, timestamps, metadata, extra groups, and duplicate ranks', () => {
+  const startingParticipants = Object.fromEntries(expectedRolloverGroups().map(group => [group,
+    Array.from({ length: 8 }, (_, i) => ({ id: `${group}-TEAM-${i + 1}`, rank: i + 1 }))]));
+  const base = {
+    sourceSeason: 2, leagueId: 'ALPHA', archiveVersion: 1, status: 'recovered',
+    recoveredAt: '2026-10-27T00:00:00.000Z', expectedMatches: 840,
+    finishedMatches: 137, unresolvedMatches: 703, groups: 15, teamCount: 120,
+    standings: {}, startingParticipants,
+    recovery: { status: 'incomplete', finalStandingsAvailable: false, reason: 'SEASON_INCOMPLETE' },
+  };
+  assert.equal(isRecoveredSeasonArchive(base), true);
+  const invalid = [
+    { ...base, finishedMatches: -1, unresolvedMatches: 841 },
+    { ...base, finishedMatches: 1.5, unresolvedMatches: 838.5 },
+    { ...base, unresolvedMatches: 702 },
+    { ...base, recoveredAt: 'not-a-date' },
+    { ...base, groups: 14 },
+    { ...base, teamCount: 119 },
+    { ...base, recovery: { ...base.recovery, reason: '' } },
+    { ...base, startingParticipants: { ...base.startingParticipants, 'D5-G1': [] } },
+    { ...base, startingParticipants: { ...base.startingParticipants, 'D1-G1': base.startingParticipants['D1-G1'].map((row, i) => ({ ...row, rank: i === 1 ? 1 : row.rank })) } },
+  ];
+  for (const candidate of invalid) assert.equal(isRecoveredSeasonArchive(candidate), false);
+});
+
+
+
+test('archive pruning retains the newest completed archive and only prunes fully verified older archives', async () => {
+  const { resolveArchivePrunePlan } = await import('../src/app/actions/season-archive.ts');
+  const first = makeSeasonArchive(1);
+  first.archive.status = 'completed';
+  first.archive.completedAt = '2026-10-08T15:00:00.000Z';
+  const second = makeSeasonArchive(2);
+  second.archive.status = 'completed';
+  second.archive.completedAt = '2026-10-23T15:00:00.000Z';
+  const result = resolveArchivePrunePlan([
+    { id: 'S1', archive: first.archive, matches: first.matches },
+    { id: 'S2', archive: second.archive, matches: second.matches },
+  ], 4, 2);
+  assert.equal(result.ready, true);
+  assert.deepEqual(result.pruneIds, ['S1']);
+  assert.equal(result.retainedArchiveSeason, 2);
+});
+
+test('archive pruning fails closed for malformed, partial, and unmarked recovered archives', async () => {
+  const { resolveArchivePrunePlan } = await import('../src/app/actions/season-archive.ts');
+  assert.equal(resolveArchivePrunePlan([
+    { id: 'legacy', archive: {}, matches: [] },
+  ], 3, null).reason, 'ARCHIVE_PRUNE_IDENTITY_CONFLICT');
+
+  const incomplete = makeSeasonArchive(1);
+  incomplete.archive.status = 'completed';
+  incomplete.archive.completedAt = 'x';
+  assert.equal(resolveArchivePrunePlan([
+    { id: 'S1', archive: incomplete.archive, matches: incomplete.matches.slice(0, 10) },
+  ], 3, null).reason, 'OBSOLETE_COMPLETED_ARCHIVE_INVALID');
+
+  const startingParticipants = Object.fromEntries(expectedRolloverGroups().map(group => [group,
+    Array.from({ length: 8 }, (_, i) => ({ id: `${group}-S2-${i + 1}`, rank: i + 1 }))]));
+  const recovered = {
+    sourceSeason: 2, leagueId: 'ALPHA', archiveVersion: 1, status: 'recovered',
+    recoveredAt: '2026-10-27T00:00:00.000Z', expectedMatches: 840, finishedMatches: 0,
+    unresolvedMatches: 840, groups: 15, teamCount: 120, standings: {}, startingParticipants,
+    recovery: { status: 'incomplete', finalStandingsAvailable: false, reason: 'SEASON_INCOMPLETE' },
+  };
+  assert.equal(resolveArchivePrunePlan([
+    { id: 'S2', archive: recovered, matches: [], historyStatus: null },
+  ], 4, null).reason, 'RECOVERED_ARCHIVE_SKIP_MARKER_MISSING');
+});
+
+test('recovered archive cannot be pruned from a pending activation marker', async () => {
+  const { resolveArchivePrunePlan } = await import('../src/app/actions/season-archive.ts');
+  const startingParticipants = Object.fromEntries(expectedRolloverGroups().map(group => [group,
+    Array.from({ length: 8 }, (_, i) => ({ id: `${group}-S2-${i + 1}`, rank: i + 1 }))]));
+  const recovered = {
+    sourceSeason: 2, leagueId: 'ALPHA', archiveVersion: 1, status: 'recovered',
+    recoveredAt: '2026-10-27T00:00:00.000Z', expectedMatches: 840, finishedMatches: 0,
+    unresolvedMatches: 840, groups: 15, teamCount: 120, standings: {}, startingParticipants,
+    recovery: { status: 'incomplete', finalStandingsAvailable: false, reason: 'SEASON_INCOMPLETE' },
+  };
+
+  const pending = resolveArchivePrunePlan([
+    { id: 'S2', archive: recovered, matches: [], historyStatus: 'SKIPPED_PENDING_ACTIVATION' },
+  ], 4, null);
+  assert.equal(pending.ready, false);
+  assert.equal(pending.reason, 'RECOVERED_ARCHIVE_SKIP_MARKER_MISSING');
+  assert.deepEqual(pending.pruneIds, []);
+
+  const finalized = resolveArchivePrunePlan([
+    { id: 'S2', archive: recovered, matches: [], historyStatus: 'SKIPPED' },
+  ], 4, null);
+  assert.equal(finalized.ready, true);
+  assert.deepEqual(finalized.pruneIds, ['S2']);
+});
+
+test('recovered archive cleanup does not resume a legacy prune intent with a pending skip marker', async () => {
+  const { resolveArchivePrunePlan } = await import('../src/app/actions/season-archive.ts');
+  const startingParticipants = Object.fromEntries(expectedRolloverGroups().map(group => [group,
+    Array.from({ length: 8 }, (_, i) => ({ id: `${group}-S2-${i + 1}`, rank: i + 1 }))]));
+  const recovered = {
+    sourceSeason: 2, leagueId: 'ALPHA', archiveVersion: 1, status: 'recovered',
+    recoveredAt: '2026-10-27T00:00:00.000Z', expectedMatches: 840, finishedMatches: 0,
+    unresolvedMatches: 840, groups: 15, teamCount: 120, standings: {}, startingParticipants,
+    recovery: { status: 'incomplete', finalStandingsAvailable: false, reason: 'SEASON_INCOMPLETE' },
+    pruneStatus: 'PRUNING', pruneTargetSeason: 4, pruneRetainedArchiveSeason: 0, prunePolicyVersion: 1,
+  };
+
+  const pending = resolveArchivePrunePlan([
+    { id: 'S2', archive: recovered, matches: [], historyStatus: 'SKIPPED_PENDING_ACTIVATION' },
+  ], 4, null);
+  assert.equal(pending.ready, false);
+  assert.equal(pending.reason, 'RECOVERED_ARCHIVE_SKIP_MARKER_MISSING');
+  assert.deepEqual(pending.pruneIds, []);
+
+  const finalized = resolveArchivePrunePlan([
+    { id: 'S2', archive: recovered, matches: [], historyStatus: 'SKIPPED' },
+  ], 4, null);
+  assert.equal(finalized.ready, true);
+  assert.deepEqual(finalized.pruneIds, ['S2']);
+});
+
+test('archive pruning resumes interrupted subcollection deletion only with a matching intent marker', async () => {
+  const { resolveArchivePrunePlan } = await import('../src/app/actions/season-archive.ts');
+  const first = makeSeasonArchive(1);
+  first.archive.status = 'completed';
+  first.archive.completedAt = '2026-10-08T15:00:00.000Z';
+  first.archive.pruneStatus = 'PRUNING';
+  first.archive.pruneTargetSeason = 4;
+  first.archive.pruneRetainedArchiveSeason = 2;
+  first.archive.prunePolicyVersion = 1;
+  const second = makeSeasonArchive(2);
+  second.archive.status = 'completed';
+  second.archive.completedAt = '2026-10-23T15:00:00.000Z';
+  const result = resolveArchivePrunePlan([
+    { id: 'S1', archive: first.archive, matches: [] },
+    { id: 'S2', archive: second.archive, matches: second.matches },
+  ], 4, 2);
+  assert.equal(result.ready, true);
+  assert.deepEqual(result.pruneIds, ['S1']);
+});
+
+
+
+test('archive pruning refuses to resume an interrupted deletion when any intent fence field changed', async () => {
+  const { resolveArchivePrunePlan } = await import('../src/app/actions/season-archive.ts');
+  const first = makeSeasonArchive(1);
+  first.archive.status = 'completed';
+  first.archive.completedAt = '2026-10-08T15:00:00.000Z';
+  first.archive.pruneStatus = 'PRUNING';
+  first.archive.pruneTargetSeason = 4;
+  first.archive.pruneRetainedArchiveSeason = 2;
+  first.archive.prunePolicyVersion = 1;
+  const second = makeSeasonArchive(2);
+  second.archive.status = 'completed';
+  second.archive.completedAt = '2026-10-23T15:00:00.000Z';
+
+  const variants = [
+    { ...first.archive, pruneTargetSeason: 5 },
+    { ...first.archive, pruneRetainedArchiveSeason: 1 },
+    { ...first.archive, prunePolicyVersion: 2 },
+  ];
+  for (const archive of variants) {
+    const result = resolveArchivePrunePlan([
+      { id: 'S1', archive, matches: [] },
+      { id: 'S2', archive: second.archive, matches: second.matches },
+    ], 4, 2);
+    assert.equal(result.ready, false);
+    assert.equal(result.reason, 'ARCHIVE_PRUNE_MARKER_CONFLICT');
+    assert.deepEqual(result.pruneIds, []);
+  }
+});
+
+test('archive pruning never resumes deletion of the newest retained completed archive', async () => {
+  const { resolveArchivePrunePlan } = await import('../src/app/actions/season-archive.ts');
+  const retained = makeSeasonArchive(2);
+  retained.archive.status = 'completed';
+  retained.archive.completedAt = '2026-10-23T15:00:00.000Z';
+  retained.archive.pruneStatus = 'PRUNING';
+  retained.archive.pruneTargetSeason = 4;
+  retained.archive.pruneRetainedArchiveSeason = 2;
+  retained.archive.prunePolicyVersion = 1;
+
+  const result = resolveArchivePrunePlan([
+    { id: 'S2', archive: retained.archive, matches: retained.matches },
+  ], 4, 2);
+  assert.equal(result.ready, false);
+  assert.equal(result.reason, 'RETAINED_ARCHIVE_MARKED_FOR_PRUNING');
+  assert.deepEqual(result.pruneIds, []);
+});
+
+test('recovered season archive snapshot records only starting placements and truthful unfinished counts', async () => {
+  const { buildRecoveredSeasonArchiveSnapshot, isRecoveredSeasonArchive } = await import('../src/app/actions/season-archive.ts');
+  const startingParticipants = Object.fromEntries(expectedRolloverGroups().map(group => [group,
+    Array.from({ length: 8 }, (_, i) => ({ id: `${group}-TEAM-${i + 1}`, rank: i + 1, name: `${group} team ${i + 1}` }))]));
+  const result = buildRecoveredSeasonArchiveSnapshot({
+    sourceSeason: 2,
+    startingParticipants,
+    finishedMatches: 137,
+    reason: 'SEASON_INCOMPLETE',
+    recoveredAt: '2026-10-23T15:00:00.000Z',
+  });
+  assert.equal(result.ready, true);
+  assert.equal(isRecoveredSeasonArchive(result.archive), true);
+  assert.equal(result.archive.finishedMatches, 137);
+  assert.equal(result.archive.unresolvedMatches, 703);
+  assert.deepEqual(result.archive.standings, {});
+  assert.equal(Object.values(result.archive.startingParticipants).flat().length, 120);
+  assert.equal(Object.values(result.archive.startingParticipants).flat().every(row => row.matchesPlayed === 0), true);
+});
+
+test('recovered season archive refuses incomplete or duplicate starting participant placements', async () => {
+  const { buildRecoveredSeasonArchiveSnapshot } = await import('../src/app/actions/season-archive.ts');
+  const startingParticipants = Object.fromEntries(expectedRolloverGroups().map(group => [group,
+    Array.from({ length: 8 }, (_, i) => ({ id: `${group}-TEAM-${i + 1}`, rank: i + 1 }))]));
+  startingParticipants['D1-G1'][0].id = startingParticipants['D1-G1'][1].id;
+  const result = buildRecoveredSeasonArchiveSnapshot({
+    sourceSeason: 2, startingParticipants, finishedMatches: 0, reason: 'NO_CANONICAL_RESULTS',
+  });
+  assert.equal(result.ready, false);
+  assert.equal(result.reason, 'CARRY_FORWARD_TEAM_OR_RANK_CONFLICT');
 });

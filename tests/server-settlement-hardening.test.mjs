@@ -43,6 +43,12 @@ test('league match result and its player/economy effects are committed in one tr
   assert.match(source, /match_player_effects_v1/);
   assert.match(source, /MATCH_SELF_PLAY_INVALID/);
   assert.match(source, /economyTxRef/);
+  assert.match(source, /receiptMatchesOperation/);
+  assert.match(source, /receipt\.userId === homeId/);
+  assert.match(source, /receipt\.referenceId === matchDoc\.id/);
+  assert.match(source, /receipt\.type === 'MATCH_REVENUE'/);
+  assert.match(source, /Number\(receipt\.amount\) === homeEconomy\.totalRevenue/);
+  assert.match(source, /MATCH_ECONOMY_RECEIPT_CONFLICT/);
   assert.match(source, /settlementVersion: 1/);
 });
 
@@ -58,9 +64,12 @@ test('email verification uses a cryptographic code and caps failed attempts', ()
 });
 
 test('transfer-market expiry sweep paginates instead of loading the full collection at once', () => {
-  const source = read('src/app/actions/autonomous-cycle.ts');
+  const source = read('src/app/lib/auction-expiry-sweep.ts');
   assert.match(source, /market\.orderBy\(FieldPath\.documentId\(\)\)\.limit\(pageSize\)/);
-  assert.match(source, /scanned,\s*due: due\.length/);
+  assert.match(source, /system_jobs_v1.*market_expiry_sweep|collection\('system_jobs_v1'\)/);
+  assert.match(source, /maxRuntimeMs[\s\S]*210_000/);
+  assert.match(source, /startAfter\(cursorId\)/);
+  assert.match(source, /scanned,\s*due: dueCount/);
 });
 
 test('cron routes pass the configured secret into internal worker actions', () => {

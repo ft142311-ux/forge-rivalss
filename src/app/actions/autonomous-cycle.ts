@@ -4,6 +4,9 @@ import { clampNumber } from '@/app/lib/numeric-utils';
 import { isPlayerSkillKey } from '@/game/player-skills';
 import { getMatchWinnerId } from '@/app/lib/match-winner';
 import { aggregatePlayerCombatStats } from '@/app/lib/player-combat-stats';
+import { resolveSeasonLifecycleWindow } from './season-boundary';
+import { isSeasonRolloverLockStale, SEASON_ROLLOVER_LOCK_ID } from './season-rollover-lock';
+import { runTransferMarketExpirySweepWithDb } from '@/app/lib/auction-expiry-sweep';
 
 /**
  * @fileOverview Р В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В Р В Р’В Р Р†Р вЂљРІвЂћСћР В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р Р†РІР‚С›РЎС›Р В Р’В Р Р†Р вЂљРІвЂћСћР В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В Р В Р’В Р В РІР‚В Р В Р’В Р Р†Р вЂљРЎв„ўР В Р Р‹Р Р†РІР‚С›РЎС›Р В Р’В Р вЂ™Р’В Р В Р’В Р В РІР‚в„–Р В Р’В Р В Р вЂ№Р В Р вЂ Р Р†Р вЂљРЎвЂєР РЋРЎвЂєР В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В Р В Р’В Р Р†Р вЂљРІвЂћСћР В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р Р†РІР‚С›РЎС›Р В Р’В Р Р†Р вЂљРІвЂћСћР В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В Р В Р’В Р В РІР‚В Р В Р’В Р Р†Р вЂљРЎв„ўР В Р Р‹Р Р†РІР‚С›РЎС›Р В Р’В Р вЂ™Р’В Р В Р’В Р В РІР‚в„–Р В Р’В Р В РІР‚В Р В Р’В Р Р†Р вЂљРЎв„ўР В Р Р‹Р РЋРЎв„ўР В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В Р В Р’В Р Р†Р вЂљРІвЂћСћР В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р Р†РІР‚С›РЎС›Р В Р’В Р Р†Р вЂљРІвЂћСћР В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В Р’В Р Р†Р вЂљРІвЂћвЂ“Р В Р’В Р вЂ™Р’В Р В Р’В Р Р†Р вЂљР’В Р В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р РЋРІвЂћСћР В Р’В Р В Р вЂ№Р В Р вЂ Р В РІР‚С™Р РЋРЎС™Р В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В Р В Р’В Р Р†Р вЂљРІвЂћСћР В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р Р†РІР‚С›РЎС›Р В Р’В Р Р†Р вЂљРІвЂћСћР В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В Р В Р’В Р В РІР‚В Р В Р’В Р Р†Р вЂљРЎв„ўР В Р Р‹Р Р†РІР‚С›РЎС›Р В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р Р†РІР‚С›РЎС›Р В Р’В Р Р†Р вЂљРІвЂћСћР В РІР‚в„ўР вЂ™Р’ВР В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В Р В Р’В Р Р†Р вЂљРІвЂћСћР В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р Р†РІР‚С›РЎС›Р В Р’В Р Р†Р вЂљРІвЂћСћР В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В Р’В Р Р†Р вЂљРІвЂћвЂ“Р В Р’В Р вЂ™Р’В Р В Р’В Р Р†Р вЂљР’В Р В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р РЋРІвЂћСћР В Р’В Р В РІР‚В Р В Р вЂ Р В РІР‚С™Р РЋРІР‚С”Р В Р Р‹Р РЋРІР‚С”Р В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В Р В Р’В Р Р†Р вЂљРІвЂћСћР В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р Р†РІР‚С›РЎС›Р В Р’В Р Р†Р вЂљРІвЂћСћР В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В Р В Р’В Р В РІР‚В Р В Р’В Р Р†Р вЂљРЎв„ўР В Р Р‹Р Р†РІР‚С›РЎС›Р В Р’В Р вЂ™Р’В Р В Р’В Р В РІР‚в„–Р В Р’В Р В РІР‚В Р В Р’В Р Р†Р вЂљРЎв„ўР В Р Р‹Р РЋРЎв„ўР В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В Р В Р’В Р Р†Р вЂљРІвЂћСћР В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р Р†РІР‚С›РЎС›Р В Р’В Р Р†Р вЂљРІвЂћСћР В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В Р В Р’В Р В РІР‚В Р В Р’В Р Р†Р вЂљРЎв„ўР В Р вЂ Р Р†Р вЂљРЎвЂєР РЋРЎвЂєР В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р Р†РІР‚С›РЎС›Р В Р’В Р Р†Р вЂљРІвЂћСћР В РІР‚в„ўР вЂ™Р’В¬Р В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В Р В Р’В Р Р†Р вЂљРІвЂћСћР В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р Р†РІР‚С›РЎС›Р В Р’В Р Р†Р вЂљРІвЂћСћР В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В Р’В Р Р†Р вЂљРІвЂћвЂ“Р В Р’В Р вЂ™Р’В Р В Р’В Р В РІР‚в„–Р В Р’В Р В Р вЂ№Р В Р вЂ Р Р†Р вЂљРЎвЂєР РЋРЎвЂєР В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В Р В Р’В Р Р†Р вЂљРІвЂћСћР В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р Р†РІР‚С›РЎС›Р В Р’В Р Р†Р вЂљРІвЂћСћР В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В Р В Р’В Р В РІР‚В Р В Р’В Р Р†Р вЂљРЎв„ўР В Р вЂ Р Р†Р вЂљРЎвЂєР РЋРЎвЂєР В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р Р†РІР‚С›РЎС›Р В Р’В Р Р†Р вЂљРІвЂћСћР В РІР‚в„ўР вЂ™Р’В«Р В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В Р В Р’В Р Р†Р вЂљРІвЂћСћР В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р Р†РІР‚С›РЎС›Р В Р’В Р Р†Р вЂљРІвЂћСћР В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В Р’В Р Р†Р вЂљР’В Р В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р РЋРІвЂћСћР В Р’В Р В Р вЂ№Р В Р вЂ Р В РІР‚С™Р РЋРІР‚СњР В Р’В Р вЂ™Р’В Р В Р’В Р В РІР‚в„–Р В Р’В Р В Р вЂ№Р В Р вЂ Р В РІР‚С™Р РЋРІР‚Сњ Р В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В Р В Р’В Р Р†Р вЂљРІвЂћСћР В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р Р†РІР‚С›РЎС›Р В Р’В Р Р†Р вЂљРІвЂћСћР В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В Р’В Р Р†Р вЂљРІвЂћвЂ“Р В Р’В Р вЂ™Р’В Р В Р’В Р Р†Р вЂљР’В Р В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р РЋРІвЂћСћР В Р’В Р В РІР‚В Р В Р вЂ Р В РІР‚С™Р РЋРІР‚С”Р В Р Р‹Р РЋРІР‚С”Р В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В Р В Р’В Р Р†Р вЂљРІвЂћСћР В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р Р†РІР‚С›РЎС›Р В Р’В Р Р†Р вЂљРІвЂћСћР В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В Р В Р’В Р В РІР‚В Р В Р’В Р Р†Р вЂљРЎв„ўР В Р Р‹Р Р†РІР‚С›РЎС›Р В Р’В Р вЂ™Р’В Р В Р’В Р Р†Р вЂљР’В Р В Р’В Р В РІР‚В Р В Р’В Р Р†Р вЂљРЎв„ўР В Р Р‹Р Р†Р вЂљРЎвЂќР В Р’В Р В Р вЂ№Р В Р Р‹Р Р†Р вЂљРЎвЂќР В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В Р В Р’В Р Р†Р вЂљРІвЂћСћР В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р Р†РІР‚С›РЎС›Р В Р’В Р Р†Р вЂљРІвЂћСћР В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В Р’В Р Р†Р вЂљРІвЂћвЂ“Р В Р’В Р вЂ™Р’В Р В Р’В Р В РІР‚в„–Р В Р’В Р В РІР‚В Р В Р’В Р Р†Р вЂљРЎв„ўР В Р Р‹Р Р†Р вЂљРЎСљР В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В Р В Р’В Р Р†Р вЂљРІвЂћСћР В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р Р†РІР‚С›РЎС›Р В Р’В Р Р†Р вЂљРІвЂћСћР В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В Р’В Р Р†Р вЂљРІвЂћвЂ“Р В Р’В Р вЂ™Р’В Р В Р’В Р Р†Р вЂљР’В Р В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р РЋРІвЂћСћР В Р’В Р В Р вЂ№Р В Р вЂ Р В РІР‚С™Р РЋРЎС™Р В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В Р В Р’В Р Р†Р вЂљРІвЂћСћР В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р Р†РІР‚С›РЎС›Р В Р’В Р Р†Р вЂљРІвЂћСћР В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В Р’В Р Р†Р вЂљРІвЂћвЂ“Р В Р’В Р вЂ™Р’В Р В Р’В Р В РІР‚в„–Р В Р’В Р В Р вЂ№Р В Р вЂ Р Р†Р вЂљРЎвЂєР РЋРЎвЂєР В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В Р В Р’В Р Р†Р вЂљРІвЂћСћР В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р Р†РІР‚С›РЎС›Р В Р’В Р Р†Р вЂљРІвЂћСћР В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В Р’В Р Р†Р вЂљРІвЂћвЂ“Р В Р’В Р вЂ™Р’В Р В Р’В Р Р†Р вЂљР’В Р В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р РЋРІвЂћСћР В Р’В Р В Р вЂ№Р В Р вЂ Р В РІР‚С™Р РЋРЎС™Р В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В Р В Р’В Р Р†Р вЂљРІвЂћСћР В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р Р†РІР‚С›РЎС›Р В Р’В Р Р†Р вЂљРІвЂћСћР В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В Р’В Р Р†Р вЂљРІвЂћвЂ“Р В Р’В Р вЂ™Р’В Р В Р’В Р В РІР‚в„–Р В Р’В Р В РІР‚В Р В Р вЂ Р В РІР‚С™Р РЋРІР‚С”Р В Р Р‹Р РЋРІР‚С”Р В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В Р В Р’В Р Р†Р вЂљРІвЂћСћР В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р Р†РІР‚С›РЎС›Р В Р’В Р Р†Р вЂљРІвЂћСћР В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В Р’В Р Р†Р вЂљРІвЂћвЂ“Р В Р’В Р вЂ™Р’В Р В Р’В Р В РІР‚в„–Р В Р’В Р В Р вЂ№Р В Р вЂ Р Р†Р вЂљРЎвЂєР РЋРЎвЂєР В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В Р В Р’В Р Р†Р вЂљРІвЂћСћР В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р Р†РІР‚С›РЎС›Р В Р’В Р Р†Р вЂљРІвЂћСћР В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В Р В Р’В Р В РІР‚В Р В Р’В Р Р†Р вЂљРЎв„ўР В Р вЂ Р Р†Р вЂљРЎвЂєР РЋРЎвЂєР В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р Р†РІР‚С›РЎС›Р В Р’В Р Р†Р вЂљРІвЂћСћР В РІР‚в„ўР вЂ™Р’В«Р В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В Р В Р’В Р Р†Р вЂљРІвЂћСћР В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р Р†РІР‚С›РЎС›Р В Р’В Р Р†Р вЂљРІвЂћСћР В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В Р’В Р Р†Р вЂљР’В Р В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р РЋРІвЂћСћР В Р’В Р В Р вЂ№Р В Р вЂ Р В РІР‚С™Р РЋРІР‚СњР В Р’В Р вЂ™Р’В Р В Р’В Р В РІР‚в„–Р В Р’В Р В Р вЂ№Р В Р вЂ Р В РІР‚С™Р РЋРІР‚Сњ Р В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В Р В Р’В Р Р†Р вЂљРІвЂћСћР В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р Р†РІР‚С›РЎС›Р В Р’В Р Р†Р вЂљРІвЂћСћР В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В Р В Р’В Р В РІР‚В Р В Р’В Р Р†Р вЂљРЎв„ўР В Р Р‹Р Р†РІР‚С›РЎС›Р В Р’В Р вЂ™Р’В Р В Р’В Р В РІР‚в„–Р В Р’В Р В Р вЂ№Р В Р Р‹Р Р†РІР‚С›РЎС›Р В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В Р В Р’В Р Р†Р вЂљРІвЂћСћР В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р Р†РІР‚С›РЎС›Р В Р’В Р Р†Р вЂљРІвЂћСћР В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В Р В Р’В Р В РІР‚В Р В Р’В Р Р†Р вЂљРЎв„ўР В Р Р‹Р Р†РІР‚С›РЎС›Р В Р’В Р вЂ™Р’В Р В Р’В Р Р†Р вЂљР’В Р В Р’В Р В РІР‚В Р В Р’В Р Р†Р вЂљРЎв„ўР В Р Р‹Р Р†Р вЂљРЎвЂќР В Р’В Р В Р вЂ№Р В Р Р‹Р Р†Р вЂљРЎвЂќР В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В Р В Р’В Р Р†Р вЂљРІвЂћСћР В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р Р†РІР‚С›РЎС›Р В Р’В Р Р†Р вЂљРІвЂћСћР В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В Р В Р’В Р В РІР‚В Р В Р’В Р Р†Р вЂљРЎв„ўР В Р вЂ Р Р†Р вЂљРЎвЂєР РЋРЎвЂєР В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р Р†РІР‚С›РЎС›Р В Р’В Р Р†Р вЂљРІвЂћСћР В РІР‚в„ўР вЂ™Р’ВР В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В Р В Р’В Р Р†Р вЂљРІвЂћСћР В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р Р†РІР‚С›РЎС›Р В Р’В Р Р†Р вЂљРІвЂћСћР В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В Р В Р’В Р В РІР‚В Р В Р’В Р Р†Р вЂљРЎв„ўР В Р Р‹Р Р†РІР‚С›РЎС›Р В Р’В Р вЂ™Р’В Р В Р’В Р В РІР‚в„–Р В Р’В Р В Р вЂ№Р В Р вЂ Р Р†Р вЂљРЎвЂєР РЋРЎвЂєР В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В Р В Р’В Р Р†Р вЂљРІвЂћСћР В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р Р†РІР‚С›РЎС›Р В Р’В Р Р†Р вЂљРІвЂћСћР В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В Р’В Р Р†Р вЂљРІвЂћвЂ“Р В Р’В Р вЂ™Р’В Р В Р’В Р Р†Р вЂљР’В Р В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р РЋРІвЂћСћР В Р’В Р В РІР‚В Р В Р вЂ Р В РІР‚С™Р РЋРІР‚С”Р В Р Р‹Р РЋРІР‚С”Р В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В Р В Р’В Р Р†Р вЂљРІвЂћСћР В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р Р†РІР‚С›РЎС›Р В Р’В Р Р†Р вЂљРІвЂћСћР В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В Р’В Р Р†Р вЂљРІвЂћвЂ“Р В Р’В Р вЂ™Р’В Р В Р’В Р В РІР‚в„–Р В Р’В Р В РІР‚В Р В Р’В Р Р†Р вЂљРЎв„ўР В Р Р‹Р Р†Р вЂљРЎСљР В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В Р В Р’В Р Р†Р вЂљРІвЂћСћР В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р Р†РІР‚С›РЎС›Р В Р’В Р Р†Р вЂљРІвЂћСћР В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В Р В Р’В Р В РІР‚В Р В Р’В Р Р†Р вЂљРЎв„ўР В Р Р‹Р Р†РІР‚С›РЎС›Р В Р’В Р вЂ™Р’В Р В Р’В Р В РІР‚в„–Р В Р’В Р В Р вЂ№Р В Р вЂ Р В РІР‚С™Р РЋРІР‚СњР В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В Р В Р’В Р Р†Р вЂљРІвЂћСћР В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р Р†РІР‚С›РЎС›Р В Р’В Р Р†Р вЂљРІвЂћСћР В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В Р В Р’В Р В РІР‚В Р В Р’В Р Р†Р вЂљРЎв„ўР В Р Р‹Р Р†РІР‚С›РЎС›Р В Р’В Р вЂ™Р’В Р В Р’В Р В РІР‚в„–Р В Р’В Р В РІР‚В Р В Р’В Р Р†Р вЂљРЎв„ўР В Р Р‹Р РЋРЎв„ўР В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В Р В Р’В Р Р†Р вЂљРІвЂћСћР В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р Р†РІР‚С›РЎС›Р В Р’В Р Р†Р вЂљРІвЂћСћР В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В Р В Р’В Р В РІР‚В Р В Р’В Р Р†Р вЂљРЎв„ўР В Р вЂ Р Р†Р вЂљРЎвЂєР РЋРЎвЂєР В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р Р†РІР‚С›РЎС›Р В Р’В Р Р†Р вЂљРІвЂћСћР В РІР‚в„ўР вЂ™Р’В¬ v149 (Admin SDK Transition).
@@ -11,7 +14,6 @@ import { aggregatePlayerCombatStats } from '@/app/lib/player-combat-stats';
 
 import { FieldPath, FieldValue } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
-import { isSystemAuctionSeller, normalizeAuctionBalance, resolveAuctionCurrency } from '@/app/lib/auction-settlement';
 import { getTableId, MAX_LEVELS } from '@/app/lib/leagues-data';
 import { getGlobalSeasonInfo } from '@/app/lib/time-utils';
 import { logger } from '@/app/lib/logger';
@@ -26,6 +28,15 @@ import { evaluateCanonicalDocuments } from './season-canonical';
 
 const SALARY_PERIOD_MS = 7 * 24 * 60 * 60 * 1000;
 const SALARY_CLUB_SHARE = 0.55;
+
+function readSafeNonNegativeBalance(value: unknown, errorCode: string) {
+  if (value === undefined || value === null) return 0;
+  if (typeof value !== 'number' && typeof value !== 'string') throw new Error(errorCode);
+  if (typeof value === 'string' && value.trim().length === 0) throw new Error(errorCode);
+  const balance = Number(value);
+  if (!Number.isSafeInteger(balance) || balance < 0) throw new Error(errorCode);
+  return balance;
+}
 
 /**
  * Stage 3A v1 Р В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В Р В Р’В Р Р†Р вЂљРІвЂћСћР В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В Р В Р’В Р В РІР‚В Р В Р’В Р Р†Р вЂљРЎв„ўР В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В Р В Р’В Р Р†Р вЂљРІвЂћСћР В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В Р’В Р Р†Р вЂљР’В Р В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р РЋРІвЂћСћР В Р’В Р В Р вЂ№Р В Р вЂ Р Р†Р вЂљРЎвЂєР РЋРЎвЂєР В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В Р В Р’В Р В РІР‚В Р В Р’В Р Р†Р вЂљРЎв„ўР В Р Р‹Р Р†РІР‚С›РЎС›Р В Р’В Р вЂ™Р’В Р В Р’В Р В РІР‚в„–Р В Р’В Р В Р вЂ№Р В Р Р‹Р Р†РІР‚С›РЎС› deterministic sporting engine.
@@ -48,10 +59,21 @@ type SportingPlayer = Record<string, any>;
  * The server is authoritative and the salary ledger makes the operation idempotent.
  */
 async function processDueSalaries(db: any, nowMs: number) {
-  const snap = await db.collection('players_v14').limit(500).get();
+  const pageSize = 200;
+  let cursor: any = null;
   let processed = 0;
 
-  for (const playerDoc of snap.docs) {
+  // Process every club, not just the first 500 documents. Stable document-ID
+  // pagination remains correct while salary transactions update player docs.
+  while (true) {
+    let query = db.collection('players_v14')
+      .orderBy(FieldPath.documentId())
+      .limit(pageSize);
+    if (cursor) query = query.startAfter(cursor);
+    const snap = await query.get();
+    if (snap.empty) break;
+
+    for (const playerDoc of snap.docs) {
     const ref = playerDoc.ref;
     try {
       const result = await db.runTransaction(async (t: any) => {
@@ -78,7 +100,7 @@ async function processDueSalaries(db: any, nowMs: number) {
         const clubCost = Math.floor(grossSalary * SALARY_CLUB_SHARE);
         const previousUnpaid = Math.max(0, Number(ledger.unpaid || 0));
         const amountDue = clubCost + previousUnpaid;
-        const before = Math.max(0, Number(data.credits || 0));
+        const before = readSafeNonNegativeBalance(data.credits, 'INVALID_SALARY_BALANCE');
         const actualPaid = Math.min(before, amountDue);
         const unpaid = amountDue - actualPaid;
         const paidAt = new Date(nowMs).toISOString();
@@ -131,6 +153,10 @@ async function processDueSalaries(db: any, nowMs: number) {
     } catch (error) {
       logger.warn(`[SALARY] Failed for ${playerDoc.id}`);
     }
+    }
+
+    cursor = snap.docs[snap.docs.length - 1];
+    if (snap.size < pageSize) break;
   }
 
   return processed;
@@ -389,7 +415,7 @@ export async function recoverStuckSeason1MatchAction(cronToken: string) {
         String(m.type || 'league').toLowerCase() !== 'league') {
       return { ok: false, code: 'MATCH_IDENTITY_MISMATCH' };
     }
-    if (m.isFinished === true || String(m.status || '').toLowerCase() === 'finished') {
+    if (m.isFinished === true || ['finished', 'completed'].includes(String(m.status || '').toLowerCase())) {
       return { ok: false, code: 'ALREADY_FINISHED' };
     }
     const now = Date.now();
@@ -453,7 +479,7 @@ export async function recoverStuckSeason1MatchAction(cronToken: string) {
       const latestSnap = await tx.get(matchRef);
       if (!latestSnap.exists) throw new Error('MATCH_NOT_FOUND_AT_COMMIT');
       const latest = latestSnap.data() || {};
-      if (latest.isFinished === true || String(latest.status || '').toLowerCase() === 'finished') {
+      if (latest.isFinished === true || ['finished', 'completed'].includes(String(latest.status || '').toLowerCase())) {
         throw new Error('ALREADY_FINISHED_AT_COMMIT');
       }
       if (latest.isProcessing !== true || latest.recoveryAttemptedBy !== recoveryToken) {
@@ -494,7 +520,7 @@ export async function recoverStuckSeason1MatchAction(cronToken: string) {
       const latestSnap = await tx.get(matchRef);
       if (!latestSnap.exists) return;
       const latest = latestSnap.data() || {};
-      if (latest.isFinished === true || String(latest.status || '').toLowerCase() === 'finished') return;
+      if (latest.isFinished === true || ['finished', 'completed'].includes(String(latest.status || '').toLowerCase())) return;
       if (latest.recoveryAttemptedBy !== recoveryToken) return;
       tx.update(matchRef, {
         isProcessing: false,
@@ -508,12 +534,37 @@ export async function recoverStuckSeason1MatchAction(cronToken: string) {
 }
 export async function resolveDailyMatches() {
   const info = getGlobalSeasonInfo();
-  if (info.isOffseason) logger.info("[LEAGUE RESOLVER] Offseason active; still settling overdue fixtures for the configured season.");
-
   const db = getAdminDb();
-  const configSnap = await db.collection('system_v1').doc('season_config').get();
+  const configRef = db.collection('system_v1').doc('season_config');
+  const rolloverLockRef = db.collection('system_v1').doc(SEASON_ROLLOVER_LOCK_ID);
+  const [configSnap, initialRolloverLockSnap] = await Promise.all([configRef.get(), rolloverLockRef.get()]);
   const config = configSnap.exists ? (configSnap.data() || {}) : {};
   const currentSeason = Number(config.activeSeasonNumber || info.activeSeasonNumber || 1);
+  const initialRolloverLock = initialRolloverLockSnap.exists ? initialRolloverLockSnap.data() || {} : null;
+  if (initialRolloverLock && !isSeasonRolloverLockStale(initialRolloverLock, Date.now())) {
+    return { success: true, count: 0, skipped: true, reason: 'SEASON_ROLLOVER_IN_PROGRESS', currentSeason, writesStarted: false };
+  }
+
+  // Hard server-side boundary: after Day 15 begins, league fixtures are never
+  // simulated or caught up. Keep the gate before match queries, standings
+  // rebuilds, lock claims, and every settlement write. The persisted next start
+  // remains authoritative, including the one-time 17-day S1 -> S2 interval.
+  let lifecycle: ReturnType<typeof resolveSeasonLifecycleWindow>;
+  try {
+    lifecycle = resolveSeasonLifecycleWindow({
+      seasonStart: config.seasonStart || info.currentSeasonStart,
+      nextSeasonStart: config.nextSeasonStart || info.nextSeasonStart,
+      now: new Date(),
+    });
+  } catch (error: any) {
+    logger.error('[LEAGUE RESOLVER] Invalid season lifecycle window; settlement blocked', { error: error?.message || String(error) });
+    return { success: false, code: 'SEASON_LIFECYCLE_WINDOW_INVALID', count: 0, writesStarted: false };
+  }
+  if (lifecycle.leagueMatchesPaused) {
+    const reason = lifecycle.activationDue ? 'SEASON_ACTIVATION_PENDING' : 'OFFSEASON_LEAGUE_MATCHES_DISABLED';
+    logger.info('[LEAGUE RESOLVER] League settlement paused for season transition', { currentSeason, reason });
+    return { success: true, count: 0, skipped: true, reason, currentSeason, writesStarted: false };
+  }
   const salariesPaid = 0; // Salaries are now processed by foundation-cycle at 00:00 MSK.
   const nowIso = new Date().toISOString();
 
@@ -536,7 +587,7 @@ export async function resolveDailyMatches() {
     // and other official match types have their own resolver and must never be
     // settled here, otherwise their results could alter league standings.
     if (String(m.type || 'league').toLowerCase() !== 'league') return false;
-    if (m.isFinished === true) return false;
+    if (m.isFinished === true || ['finished', 'completed'].includes(String(m.status || '').toLowerCase())) return false;
 
     const rawStart = m.startTime;
     let startMs = NaN;
@@ -597,11 +648,30 @@ export async function resolveDailyMatches() {
   for (const matchDoc of dueDocs) {
     const processingToken = randomUUID();
     const claimed = await db.runTransaction(async (tx: any) => {
-      const fresh = await tx.get(matchDoc.ref);
-      if (!fresh.exists) return false;
+      const [fresh, freshConfigSnap, freshRolloverLockSnap] = await Promise.all([
+        tx.get(matchDoc.ref),
+        tx.get(configRef),
+        tx.get(rolloverLockRef),
+      ]);
+      if (!fresh.exists || !freshConfigSnap.exists) return false;
       const current = fresh.data() || {};
-      if (current.isFinished === true || String(current.status || '').toLowerCase() === 'finished') return false;
-      if (String(current.type || 'league').toLowerCase() !== 'league') return false;
+      const freshConfig = freshConfigSnap.data() || {};
+      const freshRolloverLock = freshRolloverLockSnap.exists ? freshRolloverLockSnap.data() || {} : null;
+      if (current.isFinished === true || ['finished', 'completed'].includes(String(current.status || '').toLowerCase())) return false;
+      if (String(current.type || 'league').toLowerCase() !== 'league' ||
+          Number(current.season) !== currentSeason || Number(current.version) !== 140) return false;
+      if (Number(freshConfig.activeSeasonNumber || 0) !== currentSeason || freshConfig.worldReady !== true ||
+          (freshRolloverLock && !isSeasonRolloverLockStale(freshRolloverLock, Date.now()))) return false;
+      try {
+        const freshLifecycle = resolveSeasonLifecycleWindow({
+          seasonStart: freshConfig.seasonStart,
+          nextSeasonStart: freshConfig.nextSeasonStart,
+          now: new Date(),
+        });
+        if (freshLifecycle.leagueMatchesPaused) return false;
+      } catch {
+        return false;
+      }
 
       const now = Date.now();
       const rawStart = current.startTime;
@@ -647,15 +717,36 @@ export async function resolveDailyMatches() {
       // result, player progression, home revenue, and their idempotency ledgers
       // can no longer be split across independent 480-write batches.
       const settled = await db.runTransaction(async (tx: any) => {
-        const latestSnap = await tx.get(matchDoc.ref);
-        if (!latestSnap.exists) return false;
+        const [latestSnap, latestConfigSnap, latestRolloverLockSnap] = await Promise.all([
+          tx.get(matchDoc.ref),
+          tx.get(configRef),
+          tx.get(rolloverLockRef),
+        ]);
+        if (!latestSnap.exists || !latestConfigSnap.exists) return false;
         const m = latestSnap.data() || {};
-        if (m.isFinished === true || String(m.status || '').toLowerCase() === 'finished') return false;
+        const settlementConfig = latestConfigSnap.data() || {};
+        const settlementRolloverLock = latestRolloverLockSnap.exists ? latestRolloverLockSnap.data() || {} : null;
+        if (m.isFinished === true || ['finished', 'completed'].includes(String(m.status || '').toLowerCase())) return false;
         if (m.processingToken !== processingToken || m.isProcessing !== true) {
           throw new Error('MATCH_PROCESSING_LOCK_LOST');
         }
-        if (String(m.type || 'league').toLowerCase() !== 'league') {
-          throw new Error('MATCH_TYPE_CHANGED_DURING_SETTLEMENT');
+        if (String(m.type || 'league').toLowerCase() !== 'league' ||
+            Number(m.season) !== currentSeason || Number(m.version) !== 140) {
+          throw new Error('MATCH_IDENTITY_CHANGED_DURING_SETTLEMENT');
+        }
+        if (Number(settlementConfig.activeSeasonNumber || 0) !== currentSeason || settlementConfig.worldReady !== true ||
+            (settlementRolloverLock && !isSeasonRolloverLockStale(settlementRolloverLock, Date.now()))) {
+          throw new Error('MATCH_ROLLOVER_IN_PROGRESS');
+        }
+        try {
+          const settlementLifecycle = resolveSeasonLifecycleWindow({
+            seasonStart: settlementConfig.seasonStart,
+            nextSeasonStart: settlementConfig.nextSeasonStart,
+            now: new Date(),
+          });
+          if (settlementLifecycle.leagueMatchesPaused) throw new Error('MATCH_OFFSEASON_STARTED');
+        } catch (error: any) {
+          throw new Error(error?.message === 'MATCH_OFFSEASON_STARTED' ? error.message : 'MATCH_SEASON_WINDOW_INVALID');
         }
 
         const homeId = String(m.homeId || '');
@@ -775,9 +866,25 @@ export async function resolveDailyMatches() {
           tx.set(awayEffectRef!, { matchId: matchDoc.id, userId: awayId, effect: 'PLAYER_PROGRESSION', appliedAt: FieldValue.serverTimestamp() });
         }
 
+        if (homeRef && homeSnap?.exists && economyTxSnap?.exists) {
+          const receipt = economyTxSnap.data() || {};
+          const receiptMatchesOperation =
+            receipt.userId === homeId &&
+            receipt.referenceId === matchDoc.id &&
+            receipt.currency === 'credits' &&
+            receipt.type === 'MATCH_REVENUE' &&
+            Number(receipt.amount) === homeEconomy.totalRevenue;
+          if (!receiptMatchesOperation) {
+            throw new Error('MATCH_ECONOMY_RECEIPT_CONFLICT');
+          }
+        }
+
         if (homeRef && homeSnap?.exists && !economyTxSnap?.exists) {
-          const before = Number(homePlayerData.credits || 0);
+          const before = readSafeNonNegativeBalance(homePlayerData.credits, 'INVALID_MATCH_ECONOMY_BALANCE');
           const after = before + homeEconomy.totalRevenue;
+          if (!Number.isSafeInteger(after) || after < 0) {
+            throw new Error('INVALID_MATCH_ECONOMY_BALANCE');
+          }
           Object.assign(homeUpdate, {
             credits: after,
             lastMatchEconomy: homeEconomy,
@@ -841,7 +948,7 @@ export async function resolveDailyMatches() {
           const latestSnap = await tx.get(matchDoc.ref);
           if (!latestSnap.exists) return;
           const latest = latestSnap.data() || {};
-          if (latest.isFinished === true || latest.processingToken !== processingToken) return;
+          if (latest.isFinished === true || ['finished', 'completed'].includes(String(latest.status || '').toLowerCase()) || latest.processingToken !== processingToken) return;
           tx.update(matchDoc.ref, {
             isProcessing: false,
             processingStartedAt: FieldValue.delete(),
@@ -868,172 +975,8 @@ export async function resolveDailyMatches() {
 
 
 
-/**
- * Finalizes expired transfer-market listings from the server only.
- *
- * A listing is settled exactly once: the market document is re-read inside a
- * Firestore transaction and deleted only after the seller/buyer/player state is
- * reconciled. If the leading bidder is no longer eligible, the lot expires
- * without a sale and the seller's player is unlocked.
- */
 export async function runTransferMarketExpirySweep() {
-  const db = getAdminDb();
-  const now = Date.now();
-  const market = db.collection('market_v7');
-  const pageSize = 200;
-  let cursor: any = null;
-  let scanned = 0;
-  const due: any[] = [];
-
-  // Avoid an unbounded collection read while still scanning every listing.
-  // Document-ID pagination is stable even when lots are deleted as they settle.
-  while (true) {
-    let query = market.orderBy(FieldPath.documentId()).limit(pageSize);
-    if (cursor) query = query.startAfter(cursor);
-    const page = await query.get();
-    if (page.empty) break;
-    scanned += page.size;
-    for (const doc of page.docs) {
-      const lot = doc.data() || {};
-      if (lot.status === 'settled' || lot.status === 'expired') continue;
-      const raw = lot.expiresAt;
-      const expiresAt = raw && typeof raw.toMillis === 'function'
-        ? raw.toMillis()
-        : raw instanceof Date
-          ? raw.getTime()
-          : typeof raw === 'number'
-            ? raw
-            : typeof raw === 'string'
-              ? Date.parse(raw)
-              : NaN;
-      if (Number.isFinite(expiresAt) && expiresAt <= now) due.push(doc);
-    }
-    cursor = page.docs[page.docs.length - 1];
-    if (page.size < pageSize) break;
-  }
-
-  let settled = 0;
-  let sold = 0;
-  let expiredWithoutSale = 0;
-  let skipped = 0;
-  const errors: Array<{ id: string; error: string }> = [];
-
-  for (const candidate of due) {
-    const transferRef = db.collection('transfer_history').doc();
-    try {
-      const result = await db.runTransaction(async (tx: any) => {
-        const lotRef = db.collection('market_v7').doc(candidate.id);
-        const lotSnap = await tx.get(lotRef);
-        if (!lotSnap.exists) return 'SKIPPED';
-        const lot: any = lotSnap.data() || {};
-        if (lot.status === 'settled' || lot.status === 'expired') return 'SKIPPED';
-        const rawExpiry = lot.expiresAt;
-        const expiryMs = rawExpiry && typeof rawExpiry.toMillis === 'function'
-          ? rawExpiry.toMillis()
-          : rawExpiry instanceof Date
-            ? rawExpiry.getTime()
-            : typeof rawExpiry === 'number'
-              ? rawExpiry
-              : typeof rawExpiry === 'string'
-                ? Date.parse(rawExpiry)
-                : NaN;
-        if (!Number.isFinite(expiryMs) || expiryMs > Date.now()) return 'SKIPPED';
-
-        const sellerId = String(lot.sellerId || '');
-        const bidderId = String(lot.highestBidderId || lot.highestBidderUid || '');
-        const price = Math.max(0, Math.floor(Number(lot.currentBid || lot.startingPrice || lot.price) || 0));
-        const playerId = String(lot.heroData?.id || lot.playerId || '');
-
-        const isSystemSeller = isSystemAuctionSeller(sellerId, lot.isSystem);
-        const currency = resolveAuctionCurrency(lot.currency);
-        const sellerRef = isSystemSeller || !sellerId ? null : db.collection('players_v14').doc(sellerId);
-        const buyerRef = bidderId && bidderId !== sellerId ? db.collection('players_v14').doc(bidderId) : null;
-        const sellerSnap = sellerRef ? await tx.get(sellerRef) : null;
-        const buyerSnap = buyerRef ? await tx.get(buyerRef) : null;
-        const seller: any = sellerSnap?.exists ? sellerSnap.data() || {} : {};
-        const buyer: any = buyerSnap?.exists ? buyerSnap.data() || {} : {};
-        const playerArrayKey = lot.isYouth === true ? 'youthAcademyPlayers' : 'ownedPlayers';
-        const sellerPlayers: any[] = Array.isArray(seller[playerArrayKey]) ? [...seller[playerArrayKey]] : [];
-        const sellerIndex = sellerPlayers.findIndex((player: any) => String(player?.id) === playerId);
-        const systemPlayer: any = isSystemSeller && lot.heroData?.id === playerId ? lot.heroData : null;
-        const buyerPlayers: any[] = Array.isArray(buyer[playerArrayKey]) ? [...buyer[playerArrayKey]] : [];
-        const buyerBalance = normalizeAuctionBalance(buyer[currency]);
-        const escrowedAmount = lot.escrowCurrency === currency ? normalizeAuctionBalance(lot.escrowedAmount) : 0;
-        const hasValidEscrow = escrowedAmount >= price && price > 0;
-        const sellerExists = isSystemSeller ? Boolean(systemPlayer) : Boolean(sellerSnap?.exists && sellerIndex >= 0);
-        const validSale = Boolean(
-          sellerExists && buyerSnap?.exists && buyerRef && bidderId !== sellerId && price > 0 &&
-          (hasValidEscrow || buyerBalance >= price) &&
-          !buyerPlayers.some((player: any) => String(player?.id) === playerId)
-        );
-
-        if (validSale) {
-          const sourcePlayer = isSystemSeller ? systemPlayer : sellerPlayers[sellerIndex];
-          const player = { ...sourcePlayer, onTransferUntil: null, transferMarketId: null };
-          if (!isSystemSeller) sellerPlayers.splice(sellerIndex, 1);
-          buyerPlayers.push(player);
-          const commission = isSystemSeller ? 0 : Math.floor(price * 0.05);
-          const sellerIncome = price - commission;
-          tx.update(buyerRef!, { ...(hasValidEscrow ? {} : { [currency]: buyerBalance - price }), [playerArrayKey]: buyerPlayers, updatedAt: FieldValue.serverTimestamp() });
-          if (sellerRef) {
-            tx.update(sellerRef, {
-              [currency]: normalizeAuctionBalance(seller[currency]) + sellerIncome,
-              [playerArrayKey]: sellerPlayers,
-              updatedAt: FieldValue.serverTimestamp(),
-            });
-          }
-          tx.set(transferRef, {
-            playerId, playerName: player.name || lot.heroData?.name || 'Player',
-            buyerId: bidderId, sellerId, price, currency, commission, sellerIncome,
-            marketId: candidate.id, createdAt: FieldValue.serverTimestamp(), settlement: 'expired-auction',
-            sellerType: isSystemSeller ? 'system' : 'manager',
-          });
-          tx.delete(lotRef);
-          return 'SOLD';
-        }
-
-        // No valid winner: unlock a manager-owned player when present, then remove the expired listing.
-        if (sellerRef && sellerSnap?.exists && sellerIndex >= 0) {
-          sellerPlayers[sellerIndex] = { ...sellerPlayers[sellerIndex], onTransferUntil: null, transferMarketId: null };
-          tx.update(sellerRef, { [playerArrayKey]: sellerPlayers, updatedAt: FieldValue.serverTimestamp() });
-        }
-        if (buyerRef && buyerSnap?.exists && hasValidEscrow) {
-          tx.update(buyerRef, {
-            [currency]: buyerBalance + escrowedAmount,
-            updatedAt: FieldValue.serverTimestamp(),
-          });
-          const refundRef = db.collection('economy_transactions').doc();
-          tx.set(refundRef, {
-            userId: bidderId,
-            amount: escrowedAmount,
-            currency,
-            type: 'SPECIAL_AUCTION_SETTLEMENT_REFUND',
-            referenceId: candidate.id,
-            description: 'Refund for an auction that could not be settled',
-            timestamp: FieldValue.serverTimestamp(),
-          });
-        }
-        tx.delete(lotRef);
-        return 'EXPIRED';
-      });
-      if (result === 'SOLD') { settled++; sold++; }
-      else if (result === 'EXPIRED') { settled++; expiredWithoutSale++; }
-      else skipped++;
-    } catch (error: any) {
-      errors.push({ id: candidate.id, error: error?.message || 'MARKET_SETTLEMENT_FAILED' });
-    }
-  }
-
-  return {
-    success: errors.length === 0,
-    scanned,
-    due: due.length,
-    settled,
-    sold,
-    expiredWithoutSale,
-    skipped,
-    errors: errors.slice(0, 50),
-  };
+  return runTransferMarketExpirySweepWithDb(getAdminDb());
 }
 
 /** Compatibility endpoint name; settlement is idempotent so overlapping cron

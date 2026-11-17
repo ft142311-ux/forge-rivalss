@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { runSeasonOrchestrator } from '@/app/actions/season-cycle';
-import { cronResultStatus } from '../cron-result';
+import { cronResultStatus, isSeasonOrchestratorSuccessful } from '../cron-result';
 import { isCronAuthorized } from '../cron-auth';
 
 /**
@@ -17,13 +17,7 @@ export async function GET(request: Request) {
 
   try {
     const result: any = await runSeasonOrchestrator();
-    const blockedActions = new Set(['ERROR', 'WORLD_NOT_READY', 'WORLD_BUILDING', 'WAITING_FOR_SEASON_RESULTS']);
-    const success = result?.success === false
-      ? false
-      : !blockedActions.has(String(result?.action || ''))
-        && result?.worldReady !== false
-        && result?.matchSettlement?.success !== false
-        && result?.publication?.success !== false;
+    const success = isSeasonOrchestratorSuccessful(result);
     const response = { ...result, success, timestamp: new Date().toISOString() };
     return NextResponse.json(response, { status: cronResultStatus(response) });
   } catch (error: any) {

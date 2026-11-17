@@ -13,7 +13,12 @@ export async function GET(request: Request) {
   try {
     const result = await runTournamentCycle(cronSecret);
     const pyramidCup = await runPyramidCupCycle();
-    return NextResponse.json({ success: true, timestamp: new Date().toISOString(), ...result, pyramidCup });
+    const pyramidCupFailed = 'success' in pyramidCup && pyramidCup.success === false;
+    const success = result?.success !== false && !pyramidCupFailed;
+    return NextResponse.json(
+      { timestamp: new Date().toISOString(), ...result, pyramidCup, success },
+      { status: success ? 200 : 207 },
+    );
   } catch (e: any) {
     console.error('[CRON TOURNAMENTS ERROR]', e);
     return NextResponse.json({ success: false, error: 'TOURNAMENT_CYCLE_FAILED' }, { status: 500 });

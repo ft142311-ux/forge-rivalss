@@ -1,10 +1,10 @@
 
 'use server';
 
-import { FieldValue, Timestamp } from 'firebase-admin/firestore';
+import { FieldValue } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
-import { z } from 'zod';
-import { getMoscowTime } from '@/app/lib/time-utils';
+import { getMoscowDateString } from '@/app/lib/time-utils';
+import { getDailyRewardForDay, getNextDailyRewardDay, getPremiumDailyCrystalBonus } from '@/app/lib/daily-reward';
 import { requireServerActor } from '@/lib/server-auth';
 
 /**
@@ -12,50 +12,13 @@ import { requireServerActor } from '@/lib/server-auth';
  * Все изменения баланса проходят через этот модуль.
  */
 
-const TransactionSchema = z.object({
-  userId: z.string(),
-  amount: z.number(),
-  currency: z.enum(['credits', 'crystals']),
-  type: z.string(),
-  referenceId: z.string().optional(),
-  description: z.string().optional()
-});
-
-/**
- * Внутренняя функция для применения транзакции.
- * НЕ ЭКСПОРТИРУЕТСЯ наружу для прямого вызова клиентом.
- */
-async function applyTransaction(params: z.infer<typeof TransactionSchema>) {
-  const db = getAdminDb();
-  const playerRef = db.collection('players_v14').doc(params.userId);
-
-  return await db.runTransaction(async (t) => {
-    const pSnap = await t.get(playerRef);
-    if (!pSnap.exists) throw new Error("PLAYER_NOT_FOUND");
-
-    const pData = pSnap.data()!;
-    const currentBalance = Number(pData[params.currency] || 0);
-    const newBalance = currentBalance + params.amount;
-
-    if (newBalance < 0) throw new Error("INSUFFICIENT_FUNDS");
-
-    // 1. Обновляем баланс
-    t.update(playerRef, {
-      [params.currency]: newBalance,
-      updatedAt: FieldValue.serverTimestamp()
-    });
-
-    // 2. Логируем в реестр (Audit Log)
-    const logRef = db.collection('economy_transactions').doc();
-    t.set(logRef, {
-      ...params,
-      balanceBefore: currentBalance,
-      balanceAfter: newBalance,
-      timestamp: FieldValue.serverTimestamp()
-    });
-
-    return { success: true, newBalance };
-  });
+function readCurrencyBalance(value: unknown) {
+  if (value === undefined || value === null) return 0;
+  if (typeof value !== 'number' && typeof value !== 'string') throw new Error('INVALID_BALANCE');
+  if (typeof value === 'string' && value.trim().length === 0) throw new Error('INVALID_BALANCE');
+  const balance = Number(value);
+  if (!Number.isSafeInteger(balance) || balance < 0) throw new Error('INVALID_BALANCE');
+  return balance;
 }
 
 /**
@@ -65,31 +28,74 @@ export async function claimDailyRewardAction(idToken: string) {
   try {
     const { uid: userId } = await requireServerActor(idToken);
     const db = getAdminDb();
-  const today = new Date().toISOString().split('T')[0]; // МСК Дата в идеале
+  const today = getMoscowDateString();
   const playerRef = db.collection('players_v14').doc(userId);
+  const receiptRef = db.collection('daily_reward_receipts').doc(`${userId}_${today}`);
 
   try {
     const result = await db.runTransaction(async (t) => {
+      const receiptSnap = await t.get(receiptRef);
+      if (receiptSnap.exists) return receiptSnap.data()?.result;
+
       const pSnap = await t.get(playerRef);
       if (!pSnap.exists) throw new Error("PLAYER_NOT_FOUND");
-      
+
       const p = pSnap.data()!;
       if (p.lastRewardClaimDate === today) throw new Error("ALREADY_CLAIMED");
 
-      const rewardDay = (p.rewardDay || 0) % 30 + 1;
-      const credits = 100000 + (rewardDay * 50000);
-      const crystals = 10 + (rewardDay % 7 === 0 ? 50 : 0);
+      const rewardDay = getNextDailyRewardDay(p.rewardDay, Boolean(p.lastRewardClaimDate));
+      const { credits, crystals: baseCrystals } = getDailyRewardForDay(rewardDay);
+      const premiumUntilMs = p.premiumUntil ? new Date(String(p.premiumUntil)).getTime() : 0;
+      const premiumBonus = getPremiumDailyCrystalBonus(p.isPremium === true && premiumUntilMs > Date.now());
+      const crystals = baseCrystals + premiumBonus;
+      const creditsBefore = readCurrencyBalance(p.credits);
+      const crystalsBefore = readCurrencyBalance(p.crystals);
+      const creditsAfter = creditsBefore + credits;
+      const crystalsAfter = crystalsBefore + crystals;
+      if (!Number.isSafeInteger(creditsAfter) || !Number.isSafeInteger(crystalsAfter)) {
+        throw new Error('INVALID_BALANCE');
+      }
+      const result = { success: true, credits, crystals, premiumBonus };
 
-      // Применяем награду
       t.update(playerRef, {
-        credits: (p.credits || 0) + credits,
-        crystals: (p.crystals || 0) + crystals,
+        credits: creditsAfter,
+        crystals: crystalsAfter,
         lastRewardClaimDate: today,
-        rewardDay: rewardDay,
+        rewardDay,
         updatedAt: FieldValue.serverTimestamp()
       });
 
-      return { success: true, credits, crystals };
+      t.create(db.collection('economy_transactions').doc(`daily_reward_${userId}_${today}_credits`), {
+        userId,
+        amount: credits,
+        currency: 'credits',
+        type: 'DAILY_REWARD',
+        referenceId: today,
+        description: `Daily reward day ${rewardDay}`,
+        balanceBefore: creditsBefore,
+        balanceAfter: creditsAfter,
+        timestamp: FieldValue.serverTimestamp()
+      });
+      t.create(db.collection('economy_transactions').doc(`daily_reward_${userId}_${today}_crystals`), {
+        userId,
+        amount: crystals,
+        currency: 'crystals',
+        type: 'DAILY_REWARD',
+        referenceId: today,
+        description: `Daily reward day ${rewardDay}`,
+        balanceBefore: crystalsBefore,
+        balanceAfter: crystalsAfter,
+        timestamp: FieldValue.serverTimestamp()
+      });
+      t.create(receiptRef, {
+        userId,
+        date: today,
+        rewardDay,
+        result,
+        createdAt: FieldValue.serverTimestamp()
+      });
+
+      return result;
     });
 
     return result;
@@ -106,15 +112,43 @@ export async function claimDailyRewardAction(idToken: string) {
  */
 export async function purchasePremiumAction(idToken: string) {
   try {
-    const { uid: userId } = await requireServerActor(idToken);
-    return await applyTransaction({
-      userId,
-      amount: -5000,
-      currency: 'crystals',
-      type: 'PREMIUM_PURCHASE',
-      description: '30 Days Elite Status'
+    const { uid } = await requireServerActor(idToken);
+    const db = getAdminDb();
+    return await db.runTransaction(async (t) => {
+      const playerRef = db.collection('players_v14').doc(uid);
+      const playerSnap = await t.get(playerRef);
+      if (!playerSnap.exists) throw new Error('PLAYER_NOT_FOUND');
+      const player = playerSnap.data() || {};
+      const now = Date.now();
+      const currentUntil = player.premiumUntil ? new Date(String(player.premiumUntil)).getTime() : 0;
+      if (player.isPremium === true && currentUntil > now) throw new Error('PREMIUM_ALREADY_ACTIVE');
+
+      const cost = 5000;
+      const crystals = readCurrencyBalance(player.crystals);
+      if (crystals < cost) throw new Error('INSUFFICIENT_FUNDS');
+      const premiumUntil = new Date(now + 30 * 24 * 60 * 60 * 1000).toISOString();
+
+      t.update(playerRef, {
+        crystals: crystals - cost,
+        isPremium: true,
+        premiumUntil,
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+      const ledgerRef = db.collection('economy_transactions').doc();
+      t.set(ledgerRef, {
+        userId: uid,
+        amount: -cost,
+        currency: 'crystals',
+        type: 'PREMIUM_PURCHASE',
+        referenceId: 'premium_30d',
+        description: '30 Days Elite Status',
+        balanceBefore: crystals,
+        balanceAfter: crystals - cost,
+        timestamp: FieldValue.serverTimestamp(),
+      });
+      return { success: true, premiumUntil, crystals: crystals - cost };
     });
   } catch (e: any) {
-    return { success: false, error: e.message };
+    return { success: false, error: e?.message || 'PREMIUM_PURCHASE_FAILED' };
   }
 }

@@ -1,13 +1,17 @@
 'use server';
 
+import { randomUUID } from 'node:crypto';
 import { FieldValue } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { requireServerActor } from '@/lib/server-auth';
+import { assertCronSecret } from '@/lib/server-cron-auth';
 import { getMoscowDateString } from '@/app/lib/time-utils';
 import { hash32 } from '@/app/lib/hash-utils';
 import { buildMatchTeamSnapshot, createDeterministicBotSquad } from '@/app/lib/match-simulation';
 import { runMatchEngine } from '@/app/lib/match-engine';
 import { MATCH_COLLECTIONS } from '@/app/lib/match-storage';
+import { isTournamentMatchLeaseExpired, TOURNAMENT_MATCH_LEASE_MS } from '@/app/lib/tournament-match-lease';
+import { isTournamentStageMatchSetComplete } from '@/app/lib/tournament-stage-utils';
 
 const TOURNAMENTS = [
   { id: 'iron-kettle', name: 'Чугунный чайник', type: 'Тов', maxParticipants: 16, start: '10:00' },
@@ -188,8 +192,9 @@ async function generateDailyTournamentsInternal() {
 }
 
 export async function generateDailyTournaments(cronToken: string) {
-  const cronSecret = process.env.CRON_SECRET;
-  if (!cronSecret || typeof cronToken !== 'string' || cronToken !== cronSecret) {
+  try {
+    assertCronSecret(cronToken);
+  } catch {
     return { success: false, error: 'UNAUTHORIZED' };
   }
   return generateDailyTournamentsInternal();
@@ -256,22 +261,33 @@ export async function unregisterFromTournamentAction(idToken: string, tournament
 
 async function initializeTournament(db: any, tournamentId: string, now: number) {
   const ref = db.collection('tournaments_v1').doc(tournamentId);
+  const initializationToken = randomUUID();
 
-  // Claim initialization transactionally so two cron/API invocations cannot
-  // create the same groups and fixtures at the same time.
+  // A fresh initialization lease is exclusive. If its owner crashed, a later
+  // cron cycle may reclaim it after the bounded lease expires.
   const tournament = await db.runTransaction(async (t: any) => {
     const snap = await t.get(ref);
     if (!snap.exists) return null;
     const data = snap.data() || {};
-    if (data.status !== 'registration' || now < Number(data.startAt)) return null;
+    const isRegistrationDue = data.status === 'registration' && now >= Number(data.startAt);
+    // Legacy initializing records created before tokenized leases have no
+    // active owner to fence, so they are safe to reclaim immediately.
+    const hasInitializationOwner = typeof data.initializationToken === 'string' &&
+      data.initializationToken.trim().length > 0;
+    const isExpiredInitialization = data.status === 'initializing' &&
+      (!hasInitializationOwner ||
+        isTournamentMatchLeaseExpired(data.initializingAt, now, TOURNAMENT_MATCH_LEASE_MS));
+    if (!isRegistrationDue && !isExpiredInitialization) return null;
+
     t.update(ref, {
       status: 'initializing',
       stage: 'initializing',
       initializingAt: FieldValue.serverTimestamp(),
+      initializationToken,
       updatedAt: FieldValue.serverTimestamp(),
       initializationError: FieldValue.delete(),
     });
-    return { id: snap.id, ...data };
+    return { id: snap.id, ...data, initializationToken };
   });
   if (!tournament) return false;
 
@@ -290,8 +306,6 @@ async function initializeTournament(db: any, tournamentId: string, now: number) 
     const uniqueRealTeams = Array.from(new Map(realTeams.map(team => [team.id, team])).values());
     const teams: Team[] = [...uniqueRealTeams];
     for (let i = teams.length; i < maxParticipants; i++) {
-      // Bot IDs are based on the actual slot, not on the original registration
-      // array index, so missing/deleted managers cannot create duplicate bots.
       teams.push(botTeam(tournamentId, i));
     }
     if (teams.length !== maxParticipants || new Set(teams.map(team => team.id)).size !== maxParticipants) {
@@ -300,72 +314,95 @@ async function initializeTournament(db: any, tournamentId: string, now: number) 
 
     const shuffled = shuffle(teams, tournamentId);
     const groups = groupCount(maxParticipants);
-    const batch = db.batch();
+    const participantWrites: Array<{ id: string; data: Record<string, any> }> = [];
+    const groupWrites: Array<{ id: string; data: Record<string, any> }> = [];
+    const matchWrites: Array<{ id: string; data: Record<string, any> }> = [];
 
     for (let i = 0; i < shuffled.length; i++) {
       const groupIndex = Math.floor(i / 4);
       const groupId = String.fromCharCode(65 + groupIndex);
       const team = shuffled[i];
-      batch.set(ref.collection('participants').doc(team.id), {
-        ...team,
-        groupId,
-        seed: i + 1,
-        tournamentId,
-        createdAt: FieldValue.serverTimestamp(),
+      participantWrites.push({
+        id: team.id,
+        data: { ...team, groupId, seed: i + 1, tournamentId, createdAt: FieldValue.serverTimestamp() },
       });
     }
 
     for (let g = 0; g < groups; g++) {
       const groupId = String.fromCharCode(65 + g);
       const groupTeams = shuffled.slice(g * 4, g * 4 + 4);
-      const standings = groupTeams.map(team => ({ id: team.id, name: team.name, isBot: team.isBot, played: 0, wins: 0, draws: 0, losses: 0, for: 0, against: 0, diff: 0, points: 0 }));
-      batch.set(ref.collection('groups').doc(groupId), { groupId, teams: standings, status: 'active', updatedAt: FieldValue.serverTimestamp() });
+      const standings = groupTeams.map(team => ({
+        id: team.id, name: team.name, isBot: team.isBot, played: 0, wins: 0,
+        draws: 0, losses: 0, for: 0, against: 0, diff: 0, points: 0,
+      }));
+      groupWrites.push({
+        id: groupId,
+        data: { groupId, teams: standings, status: 'active', updatedAt: FieldValue.serverTimestamp() },
+      });
       for (let round = 0; round < 3; round++) {
-        const pairs = groupRoundPairs(groupTeams.map(t => t.id), round);
+        const pairs = groupRoundPairs(groupTeams.map(team => team.id), round);
         for (let pairIndex = 0; pairIndex < pairs.length; pairIndex++) {
           const [homeId, awayId] = pairs[pairIndex];
           const matchId = `groups_${groupId}_${round + 1}_${pairIndex + 1}`;
-          batch.set(ref.collection('matches').doc(matchId), {
+          matchWrites.push({
             id: matchId,
-            tournamentId,
-            stage: 'groups',
-            groupId,
-            round: round + 1,
-            index: pairIndex + 1,
-            homeId,
-            awayId,
-            homeName: groupTeams.find(t => t.id === homeId)?.name || homeId,
-            awayName: groupTeams.find(t => t.id === awayId)?.name || awayId,
-            bestOf: 2,
-            scheduledAt: addMinutes(Number(tournament.startAt), round * GROUP_ROUND_MINUTES),
-            status: 'scheduled',
-            attemptCount: 0,
-            createdAt: FieldValue.serverTimestamp(),
+            data: {
+              id: matchId, tournamentId, stage: 'groups', groupId,
+              round: round + 1, index: pairIndex + 1, homeId, awayId,
+              homeName: groupTeams.find(team => team.id === homeId)?.name || homeId,
+              awayName: groupTeams.find(team => team.id === awayId)?.name || awayId,
+              bestOf: 2,
+              scheduledAt: addMinutes(Number(tournament.startAt), round * GROUP_ROUND_MINUTES),
+              status: 'scheduled', attemptCount: 0, createdAt: FieldValue.serverTimestamp(),
+            },
           });
         }
       }
     }
 
-    batch.update(ref, {
-      status: 'groups',
-      stage: 'groups',
-      registeredIds,
-      participantCount: teams.length,
-      realParticipantCount: uniqueRealTeams.length,
-      botParticipantCount: teams.length - uniqueRealTeams.length,
-      initializedAt: FieldValue.serverTimestamp(),
-      updatedAt: FieldValue.serverTimestamp(),
-      initializationError: FieldValue.delete(),
+    // All participant, group, fixture and stage writes commit atomically after
+    // the initialization token is revalidated. A reclaimed worker is fenced.
+    await db.runTransaction(async (t: any) => {
+      const fresh = await t.get(ref);
+      const current = fresh.data() || {};
+      if (!fresh.exists || current.status !== 'initializing' ||
+          current.initializationToken !== initializationToken) {
+        throw new Error('TOURNAMENT_INITIALIZATION_LEASE_LOST');
+      }
+
+      participantWrites.forEach(item => t.create(ref.collection('participants').doc(item.id), item.data));
+      groupWrites.forEach(item => t.create(ref.collection('groups').doc(item.id), item.data));
+      matchWrites.forEach(item => t.create(ref.collection('matches').doc(item.id), item.data));
+      t.update(ref, {
+        status: 'groups',
+        stage: 'groups',
+        registeredIds,
+        participantCount: teams.length,
+        realParticipantCount: uniqueRealTeams.length,
+        botParticipantCount: teams.length - uniqueRealTeams.length,
+        initializedAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
+        initializationToken: FieldValue.delete(),
+        initializingAt: FieldValue.delete(),
+        initializationError: FieldValue.delete(),
+      });
     });
-    await batch.commit();
     return true;
   } catch (error: any) {
-    // Do not leave the tournament permanently locked if setup fails.
-    await ref.update({
-      status: 'registration',
-      stage: 'registration',
-      initializationError: String(error?.message || error || 'TOURNAMENT_INITIALIZATION_FAILED'),
-      updatedAt: FieldValue.serverTimestamp(),
+    // A stale worker must not reset a newer worker's initialization lease.
+    await db.runTransaction(async (t: any) => {
+      const fresh = await t.get(ref);
+      const current = fresh.data() || {};
+      if (!fresh.exists || current.status !== 'initializing' ||
+          current.initializationToken !== initializationToken) return;
+      t.update(ref, {
+        status: 'registration',
+        stage: 'registration',
+        initializationToken: FieldValue.delete(),
+        initializingAt: FieldValue.delete(),
+        initializationError: String(error?.message || error || 'TOURNAMENT_INITIALIZATION_FAILED'),
+        updatedAt: FieldValue.serverTimestamp(),
+      });
     }).catch(() => undefined);
     throw error;
   }
@@ -379,13 +416,41 @@ async function participantSnapshot(db: any, tournamentRef: any, id: string) {
 async function resolveTournamentMatch(db: any, tournamentId: string, matchId: string, now: number) {
   const tournamentRef = db.collection('tournaments_v1').doc(tournamentId);
   const matchRef = tournamentRef.collection('matches').doc(matchId);
+  const processingToken = randomUUID();
   const claim = await db.runTransaction(async (t: any) => {
     const snap = await t.get(matchRef);
     if (!snap.exists) return false;
     const m = snap.data() || {};
+    const status = String(m.status || '');
     const attempts = Number(m.attemptCount || 0);
-    if (!['scheduled', 'error'].includes(String(m.status)) || attempts >= 3 || Number(m.scheduledAt) > now) return false;
-    t.update(matchRef, { status: 'processing', attemptCount: attempts + 1, processingAt: FieldValue.serverTimestamp(), lastError: FieldValue.delete() });
+    const staleProcessing = status === 'processing' &&
+      isTournamentMatchLeaseExpired(m.processingAt, now, TOURNAMENT_MATCH_LEASE_MS);
+
+    if (status === 'processing' && !staleProcessing) return false;
+    if (!['scheduled', 'error', 'processing'].includes(status) || Number(m.scheduledAt) > now) return false;
+
+    // A crashed third attempt is made visibly retry-exhausted instead of
+    // remaining in processing forever and blocking tournament progression.
+    if (attempts >= 3) {
+      if (staleProcessing) {
+        t.update(matchRef, {
+          status: 'error',
+          processingToken: FieldValue.delete(),
+          lastError: 'TOURNAMENT_MATCH_RETRY_EXHAUSTED',
+          failedAt: FieldValue.serverTimestamp(),
+          updatedAt: FieldValue.serverTimestamp(),
+        });
+      }
+      return false;
+    }
+
+    t.update(matchRef, {
+      status: 'processing',
+      attemptCount: attempts + 1,
+      processingAt: FieldValue.serverTimestamp(),
+      processingToken,
+      lastError: FieldValue.delete(),
+    });
     return true;
   });
   if (!claim) return false;
@@ -413,11 +478,27 @@ async function resolveTournamentMatch(db: any, tournamentId: string, matchId: st
     const homeScore = simulation.games.reduce((s, g) => s + g.homeScore, 0);
     const awayScore = simulation.games.reduce((s, g) => s + g.awayScore, 0);
 
-    await db.runTransaction(async (t: any) => {
+    const finalized = await db.runTransaction(async (t: any) => {
       const fresh = await t.get(matchRef);
-      if (!fresh.exists || fresh.data()?.status !== 'processing') return;
+      const freshData = fresh.data() || {};
+      if (!fresh.exists || freshData.status !== 'processing' || freshData.processingToken !== processingToken) return false;
       const groupRef = m.stage === 'groups' ? tournamentRef.collection('groups').doc(m.groupId) : null;
       const groupSnap = groupRef ? await t.get(groupRef) : null;
+      const groupRows = groupSnap?.exists && Array.isArray(groupSnap.data()?.teams)
+        ? [...groupSnap.data().teams]
+        : [];
+      const homeRow = groupRows.find((row: any) => row.id === home.id);
+      const awayRow = groupRows.find((row: any) => row.id === away.id);
+      if (m.stage === 'groups' && (
+        !groupSnap?.exists ||
+        groupRows.length !== 4 ||
+        new Set(groupRows.map((row: any) => row.id)).size !== 4 ||
+        !homeRow ||
+        !awayRow ||
+        home.id === away.id
+      )) {
+        throw new Error('TOURNAMENT_GROUP_STANDINGS_INTEGRITY_FAILED');
+      }
 
       const finishedAt = FieldValue.serverTimestamp();
       const winnerName = winnerId === home.id ? home.name : winnerId === away.id ? away.name : null;
@@ -466,53 +547,65 @@ async function resolveTournamentMatch(db: any, tournamentId: string, matchId: st
       }, { merge: true });
 
       if (m.stage === 'groups' && groupRef && groupSnap) {
-        if (groupSnap.exists) {
-          const group = groupSnap.data() || {};
-          const rows = Array.isArray(group.teams) ? [...group.teams] : [];
-          const homeRow = rows.find((r: any) => r.id === home.id);
-          const awayRow = rows.find((r: any) => r.id === away.id);
-          if (homeRow && awayRow) {
-            homeRow.played += 1; awayRow.played += 1;
-            homeRow.for += homeScore; homeRow.against += awayScore;
-            awayRow.for += awayScore; awayRow.against += homeScore;
-            homeRow.diff = homeRow.for - homeRow.against;
-            awayRow.diff = awayRow.for - awayRow.against;
-            if (homeScore === awayScore) {
-              homeRow.draws += 1; awayRow.draws += 1;
-              homeRow.points += POINTS_DRAW; awayRow.points += POINTS_DRAW;
-            } else if (winnerId === home.id) {
-              homeRow.wins += 1; homeRow.points += POINTS_WIN; awayRow.losses += 1;
-            } else {
-              awayRow.wins += 1; awayRow.points += POINTS_WIN; homeRow.losses += 1;
-            }
-            rows.sort((a: any, b: any) => b.points - a.points || b.diff - a.diff || b.wins - a.wins || a.name.localeCompare(b.name));
-            t.update(groupRef, { teams: rows, updatedAt: FieldValue.serverTimestamp() });
-          }
+        homeRow.played = Number(homeRow.played || 0) + 1;
+        awayRow.played = Number(awayRow.played || 0) + 1;
+        homeRow.for = Number(homeRow.for || 0) + homeScore;
+        homeRow.against = Number(homeRow.against || 0) + awayScore;
+        awayRow.for = Number(awayRow.for || 0) + awayScore;
+        awayRow.against = Number(awayRow.against || 0) + homeScore;
+        homeRow.diff = homeRow.for - homeRow.against;
+        awayRow.diff = awayRow.for - awayRow.against;
+        if (homeScore === awayScore) {
+          homeRow.draws = Number(homeRow.draws || 0) + 1;
+          awayRow.draws = Number(awayRow.draws || 0) + 1;
+          homeRow.points = Number(homeRow.points || 0) + POINTS_DRAW;
+          awayRow.points = Number(awayRow.points || 0) + POINTS_DRAW;
+        } else if (winnerId === home.id) {
+          homeRow.wins = Number(homeRow.wins || 0) + 1;
+          homeRow.points = Number(homeRow.points || 0) + POINTS_WIN;
+          awayRow.losses = Number(awayRow.losses || 0) + 1;
+        } else {
+          awayRow.wins = Number(awayRow.wins || 0) + 1;
+          awayRow.points = Number(awayRow.points || 0) + POINTS_WIN;
+          homeRow.losses = Number(homeRow.losses || 0) + 1;
         }
+        groupRows.sort((a: any, b: any) => b.points - a.points || b.diff - a.diff || b.wins - a.wins || a.name.localeCompare(b.name));
+        t.update(groupRef, { teams: groupRows, updatedAt: FieldValue.serverTimestamp() });
       }
+      return true;
     });
-    return true;
+    return finalized === true;
   } catch (error) {
-    await matchRef.update({ status: 'error', error: String((error as any)?.message || error), lastError: String((error as any)?.message || error), failedAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp() });
+    const message = String((error as any)?.message || error || 'TOURNAMENT_MATCH_FAILED').slice(0, 300);
+    // A worker whose lease was reclaimed must never overwrite the newer
+    // worker's state or publish a stale result.
+    await db.runTransaction(async (t: any) => {
+      const fresh = await t.get(matchRef);
+      const data = fresh.data() || {};
+      if (!fresh.exists || data.status !== 'processing' || data.processingToken !== processingToken) return;
+      t.update(matchRef, {
+        status: 'error',
+        processingToken: FieldValue.delete(),
+        error: message,
+        lastError: message,
+        failedAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+    }).catch(() => undefined);
     return false;
   }
 }
 
-async function stageMatchesDone(tournamentRef: any, stage: string, expectedCount: number) {
+async function stageMatchesDone(tournamentRef: any, stage: string, expectedCount: number, maxParticipants: number) {
   const snap = await tournamentRef.collection('matches').where('stage', '==', stage).get();
-  // Этап завершён только при полном ожидаемом наборе уникальных матчей.
-  // Ошибка симуляции, пропущенный матч или дубликат не должны продвигать сетку.
+  // Count alone is insufficient: a malformed set can contain the right number
+  // of unique but out-of-range fixtures. Require the exact canonical matrix.
   if (snap.docs.length !== expectedCount) return false;
-  const ids = new Set<string>();
-  for (const doc of snap.docs) {
-    const match = doc.data() || {};
-    if (match.status !== 'finished' || !match.winnerId || !match.homeId || !match.awayId) return false;
-    if (match.homeId === match.awayId) return false;
-    const key = `${match.stage}:${match.index ?? doc.id}`;
-    if (ids.has(key)) return false;
-    ids.add(key);
-  }
-  return true;
+  return isTournamentStageMatchSetComplete(
+    snap.docs.map((doc: any) => ({ id: doc.id, data: doc.data() || {} })),
+    stage,
+    maxParticipants,
+  );
 }
 
 function expectedStageMatchCount(maxParticipants: number, stage: string) {
@@ -524,11 +617,115 @@ function expectedStageMatchCount(maxParticipants: number, stage: string) {
   return 0;
 }
 
+/**
+ * Final tournament results and participant history are separate documents.
+ * Keep a durable pending marker until every human profile receives its
+ * idempotent arrayUnion entry, so an interrupted cron run can resume.
+ */
+async function syncTournamentHistoryForParticipant(db: any, participantId: string, historyEntry: Record<string, any>) {
+  const playerRef = db.collection('players_v14').doc(participantId);
+  const archiveRef = db.collection('inactive_clubs_v1').doc(participantId);
+  return db.runTransaction(async (t: any) => {
+    const [playerSnap, archiveSnap] = await Promise.all([
+      t.get(playerRef),
+      t.get(archiveRef),
+    ]);
+    if (playerSnap.exists) {
+      t.update(playerRef, {
+        tournamentHistory: FieldValue.arrayUnion(historyEntry),
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+      return 'active';
+    }
+    // Inactive-club retirement deletes the live profile but preserves its
+    // snapshot. Keep completed tournament history with that archived club.
+    if (archiveSnap.exists) {
+      t.update(archiveRef, {
+        'clubSnapshot.tournamentHistory': FieldValue.arrayUnion(historyEntry),
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+      return 'archived';
+    }
+    throw new Error('TOURNAMENT_HISTORY_PROFILE_MISSING');
+  });
+}
+
+async function syncCompletedTournamentHistory(db: any, tournament: any) {
+  if (tournament?.status !== 'completed' || tournament?.historySyncStatus === 'completed') {
+    return tournament?.historySyncStatus === 'completed';
+  }
+  if (tournament?.historySyncStatus !== 'pending') return false;
+
+  const tournamentRef = db.collection('tournaments_v1').doc(String(tournament.id));
+  const participantSnap = await tournamentRef.collection('participants').get();
+  const finishedAtMs = Number(tournament.finishedAt);
+  const endDate = new Date(Number.isFinite(finishedAtMs) && finishedAtMs > 0 ? finishedAtMs : Date.now()).toISOString();
+  const startAtMs = Number(tournament.startAt);
+  const startDate = new Date(Number.isFinite(startAtMs) ? startAtMs : 0).toISOString();
+
+  const updates = participantSnap.docs.map(async (participantDoc: any) => {
+    const participant = participantDoc.data() || {};
+    if (participant.isBot || !participant.id) return null;
+    const participantId = String(participant.id);
+    const historyEntry = {
+      tournamentId: String(tournament.id),
+      tournamentName: String(tournament.name || tournament.id),
+      result: participantId === String(tournament.winnerId) ? 'Победитель' : 'Участник',
+      status: 'finished',
+      startDate,
+      endDate,
+    };
+    return syncTournamentHistoryForParticipant(db, participantId, historyEntry);
+  });
+
+  await Promise.all(updates);
+  await tournamentRef.update({
+    historySyncStatus: 'completed',
+    historySyncedAt: FieldValue.serverTimestamp(),
+    updatedAt: FieldValue.serverTimestamp(),
+  });
+  return true;
+}
+
+/**
+ * Commit stage advancement only while the tournament remains on the expected
+ * source stage. Deterministic IDs make retries safe; stale workers cannot
+ * overwrite fixtures after a newer stage has already advanced.
+ */
+async function commitTournamentStageTransition(
+  db: any, tournamentId: string, expectedStage: string, nextStage: string,
+  fixtures: Array<Record<string, any>>,
+) {
+  const tournamentRef = db.collection('tournaments_v1').doc(tournamentId);
+  return db.runTransaction(async (t: any) => {
+    const tournamentSnap = await t.get(tournamentRef);
+    if (!tournamentSnap.exists) return false;
+    const current = tournamentSnap.data() || {};
+    if (current.stage !== expectedStage || !['groups', 'active'].includes(String(current.status))) return false;
+    const fixtureRefs = fixtures.map(fixture => tournamentRef.collection('matches').doc(String(fixture.id)));
+    const existingSnaps = await Promise.all(fixtureRefs.map((ref: any) => t.get(ref)));
+    for (let index = 0; index < fixtures.length; index++) {
+      const fixture = fixtures[index];
+      const existing = existingSnaps[index];
+      if (!existing.exists) continue;
+      const data = existing.data() || {};
+      if (data.stage !== nextStage || String(data.homeId) !== String(fixture.homeId) ||
+          String(data.awayId) !== String(fixture.awayId) || Number(data.index) !== Number(fixture.index)) {
+        throw new Error('TOURNAMENT_STAGE_FIXTURE_CONFLICT');
+      }
+    }
+    fixtures.forEach((fixture, index) => {
+      if (!existingSnaps[index].exists) t.create(fixtureRefs[index], { ...fixture, createdAt: FieldValue.serverTimestamp() });
+    });
+    t.update(tournamentRef, { stage: nextStage, status: 'active', updatedAt: FieldValue.serverTimestamp() });
+    return true;
+  });
+}
 async function advanceTournament(db: any, tournament: any, now: number) {
   const ref = db.collection('tournaments_v1').doc(tournament.id);
   const stage = tournament.stage as Stage;
   if (stage === 'groups') {
-    if (!(await stageMatchesDone(ref, 'groups', expectedStageMatchCount(Number(tournament.maxParticipants), 'groups')))) return false;
+    if (!(await stageMatchesDone(ref, 'groups', expectedStageMatchCount(Number(tournament.maxParticipants), 'groups'), Number(tournament.maxParticipants)))) return false;
     const groupsSnap = await ref.collection('groups').get();
     const expectedGroups = Number(tournament.maxParticipants) / 4;
     if (groupsSnap.docs.length !== expectedGroups) return false;
@@ -553,22 +750,19 @@ async function advanceTournament(db: any, tournament: any, now: number) {
       throw new Error('INVALID_KNOCKOUT_PAIRING');
     }
     const nextStage = stageForParticipants(Number(tournament.maxParticipants));
-    const batch = db.batch();
-    pairs.forEach(([home, away], index) => {
+    const fixtures = pairs.map(([home, away], index) => {
       const matchId = `${nextStage}_${index + 1}`;
-      batch.set(ref.collection('matches').doc(matchId), {
+      return {
         id: matchId, tournamentId: tournament.id, stage: nextStage, round: 1, index: index + 1,
         homeId: home.id, awayId: away.id, homeName: home.name, awayName: away.name,
-        bestOf: 2, scheduledAt: addMinutes(Number(tournament.startAt), stageStartOffset(Number(tournament.maxParticipants), nextStage)), status: 'scheduled', createdAt: FieldValue.serverTimestamp(),
-      });
+        bestOf: 2, scheduledAt: addMinutes(Number(tournament.startAt), stageStartOffset(Number(tournament.maxParticipants), nextStage)), status: 'scheduled',
+      };
     });
-    batch.update(ref, { stage: nextStage, status: 'active', updatedAt: FieldValue.serverTimestamp() });
-    await batch.commit();
-    return true;
+    return commitTournamentStageTransition(db, tournament.id, stage, nextStage, fixtures);
   }
 
   if (['round_of_16', 'quarterfinal', 'semifinal'].includes(stage)) {
-    if (!(await stageMatchesDone(ref, stage, expectedStageMatchCount(Number(tournament.maxParticipants), stage)))) return false;
+    if (!(await stageMatchesDone(ref, stage, expectedStageMatchCount(Number(tournament.maxParticipants), stage), Number(tournament.maxParticipants)))) return false;
     const matches = await ref.collection('matches').where('stage', '==', stage).get();
     const ordered = matches.docs.sort((a: any, b: any) => Number(a.data()?.index || 0) - Number(b.data()?.index || 0));
     const stageExpected = expectedStageMatchCount(Number(tournament.maxParticipants), stage);
@@ -576,45 +770,62 @@ async function advanceTournament(db: any, tournament: any, now: number) {
     const winners = ordered.map((d: any) => d.data()).map((m: any) => ({ id: m.winnerId, name: m.winnerName })).filter((x: any) => x.id);
     const nextStage: Stage = stage === 'round_of_16' ? 'quarterfinal' : stage === 'quarterfinal' ? 'semifinal' : 'final';
     if (winners.length !== stageExpected || new Set(winners.map((team: any) => team.id)).size !== winners.length || winners.length < 2 || winners.length % 2 !== 0) return false;
-    const batch = db.batch();
+    const fixtures = [];
     for (let i = 0; i < winners.length; i += 2) {
       const home = winners[i], away = winners[i + 1];
       const matchId = `${nextStage}_${i / 2 + 1}`;
-      batch.set(ref.collection('matches').doc(matchId), {
+      fixtures.push({
         id: matchId, tournamentId: tournament.id, stage: nextStage, round: 1, index: i / 2 + 1,
         homeId: home.id, awayId: away.id, homeName: home.name, awayName: away.name,
-        bestOf: 2, scheduledAt: addMinutes(Number(tournament.startAt), stageStartOffset(Number(tournament.maxParticipants), nextStage)), status: 'scheduled', createdAt: FieldValue.serverTimestamp(),
+        bestOf: 2, scheduledAt: addMinutes(Number(tournament.startAt), stageStartOffset(Number(tournament.maxParticipants), nextStage)), status: 'scheduled',
       });
     }
-    batch.update(ref, { stage: nextStage, status: 'active', updatedAt: FieldValue.serverTimestamp() });
-    await batch.commit();
-    return true;
+    return commitTournamentStageTransition(db, tournament.id, stage, nextStage, fixtures);
   }
 
   if (stage === 'final') {
-    if (!(await stageMatchesDone(ref, 'final', 1))) return false;
+    if (!(await stageMatchesDone(ref, 'final', 1, Number(tournament.maxParticipants)))) return false;
     const finalSnap = await ref.collection('matches').where('stage', '==', 'final').limit(1).get();
     const finalMatch = finalSnap.docs[0]?.data();
     if (!finalMatch?.winnerId) return false;
-    const finishedAt = Date.now();
-    await ref.update({
-      stage: 'completed', status: 'completed', winnerId: finalMatch.winnerId, winnerName: finalMatch.winnerName,
-      finishedAt, updatedAt: FieldValue.serverTimestamp(),
-    });
+    const completedTournament = await db.runTransaction(async (t: any) => {
+      const fresh = await t.get(ref);
+      if (!fresh.exists) return null;
+      const current = fresh.data() || {};
 
-    const participantSnap = await ref.collection('participants').get();
-    const updates = participantSnap.docs.map((d: any) => {
-      const p = d.data();
-      if (p.isBot) return null;
-      return db.collection('players_v14').doc(p.id).update({
-        tournamentHistory: FieldValue.arrayUnion({
-          tournamentId: tournament.id, tournamentName: tournament.name, result: p.id === finalMatch.winnerId ? 'Победитель' : 'Участник',
-          status: 'finished', startDate: new Date(Number(tournament.startAt)).toISOString(), endDate: new Date(finishedAt).toISOString(),
-        }),
+      // If another cron invocation already committed the final result, reuse
+      // its stable timestamp and only resume the pending profile sync.
+      if (current.status === 'completed') {
+        if (current.historySyncStatus !== 'pending') return null;
+        return { id: tournament.id, ...current };
+      }
+      if (current.stage !== 'final' || current.status === 'completed') return null;
+
+      const finishedAt = Date.now();
+      const completed = {
+        ...current,
+        id: tournament.id,
+        status: 'completed',
+        stage: 'completed',
+        winnerId: finalMatch.winnerId,
+        winnerName: finalMatch.winnerName,
+        finishedAt,
+        historySyncStatus: 'pending',
+      };
+      t.update(ref, {
+        stage: 'completed',
+        status: 'completed',
+        winnerId: finalMatch.winnerId,
+        winnerName: finalMatch.winnerName,
+        finishedAt,
+        historySyncStatus: 'pending',
         updatedAt: FieldValue.serverTimestamp(),
       });
-    }).filter(Boolean);
-    await Promise.all(updates);
+      return completed;
+    });
+    if (!completedTournament) return false;
+
+    await syncCompletedTournamentHistory(db, completedTournament);
     return true;
   }
 
@@ -622,30 +833,46 @@ async function advanceTournament(db: any, tournament: any, now: number) {
 }
 
 export async function runTournamentCycle(cronToken: string) {
-  const cronSecret = process.env.CRON_SECRET;
-  if (!cronSecret || typeof cronToken !== 'string' || cronToken !== cronSecret) {
+  try {
+    assertCronSecret(cronToken);
+  } catch {
     return { success: false, error: 'UNAUTHORIZED' };
   }
   const generated = await generateDailyTournamentsInternal();
   const db = getAdminDb();
   const now = Date.now();
-  const snap = await db.collection('tournaments_v1').where('status', 'in', ['registration', 'groups', 'active']).get();
+  // Retry participant history independently from active tournament stages.
+  const pendingHistorySnap = await db.collection('tournaments_v1')
+    .where('historySyncStatus', '==', 'pending')
+    .get();
+  let historiesSynced = 0;
+  for (const pendingDoc of pendingHistorySnap.docs) {
+    const pendingTournament = { id: pendingDoc.id, ...pendingDoc.data() } as any;
+    if (pendingTournament.status !== 'completed') continue;
+    try {
+      if (await syncCompletedTournamentHistory(db, pendingTournament)) historiesSynced++;
+    } catch (error) {
+      console.error('[TOURNAMENT HISTORY SYNC] retry pending:', pendingDoc.id, error);
+    }
+  }
+
+  const snap = await db.collection('tournaments_v1').where('status', 'in', ['registration', 'initializing', 'groups', 'active']).get();
   let initialized = 0;
   let resolved = 0;
   let advanced = 0;
 
   for (const doc of snap.docs) {
     const tournament = { id: doc.id, ...doc.data() } as any;
-    if (tournament.status === 'registration' && now >= Number(tournament.startAt)) {
+    if ((tournament.status === 'registration' && now >= Number(tournament.startAt)) || tournament.status === 'initializing') {
       if (await initializeTournament(db, tournament.id, now)) initialized++;
       continue;
     }
-    const matchesSnap = await doc.ref.collection('matches').where('status', 'in', ['scheduled', 'error']).get();
+    const matchesSnap = await doc.ref.collection('matches').where('status', 'in', ['scheduled', 'error', 'processing']).get();
     for (const matchDoc of matchesSnap.docs) {
       const match = matchDoc.data() || {};
       // Повторяем сбойную симуляцию до 3 попыток. Ошибки не считаются сыгранными
       // и не позволяют турниру перейти к следующему этапу.
-      if (Number(match.scheduledAt) <= now && Number(match.attemptCount || 0) < 3) {
+      if (Number(match.scheduledAt) <= now) {
         if (await resolveTournamentMatch(db, tournament.id, matchDoc.id, now)) resolved++;
       }
     }
@@ -655,7 +882,7 @@ export async function runTournamentCycle(cronToken: string) {
     }
   }
 
-  return { generated, initialized, resolved, advanced };
+  return { generated, initialized, resolved, advanced, historiesSynced };
 }
 
 export async function getTournamentCatalogAction(idToken: string) {

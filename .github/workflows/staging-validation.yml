@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - hosting/vercel-free-staging
+      - feature/season-lifecycle-autonomy
   pull_request:
     branches:
       - hosting/vercel-free-staging

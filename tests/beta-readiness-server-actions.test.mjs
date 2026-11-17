@@ -10,13 +10,15 @@ const proPage = read('../src/app/transfers/pro/page.tsx');
 const youthTransferPage = read('../src/app/youth-academy/transfers/page.tsx');
 const youthSquadPage = read('../src/app/youth-academy/squad/page.tsx');
 const specialMarketAction = read('../src/app/actions/pro-market.ts');
-const settlement = read('../src/app/actions/autonomous-cycle.ts');
+const auctionBid = read('../src/app/lib/auction-bid.ts');
+const auctionPolicy = read('../src/app/lib/auction-settlement.ts');
+const settlement = read('../src/app/lib/auction-expiry-sweep.ts');
 
 function blockBetween(source, start, end) {
   const from = source.indexOf(start);
-  assert.notEqual(from, -1, `missing block start: ${start}`);
+  assert.notEqual(from, -1, 'missing block start: ' + start);
   const to = source.indexOf(end, from);
-  assert.notEqual(to, -1, `missing block end: ${end}`);
+  assert.notEqual(to, -1, 'missing block end: ' + end);
   return source.slice(from, to);
 }
 
@@ -39,14 +41,18 @@ test('PRO and youth market mutations are routed through authenticated server act
   assert.doesNotMatch(youthSquadPage, /setDoc\(doc\(db, 'market_v7'/);
 });
 
-test('special market server actions validate market type and authoritative balance', () => {
-  assert.match(specialMarketAction, /lot\.isPro === true && lot\.currency === 'crystals'/);
-  assert.match(specialMarketAction, /lot\.isYouth === true/);
-  assert.match(specialMarketAction, /bidder\[currency\]/);
-  assert.match(specialMarketAction, /SPECIAL_AUCTION_BID_ESCROW/);
-  assert.match(specialMarketAction, /SPECIAL_AUCTION_OUTBID_REFUND/);
-  assert.match(specialMarketAction, /AUCTION_ESCROW_MISMATCH/);
+test('special market server actions validate market type, authoritative balance and existing escrow', () => {
+  assert.match(auctionBid, /lot\.isPro === true && lot\.currency === 'crystals'/);
+  assert.match(auctionBid, /lot\.isYouth === true/);
+  assert.match(auctionBid, /bidder\[currency\]/);
+  assert.match(auctionBid, /SPECIAL_AUCTION_BID_ESCROW/);
+  assert.match(auctionBid, /SPECIAL_AUCTION_OUTBID_REFUND/);
+  assert.match(specialMarketAction, /placeSpecialMarketBidWithDb/);
+  assert.match(auctionBid, /resolvePreviousAuctionBidEscrow\(/);
   assert.match(specialMarketAction, /requireServerActor\(idToken\)/);
+  assert.match(auctionPolicy, /AUCTION_ESCROW_CURRENCY_MISMATCH/);
+  assert.match(auctionPolicy, /AUCTION_ESCROW_AMOUNT_MISMATCH/);
+  assert.match(auctionPolicy, /AUCTION_ESCROW_BIDDER_UNAVAILABLE/);
 });
 
 test('auction settlement supports system PRO lots and youth player arrays', () => {
@@ -59,7 +65,7 @@ test('auction settlement supports system PRO lots and youth player arrays', () =
 
 test('legacy tournament routes redirect to the canonical daily tournament catalog', () => {
   for (const route of ['iron-kettle', 'iron-brick', 'iron-globe']) {
-    const source = read(`../src/app/tournaments/${route}/page.tsx`);
+    const source = read('../src/app/tournaments/' + route + '/page.tsx');
     assert.match(source, /redirect\('\/tournaments\/open'\)/);
   }
 });

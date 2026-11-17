@@ -88,7 +88,7 @@ interface GameState {
   assignToRole: (role: LineupSlot, playerId: string | null) => void;
   updateLineup: (updates: Partial<Record<LineupSlot, string | null>>) => void;
   updateTactics: (strategy: string, lineSettings: any) => void;
-  claimReward: (credits: number, crystals: number) => void;
+  claimReward: () => void;
   setLanguage: (lang: string) => void;
   purchaseLicense: (tier: number, cost: number) => boolean;
   purchasePremium: () => boolean;

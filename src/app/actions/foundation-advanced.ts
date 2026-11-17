@@ -63,29 +63,38 @@ export async function resolveFoundationEventAction(idToken: string, eventId: str
 export async function foundationFanAction(idToken: string, action: 'free_entry' | 'away_trip' | 'autograph' | 'fan_groups') {
   try {
     const { uid } = await requireServerActor(idToken);
+    const allowedActions = ['free_entry', 'away_trip', 'autograph', 'fan_groups'];
+    if (!allowedActions.includes(String(action))) throw new Error('INVALID_FAN_ACTION');
     const db = getAdminDb();
     const ref = getFoundationManagerRef(db, uid);
-    const snap = await ref.get();
-    if (!snap.exists) throw new Error('PLAYER_NOT_FOUND');
-    const data = snap.data() || {};
-    const fans = { mood: 50, communitySize: 1000, attendanceLast3: [], attendance: 0, ...(data.fans || {}) } as any;
     const today = moscowDayKey();
     const actionRef = db.collection(FOUNDATION_COLLECTIONS.fanSnapshots).doc(`${uid}_${today}_${action}`);
-    const old = await actionRef.get();
-    if (old.exists) throw new Error('FAN_ACTION_ALREADY_USED');
-    if (action === 'autograph') fans.mood = Math.min(100, Number(fans.mood) + 5);
-    if (action === 'fan_groups') { fans.communitySize = Math.max(0, Number(fans.communitySize) + 1000); fans.mood = Math.min(100, Number(fans.mood) + 2); }
-    if (action === 'free_entry') fans.mood = Math.min(100, Number(fans.mood) + 3);
-    if (action === 'away_trip') fans.mood = Math.min(100, Number(fans.mood) + 2);
-    const capacity = Number(data.arenaCapacity || 10000);
-    const attendance = action === 'free_entry' ? capacity : expectedAttendance(fans, capacity);
-    await db.runTransaction(async t => {
-      const fresh = await t.get(actionRef);
-      if (fresh.exists) throw new Error('FAN_ACTION_ALREADY_USED');
+    const result = await db.runTransaction(async t => {
+      const [freshAction, managerSnap] = await Promise.all([t.get(actionRef), t.get(ref)]);
+      if (freshAction.exists) throw new Error('FAN_ACTION_ALREADY_USED');
+      if (!managerSnap.exists) throw new Error('PLAYER_NOT_FOUND');
+      const data = managerSnap.data() || {};
+      const fans = { mood: 50, communitySize: 1000, attendanceLast3: [], attendance: 0, ...(data.fans || {}) } as any;
+      if (action === 'autograph') fans.mood = Math.min(100, Number(fans.mood) + 5);
+      if (action === 'fan_groups') {
+        fans.communitySize = Math.max(0, Number(fans.communitySize) + 1000);
+        fans.mood = Math.min(100, Number(fans.mood) + 2);
+      }
+      if (action === 'free_entry') fans.mood = Math.min(100, Number(fans.mood) + 3);
+      if (action === 'away_trip') fans.mood = Math.min(100, Number(fans.mood) + 2);
+      const capacity = Number(data.arenaCapacity || 10000);
+      const attendance = action === 'free_entry' ? capacity : expectedAttendance(fans, capacity);
       t.update(ref, { fans: { ...fans, attendance }, updatedAt: FieldValue.serverTimestamp() });
-      t.set(actionRef, { userId: uid, action, date: today, attendance, createdAt: FieldValue.serverTimestamp() });
+      t.create(actionRef, {
+        userId: uid,
+        action,
+        date: today,
+        attendance,
+        createdAt: FieldValue.serverTimestamp(),
+      });
+      return { fans, attendance };
     });
-    return { success: true, fans, attendance };
+    return { success: true, ...result };
   } catch (e) { return fail(e); }
 }
 

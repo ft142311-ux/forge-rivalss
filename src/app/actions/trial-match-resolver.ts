@@ -1,5 +1,6 @@
 'use server';
 
+import { randomUUID } from 'node:crypto';
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { requireServerActor } from '@/lib/server-auth';
@@ -9,10 +10,27 @@ import { MATCH_COLLECTIONS } from '@/app/lib/match-storage';
 import { hash32 } from '@/app/lib/hash-utils';
 import { timestampToMillis } from '@/app/lib/timestamp-utils';
 import { getMatchWinnerId } from '@/app/lib/match-winner';
+import { isProcessingLeaseStale } from '@/app/lib/match-processing-lease';
 
 function startTimeMs(match: any): number {
   const raw = match?.startTime || match?.scheduledStartAt || match?.scheduledAt;
   return timestampToMillis(raw);
+}
+
+function isTrialMatchTerminal(match: any): boolean {
+  return match?.isFinished === true ||
+    ['finished', 'completed'].includes(String(match?.status || '').toLowerCase());
+}
+
+const TRIAL_MATCH_PROCESSING_LEASE_MS = 5 * 60 * 1000;
+
+function isTrialMatchProcessingLeaseStale(match: any, nowMs: number): boolean {
+  return isProcessingLeaseStale({
+    isProcessing: match?.isProcessing,
+    startedAtMs: timestampToMillis(match?.processingStartedAt),
+    nowMs,
+    leaseMs: TRIAL_MATCH_PROCESSING_LEASE_MS,
+  });
 }
 
 
@@ -133,23 +151,25 @@ export async function resolveDueTrialMatchesForUserAction(idToken: string) {
     const matchId = matchDoc.id;
     const match = matchDoc.data() as any;
     const dueAt = startTimeMs(match);
-    if (!Number.isFinite(dueAt) || dueAt > Date.now() || !match.teamA || !match.teamB || match.isProcessing) {
+    if (isTrialMatchTerminal(match) || !Number.isFinite(dueAt) || dueAt > Date.now() || !match.teamA || !match.teamB || (match.isProcessing && !isTrialMatchProcessingLeaseStale(match, Date.now()))) {
       skipped++;
       continue;
     }
 
     const matchRef = db.collection(MATCH_COLLECTIONS.trial).doc(matchId);
     let claimed = false;
+    const processingToken = randomUUID();
     try {
       claimed = await db.runTransaction(async transaction => {
         const fresh = await transaction.get(matchRef);
         const data = fresh.data() as any;
-        if (!fresh.exists || data?.homeId !== uid || data?.isTrial !== true || data?.isFinished === true || data?.isProcessing === true) return false;
+        if (!fresh.exists || data?.homeId !== uid || data?.isTrial !== true || isTrialMatchTerminal(data) || (data?.isProcessing === true && !isTrialMatchProcessingLeaseStale(data, Date.now()))) return false;
         const freshDueAt = startTimeMs(data);
         if (!Number.isFinite(freshDueAt) || freshDueAt > Date.now() || !data.teamA || !data.teamB) return false;
         transaction.update(matchRef, {
           isProcessing: true,
           status: 'processing',
+          processingToken,
           processingStartedAt: FieldValue.serverTimestamp(),
         });
         return true;
@@ -165,14 +185,15 @@ export async function resolveDueTrialMatchesForUserAction(idToken: string) {
         const fresh = await transaction.get(matchRef);
         const data = fresh.data() as any;
         if (!fresh.exists || data?.homeId !== uid || data?.isTrial !== true) throw new Error('TRIAL_MATCH_OWNERSHIP_CHANGED');
-        if (data?.isFinished === true) return false;
-        if (data?.isProcessing !== true) throw new Error('TRIAL_MATCH_LOCK_LOST');
+        if (isTrialMatchTerminal(data)) return false;
+        if (data?.isProcessing !== true || data?.processingToken !== processingToken) throw new Error('TRIAL_MATCH_LOCK_LOST');
         transaction.update(matchRef, {
           scoreA, scoreB, homeScore: scoreA, awayScore: scoreB,
           seriesScore: `${scoreA}-${scoreB}`, score: `${scoreA}-${scoreB}`,
           winner: simulation.winner,
           winnerId: getMatchWinnerId(simulation.winnerSide, data.homeId, data.awayId),
           status: 'finished', isFinished: true, isProcessing: false,
+          processingToken: FieldValue.delete(), processingStartedAt: FieldValue.delete(),
           simulation, games: simulation.games, homeStrength: simulation.homeStrength,
           awayStrength: simulation.awayStrength, homeOverall: simulation.homeOverall,
           awayOverall: simulation.awayOverall, playedAt: finishedAt,
@@ -189,7 +210,7 @@ export async function resolveDueTrialMatchesForUserAction(idToken: string) {
         await db.runTransaction(async transaction => {
           const fresh = await transaction.get(matchRef);
           const data = fresh.data() as any;
-          if (fresh.exists && data?.homeId === uid && data?.isTrial === true && data?.isFinished !== true && data?.isProcessing === true) {
+          if (fresh.exists && data?.homeId === uid && data?.isTrial === true && !isTrialMatchTerminal(data) && data?.isProcessing === true && data?.processingToken === processingToken) {
             transaction.update(matchRef, { isProcessing: false, status: 'scheduled', processingErrorAt: FieldValue.serverTimestamp() });
           }
         }).catch(resetError => console.error('[TRIAL MATCH SERVER] Could not release claim:', matchId, resetError));

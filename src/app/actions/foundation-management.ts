@@ -6,12 +6,28 @@ import { requireServerActor } from '@/lib/server-auth';
 import { getFoundationManagerRef } from './foundation-manager-ref';
 import { applyTraining } from '@/game/foundation/training';
 import { calculateTeamSynergy } from '@/game/foundation/synergy';
-import { expectedAttendance, updateFansAfterHomeMatch } from '@/game/foundation/fans';
 import { associationExperienceGain, validateSingleAssociation, qualifiesForAssociationCup } from '@/game/foundation/associations';
 import { getTournamentRuleSet, canEnterTournament, buildOlympicPairs } from '@/game/foundation/tournaments';
 import { FOUNDATION_COLLECTIONS } from '@/game/foundation/config';
 import { deterministicDailyEvent } from '@/game/foundation/events';
 import { isFoundationSkill } from '@/game/foundation/skills';
+import { resolveTrainingFinishTimeMs } from '@/app/lib/player-training-guards';
+
+function readCreditsBalance(value: unknown) {
+  const balance = value === undefined || value === null
+    ? 0
+    : (typeof value === 'number' || typeof value === 'string') ? Number(value) : NaN;
+  if (!Number.isSafeInteger(balance) || balance < 0) throw new Error('INVALID_BALANCE');
+  return balance;
+}
+
+function readTreasuryBalance(value: unknown) {
+  const balance = value === undefined || value === null
+    ? 0
+    : (typeof value === 'number' || typeof value === 'string') ? Number(value) : NaN;
+  if (!Number.isSafeInteger(balance) || balance < 0) throw new Error('INVALID_TREASURY_BALANCE');
+  return balance;
+}
 
 function errorOf(e: any) { return e?.message || 'FOUNDATION_ACTION_FAILED'; }
 
@@ -55,9 +71,12 @@ export async function completePlayerTrainingAction(idToken: string, playerId: st
       const index = players.findIndex(p => p.id === playerId);
       if (index < 0) throw new Error('UNIT_NOT_FOUND');
       const player = players[index];
-      if (!player.dailyTrainingFinishTime || new Date(player.dailyTrainingFinishTime).getTime() > Date.now()) throw new Error('TRAINING_NOT_READY');
+      const finishAtMs = resolveTrainingFinishTimeMs(player.dailyTrainingFinishTime);
+      if (finishAtMs === null) throw new Error('TRAINING_FINISH_TIME_INVALID');
+      if (finishAtMs > Date.now()) throw new Error('TRAINING_NOT_READY');
       const focus = player.dailyTrainingFocus || player.trainingFocus;
       if (!focus) throw new Error('TRAINING_FOCUS_MISSING');
+      if (!isFoundationSkill(focus)) throw new Error('INVALID_TRAINING_SKILL');
       const staffBonus = data.staff?.coach ? 1.08 : 1;
       const result = applyTraining(player, focus, Math.round(90 * staffBonus));
       players[index] = { ...result.player, dailyTrainingFinishTime: null, lastTrainingCompletedAt: new Date().toISOString() };
@@ -84,19 +103,18 @@ export async function recalculateTeamSynergyAction(idToken: string) {
   } catch (e) { return { success: false, error: errorOf(e) }; }
 }
 
-export async function updateFansAfterOfficialHomeMatchAction(idToken: string, won: boolean, capacity = 10000) {
+/**
+ * Deprecated compatibility endpoint.
+ *
+ * Match outcomes and attendance are authoritative match-engine data. A client
+ * must never be able to submit a boolean win/loss or stadium capacity to grant
+ * fan growth. Official match settlement owns this update; this legacy action
+ * intentionally fails closed until it can resolve a verified finished fixture.
+ */
+export async function updateFansAfterOfficialHomeMatchAction(idToken: string, _won: boolean, _capacity = 10000) {
   try {
-    const { uid } = await requireServerActor(idToken);
-    const db = getAdminDb();
-    const ref = getFoundationManagerRef(db, uid);
-    const snap = await ref.get();
-    if (!snap.exists) throw new Error('PLAYER_NOT_FOUND');
-    const data = snap.data() || {};
-    const attendance = expectedAttendance(data.fans, capacity);
-    const fans = updateFansAfterHomeMatch(data.fans, attendance, won);
-    await ref.update({ fans, updatedAt: FieldValue.serverTimestamp() });
-    await db.collection(FOUNDATION_COLLECTIONS.fanSnapshots).add({ userId: uid, attendance, fans, createdAt: FieldValue.serverTimestamp() });
-    return { success: true, fans, attendance };
+    await requireServerActor(idToken);
+    throw new Error('OFFICIAL_MATCH_RESULT_REQUIRED');
   } catch (e) { return { success: false, error: errorOf(e) }; }
 }
 
@@ -146,18 +164,64 @@ export async function registerFoundationTournamentAction(idToken: string, tourna
 export async function recordFoundationTournamentResultAction(idToken: string, tournamentId: string, matchId: string, winnerId: string, loserId: string, winnerPoints = 1, loserPoints = 0) {
   try {
     const { uid } = await requireServerActor(idToken);
+    const ids = [tournamentId, matchId, winnerId, loserId];
+    if (ids.some(value => typeof value !== 'string' || !value.trim() || value.length > 128)) {
+      throw new Error('INVALID_TOURNAMENT_RESULT_ID');
+    }
+    if (winnerId === loserId) throw new Error('INVALID_TOURNAMENT_RESULT_PARTICIPANTS');
+    const homePoints = Number(winnerPoints);
+    const awayPoints = Number(loserPoints);
+    if (!Number.isSafeInteger(homePoints) || !Number.isSafeInteger(awayPoints) ||
+        homePoints < 0 || awayPoints < 0 || homePoints > 100 || awayPoints > 100 ||
+        homePoints <= awayPoints) {
+      throw new Error('INVALID_TOURNAMENT_RESULT_SCORE');
+    }
+
     const db = getAdminDb();
     const tournamentRef = db.collection(FOUNDATION_COLLECTIONS.tournaments).doc(tournamentId);
     const matchRef = db.collection(FOUNDATION_COLLECTIONS.tournamentMatches).doc(matchId);
-    await db.runTransaction(async t => {
-      const tournament = await t.get(tournamentRef);
+    const result = await db.runTransaction(async t => {
+      const [tournament, match] = await Promise.all([t.get(tournamentRef), t.get(matchRef)]);
       if (!tournament.exists) throw new Error('TOURNAMENT_NOT_FOUND');
+      if (!match.exists) throw new Error('TOURNAMENT_MATCH_NOT_FOUND');
       const data = tournament.data() || {};
-      if (!Array.isArray(data.participants) || !data.participants.includes(uid)) throw new Error('NOT_PARTICIPANT');
-      t.set(matchRef, { matchId, tournamentId, winnerId, loserId, winnerPoints, loserPoints, resolvedBy: uid, resolvedAt: FieldValue.serverTimestamp() }, { merge: true });
+      if (data.status !== 'active') throw new Error('TOURNAMENT_NOT_ACTIVE');
+      if (!Array.isArray(data.participants) ||
+          !data.participants.includes(winnerId) || !data.participants.includes(loserId)) {
+        throw new Error('RESULT_PARTICIPANTS_NOT_IN_TOURNAMENT');
+      }
+      const fixture = match.data() || {};
+      if (String(fixture.tournamentId || '') !== tournamentId) throw new Error('TOURNAMENT_MATCH_MISMATCH');
+      if (fixture.status === 'bye' || fixture.homeId === 'BYE' || fixture.awayId === 'BYE' ||
+          ![fixture.homeId, fixture.awayId].includes(winnerId) ||
+          ![fixture.homeId, fixture.awayId].includes(loserId)) {
+        throw new Error('RESULT_PARTICIPANTS_MISMATCH');
+      }
+      if (uid !== winnerId && uid !== loserId && data.createdBy !== uid) {
+        throw new Error('MATCH_RESULT_ACCESS_DENIED');
+      }
+      if (fixture.status === 'finished' || fixture.resolvedAt) {
+        if (fixture.winnerId === winnerId && fixture.loserId === loserId &&
+            Number(fixture.winnerPoints) === homePoints && Number(fixture.loserPoints) === awayPoints) {
+          return { alreadyResolved: true };
+        }
+        throw new Error('TOURNAMENT_MATCH_ALREADY_RESOLVED');
+      }
+      if (fixture.status !== 'scheduled') throw new Error('TOURNAMENT_MATCH_NOT_SCHEDULED');
+      t.update(matchRef, {
+        winnerId,
+        loserId,
+        winnerPoints: homePoints,
+        loserPoints: awayPoints,
+        status: 'finished',
+        resolvedBy: uid,
+        resolvedAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
+      });
       t.update(tournamentRef, { lastMatchId: matchId, updatedAt: FieldValue.serverTimestamp() });
+      return { alreadyResolved: false };
     });
-    return { success: true };
+    return { success: true, ...result };
   } catch (e) { return { success: false, error: errorOf(e) }; }
 }
 
@@ -275,19 +339,31 @@ export async function associationTreasuryPaymentAction(idToken: string, amount: 
       const data = snap.data() || {};
       const associationId = data.associationId;
       if (!associationId) throw new Error('NO_ASSOCIATION');
-      const payment = Math.max(0, Math.round(Number(amount || 0)));
-      if (!payment) throw new Error('INVALID_AMOUNT');
-      const balance = Math.max(0, Number(data.credits || 0));
+      if (typeof amount !== 'number' || !Number.isSafeInteger(amount) || amount <= 0) throw new Error('INVALID_AMOUNT');
+      const payment = amount;
+      const balance = readCreditsBalance(data.credits);
       if (balance < payment) throw new Error('INSUFFICIENT_FUNDS');
       const assocRef = db.collection(FOUNDATION_COLLECTIONS.associations).doc(associationId);
       const assocSnap = await t.get(assocRef);
       if (!assocSnap.exists) throw new Error('ASSOCIATION_NOT_FOUND');
       const assoc = assocSnap.data() || {};
+      const treasuryBefore = readTreasuryBalance(assoc.treasury);
+      const treasuryAfter = treasuryBefore + payment;
+      if (!Number.isSafeInteger(treasuryAfter)) throw new Error('INVALID_TREASURY_BALANCE');
       t.update(managerRef, { credits: balance-payment, updatedAt: FieldValue.serverTimestamp() });
-      t.update(assocRef, { treasury: Math.max(0, Number(assoc.treasury || 0))+payment, updatedAt: FieldValue.serverTimestamp() });
-      t.set(db.collection(FOUNDATION_COLLECTIONS.economy).doc(), { userId:uid, associationId, amount:-payment, currency:'credits', type:'ASSOCIATION_PAYMENT', timestamp:FieldValue.serverTimestamp() });
+      t.update(assocRef, { treasury: treasuryAfter, updatedAt: FieldValue.serverTimestamp() });
+      t.set(db.collection(FOUNDATION_COLLECTIONS.economy).doc(), {
+        userId: uid,
+        associationId,
+        amount: -payment,
+        currency: 'credits',
+        type: 'ASSOCIATION_PAYMENT',
+        balanceBefore: balance,
+        balanceAfter: balance - payment,
+        timestamp: FieldValue.serverTimestamp(),
+      });
     });
-    return { success:true, amount:Math.round(Number(amount||0)) };
+    return { success:true, amount };
   } catch(e) { return { success:false, error:errorOf(e) }; }
 }
 

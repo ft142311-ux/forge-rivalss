@@ -60,6 +60,14 @@ function buildingAvailable(data: any, building: string) {
   return false;
 }
 
+function readCreditsBalance(value: unknown) {
+  const balance = value === undefined || value === null
+    ? 0
+    : (typeof value === 'number' || typeof value === 'string') ? Number(value) : NaN;
+  if (!Number.isSafeInteger(balance) || balance < 0) throw new Error('INVALID_BALANCE');
+  return balance;
+}
+
 function errorOf(e: any) {
   return e?.message || 'FOUNDATION_STAFF_FAILED';
 }
@@ -137,7 +145,7 @@ export async function hireFoundationStaffAction(idToken: string, roleValue: stri
       if (!candidate) throw new Error('CANDIDATE_DATA_MISSING');
 
       const cost = 50000;
-      const balance = Number(data.credits || 0);
+      const balance = readCreditsBalance(data.credits);
       if (balance < cost) throw new Error('INSUFFICIENT_FUNDS');
 
       const hired = {
@@ -166,6 +174,8 @@ export async function hireFoundationStaffAction(idToken: string, roleValue: stri
         type: 'STAFF_HIRE',
         referenceId: hired.id,
         description: `Hire ${role}`,
+        balanceBefore: balance,
+        balanceAfter: balance - cost,
         timestamp: FieldValue.serverTimestamp(),
       });
 

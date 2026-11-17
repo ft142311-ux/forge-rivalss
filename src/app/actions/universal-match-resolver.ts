@@ -10,6 +10,8 @@ import { timestampToMillis } from '@/app/lib/timestamp-utils';
 import { normalizeName } from '@/app/lib/normalize-name';
 import { assertMatchDocumentId } from '@/app/lib/match-id';
 import { getMatchWinnerId } from '@/app/lib/match-winner';
+import { getGlobalSeasonInfo } from '@/app/lib/time-utils';
+import { resolveSeasonLifecycleWindow } from './season-boundary';
 
 export type UniversalMatchResult = {
   success: boolean;
@@ -62,7 +64,8 @@ export async function resolveUniversalMatchDocument(
       }
     };
 
-    if (match.isFinished === true || match.status === 'finished') {
+    if (match.isFinished === true ||
+        ['finished', 'completed'].includes(String(match.status || '').toLowerCase())) {
       renewRolloverLock();
       // Repair the notification/report flags without re-simulating an already
       // finished match. This is intentionally idempotent.
@@ -76,6 +79,33 @@ export async function resolveUniversalMatchDocument(
         updatedAt: FieldValue.serverTimestamp(),
       }, { merge: true });
       return { success: true, finished: true, alreadyResolved: true, matchId };
+    }
+
+    // The universal resolver is also callable directly, so the daily worker's
+    // offseason guard alone is insufficient. Re-check the authoritative season
+    // boundary inside this transaction before any league simulation or writes.
+    const matchType = String(match.matchType || match.type || 'league').toLowerCase();
+    if (collectionName === 'matches_v2' && matchType === 'league') {
+      const configSnap = await t.get(db.collection('system_v1').doc('season_config'));
+      const config = configSnap.exists ? configSnap.data() || {} : {};
+      const info = getGlobalSeasonInfo(new Date());
+      let lifecycle: ReturnType<typeof resolveSeasonLifecycleWindow>;
+      try {
+        lifecycle = resolveSeasonLifecycleWindow({
+          seasonStart: config.seasonStart || info.currentSeasonStart,
+          nextSeasonStart: config.nextSeasonStart || info.nextSeasonStart,
+          now: new Date(),
+        });
+      } catch {
+        throw new Error('SEASON_LIFECYCLE_WINDOW_INVALID');
+      }
+      if (lifecycle.leagueMatchesPaused) {
+        return { success: true, finished: false, status: 'offseason', matchId };
+      }
+      const configuredActiveSeason = Number(config.activeSeasonNumber || info.activeSeasonNumber || 1);
+      if (Number.isFinite(Number(match.season)) && Number(match.season) !== configuredActiveSeason) {
+        return { success: true, finished: false, status: 'season_not_active', matchId };
+      }
     }
 
     if (options?.requireDue) {
@@ -99,7 +129,7 @@ export async function resolveUniversalMatchDocument(
     const awayData: any = awaySnap.data() || {};
     const homeName = normalizeName(homeData.clubName || homeData.displayName || match.homeName || match.hostName, 'Home');
     const awayName = normalizeName(awayData.clubName || awayData.displayName || match.awayName || match.challengerName, 'Away');
-    const matchType = String(match.matchType || match.type || 'league').toLowerCase();
+
 
     const simulation = runMatchEngine({
       mode: matchType,

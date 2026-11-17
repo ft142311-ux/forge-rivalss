@@ -2,7 +2,15 @@ import type { FoundationPlayerState } from './types';
 import { calculateSalary } from './player-system';
 
 export function calculateDailyPlayerSalary(players: FoundationPlayerState[]) {
-  return players.reduce((sum, player) => sum + Math.max(0, Number(player.salary || calculateSalary(player))), 0);
+  return players.reduce((sum, player) => {
+    const salary = player.salary === undefined || player.salary === null || player.salary === 0
+      ? calculateSalary(player)
+      : player.salary;
+    if (!Number.isSafeInteger(salary) || salary < 0) throw new Error('FOUNDATION_SALARY_INVALID');
+    const total = sum + salary;
+    if (!Number.isSafeInteger(total)) throw new Error('FOUNDATION_SALARY_INVALID');
+    return total;
+  }, 0);
 }
 
 export function salaryPeriodKey(date = new Date()) {

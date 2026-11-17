@@ -3,7 +3,9 @@ service cloud.firestore {
   match /databases/{database}/documents {
 
     function signedIn() {
-      return request.auth != null;
+      return request.auth != null
+        && !exists(/databases/$(database)/documents/inactive_club_retirements_v1/$(request.auth.uid))
+        && !exists(/databases/$(database)/documents/inactive_clubs_v1/$(request.auth.uid));
     }
 
     function isSystem() {
@@ -174,6 +176,12 @@ service cloud.firestore {
         && request.resource.data.participants[0] != request.resource.data.participants[1]
         && request.resource.data.senderId in request.resource.data.participants
         && request.resource.data.receiverId in request.resource.data.participants
+        // Premium identity is authoritative profile state, not client input.
+        && request.resource.data.senderIsPremium == (
+          get(/databases/$(database)/documents/players_v14/$(request.auth.uid)).data.isPremium == true
+        )
+        && request.resource.data.read == false
+        && request.resource.data.createdAt is string
         && request.resource.data.keys().hasOnly([
           'senderId', 'senderName', 'senderClubName', 'senderClubLogo',
           'senderIsPremium', 'receiverId', 'receiverName', 'participants',

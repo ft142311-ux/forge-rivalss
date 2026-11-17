@@ -2,7 +2,8 @@
 
 import { useState, useEffect, useMemo } from 'react';
 import { useGameState } from '@/app/lib/store';
-import { getMoscowDateString, getMoscowTime } from '@/app/lib/time-utils';
+import { getMoscowDateString } from '@/app/lib/time-utils';
+import { getDailyRewardForDay, getNextDailyRewardDay } from '@/app/lib/daily-reward';
 import { 
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter 
 } from '@/components/ui/dialog';
@@ -12,9 +13,10 @@ import { cn } from '@/lib/utils';
 import { usePathname } from 'next/navigation';
 
 export function DailyRewardManager() {
-  const { isLoaded, language, lastRewardClaimDate, rewardDay, claimReward, selectedLeagueId, isPremium } = useGameState();
+  const { isLoaded, language, lastRewardClaimDate, rewardDay, claimReward, selectedLeagueId, isPremium, premiumUntil } = useGameState();
   const [showReward, setShowReward] = useState(false);
   const pathname = usePathname();
+  const isPremiumActive = isPremium && Boolean(premiumUntil) && new Date(premiumUntil!).getTime() > Date.now();
 
   useEffect(() => {
     if (isLoaded && pathname === '/' && !!selectedLeagueId) {
@@ -29,19 +31,16 @@ export function DailyRewardManager() {
     }
   }, [isLoaded, lastRewardClaimDate, pathname, selectedLeagueId]);
 
-  const calendarRewards = useMemo(() => {
-    return Array.from({ length: 30 }, (_, i) => {
-      const day = i + 1;
-      const credits = 100000 + (i * 150000) + (Math.floor(i / 7) * 500000);
-      const crystals = 10 + (i * 15) + (day % 7 === 0 ? 50 : 0);
-      return { day, credits, crystals };
-    });
-  }, []);
+  const calendarRewards = useMemo(
+    () => Array.from({ length: 30 }, (_, i) => getDailyRewardForDay(i + 1)),
+    [],
+  );
 
-  const currentDayReward = calendarRewards[rewardDay - 1] || calendarRewards[0];
+  const nextRewardDay = getNextDailyRewardDay(rewardDay, Boolean(lastRewardClaimDate));
+  const currentDayReward = getDailyRewardForDay(nextRewardDay);
 
   const handleClaim = () => {
-    claimReward(currentDayReward.credits, currentDayReward.crystals);
+    claimReward();
     setShowReward(false);
   };
 
@@ -76,9 +75,9 @@ export function DailyRewardManager() {
         <div className="flex-1 p-3 overflow-y-auto scrollbar-hide">
           <div className="grid grid-cols-5 gap-1.5">
             {calendarRewards.map((reward) => {
-              const isClaimed = reward.day < rewardDay;
-              const isToday = reward.day === rewardDay;
-              const isUpcoming = reward.day > rewardDay;
+              const isClaimed = reward.day < nextRewardDay;
+              const isToday = reward.day === nextRewardDay;
+              const isUpcoming = reward.day > nextRewardDay;
 
               return (
                 <div 
@@ -129,13 +128,13 @@ export function DailyRewardManager() {
               <div className="flex items-center gap-3">
                 <div className="p-1.5 rounded-lg bg-primary/20"><Sparkles className="w-4 h-4 text-primary" /></div>
                 <div>
-                  <p className="text-[7px] uppercase font-black text-muted-foreground">{t.today} (День {rewardDay})</p>
+                  <p className="text-[7px] uppercase font-black text-muted-foreground">{t.today} (День {nextRewardDay})</p>
                   <p className="text-[11px] font-bold text-primary">{currentDayReward.credits.toLocaleString()} € + {currentDayReward.crystals} Gems</p>
                 </div>
               </div>
             </div>
             
-            {isPremium && (
+            {isPremiumActive && (
               <div className="p-2.5 bg-yellow-500/10 rounded-xl border border-yellow-500/20 flex items-center justify-between shadow-[0_0_15px_rgba(234,179,8,0.1)]">
                 <div className="flex items-center gap-3">
                   <div className="p-1.5 rounded-lg bg-yellow-500/20"><Crown className="w-4 h-4 text-yellow-500" /></div>

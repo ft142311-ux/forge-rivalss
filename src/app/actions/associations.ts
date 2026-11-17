@@ -140,6 +140,13 @@ export async function cancelAssociationRequestAction(idToken: string, associatio
 
 export async function processAssociationRequestAction(idToken: string, associationId: string, applicantId: string, accept: boolean) {
   try {
+    if (typeof accept !== 'boolean') throw new Error('INVALID_ASSOCIATION_DECISION');
+    if (typeof associationId !== 'string' || !associationId.trim() || associationId.length > 128) {
+      throw new Error('INVALID_ASSOCIATION_ID');
+    }
+    if (typeof applicantId !== 'string' || !applicantId.trim() || applicantId.length > 128) {
+      throw new Error('INVALID_APPLICANT_ID');
+    }
     const { uid } = await requireServerActor(idToken);
     const db = getAdminDb();
     const assocRef = db.collection('associations_v4').doc(associationId);

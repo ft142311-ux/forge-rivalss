@@ -71,9 +71,36 @@ export async function buyMarketPlayerAction(idToken: string, marketId: string) {
       const commission = Math.floor(price * COMMISSION_RATE);
       const sellerIncome = price - commission;
 
-      t.update(buyerRef, { credits: balance - price, ownedPlayers: buyerPlayers, updatedAt: FieldValue.serverTimestamp() });
-      t.update(sellerRef, { credits: money(seller.credits) + sellerIncome, ownedPlayers: sellerPlayers, updatedAt: FieldValue.serverTimestamp() });
+      const buyerAfter = balance - price;
+      const sellerBefore = money(seller.credits);
+      const sellerAfter = sellerBefore + sellerIncome;
+      t.update(buyerRef, { credits: buyerAfter, ownedPlayers: buyerPlayers, updatedAt: FieldValue.serverTimestamp() });
+      t.update(sellerRef, { credits: sellerAfter, ownedPlayers: sellerPlayers, updatedAt: FieldValue.serverTimestamp() });
       t.delete(marketRef);
+
+      t.create(db.collection('economy_transactions').doc(`market_${marketId}_buyer`), {
+        userId: buyerId,
+        amount: -price,
+        currency: 'credits',
+        type: 'TRANSFER_MARKET_PURCHASE',
+        referenceId: marketId,
+        description: `Purchase player ${String(player.name || player.id)}`,
+        balanceBefore: balance,
+        balanceAfter: buyerAfter,
+        timestamp: FieldValue.serverTimestamp(),
+      });
+      t.create(db.collection('economy_transactions').doc(`market_${marketId}_seller`), {
+        userId: sellerId,
+        amount: sellerIncome,
+        currency: 'credits',
+        type: 'TRANSFER_MARKET_SALE',
+        referenceId: marketId,
+        description: `Sale proceeds after ${commission} credits commission`,
+        commission,
+        balanceBefore: sellerBefore,
+        balanceAfter: sellerAfter,
+        timestamp: FieldValue.serverTimestamp(),
+      });
 
       const transferRef = db.collection('transfer_history').doc();
       t.set(transferRef, { playerId: player.id, playerName: player.name, buyerId, sellerId, price, commission, sellerIncome, marketId, createdAt: FieldValue.serverTimestamp() });
@@ -132,11 +159,11 @@ export async function releaseYouthPlayerAction(idToken: string, playerId: string
 }
 
 export async function scoutYouthPlayerAction(idToken: string) {
-  try { const { uid }=await requireServerActor(idToken); const db=getAdminDb(); const ref=db.collection('players_v14').doc(uid); return await db.runTransaction(async t=>{ const s=await t.get(ref); if(!s.exists) throw new Error('PLAYER_NOT_FOUND'); const p=s.data()||{}; const cost=25000; if(money(p.credits)<cost) throw new Error('INSUFFICIENT_FUNDS'); const candidates=Array.isArray(p.scoutingCandidates)?p.scoutingCandidates:[]; const candidate=generateScoutedPlayer(candidates.length,Number(p.staff?.scout?.skills?.primary||10)); candidate.marketValue=calculatePlayerMarketValue(candidate); candidate.price=candidate.marketValue; t.update(ref,{credits:money(p.credits)-cost,scoutingCandidates:[...candidates,candidate],updatedAt:FieldValue.serverTimestamp()}); const tx=db.collection('economy_transactions').doc(); t.set(tx,{userId:uid,amount:-cost,currency:'credits',type:'YOUTH_SCOUTING',referenceId:candidate.id,description:'Youth scouting',timestamp:FieldValue.serverTimestamp()}); return {success:true,candidate}; }); } catch(e){return {success:false,error:err(e)}}
+  try { const { uid }=await requireServerActor(idToken); const db=getAdminDb(); const ref=db.collection('players_v14').doc(uid); return await db.runTransaction(async t=>{ const s=await t.get(ref); if(!s.exists) throw new Error('PLAYER_NOT_FOUND'); const p=s.data()||{}; const cost=25000; if(money(p.credits)<cost) throw new Error('INSUFFICIENT_FUNDS'); const candidates=Array.isArray(p.scoutingCandidates)?p.scoutingCandidates:[]; const candidate=generateScoutedPlayer(candidates.length,Number(p.staff?.scout?.skills?.primary||10)); candidate.marketValue=calculatePlayerMarketValue(candidate); candidate.price=candidate.marketValue; const before=money(p.credits); const after=before-cost; t.update(ref,{credits:after,scoutingCandidates:[...candidates,candidate],updatedAt:FieldValue.serverTimestamp()}); const tx=db.collection('economy_transactions').doc(); t.set(tx,{userId:uid,amount:-cost,currency:'credits',type:'YOUTH_SCOUTING',referenceId:candidate.id,description:'Youth scouting',balanceBefore:before,balanceAfter:after,timestamp:FieldValue.serverTimestamp()}); return {success:true,candidate}; }); } catch(e){return {success:false,error:err(e)}}
 }
 
 export async function hireStaffAction(idToken: string, role: StaffRole) {
-  try { const {uid}=await requireServerActor(idToken); const db=getAdminDb(); const ref=db.collection('players_v14').doc(uid); const allowed=['coach','analyst','scout','doctor','financier']; if(!allowed.includes(role)) throw new Error('INVALID_STAFF_ROLE'); await db.runTransaction(async t=>{const s=await t.get(ref);if(!s.exists)throw new Error('PLAYER_NOT_FOUND');const p=s.data()||{};if(p.staff?.[role])throw new Error('STAFF_ROLE_OCCUPIED');const member=generateStaffMember(role);const cost=50000; if(money(p.credits)<cost)throw new Error('INSUFFICIENT_FUNDS');const staff={...(p.staff||{}),[role]:member};t.update(ref,{credits:money(p.credits)-cost,staff,updatedAt:FieldValue.serverTimestamp()});const tx=db.collection('economy_transactions').doc();t.set(tx,{userId:uid,amount:-cost,currency:'credits',type:'STAFF_HIRE',referenceId:member.id,description:`Hire ${role}`,timestamp:FieldValue.serverTimestamp()});});return{success:true}; } catch(e){return{success:false,error:err(e)}}
+  try { const {uid}=await requireServerActor(idToken); const db=getAdminDb(); const ref=db.collection('players_v14').doc(uid); const allowed=['coach','analyst','scout','doctor','financier']; if(!allowed.includes(role)) throw new Error('INVALID_STAFF_ROLE'); await db.runTransaction(async t=>{const s=await t.get(ref);if(!s.exists)throw new Error('PLAYER_NOT_FOUND');const p=s.data()||{};if(p.staff?.[role])throw new Error('STAFF_ROLE_OCCUPIED');const member=generateStaffMember(role);const cost=50000; const before=money(p.credits); if(before<cost)throw new Error('INSUFFICIENT_FUNDS');const after=before-cost;const staff={...(p.staff||{}),[role]:member};t.update(ref,{credits:after,staff,updatedAt:FieldValue.serverTimestamp()});const tx=db.collection('economy_transactions').doc();t.set(tx,{userId:uid,amount:-cost,currency:'credits',type:'STAFF_HIRE',referenceId:member.id,description:`Hire ${role}`,balanceBefore:before,balanceAfter:after,timestamp:FieldValue.serverTimestamp()});});return{success:true}; } catch(e){return{success:false,error:err(e)}}
 }
 
 export async function fireStaffAction(idToken: string, role: StaffRole) {
@@ -170,7 +197,29 @@ async function mutateOwnedPlayer(
     if (index < 0) throw new Error('UNIT_NOT_OWNED');
     const result = mutation(players[index], manager);
     if (result.player) players[index] = result.player;
-    t.update(ref, { ...(result.manager || {}), ownedPlayers: players, updatedAt: FieldValue.serverTimestamp() });
+    const managerUpdates = result.manager || {};
+    for (const currency of ['credits', 'crystals'] as const) {
+      if (Object.prototype.hasOwnProperty.call(managerUpdates, currency)) {
+        const balanceBefore = money(manager[currency]);
+        const balanceAfter = money(managerUpdates[currency]);
+        const amount = balanceAfter - balanceBefore;
+        if (amount !== 0) {
+          const ledgerRef = db.collection('economy_transactions').doc();
+          t.set(ledgerRef, {
+            userId: uid,
+            amount,
+            currency,
+            type: 'PLAYER_CARE_PURCHASE',
+            referenceId: playerId,
+            description: `Player care operation: ${currency}`,
+            balanceBefore,
+            balanceAfter,
+            timestamp: FieldValue.serverTimestamp(),
+          });
+        }
+      }
+    }
+    t.update(ref, { ...managerUpdates, ownedPlayers: players, updatedAt: FieldValue.serverTimestamp() });
     return result.result || { success: true };
   });
 }
@@ -180,6 +229,7 @@ export async function recoverPlayerFatigueCreditsAction(idToken: string, playerI
   try {
     return await mutateOwnedPlayer(idToken, playerId, (player, manager) => {
       const balance = money(manager.credits);
+      if (Number(player.fatigue ?? 100) >= 100) throw new Error('FATIGUE_ALREADY_FULL');
       if (balance < PLAYER_ACTION_COSTS.fatigueCredits) throw new Error('INSUFFICIENT_FUNDS');
       const next = { ...player, fatigue: 100 };
       next.marketValue = calculatePlayerMarketValue(next); next.price = next.marketValue;
@@ -193,6 +243,7 @@ export async function recoverPlayerFatigueCrystalsAction(idToken: string, player
   try {
     return await mutateOwnedPlayer(idToken, playerId, (player, manager) => {
       const balance = money(manager.crystals);
+      if (Number(player.fatigue ?? 100) >= 100) throw new Error('FATIGUE_ALREADY_FULL');
       if (balance < PLAYER_ACTION_COSTS.fatigueCrystals) throw new Error('INSUFFICIENT_CRYSTALS');
       const next = { ...player, fatigue: 100 };
       next.marketValue = calculatePlayerMarketValue(next); next.price = next.marketValue;
@@ -206,6 +257,7 @@ export async function boostPlayerFormAction(idToken: string, playerId: string) {
   try {
     return await mutateOwnedPlayer(idToken, playerId, (player, manager) => {
       const balance = money(manager.credits);
+      if (Number(player.form || 0) >= 100) throw new Error('FORM_ALREADY_MAX');
       if (balance < PLAYER_ACTION_COSTS.formCredits) throw new Error('INSUFFICIENT_FUNDS');
       const next = { ...player, form: Math.min(100, Number(player.form || 0) + 15) };
       next.marketValue = calculatePlayerMarketValue(next); next.price = next.marketValue;
