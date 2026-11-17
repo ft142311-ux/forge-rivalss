@@ -3,7 +3,7 @@ import { resolveAuctionPrice, resolvePreviousAuctionBidEscrow, normalizeAuctionB
 import { resolveMarketBidExpiryMs, resolveMarketBidPrice } from './market-bid-guards';
 
 function money(value: unknown) {
-  return Math.max(0, Math.floor(Number(value) || 0));
+  return normalizeAuctionBalance(value);
 }
 
 export async function placeSpecialMarketBidWithDb(
@@ -97,8 +97,11 @@ export async function placeSpecialMarketBidWithDb(
 
     if (previousBidderRef && previousBidder) {
       const refundAmount = previousEscrow;
+      const previousBalance = money(previousBidder[currency]);
+      const refundedBalance = previousBalance + refundAmount;
+      if (!Number.isSafeInteger(refundedBalance)) throw new Error('AUCTION_BALANCE_INVALID');
       tx.update(previousBidderRef, {
-        [currency]: money(previousBidder[currency]) + refundAmount,
+        [currency]: refundedBalance,
         updatedAt: FieldValue.serverTimestamp(),
       });
       tx.set(refundLedgerRef, {
@@ -108,8 +111,8 @@ export async function placeSpecialMarketBidWithDb(
         type: 'SPECIAL_AUCTION_OUTBID_REFUND',
         referenceId: marketId,
         description: `Refund after being outbid in ${marketKind} market`,
-        balanceBefore: money(previousBidder[currency]),
-        balanceAfter: money(previousBidder[currency]) + refundAmount,
+        balanceBefore: previousBalance,
+        balanceAfter: refundedBalance,
         timestamp: FieldValue.serverTimestamp(),
       });
     }
@@ -210,7 +213,7 @@ export async function placeStandardMarketBidWithDb(
     const sameEscrowedBidder = previousBidderId === uid && previousEscrow === currentBid;
     const chargeAmount = sameEscrowedBidder ? amount - currentBid : amount;
     const bidderBalance = normalizeAuctionBalance(bidderData.credits);
-    if (bidderBalance < chargeAmount) throw new Error('INSUFFICIENT_FUNDS');
+    if (!Number.isSafeInteger(bidderBalance - chargeAmount) || bidderBalance < chargeAmount) throw new Error('INSUFFICIENT_FUNDS');
 
     let previousBidderRef: DocumentReference | null = null;
     let previousBidder: any = null;
@@ -250,6 +253,7 @@ export async function placeStandardMarketBidWithDb(
     if (previousBidderRef && previousBidder) {
       const previousBalance = normalizeAuctionBalance(previousBidder.credits);
       const refundedBalance = previousBalance + previousEscrow;
+      if (!Number.isSafeInteger(refundedBalance)) throw new Error('AUCTION_BALANCE_INVALID');
       tx.update(previousBidderRef, {
         credits: refundedBalance,
         updatedAt: FieldValue.serverTimestamp(),
