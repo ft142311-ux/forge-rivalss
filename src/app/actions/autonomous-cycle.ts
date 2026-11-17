@@ -29,6 +29,15 @@ import { evaluateCanonicalDocuments } from './season-canonical';
 const SALARY_PERIOD_MS = 7 * 24 * 60 * 60 * 1000;
 const SALARY_CLUB_SHARE = 0.55;
 
+function readSafeNonNegativeBalance(value: unknown, errorCode: string) {
+  if (value === undefined || value === null) return 0;
+  if (typeof value !== 'number' && typeof value !== 'string') throw new Error(errorCode);
+  if (typeof value === 'string' && value.trim().length === 0) throw new Error(errorCode);
+  const balance = Number(value);
+  if (!Number.isSafeInteger(balance) || balance < 0) throw new Error(errorCode);
+  return balance;
+}
+
 /**
  * Stage 3A v1 Р В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В Р В Р’В Р Р†Р вЂљРІвЂћСћР В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В Р В Р’В Р В РІР‚В Р В Р’В Р Р†Р вЂљРЎв„ўР В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В Р В Р’В Р Р†Р вЂљРІвЂћСћР В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В Р’В Р Р†Р вЂљР’В Р В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р РЋРІвЂћСћР В Р’В Р В Р вЂ№Р В Р вЂ Р Р†Р вЂљРЎвЂєР РЋРЎвЂєР В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В Р вЂ Р В РІР‚С™Р вЂ™Р’В Р В Р’В Р вЂ™Р’В Р В РІР‚в„ўР вЂ™Р’В Р В Р’В Р В РІР‚В Р В Р’В Р Р†Р вЂљРЎв„ўР В Р Р‹Р Р†РІР‚С›РЎС›Р В Р’В Р вЂ™Р’В Р В Р’В Р В РІР‚в„–Р В Р’В Р В Р вЂ№Р В Р Р‹Р Р†РІР‚С›РЎС› deterministic sporting engine.
  *
@@ -91,7 +100,7 @@ async function processDueSalaries(db: any, nowMs: number) {
         const clubCost = Math.floor(grossSalary * SALARY_CLUB_SHARE);
         const previousUnpaid = Math.max(0, Number(ledger.unpaid || 0));
         const amountDue = clubCost + previousUnpaid;
-        const before = Math.max(0, Number(data.credits || 0));
+        const before = readSafeNonNegativeBalance(data.credits, 'INVALID_SALARY_BALANCE');
         const actualPaid = Math.min(before, amountDue);
         const unpaid = amountDue - actualPaid;
         const paidAt = new Date(nowMs).toISOString();
@@ -871,11 +880,7 @@ export async function resolveDailyMatches() {
         }
 
         if (homeRef && homeSnap?.exists && !economyTxSnap?.exists) {
-          const rawBalance = homePlayerData.credits;
-          const before = rawBalance === undefined || rawBalance === null ? 0 : Number(rawBalance);
-          if (!Number.isSafeInteger(before) || before < 0) {
-            throw new Error('INVALID_MATCH_ECONOMY_BALANCE');
-          }
+          const before = readSafeNonNegativeBalance(homePlayerData.credits, 'INVALID_MATCH_ECONOMY_BALANCE');
           const after = before + homeEconomy.totalRevenue;
           if (!Number.isSafeInteger(after) || after < 0) {
             throw new Error('INVALID_MATCH_ECONOMY_BALANCE');
