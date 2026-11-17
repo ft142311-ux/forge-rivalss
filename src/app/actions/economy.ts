@@ -13,7 +13,10 @@ import { requireServerActor } from '@/lib/server-auth';
  */
 
 function readCurrencyBalance(value: unknown) {
-  const balance = value === undefined || value === null ? 0 : Number(value);
+  if (value === undefined || value === null) return 0;
+  if (typeof value !== 'number' && typeof value !== 'string') throw new Error('INVALID_BALANCE');
+  if (typeof value === 'string' && value.trim().length === 0) throw new Error('INVALID_BALANCE');
+  const balance = Number(value);
   if (!Number.isSafeInteger(balance) || balance < 0) throw new Error('INVALID_BALANCE');
   return balance;
 }
