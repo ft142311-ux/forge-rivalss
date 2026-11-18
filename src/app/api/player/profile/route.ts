@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { getApps } from 'firebase-admin/app';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { requireServerActor } from '@/lib/server-auth';
 
@@ -33,13 +34,14 @@ export async function GET(request: NextRequest) {
   try {
     const actor = await requireServerActor(tokenMatch[1]);
     const db = getAdminDb();
+    const projectId = getApps()[0]?.options.projectId || null;
     const snapshot = await db.collection('players_v14').doc(actor.uid).get();
 
     if (!snapshot.exists) {
       return json(404, {
         success: false,
         error: 'PLAYER_PROFILE_NOT_FOUND',
-        projectId: db.app.options.projectId || null,
+        projectId,
       });
     }
 
@@ -48,7 +50,7 @@ export async function GET(request: NextRequest) {
     return json(200, {
       success: true,
       profile,
-      projectId: db.app.options.projectId || null,
+      projectId,
     });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'PLAYER_PROFILE_READ_FAILED';
