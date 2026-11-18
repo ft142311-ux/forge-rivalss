@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import type { Firestore } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { ensureSeasonCalendar } from '@/app/actions/season-calendar';
 import { isCronAuthorized } from '@/app/api/cron/cron-auth';
@@ -16,8 +17,6 @@ const EXPECTED_SLOTS = 120;
 const EXPECTED_MATCHES = 840;
 const EXPECTED_BOTS = 120;
 
-// These collections are owned by the canonical season bootstrap. Any existing
-// document means this endpoint must stop rather than attempt a repair.
 const GUARDED_COLLECTIONS = [
   'system_v1',
   'league_tables_v2',
@@ -41,8 +40,6 @@ export async function POST(request: NextRequest) {
     return response(401, { success: false, error: 'UNAUTHORIZED' });
   }
 
-  // This endpoint is deliberately incapable of running against local,
-  // production, or any Firebase project other than the dedicated staging DB.
   const configuredProject =
     process.env.GCLOUD_PROJECT ||
     process.env.GCP_PROJECT ||
@@ -84,8 +81,8 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // Strict read-only preflight. We also reject stale locks and history/rollover
-    // artifacts; ensureSeasonCalendar must never be used as a generic repair tool.
+    // Never use the calendar builder as a repair mechanism. Reject any existing
+    // game, history, rollover, or system document before its first write.
     const snapshots = await Promise.all(
       GUARDED_COLLECTIONS.map((name) => db.collection(name).limit(1).get()),
     );
@@ -105,9 +102,8 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // The calendar builder owns its fenced build lock and performs bounded,
-    // idempotent writes. Do not call the broad season orchestrator or emergency
-    // repair endpoint here.
+    // The builder uses its own fenced lease and bounded commits. The broad
+    // season orchestrator and emergency-repair endpoint are intentionally not used.
     const build = await ensureSeasonCalendar(SEASON);
     if ((build as any)?.success !== true) {
       return response(409, {
@@ -136,7 +132,7 @@ export async function POST(request: NextRequest) {
   }
 }
 
-async function verifyWorld(db: FirebaseFirestore.Firestore) {
+async function verifyWorld(db: Firestore) {
   const [configSnap, tablesSnap, slotsSnap, matchesSnap, botsSnap] = await Promise.all([
     db.collection('system_v1').doc('season_config').get(),
     db.collection('league_tables_v2')
