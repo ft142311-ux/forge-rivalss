@@ -243,9 +243,19 @@ export function GameStateProvider({ children }: { children: ReactNode }) {
     }
     const { firestore: db } = initializeFirebase();
     const playerRef = doc(db, 'players_v14', user.uid);
+    console.info('[PLAYER SYNC] subscribing', {
+      uid: user.uid,
+      projectId: db.app.options.projectId || 'unknown',
+      path: `players_v14/${user.uid}`,
+    });
     const unsubscribe = onSnapshot(playerRef, (snapshot) => {
       if (snapshot.exists()) {
         const d = snapshot.data();
+        console.info('[PLAYER SYNC] profile snapshot received', {
+          uid: user.uid,
+          projectId: db.app.options.projectId || 'unknown',
+          exists: true,
+        });
         saveToLocal({
           ...d,
           isTeamLoaded: true,
@@ -254,8 +264,23 @@ export function GameStateProvider({ children }: { children: ReactNode }) {
           crystals: Number(d.crystals)
         } as any);
       } else {
+        console.error('[PLAYER SYNC] profile document is missing', {
+          uid: user.uid,
+          projectId: db.app.options.projectId || 'unknown',
+          path: `players_v14/${user.uid}`,
+        });
         setState(prev => ({ ...prev, isTeamLoaded: false, isInitialSyncDone: true }));
       }
+    }, (error) => {
+      console.error('[PLAYER SYNC] Firestore subscription failed', {
+        uid: user.uid,
+        projectId: db.app.options.projectId || 'unknown',
+        path: `players_v14/${user.uid}`,
+        code: error?.code || 'unknown',
+        message: error?.message || 'unknown',
+        name: error?.name || 'unknown',
+      });
+      setState(prev => ({ ...prev, isTeamLoaded: false, isInitialSyncDone: true }));
     });
     return () => unsubscribe();
   }, [user?.uid, state.isLoaded, saveToLocal]);
