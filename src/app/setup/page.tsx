@@ -23,7 +23,7 @@ export default function SetupPage() {
   const { user, isUserLoading } = useUser();
   const { firebaseApp } = useFirebase();
   const { toast } = useToast();
-  const { language, isLoaded, isTeamLoaded, isInitialSyncDone } = useGameState();
+  const { language, isLoaded, isTeamLoaded, isInitialSyncDone, saveToLocal } = useGameState();
   
   const [isUpdating, setIsUpdating] = useState(false);
   const [step, setStep] = useState<'IDLE' | 'PROVISIONING' | 'SUCCESS'>('IDLE');
@@ -92,6 +92,37 @@ export default function SetupPage() {
       }
       console.log("[SETUP] Server response:", result);
 
+      // Registration is committed with Firebase Admin. Hydrate the initial
+      // client state through an authenticated, owner-scoped server read rather
+      // than waiting indefinitely for a browser Firestore listener.
+      const profileResponse = await fetch('/api/player/profile', {
+        method: 'GET',
+        headers: { Authorization: `Bearer ${idToken}` },
+        cache: 'no-store',
+      });
+      const profileResult = await profileResponse.json();
+      if (!profileResponse.ok || !profileResult?.success || !profileResult?.profile) {
+        throw new Error(
+          typeof profileResult?.error === 'string'
+            ? profileResult.error
+            : 'PLAYER_PROFILE_SYNC_FAILED'
+        );
+      }
+      if (profileResult.profile.id !== user.uid) {
+        throw new Error('PLAYER_PROFILE_ID_MISMATCH');
+      }
+      console.info('[AUTH HANDOFF] Server profile loaded', {
+        projectId: profileResult.projectId || 'unknown',
+        profileExists: true,
+      });
+      saveToLocal({
+        ...profileResult.profile,
+        isTeamLoaded: true,
+        isInitialSyncDone: true,
+        credits: Number(profileResult.profile.credits),
+        crystals: Number(profileResult.profile.crystals),
+      } as any);
+
       // Проверка версии серверного registration endpoint
       if (result.version !== 'v170') {
         console.error("[SETUP] Outdated function version detected:", result.version);
@@ -104,10 +135,9 @@ export default function SetupPage() {
 
       setStep('SUCCESS');
       localStorage.removeItem('pending_club_name');
-      console.log('[AUTH HANDOFF] initializeClub success; waiting for players_v14 snapshot', { uid: user.uid });
+      console.log('[AUTH HANDOFF] initializeClub success; server profile hydrated', { uid: user.uid });
       toast({ title: language === 'ru' ? "Штаб развернут!" : "HQ Fully Operational!" });
-      // Не уходим на '/' по таймеру. AuthGuard должен увидеть isTeamLoaded=true
-      // после реального snapshot players_v14 и сам выполнит переход.
+      // The store is now hydrated from the verified owner-scoped server profile.
 
     } catch (e: any) {
       const originalCode = e?.details?.originalErrorCode || e?.code;
