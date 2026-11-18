@@ -111,10 +111,16 @@ export default function SetupPage() {
       if (profileResult.profile.id !== user.uid) {
         throw new Error('PLAYER_PROFILE_ID_MISMATCH');
       }
+      const webProjectId = firebaseApp.options.projectId || 'unknown';
+      const serverProjectId = profileResult.projectId || 'unknown';
       console.info('[AUTH HANDOFF] Server profile loaded', {
-        projectId: profileResult.projectId || 'unknown',
+        webProjectId,
+        serverProjectId,
         profileExists: true,
       });
+      if (webProjectId !== 'unknown' && serverProjectId !== 'unknown' && webProjectId !== serverProjectId) {
+        throw new Error('FIREBASE_PROJECT_MISMATCH');
+      }
       saveToLocal({
         ...profileResult.profile,
         isTeamLoaded: true,
