@@ -424,7 +424,7 @@ export async function POST(request: NextRequest) {
           code: catchUp?.code || catchUp?.reason || 'MATCH_CATCH_UP_FAILED',
           count: catchUp?.count || 0,
           diagnostics: Array.isArray(catchUp?.diagnostics) ? catchUp.diagnostics : undefined,
-          finishedMatches: catchUp?.finishedMatches,
+          finishedMatches: catchUp && 'finishedMatches' in catchUp ? catchUp.finishedMatches : undefined,
           skippedTables: catchUp?.skippedTables,
         });
         throw new Error('REGISTRATION_MATCH_CATCH_UP_FAILED');
