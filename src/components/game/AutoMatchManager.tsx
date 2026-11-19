@@ -56,7 +56,7 @@ export function AutoMatchManager() {
 
     if (!db) {
       console.warn('[MATCH REALTIME] Firestore is not initialized yet.');
-      setWorldReady(false);
+      setWorldReady(true);
       return;
     }
 
@@ -73,7 +73,19 @@ export function AutoMatchManager() {
       where('version', '==', 140)
     );
 
+    const readinessTimeout = window.setTimeout(() => {
+      console.error('[MATCH REALTIME] Schedule listener did not respond; releasing application preloader.', {
+        season: currentSeason,
+        leagueId: selectedLeagueId,
+        level: Number(leagueLevel),
+        group: Number(groupId),
+      });
+      saveToLocal({ isMatchesLoading: true });
+      setWorldReady(true);
+    }, 12_000);
+
     const unsubscribe = onSnapshot(q, snap => {
+      window.clearTimeout(readinessTimeout);
       const officialMatches = snap.docs.map(d => ({ ...d.data(), id: d.id }));
       console.log('[MATCH REALTIME] Schedule synced', {
         season: currentSeason,
@@ -100,15 +112,19 @@ export function AutoMatchManager() {
         activeSeasonNumber: currentSeason,
         isMatchesLoading: !scheduleReady
       });
-      setWorldReady(scheduleReady);
+      // App readiness is independent from schedule completeness. An incomplete
+      // schedule stays flagged as loading, but must not trap the whole game UI.
+      setWorldReady(true);
 
       // Official league matches are resolved by the authenticated server cron.
       // A browser must never trigger the global resolver: it is a world-wide
       // state mutation, not a per-user synchronization operation.
       void resolveDueTrialMatches().catch(error => console.error('[TRIAL MATCH] Initial resolver failed:', error));
     }, error => {
+      window.clearTimeout(readinessTimeout);
       console.error('[MATCH REALTIME] Sync failed:', error);
-      setWorldReady(false);
+      saveToLocal({ isMatchesLoading: true });
+      setWorldReady(true);
     });
     // Official league match resolution runs on the server cron. This component
     // only synchronizes the schedule and handles the existing trial-match flow.
@@ -118,6 +134,7 @@ export function AutoMatchManager() {
 
     return () => {
       unsubscribe();
+      window.clearTimeout(readinessTimeout);
       window.clearInterval(trialTick);
     };
   }, [isLoaded, selectedLeagueId, leagueLevel, groupId, activeSeasonNumber, userId, saveToLocal, setWorldReady, db, auth]);
