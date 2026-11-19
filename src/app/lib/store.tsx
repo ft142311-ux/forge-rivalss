@@ -269,7 +269,19 @@ export function GameStateProvider({ children }: { children: ReactNode }) {
           projectId: db.app.options.projectId || 'unknown',
           path: `players_v14/${user.uid}`,
         });
-        setState(prev => ({ ...prev, isTeamLoaded: false, isInitialSyncDone: true }));
+        setState(prev => {
+          // A missing realtime document must not erase a profile already
+          // verified and hydrated by the authenticated server bootstrap.
+          // Keep the current session usable; AuthGuard can still redirect a
+          // genuinely new account when no matching profile is present.
+          const hasVerifiedLocalProfile =
+            prev.id === user.uid && Array.isArray(prev.ownedPlayers) && prev.ownedPlayers.length > 0;
+          return {
+            ...prev,
+            isTeamLoaded: hasVerifiedLocalProfile,
+            isInitialSyncDone: true,
+          };
+        });
       }
     }, (error) => {
       console.error('[PLAYER SYNC] Firestore subscription failed', {
@@ -280,7 +292,18 @@ export function GameStateProvider({ children }: { children: ReactNode }) {
         message: error?.message || 'unknown',
         name: error?.name || 'unknown',
       });
-      setState(prev => ({ ...prev, isTeamLoaded: false, isInitialSyncDone: true }));
+      setState(prev => {
+        // A transient listener/permission/network failure is not proof that
+        // the authenticated profile was deleted. Preserve a server-hydrated
+        // profile for this UID and let realtime retry in the background.
+        const hasVerifiedLocalProfile =
+          prev.id === user.uid && Array.isArray(prev.ownedPlayers) && prev.ownedPlayers.length > 0;
+        return {
+          ...prev,
+          isTeamLoaded: hasVerifiedLocalProfile,
+          isInitialSyncDone: true,
+        };
+      });
     });
     return () => unsubscribe();
   }, [user?.uid, state.isLoaded, saveToLocal]);
