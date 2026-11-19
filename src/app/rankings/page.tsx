@@ -112,29 +112,8 @@ export default function RankingsPage() {
     setTableLoadAttempt(attempt => attempt + 1);
   };
 
-  const groupPlayersQuery = useMemoFirebase(() => {
-    if (!db) return null;
-    return query(collection(db, 'players_v14'), 
-      where('selectedLeagueId', '==', contextLeagueId),
-      where('leagueLevel', '==', contextLevel),
-      where('groupId', '==', contextGroup)
-    );
-  }, [db, contextLeagueId, contextLevel, contextGroup]);
-
-  const { data: groupPlayers } = useCollection(groupPlayersQuery);
-
   const awardsQuery = useMemoFirebase(() => db && user ? query(collection(db, 'player_awards_v1'), where('seasonId', '==', 'current')) : null, [db, user]);
   const { data: awardVotes } = useCollection(awardsQuery);
-
-  const logoMap = useMemo(() => {
-    const map: Record<string, string> = {};
-    if (groupPlayers) {
-      groupPlayers.forEach(p => {
-        if (p.clubLogo) map[p.id] = p.clubLogo;
-      });
-    }
-    return { logos: map };
-  }, [groupPlayers]);
 
   const standings = useMemo(() => {
     if (!tableData?.stats) return [];
@@ -371,7 +350,7 @@ export default function RankingsPage() {
                {standings.map((entry: any, i: number) => {
                  const pos = i + 1;
                  const isMe = entry.id === user?.uid;
-                 const clubLogo = logoMap.logos[entry.id] || entry.clubLogo;
+                 const clubLogo = entry.clubLogo || null;
                  
                  const isChampionZone = pos === 1;
                  const isRelegationZone = pos >= 7;
