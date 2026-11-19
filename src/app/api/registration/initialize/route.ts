@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getAppCheck } from 'firebase-admin/app-check';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { requireServerActor } from '@/lib/server-auth';
-import { resolveDailyMatches } from '@/app/actions/autonomous-cycle';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -418,6 +417,9 @@ export async function POST(request: NextRequest) {
       // This uses the same guarded simulation/settlement path as the scheduler;
       // it does not rewrite or force-finish a match from the registration API.
       console.info('[REGISTRATION API] Due league fixture detected; running canonical catch-up');
+      // Load the server-only orchestrator only when a due fixture actually requires catch-up.
+      // This keeps the registration boundary testable without loading the entire season engine.
+      const { resolveDailyMatches } = await import('@/app/actions/autonomous-cycle');
       const catchUp = await resolveDailyMatches();
       if (!catchUp || catchUp.success !== true) {
         console.warn('[REGISTRATION API] Canonical match catch-up did not complete', {
