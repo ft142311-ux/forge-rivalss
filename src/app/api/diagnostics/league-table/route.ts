@@ -30,8 +30,8 @@ export async function POST(request: NextRequest) {
   if (!tokenMatch) return respond(401, { success: false, code: 'AUTHENTICATION_REQUIRED' });
 
   try {
-    const decoded = await getAuth().verifyIdToken(tokenMatch[1], true);
     const db = getAdminDb();
+    const decoded = await getAuth().verifyIdToken(tokenMatch[1], true);
     const [pendingMarker, retiredMarker, profileSnapshot, seasonSnapshot] = await Promise.all([
       db.collection('inactive_club_retirements_v1').doc(decoded.uid).get(),
       db.collection('inactive_clubs_v1').doc(decoded.uid).get(),
