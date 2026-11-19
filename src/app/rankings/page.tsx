@@ -44,6 +44,7 @@ export default function RankingsPage() {
   const [busyVote, setBusyVote] = useState<string | null>(null);
   const [tableLoadAttempt, setTableLoadAttempt] = useState(0);
   const [tableLoadTimedOut, setTableLoadTimedOut] = useState(false);
+  const [tableDiagnostic, setTableDiagnostic] = useState<Record<string, any> | null>(null);
   const [selectedArchiveSeason, setSelectedArchiveSeason] = useState<number | null>(null);
   const [archiveGroup, setArchiveGroup] = useState('D1-G1');
 
@@ -90,6 +91,33 @@ export default function RankingsPage() {
   }, [db, tableId, isLoaded, tableLoadAttempt]);
 
   const { data: tableData, isLoading: isTableLoading, error: tableError } = useDoc(tableRef);
+
+  // When Firestore denies the standings read, ask the server to inspect only
+  // this authenticated account's retirement markers and canonical table.
+  useEffect(() => {
+    if (!tableError || !user) {
+      setTableDiagnostic(null);
+      return;
+    }
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const token = await user.getIdToken();
+        const response = await fetch('/api/diagnostics/league-table', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}` },
+          cache: 'no-store',
+        });
+        const result = await response.json();
+        if (!cancelled) setTableDiagnostic(result);
+      } catch {
+        if (!cancelled) setTableDiagnostic({ success: false, code: 'DIAGNOSTIC_UNAVAILABLE' });
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [tableError, user, tableId]);
 
   const pyramidCupRef = useMemoFirebase(() => db ? doc(db, 'cup_pyramid_v1', `cup_s${tableSeasonNumber}_lALPHA`) : null, [db, tableSeasonNumber]);
   const { data: pyramidCup, isLoading: isPyramidCupLoading } = useDoc(pyramidCupRef);
@@ -337,6 +365,13 @@ export default function RankingsPage() {
                <p className="text-xs font-bold text-white">{t.loadFailed}</p>
                {tableError && (
                  <p className="text-[10px] text-muted-foreground break-words">{tableError.message}</p>
+               )}
+               {tableDiagnostic && (
+                 <p className="text-[10px] text-amber-200/80 break-words">
+                   {tableDiagnostic.success
+                     ? `Диагностика: проект ${tableDiagnostic.projectId || 'не определён'}; таблица ${tableDiagnostic.tableExists ? 'найдена' : 'не найдена'}; маркер выхода ${tableDiagnostic.accessFence?.pendingRetirement ? 'активен' : 'нет'}; маркер неактивности ${tableDiagnostic.accessFence?.retired ? 'активен' : 'нет'}.`
+                     : `Диагностика недоступна: ${tableDiagnostic.code || 'UNKNOWN'}`}
+                 </p>
                )}
                <Button variant="outline" className="border-amber-400/30" onClick={retryTableLoad}>
                  <RefreshCw className="w-4 h-4 mr-2" />{t.retry}
