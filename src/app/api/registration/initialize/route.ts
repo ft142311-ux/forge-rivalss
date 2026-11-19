@@ -423,6 +423,9 @@ export async function POST(request: NextRequest) {
         console.warn('[REGISTRATION API] Canonical match catch-up did not complete', {
           code: catchUp?.code || catchUp?.reason || 'MATCH_CATCH_UP_FAILED',
           count: catchUp?.count || 0,
+          diagnostics: Array.isArray(catchUp?.diagnostics) ? catchUp.diagnostics : undefined,
+          finishedMatches: catchUp?.finishedMatches,
+          skippedTables: catchUp?.skippedTables,
         });
         throw new Error('REGISTRATION_MATCH_CATCH_UP_FAILED');
       }
