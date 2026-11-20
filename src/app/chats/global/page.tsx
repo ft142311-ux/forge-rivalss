@@ -3,7 +3,7 @@
 
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
-import { useUser, useFirestore, useCollection, useMemoFirebase, useDoc, addDocumentNonBlocking, setDocumentNonBlocking } from '@/firebase';
+import { useUser, useFirestore, useCollection, useMemoFirebase, useDoc, setDocumentNonBlocking } from '@/firebase';
 import { useGameState } from '@/app/lib/store';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -13,7 +13,7 @@ import {
   CornerUpLeft, ChevronRight, UserPlus, Crown, UserMinus, Lock
 } from 'lucide-react';
 import Link from 'next/link';
-import { collection, query, orderBy, limit, doc, where, getDocs, writeBatch } from 'firebase/firestore';
+import { collection, query, orderBy, limit, doc, where, getDocs, writeBatch, addDoc } from 'firebase/firestore';
 import { LoadingScreen } from '@/components/game/LoadingScreen';
 import { cn } from '@/lib/utils';
 import {
@@ -97,7 +97,7 @@ export default function GlobalChatPage() {
     setIsSending(true);
     try {
       const now = new Date().toISOString();
-      await addDocumentNonBlocking(collection(db, 'global_chat_v2'), {
+      await addDoc(collection(db, 'global_chat_v2'), {
         userId: String(user.uid),
         userName: String(profile.displayName || "Manager"),
         clubName: String(clubName || profile.displayName || "Manager"),
@@ -109,6 +109,11 @@ export default function GlobalChatPage() {
       setMessage('');
     } catch (e) {
       console.error("Failed to send message", e);
+      toast({
+        title: language === 'ru' ? 'Не удалось отправить сообщение' : 'Message could not be sent',
+        description: language === 'ru' ? 'Проверьте подключение и попробуйте снова.' : 'Check your connection and try again.',
+        variant: 'destructive',
+      });
     } finally {
       setIsSending(false);
     }
