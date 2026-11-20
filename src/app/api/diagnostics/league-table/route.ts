@@ -48,12 +48,47 @@ export async function POST(request: NextRequest) {
     const tableSnapshot = await db.collection('league_tables_v2').doc(tableId).get();
     const projectId = getApps()[0]?.options.projectId || null;
 
+    // Probe the same document through the Firestore REST API with the caller's
+    // Firebase ID token. Unlike Admin SDK reads, this request is evaluated by
+    // the project's deployed Firestore Security Rules.
+    let rulesProbe: { allowed: boolean; status: number; code: string | null } = {
+      allowed: false,
+      status: 0,
+      code: 'PROBE_NOT_COMPLETED',
+    };
+    if (projectId) {
+      try {
+        const probeResponse = await fetch(
+          `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/databases/(default)/documents/league_tables_v2/${encodeURIComponent(tableId)}`,
+          {
+            method: 'GET',
+            headers: { Authorization: `Bearer ${tokenMatch[1]}` },
+            cache: 'no-store',
+            signal: AbortSignal.timeout(8000),
+          },
+        );
+        let probeCode: string | null = null;
+        if (!probeResponse.ok) {
+          try {
+            const probeBody = await probeResponse.json();
+            probeCode = String(probeBody?.error?.status || probeBody?.error?.message || 'FIRESTORE_READ_DENIED').slice(0, 120);
+          } catch {
+            probeCode = 'FIRESTORE_READ_DENIED';
+          }
+        }
+        rulesProbe = { allowed: probeResponse.ok, status: probeResponse.status, code: probeCode };
+      } catch {
+        rulesProbe = { allowed: false, status: 0, code: 'PROBE_UNAVAILABLE' };
+      }
+    }
+
     return respond(200, {
       success: true,
       projectId,
       profileExists: profileSnapshot.exists,
       activeSeason: season,
       tableExists: tableSnapshot.exists,
+      rulesProbe,
       accessFence: {
         pendingRetirement: pendingMarker.exists,
         retired: retiredMarker.exists,
