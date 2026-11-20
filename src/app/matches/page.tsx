@@ -119,14 +119,10 @@ export default function MatchesPage() {
   const nameMap = useMemo(() => {
     const names: Record<number, string> = {};
     const logos: Record<number, string> = {};
-    if (players) {
-      players.forEach(p => {
-        names[p.rank] = p.clubName || p.displayName;
-        logos[p.rank] = p.clubLogo;
-      });
-    }
+    // Match documents carry public participant names; private player profiles
+    // are intentionally not queried from this client page.
     return { names, logos };
-  }, [players]);
+  }, []);
 
   const resolveMatchData = useCallback((m: any) => {
     const hRank = Number(m.homeRank);
@@ -189,7 +185,7 @@ export default function MatchesPage() {
         </CardContent>
       </Card>
     );
-  }, [players, resolveMatchData, t.tour, user]);
+  }, [resolveMatchData, t.tour, user]);
 
   const renderGrouped = (matches: any[]) => {
     const tours = [...new Set(matches.map(m => m.tour))].sort((a, b) => a - b);
@@ -212,7 +208,7 @@ export default function MatchesPage() {
     }
 
     const allMatches = [...(fixedMatches || [])].sort((a, b) => a.tour - b.tour);
-    const myRank = players?.find(p => p.id === user?.uid)?.rank || 0;
+    const myRank = Number(rank || 0);
 
     switch(view) {
       case 'next':
