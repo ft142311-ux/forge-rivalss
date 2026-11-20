@@ -54,7 +54,7 @@ export default function MatchesPage() {
     );
   }, [db, selectedLeagueId, leagueLevel, groupId, seasonNumber]);
 
-  const { data: fixedMatches, isLoading: isMatchesLoading } = useCollection(groupMatchesQuery);
+  const { data: fixedMatches, isLoading: isMatchesLoading, error: matchesError } = useCollection(groupMatchesQuery);
 
   // Все завершённые матчи конкретного менеджера, включая товарищеские.
   // Friendly-отчёты не имеют leagueId/level/groupId, поэтому они не попадают
@@ -198,6 +198,14 @@ export default function MatchesPage() {
   };
 
   const renderContent = () => {
+    if (matchesError) {
+      return (
+        <div role="alert" className="rounded-xl border border-destructive/30 bg-destructive/10 p-4 text-center">
+          <p className="text-xs font-bold">Не удалось загрузить расписание лиги</p>
+          <p className="mt-2 break-words text-[10px] text-muted-foreground">{matchesError.message}</p>
+        </div>
+      );
+    }
     if (isMatchesLoading || isHomeHistoryLoading || isAwayHistoryLoading) {
       return (
         <div className="py-20 flex flex-col items-center justify-center space-y-4 opacity-50">
