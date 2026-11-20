@@ -12,7 +12,7 @@ const LEAGUE_ID = 'ALPHA';
 const CUP_COLLECTION = 'cup_pyramid_v1';
 const TOTAL_TEAMS = TOTAL_GROUPS * TEAMS_PER_GROUP;
 const ROUND_COUNT = 7; // preliminary + 64-team round + 32 + 16 + 8 + 4 + final
-const ROUND_DAYS = [2, 3, 4, 5, 6, 7, 8]; // day after league tour 1, then daily
+const ROUND_DAYS = [1, 2, 3, 4, 5, 6, 7]; // preliminary round starts with the season, then daily
 const CUP_START_HOUR_UTC = 4; // 07:00 Moscow time
 
 type Team = { id: string; name: string; level: number; group: number; rank: number; isBot: boolean; seed: number };
@@ -62,6 +62,10 @@ function cupId(season: number) { return `cup_s${season}_l${LEAGUE_ID}`; }
 function matchId(season: number, round: number, index: number) { return `cup_S${season}_R${round}_M${String(index).padStart(2, '0')}`; }
 function roundKey(round: number) { return `r${round}`; }
 function roundDate(seasonStart: Date, seasonDay: number) {
+  // The opening cup round must never be scheduled before the configured season
+  // boundary. Keep the exact seasonStart timestamp for day 1; later rounds use
+  // the established daily 07:00 Moscow kickoff.
+  if (seasonDay === 1) return new Date(seasonStart.getTime());
   const date = new Date(seasonStart.getTime() + (seasonDay - 1) * 86400000);
   date.setUTCHours(CUP_START_HOUR_UTC, 0, 0, 0);
   return date;
