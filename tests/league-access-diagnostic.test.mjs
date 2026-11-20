@@ -11,7 +11,8 @@ test('league access diagnostics verify identity and inspect only the caller reti
   assert.match(route, /inactive_clubs_v1/);
   assert.match(route, /league_tables_v2/);
   assert.match(route, /firestore\.googleapis\.com/);
-  assert.match(route, /Authorization:\s*\{\s*Bearer/);
+  assert.match(route, /Authorization:/);
+  assert.match(route, /tokenMatch\[1\]/);
   assert.match(route, /rulesProbe/);
   assert.doesNotMatch(route, /requireServerActor/);
   assert.match(route, /pendingRetirement:\s*pendingMarker\.exists/);
