@@ -39,17 +39,9 @@ export default function MatchesPage() {
     return () => clearInterval(timer);
   }, []);
 
-  // ИСПОЛЬЗУЕМ ТОЛЬКО v14
-  const groupPlayersQuery = useMemoFirebase(() => {
-    if (!db || !selectedLeagueId) return null;
-    return query(collection(db, 'players_v14'), 
-      where('selectedLeagueId', '==', selectedLeagueId),
-      where('leagueLevel', '==', leagueLevel),
-      where('groupId', '==', groupId)
-    );
-  }, [db, selectedLeagueId, leagueLevel, groupId]);
-
-  const { data: players } = useCollection(groupPlayersQuery);
+  // Rank is already hydrated from the authenticated manager profile.
+  // Do not query other managers' private players_v14 documents from the client:
+  // Firestore rules intentionally restrict those documents to their owner.
 
   // ФИЛЬТРАЦИЯ ПО ВЕРСИИ 140
   const groupMatchesQuery = useMemoFirebase(() => {
@@ -153,7 +145,7 @@ export default function MatchesPage() {
     const m = resolveMatchData(raw);
     const isLive = isMatchLive(m.startTime);
     const isFinished = m.isFinished;
-    const myRank = players?.find(p => p.id === user?.uid)?.rank || 0;
+    const myRank = Number(rank || 0);
     const isMeHome = Number(m.homeRank) === Number(myRank) || m.homeId === user?.uid;
     const isMeAway = Number(m.awayRank) === Number(myRank) || m.awayId === user?.uid;
 
