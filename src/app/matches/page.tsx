@@ -160,7 +160,6 @@ export default function MatchesPage() {
     const m = resolveMatchData(raw);
     const isLive = isMatchLive(m.startTime);
     const isFinished = m.isFinished;
-    const myRank = Number(rank || 0);
     const isMeHome = m.isMyHomeClub === true;
     const isMeAway = m.isMyAwayClub === true;
 
