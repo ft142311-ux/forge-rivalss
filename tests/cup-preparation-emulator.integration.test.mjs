@@ -23,6 +23,8 @@ test('prepared Season 2 receives its complete Pyramid Cup before publication in 
   const runId = randomUUID();
   const season = 2;
   const seasonStart = new Date(Date.now() + 24 * 60 * 60 * 1000);
+  const expectedFirstKickoff = new Date(seasonStart.getTime() + 86400000);
+  expectedFirstKickoff.setUTCHours(4, 0, 0, 0);
   const configRef = db.collection('system_v1').doc('season_config');
   const cupRef = db.collection('cup_pyramid_v1').doc(`cup_s${season}_lALPHA`);
   const tableRefs = [];
@@ -84,7 +86,7 @@ test('prepared Season 2 receives its complete Pyramid Cup before publication in 
   assert.equal(result.participants, 120);
   assert.equal(result.preliminaryMatches, 56);
   assert.equal(result.byes, 8);
-  assert.equal(result.scheduledAt, seasonStart.toISOString());
+  assert.equal(result.scheduledAt, expectedFirstKickoff.toISOString(), 'preliminary cup round must follow league Tour 1 at 07:00 Moscow time');
 
   const cupSnap = await cupRef.get();
   assert.equal(cupSnap.exists, true);
@@ -106,7 +108,8 @@ test('prepared Season 2 receives its complete Pyramid Cup before publication in 
     assert.equal(fixture.cupId, cupRef.id);
     assert.equal(fixture.homeId, pairing.home.id);
     assert.equal(fixture.awayId, pairing.away.id);
-    assert.equal(fixture.scheduledAt.toMillis(), seasonStart.getTime());
+    assert.equal(fixture.scheduledAt.toMillis(), expectedFirstKickoff.getTime());
+    assert.equal(fixture.scheduledAt.toDate().getUTCHours(), 4);
   }
 
   const retry = await preparePyramidCupForSeason(season);
