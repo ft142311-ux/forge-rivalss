@@ -31,15 +31,26 @@ function resolveCupDate(value: any): Date {
   return date;
 }
 
-async function readActiveCupSeasonContext(db: any, nowMs = Date.now()) {
+async function readActiveCupSeasonContext(db: any, nowMs = Date.now(), requestedSeason?: number) {
   const configSnap = await db.collection('system_v1').doc('season_config').get();
   if (!configSnap.exists) return { ready: false as const, reason: 'SEASON_CONFIG_MISSING' };
   const config = configSnap.data() || {};
-  const season = Number(config.activeSeasonNumber);
-  if (!Number.isSafeInteger(season) || season < 1) {
+  const activeSeason = Number(config.activeSeasonNumber);
+  if (!Number.isSafeInteger(activeSeason) || activeSeason < 1) {
     return { ready: false as const, reason: 'ACTIVE_SEASON_INVALID' };
   }
+  const season = Number(requestedSeason || activeSeason);
   const phase = String(config.phase || '').toUpperCase();
+  if (season !== activeSeason) {
+    const preparedSeason = Number(config.preparedSeasonNumber);
+    const preparedPhase = ['GENERATING_NEXT', 'PREPARING_NEXT_SEASON', 'PREPARATION', 'PUBLISHED'].includes(phase);
+    if (season !== preparedSeason || config.worldReady !== true ||
+        config.preparedWorldReady !== true || !preparedPhase) {
+      return { ready: false as const, reason: 'PREPARED_SEASON_NOT_READY', season, activeSeason, preparedSeason, phase };
+    }
+    const seasonStart = resolveCupDate(config.preparedSeasonStart);
+    return { ready: true as const, season, phase, seasonStart, seasonDay: 0, prepared: true as const };
+  }
   if (config.worldReady !== true || !['REGULAR_SEASON', 'ACTIVE'].includes(phase)) {
     return { ready: false as const, reason: 'ACTIVE_SEASON_NOT_READY', season, phase };
   }
@@ -55,7 +66,7 @@ async function readActiveCupSeasonContext(db: any, nowMs = Date.now()) {
     return { ready: false as const, reason: 'OFFSEASON_CUP_MATCHES_DISABLED', season, phase };
   }
   const seasonDay = Math.floor((nowMs - seasonStart.getTime()) / 86400000) + 1;
-  return { ready: true as const, season, phase, seasonStart, seasonDay };
+  return { ready: true as const, season, phase, seasonStart, seasonDay, prepared: false as const };
 }
 
 function cupId(season: number) { return `cup_s${season}_l${LEAGUE_ID}`; }
@@ -265,7 +276,7 @@ async function commitCupRoundState(
 
 export async function generatePyramidCup(targetSeasonNumber?: number) {
   const db = getAdminDb();
-  const context = await readActiveCupSeasonContext(db);
+  const context = await readActiveCupSeasonContext(db, Date.now(), targetSeasonNumber);
   if (!context.ready) throw new Error(context.reason);
   const season = Number(targetSeasonNumber || context.season);
   if (season !== context.season) throw new Error('CUP_TARGET_SEASON_NOT_ACTIVE');
@@ -295,6 +306,60 @@ export async function generatePyramidCup(targetSeasonNumber?: number) {
   await batch.commit();
   return { success: true, created: true, cupId: id, participants: TOTAL_TEAMS, preliminaryMatches: 56 };
 }
+/**
+ * Build and verify the next season's cup before that season is published.
+ * The prepared calendar is already canonical, but its league is not active yet.
+ * This is deliberately idempotent so every orchestrator retry can re-check it.
+ */
+export async function preparePyramidCupForSeason(targetSeasonNumber: number) {
+  const db = getAdminDb();
+  const context = await readActiveCupSeasonContext(db, Date.now(), targetSeasonNumber);
+  if (!context.ready || context.prepared !== true) {
+    return { success: false, reason: context.ready ? 'CUP_TARGET_IS_NOT_PREPARED' : context.reason, writesStarted: false };
+  }
+  const generated = await generatePyramidCup(targetSeasonNumber);
+  const ref = db.collection(CUP_COLLECTION).doc(cupId(targetSeasonNumber));
+  const snap = await ref.get();
+  if (!snap.exists) return { success: false, reason: 'CUP_DOCUMENT_MISSING_AFTER_GENERATION' };
+  const cup = snap.data() || {};
+  const participants = Array.isArray(cup.participants) ? cup.participants : [];
+  const rounds = cup.rounds && typeof cup.rounds === 'object' ? cup.rounds : {};
+  const firstRound = Array.isArray(rounds.r1) ? rounds.r1 : [];
+  if (Number(cup.season) !== targetSeasonNumber || cup.name !== 'Кубок Пирамиды' ||
+      cup.status !== 'active' || participants.length !== TOTAL_TEAMS ||
+      new Set(participants.map((team: any) => String(team?.id || ''))).size !== TOTAL_TEAMS ||
+      firstRound.length !== 64 || firstRound.filter((pairing: any) => pairing?.status === 'bye').length !== 8) {
+    return { success: false, reason: 'CUP_PREPARED_BRACKET_INVALID', cupId: ref.id };
+  }
+  const fixtures = firstRound.filter((pairing: any) => pairing?.home && pairing?.away);
+  if (fixtures.length !== 56) return { success: false, reason: 'CUP_PREPARED_FIXTURE_COUNT_INVALID', cupId: ref.id };
+  const fixtureSnapshots = await Promise.all(fixtures.map((pairing: any) =>
+    db.collection(MATCH_COLLECTIONS.cup).doc(matchId(targetSeasonNumber, 1, Number(pairing.index))).get()
+  ));
+  const missing = fixtureSnapshots.filter((fixture: any) => !fixture.exists);
+  if (missing.length) return { success: false, reason: 'CUP_PREPARED_FIXTURES_MISSING', missing: missing.length, cupId: ref.id };
+  for (let index = 0; index < fixtures.length; index++) {
+    const pairing = fixtures[index];
+    const fixture = fixtureSnapshots[index].data() || {};
+    if (fixture.cupId !== ref.id || Number(fixture.season) !== targetSeasonNumber ||
+        Number(fixture.cupRound) !== 1 || fixture.homeId !== pairing.home.id ||
+        fixture.awayId !== pairing.away.id || fixture.type !== 'cup') {
+      return { success: false, reason: 'CUP_PREPARED_FIXTURE_IDENTITY_INVALID', matchId: fixture.id || null, cupId: ref.id };
+    }
+  }
+  return {
+    success: true,
+    generated: generated.created === true,
+    alreadyExists: generated.alreadyExists === true,
+    cupId: ref.id,
+    season: targetSeasonNumber,
+    participants: participants.length,
+    preliminaryMatches: fixtures.length,
+    byes: 8,
+    scheduledAt: context.seasonStart.toISOString(),
+  };
+}
+
 async function loadCup(db: any, season: number) {
   const ref = db.collection(CUP_COLLECTION).doc(cupId(season));
   const snap = await ref.get();
