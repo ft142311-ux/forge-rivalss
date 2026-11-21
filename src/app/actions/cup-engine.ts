@@ -345,7 +345,7 @@ export async function preparePyramidCupForSeason(targetSeasonNumber: number) {
     if (fixture.cupId !== ref.id || Number(fixture.season) !== targetSeasonNumber ||
         Number(fixture.cupRound) !== 1 || fixture.homeId !== pairing.home.id ||
         fixture.awayId !== pairing.away.id || fixture.type !== 'cup' ||
-        scheduledAtMs !== context.seasonStart.getTime()) {
+        scheduledAtMs !== roundDate(context.seasonStart, ROUND_DAYS[0]).getTime()) {
       return { success: false, reason: 'CUP_PREPARED_FIXTURE_IDENTITY_INVALID', matchId: fixture.id || null, cupId: ref.id };
     }
   }
