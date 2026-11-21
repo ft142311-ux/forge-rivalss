@@ -153,7 +153,7 @@ export default function MatchesPage() {
       : nameMap.names[aRank] || m.awayName || botAway;
     const homeLogo = isMyHome ? myClubLogo || null : nameMap.logos[hRank] || null;
     const awayLogo = isMyAway ? myClubLogo || null : nameMap.logos[aRank] || null;
-    return { ...m, homeName, awayName, homeLogo, awayLogo };
+    return { ...m, homeName, awayName, homeLogo, awayLogo, isMyHomeClub: isMyHome, isMyAwayClub: isMyAway };
   }, [nameMap, selectedLeagueId, leagueLevel, groupId, seasonNumber, rank, myClubName, myClubLogo, user?.uid]);
 
   const renderMatchCard = useCallback((raw: any, idx: number) => {
@@ -161,8 +161,8 @@ export default function MatchesPage() {
     const isLive = isMatchLive(m.startTime);
     const isFinished = m.isFinished;
     const myRank = Number(rank || 0);
-    const isMeHome = Number(m.homeRank) === Number(myRank) || m.homeId === user?.uid;
-    const isMeAway = Number(m.awayRank) === Number(myRank) || m.awayId === user?.uid;
+    const isMeHome = m.isMyHomeClub === true;
+    const isMeAway = m.isMyAwayClub === true;
 
     return (
       <Card key={m.id || idx} className={cn(
