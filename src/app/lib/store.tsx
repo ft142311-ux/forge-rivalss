@@ -590,7 +590,7 @@ export function GameStateProvider({ children }: { children: ReactNode }) {
     saveToLocal,
     resetProfile: async () => { if (typeof window !== 'undefined') localStorage.removeItem(STORAGE_KEY); window.location.reload(); }
   }), [state, claimReward, purchasePremium, updateLineup, setTrainingFocus, startDailyPlayerTraining, assignToRole,
-    startArenaConstruction, startHQConstruction, startBootcampConstruction, startAcademyConstruction,
+    startArenaConstruction, startCapacityExpansion, startHQConstruction, startBootcampConstruction, startAcademyConstruction,
     startMedicalConstruction, accelerateConstruction, checkConstructions, setLanguage, setWorldReady, saveToLocal, recordMatch, runTrialMatch, markMatchIdAsSeen]);
 
   return <GameStateContext.Provider value={value}>{children}</GameStateContext.Provider>;
