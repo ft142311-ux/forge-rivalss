@@ -111,6 +111,20 @@ export default function PyramidCupPage() {
         <div className="py-20 text-center animate-in fade-in duration-700 flex flex-col items-center"><Medal className="w-12 h-12 text-orange-500 mb-4 opacity-50" /><h2 className="text-lg font-headline font-bold uppercase text-white mb-2">{ru ? 'СЕТКА ФОРМИРУЕТСЯ' : 'BRACKET PENDING'}</h2><p className="text-[10px] text-muted-foreground uppercase px-10 italic">{ru ? 'Кубок формируется при подготовке сезона и будет доступен до стартового свистка.' : 'The cup is generated during season preparation and will be available before kickoff.'}</p></div>
       ) : (
         <>
+          {cupData.status === 'completed' && cupData.winnerId && (
+            <Card className="glass-card border-yellow-500/30 mb-5 bg-yellow-500/5">
+              <CardContent className="p-4 text-center">
+                <Crown className="w-8 h-8 mx-auto mb-2 text-yellow-400" />
+                <p className="text-[9px] font-black uppercase tracking-[0.2em] text-yellow-400">{ru ? 'ЧЕМПИОН КУБКА ПИРАМИДЫ' : 'PYRAMID CUP CHAMPION'}</p>
+                <p className="mt-1 text-lg font-headline font-black uppercase text-white">{cupData.winnerName || cupData.winnerId}</p>
+                {cupData.finalistId && (
+                  <p className="mt-2 text-[9px] font-bold uppercase text-muted-foreground">
+                    {ru ? 'ФИНАЛИСТ' : 'RUNNER-UP'} · {cupData.finalistName || cupData.finalistId}
+                  </p>
+                )}
+              </CardContent>
+            </Card>
+          )}
           <div className="grid grid-cols-7 gap-1.5 mb-5">
             {Array.from({ length: ROUND_COUNT }, (_, i) => i + 1).map(round => (
               <Button key={round} variant={activeRound === round ? 'default' : 'outline'} size="sm" onClick={() => setActiveRound(round)} className={cn('h-9 min-w-0 px-0 rounded-lg font-black text-[9px] uppercase', activeRound === round ? 'hero-gradient border-none' : 'bg-secondary/20 border-white/5')}>
