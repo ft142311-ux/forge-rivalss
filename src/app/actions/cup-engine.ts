@@ -574,10 +574,10 @@ async function repairCurrentRoundFixtures(db: any, cup: { ref: any; data: any },
       teamId,
       snap: await tx.get(participantSnapshotRef(db, season, teamId)),
     })));
-    const participantSnapshotById = new Map(participantSnapshots.map(({ teamId, snap }) => [
+    const participantSnapshotById = new Map<string, MatchTeamSnapshot | null>(participantSnapshots.map(({ teamId, snap }) => [
       teamId,
       snap.exists ? (snap.data() || {}).matchSnapshot as MatchTeamSnapshot : null,
-    ]));
+    ] as const));
     for (const pairing of pairings) {
       if (pairing.home) pairing.home.matchSnapshot = participantSnapshotById.get(pairing.home.id) || pairing.home.matchSnapshot;
       if (pairing.away) pairing.away.matchSnapshot = participantSnapshotById.get(pairing.away.id) || pairing.away.matchSnapshot;
