@@ -5,6 +5,7 @@ import { FieldValue, Timestamp } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { getTableId, MAX_LEVELS, TEAMS_PER_GROUP, TOTAL_GROUPS } from '@/app/lib/leagues-data';
 import { resolveUniversalMatchDocument } from '@/app/actions/universal-match-resolver';
+import { buildMatchTeamSnapshot, type MatchTeamSnapshot } from '@/app/lib/match-simulation';
 import { MATCH_COLLECTIONS } from '@/app/lib/match-storage';
 import { resolveSeasonLifecycleWindow } from './season-boundary';
 
@@ -15,7 +16,7 @@ const ROUND_COUNT = 7; // preliminary + 64-team round + 32 + 16 + 8 + 4 + final
 const ROUND_DAYS = [2, 3, 4, 5, 6, 7, 8]; // preliminary round follows league Tour 1; every round is daily
 const CUP_START_HOUR_UTC = 4; // 07:00 Moscow time
 
-type Team = { id: string; name: string; level: number; group: number; rank: number; isBot: boolean; seed: number };
+type Team = { id: string; name: string; level: number; group: number; rank: number; isBot: boolean; seed: number; matchSnapshot?: MatchTeamSnapshot };
 type Pairing = { id: string; index: number; home: Team | null; away: Team | null; status: 'scheduled' | 'bye' | 'finished'; matchId?: string | null; winnerId?: string | null; scoreA?: number | null; scoreB?: number | null; technicalDecision?: boolean };
 
 function resolveCupDate(value: any): Date {
@@ -122,7 +123,27 @@ async function loadAllLeagueTeams(db: any, season: number): Promise<Team[]> {
   if (teams.length !== TOTAL_TEAMS) throw new Error(`CUP_PARTICIPANT_COUNT_INVALID:${teams.length}`);
   if (new Set(teams.map(t => t.id)).size !== TOTAL_TEAMS) throw new Error('CUP_DUPLICATE_PARTICIPANTS');
   teams.sort(compareStrength);
-  return teams.map((team, i) => ({ ...team, seed: i + 1 }));
+
+  // Freeze each participant's active five-player roster and tactics at cup
+  // generation. A later league-slot registration may retire the replaced bot
+  // profile, but it must not erase that club's already-published cup entry.
+  const profileSnapshots = await Promise.all(teams.map(team =>
+    db.collection('players_v14').doc(team.id).get()
+  ));
+  return teams.map((team, index) => {
+    const profile = profileSnapshots[index];
+    if (!profile.exists) throw new Error(`CUP_PARTICIPANT_PROFILE_MISSING:${team.id}`);
+    const data = profile.data() || {};
+    const matchSnapshot = buildMatchTeamSnapshot({
+      ...data,
+      clubName: team.name,
+      displayName: team.name,
+    }, team.name, team.id, 'cup');
+    if (!Array.isArray(matchSnapshot.players) || matchSnapshot.players.length !== 5) {
+      throw new Error(`CUP_PARTICIPANT_ROSTER_INVALID:${team.id}`);
+    }
+    return { ...team, seed: index + 1, matchSnapshot };
+  });
 }
 function publicTeam(team: Team | null) {
   return team ? { id: team.id, name: team.name, level: team.level, group: team.group, rank: team.rank, seed: team.seed, isBot: team.isBot } : null;
@@ -144,7 +165,7 @@ function createPreliminary(teams: Team[]): Pairing[] {
 }
 function teamFromPublic(value: any): Team | null {
   if (!value?.id) return null;
-  return { id: String(value.id), name: String(value.name || value.id), level: Number(value.level || 4), group: Number(value.group || 1), rank: Number(value.rank || 8), isBot: Boolean(value.isBot), seed: Number(value.seed || 0) };
+  return { id: String(value.id), name: String(value.name || value.id), level: Number(value.level || 4), group: Number(value.group || 1), rank: Number(value.rank || 8), isBot: Boolean(value.isBot), seed: Number(value.seed || 0), matchSnapshot: Array.isArray(value.matchSnapshot?.players) ? value.matchSnapshot : undefined };
 }
 function buildRoundPairings(round: number, input: Team[]): Pairing[] {
   const teams = [...input].sort(compareStrength);
@@ -163,6 +184,8 @@ function buildCupRoundMatchData(season: number, round: number, pairing: Pairing,
     cupRoundLabel: isFinal ? 'final' : round === 1 ? 'preliminary' : `round_${round}`,
     season, leagueId: LEAGUE_ID, homeId: pairing.home!.id, awayId: pairing.away!.id,
     homeName: pairing.home!.name, awayName: pairing.away!.name,
+    homeTeamSnapshot: pairing.home!.matchSnapshot || null,
+    awayTeamSnapshot: pairing.away!.matchSnapshot || null,
     homeRank: pairing.home!.rank, awayRank: pairing.away!.rank,
     homeLevel: pairing.home!.level, awayLevel: pairing.away!.level,
     homeGroup: pairing.home!.group, awayGroup: pairing.away!.group,
