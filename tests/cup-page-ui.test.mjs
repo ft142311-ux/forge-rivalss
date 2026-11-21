@@ -26,3 +26,9 @@ test('finished Pyramid Cup fixtures link to the canonical Match Overview report'
   assert.match(source, /\/match\?id=\$\{encodeURIComponent\(m\.matchId\)\}/);
   assert.match(source, /ОТЧЁТ БОЯ/);
 });
+
+test('Pyramid Cup opens on the currently active round instead of always resetting to the preliminary round', () => {
+  assert.match(source, /const currentRound = Number\(cupData\?\.currentRound\)/);
+  assert.match(source, /setActiveRound\(currentRound\)/);
+  assert.match(source, /\[cupData\?\.id, cupData\?\.currentRound\]/);
+});
