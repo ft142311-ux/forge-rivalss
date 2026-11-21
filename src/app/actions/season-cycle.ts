@@ -327,6 +327,14 @@ export async function activateNextSeason() {
  * Do not use for later seasons: their normal strict rollover path is preserved.
  */
 export async function finishTestSeason1AndPrepareSeason2() {
+  // This one-shot recovery exists only for the disposable local emulator.
+  // Keep the guard inside the action as well as at any HTTP entry point so a
+  // future caller cannot accidentally run it against shared staging/Production.
+  const emulatorHost = process.env.FIRESTORE_EMULATOR_HOST || '';
+  const projectId = process.env.GCLOUD_PROJECT || process.env.GOOGLE_CLOUD_PROJECT || '';
+  if (!/^(127[.]0[.]0[.]1|localhost):[0-9]+$/.test(emulatorHost) || projectId !== 'demo-forge-rivals') {
+    return { success: false, action: 'LOCAL_EMULATOR_ONLY', reason: 'DISPOSABLE_SEASON_1_RECOVERY_REQUIRES_LOCAL_EMULATOR', writesStarted: false };
+  }
   const db = getAdminDb();
   const configRef = db.collection('system_v1').doc('season_config');
   const initialSnap = await configRef.get();
