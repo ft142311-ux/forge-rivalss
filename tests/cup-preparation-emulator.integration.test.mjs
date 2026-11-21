@@ -278,6 +278,34 @@ test('prepared Season 2 receives its complete Pyramid Cup before publication in 
   assert.equal(championLedger.amount, 35_000);
   assert.equal(championLedger.type, 'PYRAMID_CUP_CHAMPION_REWARD');
 
+  // A retry after completion must be a strict no-op: no second reward,
+  // no duplicate trophy, and no mutation of the published champion record.
+  const completedSnapshot = {
+    winnerId: completedCup.winnerId,
+    winnerName: completedCup.winnerName,
+    finalistId: completedCup.finalistId,
+    finalistName: completedCup.finalistName,
+    championPrize: completedCup.championPrize,
+    finalistPrize: completedCup.finalistPrize,
+  };
+  const retryCycle = await runPyramidCupCycle();
+  assert.equal(retryCycle.completed, true);
+  assert.equal(retryCycle.advanced, 0);
+  const afterRetryCup = (await cupRef.get()).data();
+  assert.deepEqual({
+    winnerId: afterRetryCup.winnerId,
+    winnerName: afterRetryCup.winnerName,
+    finalistId: afterRetryCup.finalistId,
+    finalistName: afterRetryCup.finalistName,
+    championPrize: afterRetryCup.championPrize,
+    finalistPrize: afterRetryCup.finalistPrize,
+  }, completedSnapshot);
+  const championAfterRetry = (await db.collection('players_v14').doc(humanUid).get()).data();
+  assert.equal(championAfterRetry.credits, 1_035_000);
+  assert.equal(championAfterRetry.trophies.filter(trophy => trophy.id === `pyramid-cup-season-${season}`).length, 1);
+  const championLedgerAfterRetry = (await economyRefs[0].get()).data();
+  assert.deepEqual(championLedgerAfterRetry, championLedger);
+
   const leagueTablesAfterCup = await Promise.all(tableRefs.map(async ref => {
     const snap = await ref.get();
     assert.equal(snap.exists, true);
