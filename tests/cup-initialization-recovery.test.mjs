@@ -106,3 +106,13 @@ test('Pyramid Cup ordinary rounds use BO1 and only the final uses BO3', () => {
   assert.match(builder, /bestOf: isFinal \? 3 : 1/);
   assert.match(builder, /affectsLeagueStandings: false/);
 });
+
+test('legacy activateNextSeason entry point cannot bypass Pyramid Cup or scheduled activation gates', () => {
+  const seasonCycleSource = readFileSync(new URL('../src/app/actions/season-cycle.ts', import.meta.url), 'utf8');
+  const start = seasonCycleSource.indexOf('export async function activateNextSeason()');
+  const end = seasonCycleSource.indexOf('\n}', start) + 2;
+  assert.ok(start >= 0 && end > start);
+  const entryPoint = seasonCycleSource.slice(start, end);
+  assert.match(entryPoint, /return runSeasonOrchestrator\(\)/);
+  assert.doesNotMatch(entryPoint, /publishPreparedSeason\(|activatePublishedSeason\(/);
+});
