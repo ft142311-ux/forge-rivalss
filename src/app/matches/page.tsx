@@ -28,7 +28,7 @@ export default function MatchesPage() {
   const { 
     isLoaded, language,
     selectedLeagueId, leagueLevel, groupId,
-    clubLogo: myClubLogo, seasonNumber, matchHistory, rank
+    clubLogo: myClubLogo, clubName: myClubName, seasonNumber, matchHistory, rank
   } = useGameState();
   
   const [view, setView] = useState<MatchView>('menu');
@@ -130,12 +130,21 @@ export default function MatchesPage() {
     const botHome = `BOT_ALPHA_L${leagueLevel}_G${groupId}_R${hRank}`;
     const botAway = `BOT_ALPHA_L${leagueLevel}_G${groupId}_R${aRank}`;
 
-    const homeName = nameMap.names[hRank] || m.homeName || botHome;
-    const awayName = nameMap.names[aRank] || m.awayName || botAway;
-    const homeLogo = nameMap.logos[hRank] || null;
-    const awayLogo = nameMap.logos[aRank] || null;
+    // Match snapshots can retain the previous slot owner's name after a
+    // registration. Resolve the authenticated manager by immutable UID first;
+    // never infer ownership from rank alone or rename the opponent.
+    const isMyHome = Boolean(user?.uid && m.homeId === user.uid);
+    const isMyAway = Boolean(user?.uid && m.awayId === user.uid);
+    const homeName = isMyHome && myClubName
+      ? myClubName
+      : nameMap.names[hRank] || m.homeName || botHome;
+    const awayName = isMyAway && myClubName
+      ? myClubName
+      : nameMap.names[aRank] || m.awayName || botAway;
+    const homeLogo = isMyHome ? myClubLogo || null : nameMap.logos[hRank] || null;
+    const awayLogo = isMyAway ? myClubLogo || null : nameMap.logos[aRank] || null;
     return { ...m, homeName, awayName, homeLogo, awayLogo };
-  }, [nameMap, leagueLevel, groupId]);
+  }, [nameMap, leagueLevel, groupId, myClubName, myClubLogo, user?.uid]);
 
   const renderMatchCard = useCallback((raw: any, idx: number) => {
     const m = resolveMatchData(raw);
