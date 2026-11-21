@@ -86,12 +86,26 @@ async function loadAllLeagueTeams(db: any, season: number): Promise<Team[]> {
       const snap = await db.collection('league_tables_v2').doc(getTableId(season, LEAGUE_ID, level, group)).get();
       if (!snap.exists) throw new Error(`CUP_LEAGUE_TABLE_MISSING:D${level}-G${group}`);
       const stats = snap.data()?.stats || {};
-      const byRank = new Map<number, any>();
-      for (const value of Object.values(stats) as any[]) {
+      const byRank = new Map<number, { id: string; value: any }>();
+      for (const [key, value] of Object.entries(stats) as Array<[string, any]>) {
         const rank = Number(value?.rank);
-        if (rank >= 1 && rank <= TEAMS_PER_GROUP && !byRank.has(rank)) byRank.set(rank, value);
+        if (!Number.isInteger(rank) || rank < 1 || rank > TEAMS_PER_GROUP) continue;
+        if (byRank.has(rank)) {
+          throw new Error(`CUP_DUPLICATE_LEAGUE_STANDING:D${level}-G${group}-R${rank}`);
+        }
+        const rowId = String(value?.id || key);
+        if (rowId !== key) {
+          throw new Error(`CUP_LEAGUE_STANDING_IDENTITY_INVALID:D${level}-G${group}-R${rank}`);
+        }
+        byRank.set(rank, { id: key, value });
       }
-      for (let rank = 1; rank <= TEAMS_PER_GROUP; rank++) teams.push(normalizeTeam(byRank.get(rank), level, group, rank));
+      for (let rank = 1; rank <= TEAMS_PER_GROUP; rank++) {
+        const entry = byRank.get(rank);
+        if (!entry) {
+          throw new Error(`CUP_LEAGUE_STANDING_MISSING:D${level}-G${group}-R${rank}`);
+        }
+        teams.push(normalizeTeam({ ...entry.value, id: entry.id }, level, group, rank));
+      }
     }
   }
   if (teams.length !== TOTAL_TEAMS) throw new Error(`CUP_PARTICIPANT_COUNT_INVALID:${teams.length}`);
