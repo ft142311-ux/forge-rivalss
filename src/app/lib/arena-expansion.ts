@@ -16,7 +16,19 @@ const INITIAL_STEPS = [
 
 // Geometric progression calibrated to the approved 50,000-seat endpoint.
 const PRICE_GROWTH = 1.039479044216737;
-const TIME_GROWTH = 1.0189100421169643;
+// Approved duration schedule for every 500-seat tier above the initial 2,500-seat range.
+const EXTENDED_DURATION_HOURS = [
+  44, 54, 64, 74, 85, 95, 106, 117, 128, 140,
+  151, 163, 175, 188, 200, 213, 226, 240, 253, 267,
+  281, 296, 311, 326, 341, 357, 373, 389, 405, 422,
+  439, 457, 475, 493, 512, 531, 550, 570, 590, 610,
+  631, 652, 674, 696, 719, 742, 765, 789, 813, 838,
+  864, 889, 916, 943, 970, 998, 1026, 1055, 1085, 1115,
+  1146, 1177, 1209, 1242, 1275, 1309, 1343, 1379, 1415, 1451,
+  1488, 1527, 1565, 1605, 1645, 1686, 1728, 1771, 1815, 1859,
+  1904, 1951, 1998, 2046, 2095, 2145, 2195, 2247, 2300, 2354,
+  2409, 2465, 2522, 2581, 2640,
+];
 
 function geometricSum(ratio: number, terms: number): number {
   if (terms <= 0) return 0;
@@ -49,7 +61,7 @@ export function getArenaExpansionQuote(seats: number, currentCapacity = ARENA_BA
   } else {
     const terms = seats / ARENA_EXPANSION_STEP - INITIAL_STEPS.length;
     cost = Math.round(687500 + 187500 * geometricSum(PRICE_GROWTH, terms));
-    durationHours = Math.round(34 + 10 * geometricSum(TIME_GROWTH, terms));
+    durationHours = EXTENDED_DURATION_HOURS[terms - 1];
   }
 
   return {
