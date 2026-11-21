@@ -393,6 +393,28 @@ export async function preparePyramidCupForSeason(targetSeasonNumber: number) {
       firstRound.length !== 64 || firstRound.filter((pairing: any) => pairing?.status === 'bye').length !== 8) {
     return { success: false, reason: 'CUP_PREPARED_BRACKET_INVALID', cupId: ref.id };
   }
+
+  // Verify every frozen participant snapshot, including the eight D1 BYE
+  // teams that do not appear in a preliminary fixture. Fixture-only checks
+  // would otherwise miss a partially deleted participant snapshot collection.
+  const participantSnapshots = await Promise.all(participants.map((team: any) =>
+    participantSnapshotRef(db, targetSeasonNumber, String(team?.id || '')).get()
+  ));
+  const invalidParticipantSnapshot = participantSnapshots.find((snapshot: any, index: number) => {
+    if (!snapshot.exists) return true;
+    const data = snapshot.data() || {};
+    const frozen = data.matchSnapshot;
+    return data.cupId !== ref.id ||
+      Number(data.season) !== targetSeasonNumber ||
+      data.teamId !== String(participants[index]?.id || '') ||
+      frozen?.id !== String(participants[index]?.id || '') ||
+      !Array.isArray(frozen?.players) ||
+      frozen.players.length !== 5;
+  });
+  if (invalidParticipantSnapshot) {
+    return { success: false, reason: 'CUP_PREPARED_PARTICIPANT_SNAPSHOT_INVALID', cupId: ref.id };
+  }
+
   const fixtures = firstRound.filter((pairing: any) => pairing?.home && pairing?.away);
   if (fixtures.length !== 56) return { success: false, reason: 'CUP_PREPARED_FIXTURE_COUNT_INVALID', cupId: ref.id };
   const fixtureSnapshots = await Promise.all(fixtures.map((pairing: any) =>
