@@ -121,6 +121,27 @@ test('disposable Season 1 rollover diagnostics are restricted to the local demo 
 });
 
 
+test('direct publication and activation entry points enforce the Pyramid Cup prerequisite', () => {
+  const calendar = readFileSync(
+    resolve(import.meta.dirname, '../src/app/actions/season-calendar.ts'),
+    'utf8',
+  );
+  assert.match(calendar, /import \{ preparePyramidCupForSeason \} from '\.\/cup-engine'/);
+  const publishStart = calendar.indexOf('export async function publishPreparedSeason()');
+  const activateStart = calendar.indexOf('export async function activatePublishedSeason()');
+  assert.ok(publishStart >= 0 && activateStart > publishStart);
+  const publishEnd = activateStart;
+  const publishBlock = calendar.slice(publishStart, publishEnd);
+  const activateEnd = calendar.indexOf('\nexport ', activateStart + 20);
+  const activateBlock = calendar.slice(activateStart, activateEnd > 0 ? activateEnd : undefined);
+  for (const [name, block] of [['publish', publishBlock], ['activate', activateBlock]]) {
+    const gate = block.indexOf('preparePyramidCupForSeason(targetSeason)');
+    const writeBoundary = block.indexOf(name === 'publish' ? 'commitSeasonCalendarPublication(' : 'commitSeasonActivation(');
+    assert.ok(gate >= 0 && writeBoundary > gate, `${name} must verify Pyramid Cup before committing lifecycle writes`);
+    assert.match(block.slice(gate, writeBoundary), /PYRAMID_CUP_PREPARATION_BLOCKED/);
+  }
+});
+
 test('prepared season Pyramid Cup is generated and verified before publication or activation', () => {
   assert.match(source, /import \{ preparePyramidCupForSeason, runPyramidCupCycle \} from '\.\/cup-engine'/);
   const prepared = source.indexOf("if (world?.prepared === true)");
