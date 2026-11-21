@@ -56,12 +56,32 @@ test('Pyramid Cup uses the active season config instead of the hard-coded global
   assert.doesNotMatch(source, /getGlobalSeasonInfo|GLOBAL_EPOCH_ISO|FIRST_SEASON_NEXT_START_ISO/);
 });
 
-test('Pyramid Cup generation refuses to target a season other than the active world', () => {
-  const start = source.indexOf('export async function generatePyramidCup');
-  const end = source.indexOf('async function loadCup', start);
-  const generation = source.slice(start, end);
-  assert.match(generation, /readActiveCupSeasonContext\(db\)/);
-  assert.match(generation, /season !== context\.season/);
-  assert.match(generation, /CUP_TARGET_SEASON_NOT_ACTIVE/);
+test('Pyramid Cup can be generated from a fully prepared future season before activation', () => {
+  const contextStart = source.indexOf('async function readActiveCupSeasonContext');
+  const contextEnd = source.indexOf('function cupId', contextStart);
+  const context = source.slice(contextStart, contextEnd);
+  assert.match(context, /config\.preparedSeasonNumber/);
+  assert.match(context, /config\.preparedWorldReady !== true/);
+  assert.match(context, /config\.preparedSeasonStart/);
+  assert.match(context, /preparedPhase/);
+  assert.match(context, /seasonDay: 0, prepared: true/);
+  const generationStart = source.indexOf('export async function generatePyramidCup');
+  const generationEnd = source.indexOf('export async function preparePyramidCupForSeason', generationStart);
+  const generation = source.slice(generationStart, generationEnd);
+  assert.match(generation, /readActiveCupSeasonContext\(db, Date\.now\(\), targetSeasonNumber\)/);
   assert.match(generation, /const seasonStart = context\.seasonStart/);
+});
+
+test('pre-publication Pyramid Cup preparation verifies all 120 teams, 56 fixtures and 8 byes', () => {
+  const start = source.indexOf('export async function preparePyramidCupForSeason');
+  const end = source.indexOf('async function loadCup', start);
+  assert.ok(start >= 0 && end > start);
+  const preparation = source.slice(start, end);
+  assert.match(preparation, /context\.prepared !== true/);
+  assert.match(preparation, /participants\.length !== TOTAL_TEAMS/);
+  assert.match(preparation, /firstRound\.length !== 64/);
+  assert.match(preparation, /filter\(\(pairing: any\) => pairing\?\.status === 'bye'\)\.length !== 8/);
+  assert.match(preparation, /fixtures\.length !== 56/);
+  assert.match(preparation, /CUP_PREPARED_FIXTURES_MISSING/);
+  assert.match(preparation, /CUP_PREPARED_FIXTURE_IDENTITY_INVALID/);
 });
