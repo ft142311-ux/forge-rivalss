@@ -220,8 +220,16 @@ test('prepared Season 2 receives its complete Pyramid Cup before publication in 
         });
       }
     }
-    const advanced = await runPyramidCupCycle();
-    assert.equal(advanced.advanced, 1, JSON.stringify({ round, advanced }));
+    // Two workers may pick up the same due round concurrently. The
+    // transaction's expected-round guard must allow exactly one advancement.
+    const [advanced, duplicate] = await Promise.all([
+      runPyramidCupCycle(),
+      runPyramidCupCycle(),
+    ]);
+    assert.equal([advanced.advanced, duplicate.advanced].reduce((sum, value) => sum + Number(value || 0), 0), 1,
+      JSON.stringify({ round, advanced, duplicate }));
+    assert.equal([advanced.stale, duplicate.stale].filter(Boolean).length, 1,
+      JSON.stringify({ round, advanced, duplicate }));
     const nextCup = (await cupRef.get()).data();
     assert.equal(nextCup.currentRound, round + 1);
     const nextPairings = nextCup.rounds[`r${round + 1}`];
