@@ -46,7 +46,7 @@ export async function startConstructionAction(idToken: string, section: Construc
 
       // One active project per infrastructure section/tab.
       const now = Date.now();
-      for (const [activeId, finish] of Object.entries(finishes)) {
+      for (const finish of Object.values(finishes)) {
         const finishMs = new Date(String(finish)).getTime();
         if (Number.isFinite(finishMs) && finishMs > now) {
           throw new Error('CONSTRUCTION_ALREADY_IN_PROGRESS');
