@@ -1,6 +1,6 @@
 const functions = require('firebase-functions');
 const admin = require('firebase-admin');
-const { isEligibleRegistrationSlot, validateRegistrationSchedule, generateStartingSquad, buildRegistrationMatchPlan, transferBotStandingToUser } = require('./registration-core');
+const { isEligibleRegistrationSlot, validateRegistrationSchedule, generateStartingSquad, buildRegistrationMatchPlan, transferBotStandingToUser, DEFAULT_ARENA_CAPACITY } = require('./registration-core');
 const { recordUserActivityUnlessRetiring } = require('./club-activity-fence');
 const { invokeSeasonOrchestrator, invokeMarketExpirySweep, invokeTournamentSweep } = require('./season-orchestrator-scheduler');
 
@@ -317,7 +317,7 @@ exports.initializeClub = functions.region('us-central1').https.onCall(async (dat
           sub_full_support: startingSquad[9].id
         },
         staff: { coach: null }, strategy: "Balanced Play",
-        arena: { capacity: 3000 }, hq: {}, bootcamp: {}, academy: {}, medical: {}
+        arena: { capacity: DEFAULT_ARENA_CAPACITY }, hq: {}, bootcamp: {}, academy: {}, medical: {}
       };
       
       t.set(playerRef, initialState);
