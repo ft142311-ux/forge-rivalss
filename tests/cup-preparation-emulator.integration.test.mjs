@@ -30,6 +30,7 @@ test('prepared Season 2 receives its complete Pyramid Cup before publication in 
   const tableRefs = [];
   const fixtureRefs = [];
   const playerRefs = [];
+  const participantSnapshotRefs = [];
 
   for (let level = 1; level <= MAX_LEVELS; level++) {
     for (let group = 1; group <= Math.pow(2, level - 1); group++) {
@@ -40,7 +41,7 @@ test('prepared Season 2 receives its complete Pyramid Cup before publication in 
 
   t.after(async () => {
     const batch = db.batch();
-    [configRef, cupRef, ...tableRefs, ...fixtureRefs, ...playerRefs].forEach(ref => batch.delete(ref));
+    [configRef, cupRef, ...tableRefs, ...fixtureRefs, ...playerRefs, ...participantSnapshotRefs].forEach(ref => batch.delete(ref));
     await batch.commit().catch(() => undefined);
     const app = getApps().find(candidate => candidate.name === '[DEFAULT]');
     if (app) await deleteApp(app).catch(() => undefined);
@@ -69,6 +70,7 @@ test('prepared Season 2 receives its complete Pyramid Cup before publication in 
         stats[id] = { id, name, rank, isBot: true };
         const playerRef = db.collection('players_v14').doc(id);
         playerRefs.push(playerRef);
+        participantSnapshotRefs.push(db.collection('cup_participant_snapshots_v1').doc(cupRef.id).collection('teams').doc(id));
         const roles = ['Carry', 'Midlaner', 'Tank', 'Jungler', 'Support'];
         playerBatch.set(playerRef, {
           id,
@@ -120,6 +122,7 @@ test('prepared Season 2 receives its complete Pyramid Cup before publication in 
   assert.equal(cup.currentRound, 1);
   assert.equal(cup.participants.length, 120);
   assert.equal(cup.rounds.r1.length, 64);
+  assert.equal(cup.rounds.r1[0].home.matchSnapshot, undefined, 'large roster snapshots must not inflate the bracket document');
   assert.equal(cup.rounds.r1.filter(pairing => pairing.status === 'bye').length, 8);
 
   const firstRound = cup.rounds.r1.filter(pairing => pairing.home && pairing.away);
@@ -134,6 +137,9 @@ test('prepared Season 2 receives its complete Pyramid Cup before publication in 
     assert.equal(fixture.homeId, pairing.home.id);
     assert.equal(fixture.awayId, pairing.away.id);
     assert.equal(fixture.homeTeamSnapshot.players.length, 5);
+    const homeParticipantSnapshot = await db.collection('cup_participant_snapshots_v1').doc(cupRef.id).collection('teams').doc(pairing.home.id).get();
+    assert.equal(homeParticipantSnapshot.exists, true);
+    assert.equal(homeParticipantSnapshot.data().matchSnapshot.players.length, 5);
     assert.equal(fixture.awayTeamSnapshot.players.length, 5);
     assert.equal(fixture.homeTeamSnapshot.name, pairing.home.name);
     assert.equal(fixture.scheduledAt.toMillis(), expectedFirstKickoff.getTime());
