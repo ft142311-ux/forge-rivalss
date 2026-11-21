@@ -1,5 +1,7 @@
 'use strict';
 
+const DEFAULT_ARENA_CAPACITY = 3000;
+
 const { isEligibleRegistrationSlot } = require('./league-integrity');
 
 /**
@@ -217,6 +219,7 @@ function buildRegistrationMatchPlan(matches, botId, userId, clubName, nowMs = Da
 }
 
 module.exports = {
+  DEFAULT_ARENA_CAPACITY,
   isEligibleRegistrationSlot,
   validateRegistrationSchedule,
   generateStartingSquad,
