@@ -130,11 +130,21 @@ export default function MatchesPage() {
     const botHome = `BOT_ALPHA_L${leagueLevel}_G${groupId}_R${hRank}`;
     const botAway = `BOT_ALPHA_L${leagueLevel}_G${groupId}_R${aRank}`;
 
-    // Match snapshots can retain the previous slot owner's name after a
-    // registration. Resolve the authenticated manager by immutable UID first;
-    // never infer ownership from rank alone or rename the opponent.
-    const isMyHome = Boolean(user?.uid && m.homeId === user.uid);
-    const isMyAway = Boolean(user?.uid && m.awayId === user.uid);
+    // A league slot keeps its season-to-date history when a bot is replaced
+    // by a newly registered manager. For official fixtures in this exact
+    // league/group/season, the authenticated manager owns their current rank
+    // slot even when an already-finished fixture still contains the old bot ID.
+    // Non-league matches continue to require the immutable authenticated UID.
+    const isMyLeagueFixture = Boolean(
+      m.leagueId === selectedLeagueId &&
+      Number(m.level) === Number(leagueLevel) &&
+      Number(m.groupId) === Number(groupId) &&
+      Number(m.season) === Number(seasonNumber)
+    );
+    const isMyHome = Boolean(user?.uid && m.homeId === user.uid) ||
+      (isMyLeagueFixture && Number(m.homeRank) === Number(rank));
+    const isMyAway = Boolean(user?.uid && m.awayId === user.uid) ||
+      (isMyLeagueFixture && Number(m.awayRank) === Number(rank));
     const homeName = isMyHome && myClubName
       ? myClubName
       : nameMap.names[hRank] || m.homeName || botHome;
@@ -144,7 +154,7 @@ export default function MatchesPage() {
     const homeLogo = isMyHome ? myClubLogo || null : nameMap.logos[hRank] || null;
     const awayLogo = isMyAway ? myClubLogo || null : nameMap.logos[aRank] || null;
     return { ...m, homeName, awayName, homeLogo, awayLogo };
-  }, [nameMap, leagueLevel, groupId, myClubName, myClubLogo, user?.uid]);
+  }, [nameMap, selectedLeagueId, leagueLevel, groupId, seasonNumber, rank, myClubName, myClubLogo, user?.uid]);
 
   const renderMatchCard = useCallback((raw: any, idx: number) => {
     const m = resolveMatchData(raw);
