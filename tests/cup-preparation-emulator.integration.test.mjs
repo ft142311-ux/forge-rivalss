@@ -188,6 +188,19 @@ test('prepared Season 2 receives its complete Pyramid Cup before publication in 
   assert.equal(retry.alreadyExists, true);
   assert.equal((await cupRef.get()).data().rounds.r1.length, 64);
 
+  // A retry must reject a participant registry that no longer matches the
+  // 120 clubs represented by round one, even when both records have valid counts.
+  const canonicalParticipants = (await cupRef.get()).data().participants;
+  const corruptedParticipants = canonicalParticipants.map(team => ({ ...team }));
+  corruptedParticipants[0].id = 'CORRUPTED_CUP_PARTICIPANT';
+  await cupRef.update({ participants: corruptedParticipants });
+  const membershipRetry = await preparePyramidCupForSeason(season);
+  assert.equal(membershipRetry.success, false);
+  assert.equal(membershipRetry.reason, 'CUP_PREPARED_BRACKET_MEMBERSHIP_INVALID');
+  await cupRef.update({ participants: canonicalParticipants });
+  const restoredMembershipRetry = await preparePyramidCupForSeason(season);
+  assert.equal(restoredMembershipRetry.success, true, JSON.stringify(restoredMembershipRetry));
+
   // The participant roster is frozen at generation. Even if a replaced bot's
   // live profile is retired by registration, its published Cup fixture remains playable.
   const firstPairing = firstRound[0];
