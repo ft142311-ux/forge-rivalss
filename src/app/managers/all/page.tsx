@@ -4,6 +4,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { useUser, useFirestore, useCollection, useMemoFirebase, useDoc, setDocumentNonBlocking } from '@/firebase';
+import { listPublicManagersAction } from '@/app/actions/public-managers';
 import { useGameState } from '@/app/lib/store';
 import { collection, query, orderBy, limit, where, doc, onSnapshot, getDocs, writeBatch } from 'firebase/firestore';
 import { 
@@ -52,6 +53,11 @@ export default function AllManagersPage() {
   const [sortOrder, setSortOrder] = useState<SortOrder>('desc');
   
   const [isActionProcessing, setIsActionProcessing] = useState(false);
+  const [managers, setManagers] = useState<any[]>([]);
+  const [isManagersLoading, setIsManagersLoading] = useState(true);
+  const [isLoadingMoreManagers, setIsLoadingMoreManagers] = useState(false);
+  const [managerCursor, setManagerCursor] = useState<string | null>(null);
+  const [managerDirectoryError, setManagerDirectoryError] = useState<string | null>(null);
   const [selectedManager, setSelectedManager] = useState<{id: string, name: string} | null>(null);
 
   const userRef = useMemoFirebase(() => {
@@ -61,15 +67,49 @@ export default function AllManagersPage() {
   
   const { data: profile } = useDoc(userRef);
 
-  const managersQuery = useMemoFirebase(() => {
-    if (!db) return null;
-    return query(
-      collection(db, 'players_v14'),
-      limit(100)
-    );
-  }, [db]);
+  useEffect(() => {
+    let cancelled = false;
+    async function loadFirstPage() {
+      if (!user) return;
+      setIsManagersLoading(true);
+      setManagerDirectoryError(null);
+      try {
+        const token = await user.getIdToken();
+        const result = await listPublicManagersAction(token);
+        if (cancelled) return;
+        if (!result.success) throw new Error(result.error);
+        setManagers(result.managers);
+        setManagerCursor(result.nextCursor);
+      } catch (error: any) {
+        if (cancelled) return;
+        setManagerDirectoryError(error?.message || 'MANAGER_DIRECTORY_UNAVAILABLE');
+      } finally {
+        if (!cancelled) setIsManagersLoading(false);
+      }
+    }
+    void loadFirstPage();
+    return () => { cancelled = true; };
+  }, [user]);
 
-  const { data: managers, isLoading: isManagersLoading } = useCollection(managersQuery);
+  const loadMoreManagers = async () => {
+    if (!user || !managerCursor || isLoadingMoreManagers) return;
+    setIsLoadingMoreManagers(true);
+    setManagerDirectoryError(null);
+    try {
+      const token = await user.getIdToken();
+      const result = await listPublicManagersAction(token, managerCursor);
+      if (!result.success) throw new Error(result.error);
+      setManagers((current) => {
+        const seen = new Set(current.map((manager) => manager.id));
+        return [...current, ...result.managers.filter((manager) => !seen.has(manager.id))];
+      });
+      setManagerCursor(result.nextCursor);
+    } catch (error: any) {
+      setManagerDirectoryError(error?.message || 'MANAGER_DIRECTORY_UNAVAILABLE');
+    } finally {
+      setIsLoadingMoreManagers(false);
+    }
+  };
 
   const assocsQuery = useMemoFirebase(() => {
     if (!db) return null;
@@ -389,8 +429,7 @@ export default function AllManagersPage() {
         ) : filteredAndSortedManagers.length > 0 ? (
           filteredAndSortedManagers.map((manager) => {
             const assocName = manager.associationId ? assocMap[manager.associationId] : null;
-            const mskNow = getMoscowTime();
-            const isEntryPremium = manager.premiumUntil && new Date(manager.premiumUntil).getTime() > mskNow.getTime();
+            const isEntryPremium = manager.isPremium === true;
             
             return (
               <div 
@@ -439,6 +478,23 @@ export default function AllManagersPage() {
           </div>
         )}
       </div>
+
+      {managerDirectoryError && (
+        <p role="alert" className="mt-3 text-xs text-destructive">
+          {language === 'ru' ? 'Не удалось загрузить каталог менеджеров.' : 'Could not load the manager directory.'}
+        </p>
+      )}
+      {managerCursor && !isManagersLoading && (
+        <Button
+          variant="outline"
+          className="w-full mt-4"
+          onClick={loadMoreManagers}
+          disabled={isLoadingMoreManagers}
+        >
+          {isLoadingMoreManagers ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
+          {language === 'ru' ? 'Загрузить ещё' : 'Load more'}
+        </Button>
+      )}
 
       <Dialog open={!!selectedManager} onOpenChange={() => setSelectedManager(null)}>
         <DialogContent className="max-w-md bg-background border-white/10 p-0 overflow-hidden shadow-2xl">
