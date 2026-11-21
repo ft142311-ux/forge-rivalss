@@ -14,7 +14,7 @@ import { doc, onSnapshot, setDoc, serverTimestamp } from 'firebase/firestore';
 import { claimDailyRewardAction, purchasePremiumAction } from '@/app/actions/economy';
 import { markMatchViewedAction } from '@/app/actions/match-report';
 import { createTrialMatchAction } from '@/app/actions/trial-match-resolver';
-import { startConstructionAction, accelerateConstructionAction, finalizeConstructionsAction } from '@/app/actions/infrastructure';
+import { startConstructionAction, startCapacityExpansionAction, accelerateConstructionAction, finalizeConstructionsAction } from '@/app/actions/infrastructure';
 import { updateLineupAction, startDailyTrainingAction, listPlayerOnMarketAction } from '@/app/actions/gameplay';
 import { setFoundationTrainingFocusAction } from '@/app/actions/foundation-management';
 import { useToast } from '@/hooks/use-toast';
@@ -114,7 +114,7 @@ interface GameState {
   startBootcampConstruction: (id: string, cost?: number) => Promise<boolean>;
   startAcademyConstruction: (id: string, cost?: number) => Promise<boolean>;
   startMedicalConstruction: (id: string, cost?: number) => Promise<boolean>;
-  startCapacityExpansion: (seats: number, cost: number) => boolean;
+  startCapacityExpansion: (seats: number) => Promise<boolean>;
   accelerateConstruction: (type: string, id: string, multiplier: number, price: number) => Promise<boolean>;
   checkConstructions: () => void;
   scoutCandidates: () => void;
@@ -181,7 +181,7 @@ const DEFAULT_STATE: GameState = {
   markMatchIdAsSeen: async () => {}, deleteMatchHistoryEntry: () => {}, clearMatchHistory: () => {},
   upgradeManagerSkill: () => {},
   startArenaConstruction: async () => false, startHQConstruction: async () => false, startBootcampConstruction: async () => false,
-  startAcademyConstruction: async () => false, startMedicalConstruction: async () => false, startCapacityExpansion: () => false,
+  startAcademyConstruction: async () => false, startMedicalConstruction: async () => false, startCapacityExpansion: async () => false,
   accelerateConstruction: async () => false, checkConstructions: () => {},
   scoutCandidates: () => {}, recruitCandidate: () => {}, clearScoutingReport: () => {},
   payStaffSalaries: async () => {}, healPlayer: () => {}, launchFanCampaign: () => {},
@@ -365,6 +365,23 @@ export function GameStateProvider({ children }: { children: ReactNode }) {
   }, [user?.uid, toast]);
 
   const startArenaConstruction = useCallback((id: string, _cost?: number) => startConstruction('arena', id), [startConstruction]);
+  const startCapacityExpansion = useCallback(async (seats: number): Promise<boolean> => {
+    if (!user?.uid) return false;
+    try {
+      const idToken = await user.getIdToken(true);
+      const res = await startCapacityExpansionAction(idToken, seats);
+      if (!res.success) {
+        toast({ variant: 'destructive', title: ('error' in res ? String(res.error) : 'CAPACITY_EXPANSION_FAILED') });
+        return false;
+      }
+      toast({ title: 'ARENA_EXPANSION_STARTED' });
+      return true;
+    } catch {
+      toast({ variant: 'destructive', title: 'CAPACITY_EXPANSION_FAILED' });
+      return false;
+    }
+  }, [user?.uid, toast]);
+
   const startHQConstruction = useCallback((id: string, _cost?: number) => startConstruction('hq', id), [startConstruction]);
   const startBootcampConstruction = useCallback((id: string, _cost?: number) => startConstruction('bootcamp', id), [startConstruction]);
   const startAcademyConstruction = useCallback((id: string, _cost?: number) => startConstruction('academy', id), [startConstruction]);
@@ -563,7 +580,7 @@ export function GameStateProvider({ children }: { children: ReactNode }) {
   const value = useMemo(() => ({
     ...state, 
     recordMatch, runTrialMatch, markMatchIdAsSeen, claimReward, purchasePremium, updateLineup, setTrainingFocus, startDailyPlayerTraining, assignToRole,
-    startArenaConstruction, startHQConstruction, startBootcampConstruction, startAcademyConstruction,
+    startArenaConstruction, startCapacityExpansion, startHQConstruction, startBootcampConstruction, startAcademyConstruction,
     startMedicalConstruction, accelerateConstruction, checkConstructions,
     addCrystals: () => console.warn("Client-side state write blocked by security policy."),
     addCredits: () => console.warn("Client-side state write blocked by security policy."),
