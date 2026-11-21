@@ -436,8 +436,24 @@ export async function preparePyramidCupForSeason(targetSeasonNumber: number) {
     return { success: false, reason: 'CUP_PREPARED_PARTICIPANT_SNAPSHOT_INVALID', cupId: ref.id };
   }
 
+  try {
+    assertValidCupRoundPairings(firstRound as Pairing[], 1);
+  } catch {
+    return { success: false, reason: 'CUP_PREPARED_BRACKET_PAIRINGS_INVALID', cupId: ref.id };
+  }
+  const orderedPairings = [...firstRound].sort((a: any, b: any) => Number(a.index) - Number(b.index));
+  if (orderedPairings.some((pairing: any, index: number) => {
+    const expectedIndex = index + 1;
+    const expectedPairingId = expectedIndex <= 56 ? `r1_m${expectedIndex}` : `r1_bye_${expectedIndex - 56}`;
+    return Number(pairing.index) !== expectedIndex || pairing.id !== expectedPairingId;
+  })) {
+    return { success: false, reason: 'CUP_PREPARED_BRACKET_PAIRINGS_INVALID', cupId: ref.id };
+  }
+
   const fixtures = firstRound.filter((pairing: any) => pairing?.home && pairing?.away);
-  if (fixtures.length !== 56) return { success: false, reason: 'CUP_PREPARED_FIXTURE_COUNT_INVALID', cupId: ref.id };
+  if (fixtures.length !== 56 || fixtures.some((pairing: any) =>
+    pairing.matchId !== matchId(targetSeasonNumber, 1, Number(pairing.index))
+  )) return { success: false, reason: 'CUP_PREPARED_FIXTURE_COUNT_INVALID', cupId: ref.id };
   const fixtureSnapshots = await Promise.all(fixtures.map((pairing: any) =>
     db.collection(MATCH_COLLECTIONS.cup).doc(matchId(targetSeasonNumber, 1, Number(pairing.index))).get()
   ));
@@ -455,9 +471,14 @@ export async function preparePyramidCupForSeason(targetSeasonNumber: number) {
     }
     const homeSnapshot = fixture.homeTeamSnapshot;
     const awaySnapshot = fixture.awayTeamSnapshot;
-    if (homeSnapshot?.id !== pairing.home.id || awaySnapshot?.id !== pairing.away.id ||
+    const homeParticipant = participantSnapshots[participants.findIndex((team: any) => team.id === pairing.home.id)]?.data()?.matchSnapshot;
+    const awayParticipant = participantSnapshots[participants.findIndex((team: any) => team.id === pairing.away.id)]?.data()?.matchSnapshot;
+    if (fixture.id !== pairing.matchId ||
+        homeSnapshot?.id !== pairing.home.id || awaySnapshot?.id !== pairing.away.id ||
         !Array.isArray(homeSnapshot?.players) || homeSnapshot.players.length !== 5 ||
-        !Array.isArray(awaySnapshot?.players) || awaySnapshot.players.length !== 5) {
+        !Array.isArray(awaySnapshot?.players) || awaySnapshot.players.length !== 5 ||
+        JSON.stringify(homeSnapshot) !== JSON.stringify(homeParticipant) ||
+        JSON.stringify(awaySnapshot) !== JSON.stringify(awayParticipant)) {
       return { success: false, reason: 'CUP_PREPARED_FIXTURE_SNAPSHOT_INVALID', matchId: fixture.id || null, cupId: ref.id };
     }
   }
