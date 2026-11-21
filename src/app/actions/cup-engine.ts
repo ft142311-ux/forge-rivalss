@@ -143,7 +143,11 @@ async function loadAllLeagueTeams(db: any, season: number): Promise<Team[]> {
     if (!Array.isArray(matchSnapshot.players) || matchSnapshot.players.length !== 5) {
       throw new Error(`CUP_PARTICIPANT_ROSTER_INVALID:${team.id}`);
     }
-    return { ...team, seed: index + 1, matchSnapshot };
+    // Firestore rejects undefined nested values (for example legacy tactics
+    // without lineSettings). Snapshot data is JSON-shaped and deliberately
+    // stripped of undefined optional fields before persistence.
+    const persistedMatchSnapshot = JSON.parse(JSON.stringify(matchSnapshot)) as MatchTeamSnapshot;
+    return { ...team, seed: index + 1, matchSnapshot: persistedMatchSnapshot };
   });
 }
 function publicTeam(team: Team | null) {
