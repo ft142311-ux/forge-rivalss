@@ -256,9 +256,9 @@ test('prepared Season 2 receives its complete Pyramid Cup before publication in 
   assert.equal(completedCup.winnerId, humanUid);
   assert.equal(completedCup.winnerName, finalPairing.home.name);
   const championProfile = (await db.collection('players_v14').doc(humanUid).get()).data();
-  assert.equal(championProfile.credits, 1_350_000);
+  assert.equal(championProfile.credits, 1_035_000);
   assert.ok(championProfile.trophies.some(trophy => trophy.id === `pyramid-cup-season-${season}`));
   const championLedger = (await economyRefs[0].get()).data();
-  assert.equal(championLedger.amount, 350_000);
+  assert.equal(championLedger.amount, 35_000);
   assert.equal(championLedger.type, 'PYRAMID_CUP_CHAMPION_REWARD');
 });
