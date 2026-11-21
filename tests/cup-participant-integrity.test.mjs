@@ -38,3 +38,23 @@ test('Pyramid Cup never fabricates a bot participant for an absent standings row
   assert.doesNotMatch(loader, /normalizeTeam\(byRank\.get\(rank\)/);
   assert.match(loader, /CUP_LEAGUE_STANDING_MISSING/);
 });
+
+test('Pyramid Cup freezes five-player participant snapshots at generation', () => {
+  assert.match(source, /buildMatchTeamSnapshot/);
+  assert.match(source, /CUP_PARTICIPANT_PROFILE_MISSING/);
+  assert.match(source, /CUP_PARTICIPANT_ROSTER_INVALID/);
+  assert.match(source, /matchSnapshot/);
+  assert.match(source, /homeTeamSnapshot: pairing\.home!\.matchSnapshot/);
+  assert.match(source, /awayTeamSnapshot: pairing\.away!\.matchSnapshot/);
+});
+
+test('prepared Cup verification rejects fixtures without matching frozen participant snapshots', () => {
+  const start = source.indexOf('export async function preparePyramidCupForSeason');
+  const end = source.indexOf('async function loadCup', start);
+  const preparation = source.slice(start, end);
+  assert.match(preparation, /CUP_PREPARED_FIXTURE_SNAPSHOT_INVALID/);
+  assert.match(preparation, /homeSnapshot\?\.id !== pairing\.home\.id/);
+  assert.match(preparation, /awaySnapshot\?\.id !== pairing\.away\.id/);
+  assert.match(preparation, /homeSnapshot\.players\.length !== 5/);
+  assert.match(preparation, /awaySnapshot\.players\.length !== 5/);
+});
