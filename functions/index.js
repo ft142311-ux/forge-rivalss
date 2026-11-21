@@ -317,7 +317,7 @@ exports.initializeClub = functions.region('us-central1').https.onCall(async (dat
           sub_full_support: startingSquad[9].id
         },
         staff: { coach: null }, strategy: "Balanced Play",
-        arena: { capacity: 5000 }, hq: {}, bootcamp: {}, academy: {}, medical: {}
+        arena: { capacity: 3000 }, hq: {}, bootcamp: {}, academy: {}, medical: {}
       };
       
       t.set(playerRef, initialState);
