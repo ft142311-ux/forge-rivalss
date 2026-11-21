@@ -55,6 +55,13 @@ export default function PyramidCupPage() {
   const { data: cupData, isLoading: isCupLoading } = useDoc(cupRef);
 
   useEffect(() => {
+    const currentRound = Number(cupData?.currentRound);
+    if (Number.isInteger(currentRound) && currentRound >= 1 && currentRound <= ROUND_COUNT) {
+      setActiveRound(currentRound);
+    }
+  }, [cupData?.id, cupData?.currentRound]);
+
+  useEffect(() => {
     if (!isUserLoading && !user) router.push('/auth/login');
   }, [user, isUserLoading, router]);
 
