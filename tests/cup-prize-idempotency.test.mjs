@@ -47,3 +47,16 @@ test('Pyramid Cup never pays bots and never creates a zero-value receipt', () =>
   assert.match(payout, /team\.id\.startsWith\('BOT_'\)/);
   assert.match(payout, /if \(amount <= 0\) return 0/);
 });
+
+test('Pyramid Cup champion receives one separate trophy in the same payout transaction; finalist receives none', () => {
+  const start = source.indexOf('async function payCupPrize');
+  const end = source.indexOf('async function finishTechnically', start);
+  const payout = source.slice(start, end);
+  assert.match(payout, /const trophyId = `pyramid-cup-season-\$\{season\}`/);
+  assert.match(payout, /const shouldAddTrophy = place === 'champion' && !hasPyramidCupTrophy/);
+  assert.match(payout, /type: 'pyramid_cup_champion'/);
+  assert.match(payout, /name: `Кубок Пирамиды — сезон \$\{season\}`/);
+  assert.match(payout, /trophies: \[\.\.\.existingTrophies/);
+  assert.match(payout, /tx\.update\(playerRef, \{/);
+  assert.match(payout, /tx\.create\(ledgerRef, \{/);
+});
