@@ -81,6 +81,7 @@ test('prepared Season 2 receives its complete Pyramid Cup before publication in 
         playerBatch.set(playerRef, {
           id,
           isBot: id.startsWith('BOT_'),
+          credits: 1_000_000,
           clubName: name,
           displayName: name,
           strategy: 'Balanced Play',
@@ -169,6 +170,14 @@ test('prepared Season 2 receives its complete Pyramid Cup before publication in 
   assert.equal(resolvedFixture.bestOf, 1);
   assert.equal(Number(resolvedFixture.scoreA) + Number(resolvedFixture.scoreB), 1);
   assert.equal(resolvedFixture.games.length, 1);
+  // The next assertions isolate bracket progression from the random winner
+  // produced by this single Match Core smoke test.
+  await db.collection(MATCH_COLLECTIONS.cup).doc(firstPairing.matchId).update({
+    winnerId: firstPairing.home.id,
+    scoreA: 1,
+    scoreB: 0,
+    seriesScore: '1-0',
+  });
 
   await configRef.set({
     activeSeasonNumber: season,
