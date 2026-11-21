@@ -371,6 +371,13 @@ export async function preparePyramidCupForSeason(targetSeasonNumber: number) {
         scheduledAtMs !== roundDate(context.seasonStart, ROUND_DAYS[0]).getTime()) {
       return { success: false, reason: 'CUP_PREPARED_FIXTURE_IDENTITY_INVALID', matchId: fixture.id || null, cupId: ref.id };
     }
+    const homeSnapshot = fixture.homeTeamSnapshot;
+    const awaySnapshot = fixture.awayTeamSnapshot;
+    if (homeSnapshot?.id !== pairing.home.id || awaySnapshot?.id !== pairing.away.id ||
+        !Array.isArray(homeSnapshot?.players) || homeSnapshot.players.length !== 5 ||
+        !Array.isArray(awaySnapshot?.players) || awaySnapshot.players.length !== 5) {
+      return { success: false, reason: 'CUP_PREPARED_FIXTURE_SNAPSHOT_INVALID', matchId: fixture.id || null, cupId: ref.id };
+    }
   }
   return {
     success: true,
