@@ -230,10 +230,10 @@ async function commitCupRoundTransition(
       teamId,
       snap: await tx.get(participantSnapshotRef(db, season, teamId)),
     })));
-    const participantSnapshotById = new Map(participantSnapshots.map(({ teamId, snap }) => [
+    const participantSnapshotById = new Map<string, MatchTeamSnapshot | null>(participantSnapshots.map(({ teamId, snap }) => [
       teamId,
       snap.exists ? (snap.data() || {}).matchSnapshot as MatchTeamSnapshot : null,
-    ]));
+    ] as const));
     for (const pairing of nextPairings) {
       if (pairing.home) pairing.home.matchSnapshot = participantSnapshotById.get(pairing.home.id) || undefined;
       if (pairing.away) pairing.away.matchSnapshot = participantSnapshotById.get(pairing.away.id) || undefined;
