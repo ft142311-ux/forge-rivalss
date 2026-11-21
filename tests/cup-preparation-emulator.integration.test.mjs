@@ -114,6 +114,14 @@ test('prepared Season 2 receives its complete Pyramid Cup before publication in 
   await Promise.all([tableBatch.commit(), playerBatch.commit()]);
   assert.equal(teamCount, 120);
 
+  // Capture every one of the 15 official league tables. Cup progression,
+  // match resolution and champion rewards must never mutate league standings.
+  const leagueTablesBeforeCup = await Promise.all(tableRefs.map(async ref => {
+    const snap = await ref.get();
+    assert.equal(snap.exists, true);
+    return JSON.stringify(snap.data());
+  }));
+
   const result = await preparePyramidCupForSeason(season);
   assert.equal(result.success, true, JSON.stringify(result));
   assert.equal(result.generated, true);
@@ -269,4 +277,12 @@ test('prepared Season 2 receives its complete Pyramid Cup before publication in 
   const championLedger = (await economyRefs[0].get()).data();
   assert.equal(championLedger.amount, 35_000);
   assert.equal(championLedger.type, 'PYRAMID_CUP_CHAMPION_REWARD');
+
+  const leagueTablesAfterCup = await Promise.all(tableRefs.map(async ref => {
+    const snap = await ref.get();
+    assert.equal(snap.exists, true);
+    return JSON.stringify(snap.data());
+  }));
+  assert.deepEqual(leagueTablesAfterCup, leagueTablesBeforeCup,
+    'Pyramid Cup matches and rewards must not change any of the 15 league tables');
 });
