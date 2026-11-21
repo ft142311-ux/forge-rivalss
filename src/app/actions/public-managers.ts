@@ -2,7 +2,7 @@
 
 import { getAdminDb } from '@/lib/firebase-admin';
 import { requireServerActor } from '@/lib/server-auth';
-import { isManagerOnline } from '../../../../functions/manager-presence-policy';
+import { isManagerOnline } from '../../../functions/manager-presence-policy';
 
 const PAGE_SIZE = 100;
 
