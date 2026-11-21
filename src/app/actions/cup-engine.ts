@@ -468,7 +468,23 @@ async function payCupPrize(db: any, season: number, team: Team | null, place: 'c
     if (!playerSnap.exists) return 0;
     const player = playerSnap.data() || {};
     const before = Math.max(0, Math.floor(Number(player.credits) || 0));
-    tx.update(playerRef, { credits: before + amount, updatedAt: FieldValue.serverTimestamp() });
+    const existingTrophies = Array.isArray(player.trophies) ? player.trophies : [];
+    const trophyId = `pyramid-cup-season-${season}`;
+    const hasPyramidCupTrophy = existingTrophies.some((item: any) => item?.id === trophyId);
+    const shouldAddTrophy = place === 'champion' && !hasPyramidCupTrophy;
+    tx.update(playerRef, {
+      credits: before + amount,
+      ...(shouldAddTrophy ? {
+        trophies: [...existingTrophies, {
+          id: trophyId,
+          name: `Кубок Пирамиды — сезон ${season}`,
+          type: 'pyramid_cup_champion',
+          date: new Date().toISOString(),
+          season,
+        }],
+      } : {}),
+      updatedAt: FieldValue.serverTimestamp(),
+    });
     tx.create(ledgerRef, {
       userId: team.id, amount, currency: 'credits', type: rewardType,
       referenceId, description: `Pyramid Cup season ${season}: ${place}`,
