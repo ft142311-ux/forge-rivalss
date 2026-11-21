@@ -228,8 +228,8 @@ test('prepared Season 2 receives its complete Pyramid Cup before publication in 
     ]);
     assert.equal([advanced.advanced, duplicate.advanced].reduce((sum, value) => sum + Number(value || 0), 0), 1,
       JSON.stringify({ round, advanced, duplicate }));
-    assert.equal([advanced.stale, duplicate.stale].filter(Boolean).length, 1,
-      JSON.stringify({ round, advanced, duplicate }));
+    // The second worker may observe either the stale old round or the newly
+    // committed next round; both are safe as long as it cannot advance twice.
     const nextCup = (await cupRef.get()).data();
     assert.equal(nextCup.currentRound, round + 1);
     const nextPairings = nextCup.rounds[`r${round + 1}`];
