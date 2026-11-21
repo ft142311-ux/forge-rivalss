@@ -32,3 +32,12 @@ test('Pyramid Cup opens on the currently active round instead of always resettin
   assert.match(source, /setActiveRound\(currentRound\)/);
   assert.match(source, /\[cupData\?\.id, cupData\?\.currentRound\]/);
 });
+
+test('completed Pyramid Cup prominently displays champion and finalist', () => {
+  assert.match(source, /cupData\.status === 'completed' && cupData\.winnerId/);
+  assert.match(source, /cupData\.winnerName \|\| cupData\.winnerId/);
+  assert.match(source, /cupData\.finalistId/);
+  assert.match(source, /cupData\.finalistName \|\| cupData\.finalistId/);
+  assert.match(source, /ЧЕМПИОН КУБКА ПИРАМИДЫ/);
+  assert.match(source, /ФИНАЛИСТ/);
+});
