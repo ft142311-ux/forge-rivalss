@@ -12,10 +12,16 @@ test('retiring and retired accounts fail the shared Firestore signed-in gate', (
   assert.match(signedInRule[1], /!exists\(/);
 });
 
-test('global chat Premium flag must match the authenticated manager profile', () => {
+test('global chat is server-created and Premium identity comes from the authenticated manager profile', () => {
   const chatRule = rules.match(/match \/global_chat_v2\/{msgId}\s*\{([\s\S]*?)\n    \}/);
   assert.ok(chatRule, 'global chat rule exists');
-  assert.match(chatRule[1], /request\.resource\.data\.isPremium\s*==\s*\([\s\S]*?players_v14\/\$\(request\.auth\.uid\)[\s\S]*?data\.isPremium\s*==\s*true/);
+  assert.match(chatRule[1], /allow create, update, delete: if false/);
+
+  const action = readFileSync(new URL('../src/app/actions/global-chat.ts', import.meta.url), 'utf8');
+  assert.match(action, /requireServerActor\(idToken\)/);
+  assert.match(action, /collection\('players_v14'\)\.doc\(actor\.uid\)/);
+  assert.match(action, /const isPremium = profile\.isPremium === true/);
+  assert.match(action, /isPremium,/);
 });
 
 test('only the friend-request recipient can accept a pending request', () => {

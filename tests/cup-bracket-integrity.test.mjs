@@ -26,3 +26,20 @@ test('corrupt or skipped Pyramid Cup rounds fail closed instead of advancing an 
   assert.ok(validate >= 0 && resolve > validate);
   assert.match(cycle, /CUP_CURRENT_ROUND_INVALID/);
 });
+
+test('Pyramid Cup seeding prioritizes division, then rank and group; stronger seed is away', () => {
+  assert.match(source, /return a\.level - b\.level \|\| a\.rank - b\.rank \|\| a\.group - b\.group/);
+  assert.match(source, /const eligible = teams\.slice\(8\)/);
+  assert.match(source, /for \(let i = 0; i < 56; i\+\+\) pairs\.push\(makePair/);
+  assert.match(source, /pairs\.push\(\{ id: `r1_bye_/);
+  assert.match(source, /The stronger team is always AWAY; weaker team is HOME/);
+  assert.match(source, /teams\[i\], teams\[teams\.length - 1 - i\]/);
+});
+
+test('Pyramid Cup BO1 has exactly one decisive game and the final remains BO3', () => {
+  const simulation = readFileSync(new URL('../src/app/lib/match-simulation.ts', import.meta.url), 'utf8');
+  assert.match(source, /bestOf: isFinal \? 3 : 1/);
+  assert.match(simulation, /const totalGames=bestOf===3\?3:bestOf/);
+  assert.match(simulation, /if\(g\.winner==='home'\)winsA\+\+;else winsB\+\+/);
+  assert.match(simulation, /const winnerSide=winsA>winsB\?'home':winsB>winsA\?'away':'draw'/);
+});

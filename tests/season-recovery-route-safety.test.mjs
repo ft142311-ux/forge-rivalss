@@ -22,6 +22,17 @@ test('legacy season recovery endpoints outside the canonical orchestrator are di
   }
 });
 
+test('manual Season 1 rollover recovery is restricted to the disposable local emulator', () => {
+  const source = read('src/app/api/cron/recover-season-rollover/route.ts');
+  const guard = source.indexOf("action: 'LOCAL_EMULATOR_ONLY'");
+  const database = source.indexOf('const db = getAdminDb()');
+  assert.ok(guard >= 0 && database > guard, 'non-emulator requests must be rejected before Firestore is accessed');
+  assert.match(source, /FIRESTORE_EMULATOR_HOST/);
+  assert.match(source, /projectId !== 'demo-forge-rivals'/);
+  assert.match(source, /writesStarted: false/);
+  assert.match(source, /sourceSeason !== 1/);
+});
+
 test('public staging health endpoint is uncached and does not expose backend exception details', () => {
   const source = read('src/app/api/health/route.ts');
   assert.match(source, /export const dynamic = 'force-dynamic'/);
@@ -29,4 +40,17 @@ test('public staging health endpoint is uncached and does not expose backend exc
   assert.match(source, /error: 'FIRESTORE_UNAVAILABLE'/);
   assert.match(source, /console\.error\('\[HEALTH CHECK FAILED\]:', error\)/);
   assert.doesNotMatch(source, /error:\s*error\.message/);
+});
+
+test('disposable Season 1 preparation action is locally fenced before Firestore access', () => {
+  const source = read('src/app/actions/season-cycle.ts');
+  const start = source.indexOf('export async function finishTestSeason1AndPrepareSeason2()');
+  assert.ok(start >= 0, 'disposable recovery action must remain explicit');
+  const body = source.slice(start);
+  const guard = body.indexOf("action: 'LOCAL_EMULATOR_ONLY'");
+  const database = body.indexOf('const db = getAdminDb()');
+  assert.ok(guard >= 0 && database > guard, 'non-emulator calls must be rejected before Firestore is accessed');
+  assert.match(body, /FIRESTORE_EMULATOR_HOST/);
+  assert.match(body, /projectId !== 'demo-forge-rivals'/);
+  assert.match(body, /writesStarted: false/);
 });

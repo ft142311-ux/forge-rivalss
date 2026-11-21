@@ -5,10 +5,24 @@ import { isCronAuthorized } from '../cron-auth';
 
 export const maxDuration = 300;
 
-/** One-purpose recovery endpoint. Does not run daily settlement, tournaments, or calendar activation. */
+/**
+ * One-purpose recovery endpoint for the disposable local Season 1 world.
+ * It must never mutate a shared staging or Production Firestore project.
+ */
 export async function POST(request: Request) {
   if (!isCronAuthorized(request)) {
     return new NextResponse('Unauthorized', { status: 401 });
+  }
+
+  const emulatorHost = process.env.FIRESTORE_EMULATOR_HOST || '';
+  const projectId = process.env.GCLOUD_PROJECT || process.env.GOOGLE_CLOUD_PROJECT || '';
+  if (!/^(127[.]0[.]0[.]1|localhost):[0-9]+$/.test(emulatorHost) || projectId !== 'demo-forge-rivals') {
+    return NextResponse.json({
+      success: false,
+      readOnly: true,
+      action: 'LOCAL_EMULATOR_ONLY',
+      writesStarted: false,
+    }, { status: 404 });
   }
 
   try {

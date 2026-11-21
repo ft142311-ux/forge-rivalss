@@ -176,3 +176,55 @@ test('Firebase scheduled market expiry sweep runs every five minutes with the sh
   assert.match(scheduledFunction, /invokeMarketExpirySweep\(/);
   assert.match(scheduledFunction, /maxInstances:\s*1/);
 });
+
+
+test('tournament scheduler derives the protected tournaments route from the validated App Hosting URL', async () => {
+  let requestedUrl;
+  let requestedOptions;
+  const result = await scheduler.invokeTournamentSweep({
+    seasonOrchestratorUrl: url,
+    secret,
+    fetchImpl: async (target, options) => {
+      requestedUrl = target;
+      requestedOptions = options;
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ success: true, pyramidCup: { generated: true, cupId: 'cup_s1_lALPHA' } }),
+      };
+    },
+  });
+  assert.equal(requestedUrl, 'https://forge-rivals.example.com/api/cron/tournaments');
+  assert.equal(requestedOptions.method, 'GET');
+  assert.equal(requestedOptions.headers.authorization, `Bearer ${secret}`);
+  assert.equal(requestedOptions.redirect, 'error');
+  assert.deepEqual(result, {
+    success: true,
+    status: 200,
+    pyramidCup: { generated: true, cupId: 'cup_s1_lALPHA' },
+  });
+});
+
+test('tournament scheduler rejects failed HTTP and unsuccessful route responses', async () => {
+  await assert.rejects(scheduler.invokeTournamentSweep({
+    seasonOrchestratorUrl: url, secret,
+    fetchImpl: async () => ({ ok: false, status: 503, json: async () => ({ success: false }) }),
+  }), /TOURNAMENT_SWEEP_HTTP_503/);
+  await assert.rejects(scheduler.invokeTournamentSweep({
+    seasonOrchestratorUrl: url, secret,
+    fetchImpl: async () => ({ ok: true, status: 200, json: async () => ({ success: false }) }),
+  }), /TOURNAMENT_SWEEP_UNSUCCESSFUL/);
+});
+
+test('Firebase scheduled tournament and Pyramid Cup sweep runs every five minutes with the shared secret', () => {
+  const source = readFileSync(new URL('../functions/index.js', import.meta.url), 'utf8');
+  const start = source.indexOf('exports.runTournamentSweep = functions');
+  assert.notEqual(start, -1);
+  const scheduledFunction = source.slice(start);
+  assert.match(scheduledFunction, /\.schedule\('every 5 minutes'\)/);
+  assert.match(scheduledFunction, /\.timeZone\('UTC'\)/);
+  assert.match(scheduledFunction, /secrets:\s*\['CRON_SECRET'\]/);
+  assert.match(scheduledFunction, /process\.env\.SEASON_ORCHESTRATOR_URL/);
+  assert.match(scheduledFunction, /invokeTournamentSweep\(/);
+  assert.match(scheduledFunction, /maxInstances:\s*1/);
+});

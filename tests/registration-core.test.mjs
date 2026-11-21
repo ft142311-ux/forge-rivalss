@@ -1,12 +1,17 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  DEFAULT_ARENA_CAPACITY,
   isEligibleRegistrationSlot,
   validateRegistrationSchedule,
   generateStartingSquad,
   transferBotStandingToUser,
   buildRegistrationMatchPlan,
 } from '../functions/registration-core.js';
+
+test('new clubs start with the canonical 3,000-seat arena capacity', () => {
+  assert.equal(DEFAULT_ARENA_CAPACITY, 3000);
+});
 
 function createRoundRobin(botRank = 3, botId = 'bot-3') {
   const ids = Array.from({ length: 8 }, (_, index) =>

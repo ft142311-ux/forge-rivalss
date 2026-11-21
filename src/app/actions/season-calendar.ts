@@ -4,6 +4,7 @@ import { FieldValue } from 'firebase-admin/firestore';
 import { commitSeasonActivation } from './season-activation-commit';
 import { completeSeasonHistoryCleanup } from './season-history-cleanup';
 import { prepareSeasonRollover } from './season-rollover';
+import { preparePyramidCupForSeason } from './cup-engine';
 import { acquireSeasonCalendarBuildLock, assertSeasonCalendarBuildLock, commitSeasonCalendarPublication, commitSeasonCalendarWrites, commitSeasonHistoryCleanupWrites, releaseSeasonCalendarBuildLock } from './season-rollover-lock';
 import { buildCarryForwardGroups, buildPromotionRelegationGroups, compareRecoveryRolloverPlans, resolveRecoveryPlacementSource, resolveRolloverPlanPruneIds, validateRolloverPlan } from './season-rollover-plan';
 import { getRecoveryRolloverPlanSignature } from './season-rollover-plan-signature';
@@ -1412,6 +1413,12 @@ export async function publishPreparedSeason() {
   if (!Number.isSafeInteger(targetSeason) || (targetSeason !== sourceSeason + 1 && !multiSeasonRecovery)) {
     return { success: false, action: 'WORLD_NOT_READY', reason: 'INVALID_PUBLICATION_TARGET', sourceSeason, targetSeason };
   }
+  // Enforce the Cup prerequisite at the publication boundary itself, not
+  // only in the scheduler. Direct callers and retries must not bypass it.
+  const cupPreparation = await preparePyramidCupForSeason(targetSeason);
+  if (cupPreparation.success !== true) {
+    return { success: false, action: 'WORLD_BUILDING', reason: 'PYRAMID_CUP_PREPARATION_BLOCKED', cupPreparation, sourceSeason, targetSeason, writesStarted: false };
+  }
   if (initial.preparedPublished === true && Number(initial.preparedSeasonNumber) === targetSeason) {
     const planRef = db.collection('league_season_rollovers_v1').doc(`S${targetSeason}`);
     const [planSnap, readiness] = await Promise.all([
@@ -1634,6 +1641,12 @@ export async function activatePublishedSeason() {
   const multiSeasonRecovery = recoveryMode && targetSeason > sourceSeason + 1;
   if (!Number.isSafeInteger(targetSeason) || (targetSeason !== sourceSeason + 1 && !multiSeasonRecovery)) {
     return { success: false, action: 'WORLD_NOT_READY', reason: 'INVALID_ACTIVATION_TARGET', sourceSeason, targetSeason };
+  }
+  // Revalidate immediately before activation as well: a Cup removed or
+  // corrupted after publication must block the season boundary.
+  const cupPreparation = await preparePyramidCupForSeason(targetSeason);
+  if (cupPreparation.success !== true) {
+    return { success: false, action: 'WORLD_NOT_READY', reason: 'PYRAMID_CUP_PREPARATION_BLOCKED', cupPreparation, sourceSeason, targetSeason, writesStarted: false };
   }
   if (initial.preparedPublished !== true || initial.preparedWorldReady !== true ||
       Number(initial.preparedSeasonNumber) !== targetSeason || initial.worldReady !== true) {

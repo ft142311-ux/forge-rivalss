@@ -6,6 +6,7 @@ on:
       - hosting/vercel-free-staging
       - hosting/vercel-staging
       - feature/season-lifecycle-autonomy
+      - feature/staging-safe-world-bootstrap
   pull_request:
     branches:
       - hosting/vercel-free-staging
@@ -51,6 +52,9 @@ jobs:
 
       - name: Firestore emulator registration transactions
         run: npm run test:registration:emulator
+
+      - name: Pyramid Cup prepared-season emulator scenario
+        run: npm run test:cup:emulator
 
       - name: Production build
         run: npm run build

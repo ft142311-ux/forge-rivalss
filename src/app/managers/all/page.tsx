@@ -4,6 +4,8 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { useUser, useFirestore, useCollection, useMemoFirebase, useDoc, setDocumentNonBlocking } from '@/firebase';
+import { listPublicManagersAction } from '@/app/actions/public-managers';
+import { getPublicManagerPresenceAction } from '@/app/actions/manager-presence';
 import { useGameState } from '@/app/lib/store';
 import { collection, query, orderBy, limit, where, doc, onSnapshot, getDocs, writeBatch } from 'firebase/firestore';
 import { 
@@ -33,7 +35,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { cn } from '@/lib/utils';
-import { getMoscowTime } from '@/app/lib/time-utils';
 
 type MembershipFilter = 'all' | 'in_assoc' | 'free';
 type SortField = 'level' | 'date';
@@ -52,6 +53,11 @@ export default function AllManagersPage() {
   const [sortOrder, setSortOrder] = useState<SortOrder>('desc');
   
   const [isActionProcessing, setIsActionProcessing] = useState(false);
+  const [managers, setManagers] = useState<any[]>([]);
+  const [isManagersLoading, setIsManagersLoading] = useState(true);
+  const [isLoadingMoreManagers, setIsLoadingMoreManagers] = useState(false);
+  const [managerCursor, setManagerCursor] = useState<string | null>(null);
+  const [managerDirectoryError, setManagerDirectoryError] = useState<string | null>(null);
   const [selectedManager, setSelectedManager] = useState<{id: string, name: string} | null>(null);
 
   const userRef = useMemoFirebase(() => {
@@ -61,15 +67,111 @@ export default function AllManagersPage() {
   
   const { data: profile } = useDoc(userRef);
 
-  const managersQuery = useMemoFirebase(() => {
-    if (!db) return null;
-    return query(
-      collection(db, 'players_v14'),
-      limit(100)
-    );
-  }, [db]);
+  useEffect(() => {
+    let cancelled = false;
+    async function loadFirstPage() {
+      if (!user) return;
+      setIsManagersLoading(true);
+      setManagerDirectoryError(null);
+      try {
+        const token = await user.getIdToken();
+        const result = await listPublicManagersAction(token);
+        if (cancelled) return;
+        if (!result.success) throw new Error(result.error);
+        setManagers(result.managers);
+        setManagerCursor(result.nextCursor);
+      } catch (error: any) {
+        if (cancelled) return;
+        setManagerDirectoryError(error?.message || 'MANAGER_DIRECTORY_UNAVAILABLE');
+      } finally {
+        if (!cancelled) setIsManagersLoading(false);
+      }
+    }
+    void loadFirstPage();
+    return () => { cancelled = true; };
+  }, [user]);
 
-  const { data: managers, isLoading: isManagersLoading } = useCollection(managersQuery);
+  const loadMoreManagers = async () => {
+    if (!user || !managerCursor || isLoadingMoreManagers) return;
+    setIsLoadingMoreManagers(true);
+    setManagerDirectoryError(null);
+    try {
+      const token = await user.getIdToken();
+      const result = await listPublicManagersAction(token, managerCursor);
+      if (!result.success) throw new Error(result.error);
+      setManagers((current) => {
+        const seen = new Set(current.map((manager) => manager.id));
+        return [...current, ...result.managers.filter((manager) => !seen.has(manager.id))];
+      });
+      setManagerCursor(result.nextCursor);
+    } catch (error: any) {
+      setManagerDirectoryError(error?.message || 'MANAGER_DIRECTORY_UNAVAILABLE');
+    } finally {
+      setIsLoadingMoreManagers(false);
+    }
+  };
+
+  const managerIdsKey = useMemo(() => managers.map((manager) => manager.id).join('|'), [managers]);
+
+  // Refresh derived online state while the directory is visible. Heartbeats
+  // expire after two minutes, so a one-minute refresh keeps status responsive
+  // without exposing raw timestamps or opening client access to presence docs.
+  useEffect(() => {
+    if (!user || !managerIdsKey) return;
+    const managerIds = managerIdsKey.split('|').filter(Boolean);
+    let active = true;
+    let inFlight = false;
+
+    const refreshPresence = async () => {
+      if (!active || inFlight || document.visibilityState !== 'visible') return;
+      inFlight = true;
+      try {
+        const idToken = await user.getIdToken();
+        const chunks: string[][] = [];
+        for (let index = 0; index < managerIds.length; index += 100) {
+          chunks.push(managerIds.slice(index, index + 100));
+        }
+        const results = await Promise.all(
+          chunks.map((ids) => getPublicManagerPresenceAction(idToken, ids))
+        );
+        if (!active) return;
+
+        const onlineById = new Map<string, boolean>();
+        for (const result of results) {
+          if (!result.success) throw new Error(result.error);
+          result.presence.forEach((entry) => onlineById.set(entry.id, entry.isOnline));
+        }
+
+        setManagers((current) => {
+          let changed = false;
+          const next = current.map((manager) => {
+            const isOnline = onlineById.get(manager.id) === true;
+            if (manager.isOnline === isOnline) return manager;
+            changed = true;
+            return { ...manager, isOnline };
+          });
+          return changed ? next : current;
+        });
+      } catch (error) {
+        console.warn('[MANAGER DIRECTORY] Presence refresh failed:', error);
+      } finally {
+        inFlight = false;
+      }
+    };
+
+    void refreshPresence();
+    const interval = window.setInterval(() => { void refreshPresence(); }, 60_000);
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') void refreshPresence();
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [user, managerIdsKey]);
 
   const assocsQuery = useMemoFirebase(() => {
     if (!db) return null;
@@ -215,7 +317,9 @@ export default function AllManagersPage() {
       pmDesc: "Direct encrypted transmission",
       close: "CLOSE",
       lvl: "Ур",
-      offline: "OFFLINE: Database access restricted."
+      offline: "OFFLINE: Database access restricted.",
+      presenceOnline: "ONLINE",
+      presenceOffline: "OFFLINE"
     },
     ru: {
       title: "ВСЕ МЕНЕДЖЕРЫ",
@@ -242,7 +346,9 @@ export default function AllManagersPage() {
       pmDesc: "Прямая зашифрованная связь",
       close: "ЗАКРЫТЬ",
       lvl: "Ур",
-      offline: "ОФЛАЙН: Доступ к базе ограничен."
+      offline: "ОФЛАЙН: Доступ к базе ограничен.",
+      presenceOnline: "В СЕТИ",
+      presenceOffline: "НЕ В СЕТИ"
     }
   };
 
@@ -389,8 +495,7 @@ export default function AllManagersPage() {
         ) : filteredAndSortedManagers.length > 0 ? (
           filteredAndSortedManagers.map((manager) => {
             const assocName = manager.associationId ? assocMap[manager.associationId] : null;
-            const mskNow = getMoscowTime();
-            const isEntryPremium = manager.premiumUntil && new Date(manager.premiumUntil).getTime() > mskNow.getTime();
+            const isEntryPremium = manager.isPremium === true;
             
             return (
               <div 
@@ -416,6 +521,16 @@ export default function AllManagersPage() {
                       )}
                       {manager.id === user.uid && <Badge className="text-[7px] bg-primary text-primary-foreground">YOU</Badge>}
                     </div>
+                    <span
+                      className="inline-flex items-center gap-1 text-[8px] font-bold uppercase tracking-wider"
+                      aria-label={manager.isOnline ? t.presenceOnline : t.presenceOffline}
+                      title={manager.isOnline ? t.presenceOnline : t.presenceOffline}
+                    >
+                      <span className={cn("h-1.5 w-1.5 rounded-full", manager.isOnline ? "bg-emerald-400" : "bg-muted-foreground/40")} />
+                      <span className={manager.isOnline ? "text-emerald-400" : "text-muted-foreground/50"}>
+                        {manager.isOnline ? t.presenceOnline : t.presenceOffline}
+                      </span>
+                    </span>
                     <span className={cn(
                       "text-[9px] font-black uppercase tracking-tight",
                       assocName ? "text-primary" : "text-muted-foreground/40"
@@ -439,6 +554,23 @@ export default function AllManagersPage() {
           </div>
         )}
       </div>
+
+      {managerDirectoryError && (
+        <p role="alert" className="mt-3 text-xs text-destructive">
+          {language === 'ru' ? 'Не удалось загрузить каталог менеджеров.' : 'Could not load the manager directory.'}
+        </p>
+      )}
+      {managerCursor && !isManagersLoading && (
+        <Button
+          variant="outline"
+          className="w-full mt-4"
+          onClick={loadMoreManagers}
+          disabled={isLoadingMoreManagers}
+        >
+          {isLoadingMoreManagers ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
+          {language === 'ru' ? 'Загрузить ещё' : 'Load more'}
+        </Button>
+      )}
 
       <Dialog open={!!selectedManager} onOpenChange={() => setSelectedManager(null)}>
         <DialogContent className="max-w-md bg-background border-white/10 p-0 overflow-hidden shadow-2xl">
