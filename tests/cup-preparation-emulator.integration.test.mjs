@@ -200,7 +200,9 @@ test('prepared Season 2 receives its complete Pyramid Cup before publication in 
     const nextPairings = nextCup.rounds[`r${round + 1}`];
     assert.equal(nextPairings.filter(value => value.home && value.away).length, EXPECTED_MATCHES[round + 1]);
     for (const pairing of nextPairings.filter(value => value.home && value.away)) {
-      const nextFixture = await db.collection(MATCH_COLLECTIONS.cup).doc(pairing.matchId).get();
+      const nextFixtureRef = db.collection(MATCH_COLLECTIONS.cup).doc(pairing.matchId);
+      fixtureRefs.push(nextFixtureRef);
+      const nextFixture = await nextFixtureRef.get();
       assert.equal(nextFixture.exists, true);
       assert.equal(nextFixture.data().homeTeamSnapshot.players.length, 5);
       assert.equal(nextFixture.data().awayTeamSnapshot.players.length, 5);
