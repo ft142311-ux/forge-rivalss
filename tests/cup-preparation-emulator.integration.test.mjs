@@ -130,6 +130,14 @@ test('prepared Season 2 receives its complete Pyramid Cup before publication in 
   assert.equal(result.byes, 8);
   assert.equal(result.scheduledAt, expectedFirstKickoff.toISOString(), 'preliminary cup round must follow league Tour 1 at 07:00 Moscow time');
 
+  // Preparing the next season's Cup must not publish or activate that season.
+  const configAfterCupPreparation = (await configRef.get()).data();
+  assert.equal(configAfterCupPreparation.activeSeasonNumber, 1);
+  assert.equal(configAfterCupPreparation.preparedSeasonNumber, season);
+  assert.equal(configAfterCupPreparation.preparedWorldReady, true);
+  assert.equal(configAfterCupPreparation.preparedPublished, false);
+  assert.equal(configAfterCupPreparation.phase, 'GENERATING_NEXT');
+
   const cupSnap = await cupRef.get();
   assert.equal(cupSnap.exists, true);
   const cup = cupSnap.data();
