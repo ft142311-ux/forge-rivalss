@@ -394,6 +394,27 @@ export async function preparePyramidCupForSeason(targetSeasonNumber: number) {
     return { success: false, reason: 'CUP_PREPARED_BRACKET_INVALID', cupId: ref.id };
   }
 
+  // The public participant registry and round-one bracket are two persisted
+  // representations of the same field. Verify they contain exactly the same
+  // 120 clubs, with the eight strongest seeds receiving the eight BYEs.
+  const participantIds = new Set(participants.map((team: any) => String(team?.id || '')));
+  const bracketTeamIds = new Set(firstRound.flatMap((pairing: any) =>
+    [pairing?.home?.id, pairing?.away?.id].filter((id: any) => typeof id === 'string' && id.length > 0)
+  ));
+  const orderedParticipants = [...participants].sort(compareStrength);
+  const byeIds = new Set(firstRound.filter((pairing: any) => pairing?.status === 'bye')
+    .map((pairing: any) => String(pairing?.home?.id || '')));
+  const expectedByeIds = new Set(orderedParticipants.slice(0, 8).map((team: any) => String(team?.id || '')));
+  if (participantIds.size !== TOTAL_TEAMS || bracketTeamIds.size !== TOTAL_TEAMS ||
+      [...participantIds].some(id => !bracketTeamIds.has(id)) ||
+      [...bracketTeamIds].some(id => !participantIds.has(id)) ||
+      participants.some((team: any) => !Number.isSafeInteger(Number(team?.seed)) || Number(team.seed) < 1 || Number(team.seed) > TOTAL_TEAMS) ||
+      new Set(participants.map((team: any) => Number(team?.seed))).size !== TOTAL_TEAMS ||
+      byeIds.size !== 8 || [...expectedByeIds].some(id => !byeIds.has(id)) ||
+      [...byeIds].some(id => !expectedByeIds.has(id))) {
+    return { success: false, reason: 'CUP_PREPARED_BRACKET_MEMBERSHIP_INVALID', cupId: ref.id };
+  }
+
   // Verify every frozen participant snapshot, including the eight D1 BYE
   // teams that do not appear in a preliminary fixture. Fixture-only checks
   // would otherwise miss a partially deleted participant snapshot collection.
