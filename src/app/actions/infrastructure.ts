@@ -116,7 +116,7 @@ export async function startCapacityExpansionAction(idToken: string, seats: numbe
       const starts = { ...(arena.constructionStarts || {}) };
       const now = Date.now();
 
-      for (const [activeId, finish] of Object.entries(finishes)) {
+      for (const finish of Object.values(finishes)) {
         const finishMs = new Date(String(finish)).getTime();
         if (!Number.isFinite(finishMs)) throw new Error('INVALID_CONSTRUCTION_STATE');
         if (finishMs <= now) throw new Error('CONSTRUCTION_COMPLETION_PENDING');
