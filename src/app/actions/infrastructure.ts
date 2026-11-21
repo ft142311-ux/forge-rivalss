@@ -244,13 +244,14 @@ export async function finalizeConstructionsAction(idToken: string) {
         const starts = { ...(state.constructionStarts || {}) };
         const targets = { ...(state.constructionTargets || {}) };
         const accelerated = { ...(state.isAccelerated || {}) };
+        const details = { ...(state.constructionDetails || {}) };
         let changed = false;
 
         for (const [id, finish] of Object.entries(finishes)) {
           if (new Date(String(finish)).getTime() > now) continue;
           const target = Number(targets[id] || Number(state[id] || 0) + 1);
           state[id] = target;
-          delete finishes[id]; delete starts[id]; delete targets[id]; delete accelerated[id];
+          delete finishes[id]; delete starts[id]; delete targets[id]; delete accelerated[id]; delete details[id];
           changed = true;
         }
 
@@ -259,6 +260,7 @@ export async function finalizeConstructionsAction(idToken: string) {
           state.constructionStarts = starts;
           state.constructionTargets = targets;
           state.isAccelerated = accelerated;
+          state.constructionDetails = details;
           updates[section] = state;
         }
       }
