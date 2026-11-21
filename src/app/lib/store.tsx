@@ -374,7 +374,6 @@ export function GameStateProvider({ children }: { children: ReactNode }) {
         toast({ variant: 'destructive', title: ('error' in res ? String(res.error) : 'CAPACITY_EXPANSION_FAILED') });
         return false;
       }
-      toast({ title: 'ARENA_EXPANSION_STARTED' });
       return true;
     } catch {
       toast({ variant: 'destructive', title: 'CAPACITY_EXPANSION_FAILED' });
