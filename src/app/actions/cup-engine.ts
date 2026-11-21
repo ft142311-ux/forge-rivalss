@@ -358,7 +358,7 @@ export async function preparePyramidCupForSeason(targetSeasonNumber: number) {
     participants: participants.length,
     preliminaryMatches: fixtures.length,
     byes: 8,
-    scheduledAt: context.seasonStart.toISOString(),
+    scheduledAt: roundDate(context.seasonStart, ROUND_DAYS[0]).toISOString(),
   };
 }
 
