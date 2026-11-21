@@ -14,6 +14,7 @@ const BLOCKED_ACTIONS = new Set([
   'WAITING_FOR_SEASON_RESULTS',
   'ACTIVATION_BLOCKED',
   'PUBLICATION_BLOCKED',
+  'PYRAMID_CUP_PREPARATION_BLOCKED',
 ]);
 
 export function isSeasonOrchestratorSuccessful(result: any) {
@@ -30,6 +31,6 @@ export function isSeasonOrchestratorSuccessful(result: any) {
     && result?.activation?.historyCleanup?.pending !== true;
 }
 
-export function cronResultStatus(result: { success?: boolean }) {
+export function cronResultStatus(result: any) {
   return result.success === true ? 200 : 409;
 }
