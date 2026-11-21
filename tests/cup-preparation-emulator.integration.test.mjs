@@ -22,6 +22,7 @@ test('prepared Season 2 receives its complete Pyramid Cup before publication in 
   ]);
   const db = getAdminDb();
   const season = 2;
+  const humanUid = 'USER_CUP_TEST_S2_D4_G8_R8';
   const seasonStart = new Date(Date.now() + 24 * 60 * 60 * 1000);
   const expectedFirstKickoff = new Date(seasonStart.getTime() + 86400000);
   expectedFirstKickoff.setUTCHours(4, 0, 0, 0);
@@ -31,6 +32,9 @@ test('prepared Season 2 receives its complete Pyramid Cup before publication in 
   const fixtureRefs = [];
   const playerRefs = [];
   const participantSnapshotRefs = [];
+  const economyRefs = [
+    db.collection('economy_transactions').doc(`pyramid_cup_S${season}_champion_${humanUid}`),
+  ];
 
   for (let level = 1; level <= MAX_LEVELS; level++) {
     for (let group = 1; group <= Math.pow(2, level - 1); group++) {
@@ -41,7 +45,7 @@ test('prepared Season 2 receives its complete Pyramid Cup before publication in 
 
   t.after(async () => {
     const batch = db.batch();
-    [configRef, cupRef, ...tableRefs, ...fixtureRefs, ...playerRefs, ...participantSnapshotRefs].forEach(ref => batch.delete(ref));
+    [configRef, cupRef, ...tableRefs, ...fixtureRefs, ...playerRefs, ...participantSnapshotRefs, ...economyRefs].forEach(ref => batch.delete(ref));
     await batch.commit().catch(() => undefined);
     const app = getApps().find(candidate => candidate.name === '[DEFAULT]');
     if (app) await deleteApp(app).catch(() => undefined);
@@ -65,16 +69,18 @@ test('prepared Season 2 receives its complete Pyramid Cup before publication in 
     for (let group = 1; group <= Math.pow(2, level - 1); group++) {
       const stats = {};
       for (let rank = 1; rank <= TEAMS_PER_GROUP; rank++) {
-        const id = `BOT_CUP_TEST_S${season}_D${level}_G${group}_R${rank}`;
+        const id = level === 4 && group === 8 && rank === 8
+          ? humanUid
+          : `BOT_CUP_TEST_S${season}_D${level}_G${group}_R${rank}`;
         const name = `Test D${level} G${group} R${rank}`;
-        stats[id] = { id, name, rank, isBot: true };
+        stats[id] = { id, name, rank, isBot: id.startsWith('BOT_') };
         const playerRef = db.collection('players_v14').doc(id);
         playerRefs.push(playerRef);
         participantSnapshotRefs.push(db.collection('cup_participant_snapshots_v1').doc(cupRef.id).collection('teams').doc(id));
         const roles = ['Carry', 'Midlaner', 'Tank', 'Jungler', 'Support'];
         playerBatch.set(playerRef, {
           id,
-          isBot: true,
+          isBot: id.startsWith('BOT_'),
           clubName: name,
           displayName: name,
           strategy: 'Balanced Play',
@@ -154,10 +160,8 @@ test('prepared Season 2 receives its complete Pyramid Cup before publication in 
   // The participant roster is frozen at generation. Even if a replaced bot's
   // live profile is retired by registration, its published Cup fixture remains playable.
   const firstPairing = firstRound[0];
-  await Promise.all([
-    db.collection('players_v14').doc(firstPairing.home.id).delete(),
-    db.collection('players_v14').doc(firstPairing.away.id).delete(),
-  ]);
+  assert.equal(firstPairing.home.id, humanUid, 'the weakest seed should be home against the strongest eligible seed');
+  await db.collection('players_v14').doc(firstPairing.away.id).delete();
   const resolved = await resolveUniversalMatchDocument(firstPairing.matchId, { collectionName: MATCH_COLLECTIONS.cup });
   assert.equal(resolved.finished, true, JSON.stringify(resolved));
   const resolvedFixture = (await db.collection(MATCH_COLLECTIONS.cup).doc(firstPairing.matchId).get()).data();
@@ -231,5 +235,12 @@ test('prepared Season 2 receives its complete Pyramid Cup before publication in 
   const completedCup = (await cupRef.get()).data();
   assert.equal(completedCup.status, 'completed');
   assert.equal(completedCup.winnerId, finalPairing.home.id);
+  assert.equal(completedCup.winnerId, humanUid);
   assert.equal(completedCup.winnerName, finalPairing.home.name);
+  const championProfile = (await db.collection('players_v14').doc(humanUid).get()).data();
+  assert.equal(championProfile.credits, 1_350_000);
+  assert.ok(championProfile.trophies.some(trophy => trophy.id === `pyramid-cup-season-${season}`));
+  const championLedger = (await economyRefs[0].get()).data();
+  assert.equal(championLedger.amount, 350_000);
+  assert.equal(championLedger.type, 'PYRAMID_CUP_CHAMPION_REWARD');
 });
