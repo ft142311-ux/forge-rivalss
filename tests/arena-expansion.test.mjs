@@ -25,6 +25,20 @@ test('50,000-seat expansion matches the approved maximum price and duration', ()
   assert.equal(quote.durationMs, 110 * 24 * 60 * 60 * 1000);
 });
 
+test('extended duration schedule preserves the published intermediate checkpoints', () => {
+  const expected = [
+    [3000, 44],
+    [3500, 54],
+    [5000, 85],
+    [10000, 200],
+    [25000, 719],
+    [50000, 2640],
+  ];
+  for (const [seats, hours] of expected) {
+    assert.equal(getArenaExpansionQuote(seats).durationHours, hours);
+  }
+});
+
 test('larger expansions have strictly increasing price and duration', () => {
   let previous = getArenaExpansionQuote(500);
   for (let seats = 1000; seats <= ARENA_MAX_EXPANSION; seats += 500) {
