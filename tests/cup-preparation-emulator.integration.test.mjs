@@ -201,6 +201,38 @@ test('prepared Season 2 receives its complete Pyramid Cup before publication in 
   const restoredMembershipRetry = await preparePyramidCupForSeason(season);
   assert.equal(restoredMembershipRetry.success, true, JSON.stringify(restoredMembershipRetry));
 
+  // A fixture must carry the exact frozen snapshots stored for both entrants,
+  // not merely a matching team ID and five-player array.
+  const snapshotIntegrityPairing = firstRound[0];
+  const snapshotIntegrityFixtureRef = db.collection(MATCH_COLLECTIONS.cup).doc(snapshotIntegrityPairing.matchId);
+  const snapshotIntegrityFixture = (await snapshotIntegrityFixtureRef.get()).data();
+  const canonicalHomeSnapshot = snapshotIntegrityFixture.homeTeamSnapshot;
+  await snapshotIntegrityFixtureRef.update({
+    homeTeamSnapshot: {
+      ...canonicalHomeSnapshot,
+      players: canonicalHomeSnapshot.players.map((player, index) =>
+        index === 0 ? { ...player, overallRating: Number(player.overallRating || 0) + 1 } : player
+      ),
+    },
+  });
+  const corruptedFixtureSnapshotRetry = await preparePyramidCupForSeason(season);
+  assert.equal(corruptedFixtureSnapshotRetry.success, false);
+  assert.equal(corruptedFixtureSnapshotRetry.reason, 'CUP_PREPARED_FIXTURE_SNAPSHOT_INVALID');
+  await snapshotIntegrityFixtureRef.update({ homeTeamSnapshot: canonicalHomeSnapshot });
+
+  // Pairing identities and indexes are canonical, not just unique. A retry
+  // must reject a bracket that silently changes a deterministic pairing ID.
+  const canonicalRounds = (await cupRef.get()).data().rounds;
+  const corruptedRounds = { ...canonicalRounds, r1: canonicalRounds.r1.map(pairing => ({ ...pairing })) };
+  corruptedRounds.r1[0].id = 'r1_m999';
+  await cupRef.update({ rounds: corruptedRounds });
+  const corruptedPairingRetry = await preparePyramidCupForSeason(season);
+  assert.equal(corruptedPairingRetry.success, false);
+  assert.equal(corruptedPairingRetry.reason, 'CUP_PREPARED_BRACKET_PAIRINGS_INVALID');
+  await cupRef.update({ rounds: canonicalRounds });
+  const restoredPairingRetry = await preparePyramidCupForSeason(season);
+  assert.equal(restoredPairingRetry.success, true, JSON.stringify(restoredPairingRetry));
+
   // The participant roster is frozen at generation. Even if a replaced bot's
   // live profile is retired by registration, its published Cup fixture remains playable.
   const firstPairing = firstRound[0];
