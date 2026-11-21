@@ -1,12 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { randomUUID } from 'node:crypto';
 import { deleteApp, getApps } from 'firebase-admin/app';
 
 process.env.NEXT_PUBLIC_USE_FIREBASE_EMULATORS = 'true';
 process.env.GCLOUD_PROJECT = 'demo-forge-rivals-cup-test';
 
 const emulatorHost = process.env.FIRESTORE_EMULATOR_HOST;
+const EXPECTED_MATCHES = { 1: 56, 2: 32, 3: 16, 4: 8, 5: 4, 6: 2, 7: 1 };
 
 test('prepared Season 2 receives its complete Pyramid Cup before publication in an isolated Firestore Emulator project', {
   skip: !emulatorHost,
@@ -21,7 +21,6 @@ test('prepared Season 2 receives its complete Pyramid Cup before publication in 
     import('../src/app/actions/universal-match-resolver.ts'),
   ]);
   const db = getAdminDb();
-  const runId = randomUUID();
   const season = 2;
   const seasonStart = new Date(Date.now() + 24 * 60 * 60 * 1000);
   const expectedFirstKickoff = new Date(seasonStart.getTime() + 86400000);
