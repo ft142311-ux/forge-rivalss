@@ -25,7 +25,19 @@ export default function PyramidCupPage() {
   const { language, isLoaded, activeSeasonNumber, isDataReady } = useGameState();
   const [activeRound, setActiveRound] = useState(1);
 
-  const cupDocId = `cup_s${activeSeasonNumber}_lALPHA`;
+  const seasonConfigRef = useMemoFirebase(
+    () => db ? doc(db, 'system_v1', 'season_config') : null,
+    [db],
+  );
+  const { data: seasonConfig, isLoading: isSeasonConfigLoading } = useDoc(seasonConfigRef);
+  const preparedPhase = ['GENERATING_NEXT', 'PREPARING_NEXT_SEASON', 'PREPARATION', 'PUBLISHED']
+    .includes(String(seasonConfig?.phase || '').toUpperCase());
+  const preparedSeasonNumber = Number(seasonConfig?.preparedSeasonNumber || 0);
+  const cupSeasonNumber = seasonConfig?.preparedWorldReady === true &&
+    preparedPhase && preparedSeasonNumber > Number(activeSeasonNumber || 0)
+      ? preparedSeasonNumber
+      : Number(activeSeasonNumber || 1);
+  const cupDocId = `cup_s${cupSeasonNumber}_lALPHA`;
   const cupRef = useMemoFirebase(() => db ? doc(db, 'cup_pyramid_v1', cupDocId) : null, [db, cupDocId]);
   const { data: cupData, isLoading: isCupLoading } = useDoc(cupRef);
 
@@ -67,12 +79,12 @@ export default function PyramidCupPage() {
         <Link href="/"><Button variant="ghost" size="icon" className="rounded-full border border-white/5 bg-secondary/50"><ChevronLeft className="w-6 h-6" /></Button></Link>
         <div className="min-w-0">
           <h1 className="text-2xl font-headline font-bold uppercase tracking-tighter text-white flex items-center gap-2 leading-none"><Trophy className="w-6 h-6 text-yellow-500" />{title}</h1>
-          <p className="text-muted-foreground text-[10px] uppercase tracking-widest mt-1 truncate">{subtitle} · S{activeSeasonNumber}</p>
+          <p className="text-muted-foreground text-[10px] uppercase tracking-widest mt-1 truncate">{subtitle} · S{cupSeasonNumber}</p>
         </div>
       </header>
 
-      {isCupLoading ? <div className="py-20 text-center opacity-50"><Loader2 className="w-8 h-8 animate-spin mx-auto text-primary" /></div> : !cupData ? (
-        <div className="py-20 text-center animate-in fade-in duration-700 flex flex-col items-center"><Medal className="w-12 h-12 text-orange-500 mb-4 opacity-50" /><h2 className="text-lg font-headline font-bold uppercase text-white mb-2">{ru ? 'СЕТКА ФОРМИРУЕТСЯ' : 'BRACKET PENDING'}</h2><p className="text-[10px] text-muted-foreground uppercase px-10 italic">{ru ? 'Кубок будет автоматически создан после первого тура лиги.' : 'The cup is generated automatically after league round one.'}</p></div>
+      {isCupLoading || isSeasonConfigLoading ? <div className="py-20 text-center opacity-50"><Loader2 className="w-8 h-8 animate-spin mx-auto text-primary" /></div> : !cupData ? (
+        <div className="py-20 text-center animate-in fade-in duration-700 flex flex-col items-center"><Medal className="w-12 h-12 text-orange-500 mb-4 opacity-50" /><h2 className="text-lg font-headline font-bold uppercase text-white mb-2">{ru ? 'СЕТКА ФОРМИРУЕТСЯ' : 'BRACKET PENDING'}</h2><p className="text-[10px] text-muted-foreground uppercase px-10 italic">{ru ? 'Кубок формируется при подготовке сезона и будет доступен до стартового свистка.' : 'The cup is generated during season preparation and will be available before kickoff.'}</p></div>
       ) : (
         <>
           <div className="grid grid-cols-7 gap-1.5 mb-5">
