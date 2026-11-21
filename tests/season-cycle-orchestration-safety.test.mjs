@@ -92,7 +92,7 @@ test('season cron fails closed for unknown actions or missing active-world readi
 });
 
 test('scheduled season orchestrator runs Pyramid Cup alongside the daily tournament cycle', () => {
-  assert.match(source, /import \{ runPyramidCupCycle \} from '\.\/cup-engine'/);
+  assert.match(source, /import \{ preparePyramidCupForSeason, runPyramidCupCycle \} from '\.\/cup-engine'/);
   assert.match(source, /const \[tournaments, pyramidCup\] = await Promise\.all\(\[/);
   assert.match(source, /runPyramidCupCycle\(\)/);
   assert.match(source, /pyramidCup,/);
