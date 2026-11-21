@@ -22,6 +22,17 @@ test('legacy season recovery endpoints outside the canonical orchestrator are di
   }
 });
 
+test('manual Season 1 rollover recovery is restricted to the disposable local emulator', () => {
+  const source = read('src/app/api/cron/recover-season-rollover/route.ts');
+  const guard = source.indexOf("action: 'LOCAL_EMULATOR_ONLY'");
+  const database = source.indexOf('const db = getAdminDb()');
+  assert.ok(guard >= 0 && database > guard, 'non-emulator requests must be rejected before Firestore is accessed');
+  assert.match(source, /FIRESTORE_EMULATOR_HOST/);
+  assert.match(source, /projectId !== 'demo-forge-rivals'/);
+  assert.match(source, /writesStarted: false/);
+  assert.match(source, /sourceSeason !== 1/);
+});
+
 test('public staging health endpoint is uncached and does not expose backend exception details', () => {
   const source = read('src/app/api/health/route.ts');
   assert.match(source, /export const dynamic = 'force-dynamic'/);
