@@ -169,6 +169,20 @@ test('prepared Season 2 receives its complete Pyramid Cup before publication in 
     assert.equal(fixture.scheduledAt.toDate().getUTCHours(), 4);
   }
 
+  // The eight D1 BYE teams have no preliminary match document, so their
+  // frozen participant snapshots must be checked independently on every retry.
+  const byeTeam = cup.rounds.r1.find(pairing => pairing.status === 'bye')?.home;
+  assert.ok(byeTeam, 'one of the top-eight teams must receive a BYE');
+  const byeSnapshotRef = db.collection('cup_participant_snapshots_v1').doc(cupRef.id).collection('teams').doc(byeTeam.id);
+  const byeSnapshot = await byeSnapshotRef.get();
+  assert.equal(byeSnapshot.exists, true);
+  const byeSnapshotData = byeSnapshot.data();
+  await byeSnapshotRef.delete();
+  const incompleteRetry = await preparePyramidCupForSeason(season);
+  assert.equal(incompleteRetry.success, false);
+  assert.equal(incompleteRetry.reason, 'CUP_PREPARED_PARTICIPANT_SNAPSHOT_INVALID');
+  await byeSnapshotRef.set(byeSnapshotData);
+
   const retry = await preparePyramidCupForSeason(season);
   assert.equal(retry.success, true, JSON.stringify(retry));
   assert.equal(retry.alreadyExists, true);
