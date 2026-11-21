@@ -16,6 +16,12 @@ service cloud.firestore {
       return signedIn() && (data.fromId == request.auth.uid || data.toId == request.auth.uid);
     }
 
+    // Presence timestamps are written/read only by trusted server actions.
+    // Public clients receive only a derived online boolean from the manager directory.
+    match /manager_presence_v1/{userId} {
+      allow read, write: if false;
+    }
+
     // Server-authoritative game state.
     match /players_v14/{userId} {
       allow read: if signedIn() && request.auth.uid == userId;

@@ -2,6 +2,7 @@
 
 import { getAdminDb } from '@/lib/firebase-admin';
 import { requireServerActor } from '@/lib/server-auth';
+import { isManagerOnline } from '../../../../functions/manager-presence-policy';
 
 const PAGE_SIZE = 100;
 
@@ -37,6 +38,15 @@ export async function listPublicManagersAction(idToken: string, cursor?: string 
     const snapshot = await request.get();
     const hasMore = snapshot.docs.length > PAGE_SIZE;
     const page = snapshot.docs.slice(0, PAGE_SIZE);
+    const presenceSnapshots = page.length
+      ? await db.getAll(...page.map((document) => db.collection('manager_presence_v1').doc(document.id)))
+      : [];
+    const presenceByManagerId = new Map(
+      presenceSnapshots.map((presence) => [
+        presence.id,
+        isManagerOnline(presence.exists ? presence.data()?.lastSeen : null),
+      ])
+    );
     const managers = page.flatMap((document) => {
       const data = document.data();
       const displayName = typeof data.displayName === 'string' ? data.displayName.trim().slice(0, 80) : '';
@@ -49,6 +59,7 @@ export async function listPublicManagersAction(idToken: string, cursor?: string 
         associationId: typeof data.associationId === 'string' ? data.associationId.slice(0, 128) : null,
         createdAt: toIso(data.createdAt),
         isPremium: Boolean(premiumUntil && new Date(premiumUntil).getTime() > Date.now()),
+        isOnline: presenceByManagerId.get(document.id) === true,
       }];
     });
 

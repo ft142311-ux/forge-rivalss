@@ -254,7 +254,9 @@ export default function AllManagersPage() {
       pmDesc: "Direct encrypted transmission",
       close: "CLOSE",
       lvl: "Ур",
-      offline: "OFFLINE: Database access restricted."
+      offline: "OFFLINE: Database access restricted.",
+      presenceOnline: "ONLINE",
+      presenceOffline: "OFFLINE"
     },
     ru: {
       title: "ВСЕ МЕНЕДЖЕРЫ",
@@ -281,7 +283,9 @@ export default function AllManagersPage() {
       pmDesc: "Прямая зашифрованная связь",
       close: "ЗАКРЫТЬ",
       lvl: "Ур",
-      offline: "ОФЛАЙН: Доступ к базе ограничен."
+      offline: "ОФЛАЙН: Доступ к базе ограничен.",
+      presenceOnline: "В СЕТИ",
+      presenceOffline: "НЕ В СЕТИ"
     }
   };
 
@@ -454,6 +458,16 @@ export default function AllManagersPage() {
                       )}
                       {manager.id === user.uid && <Badge className="text-[7px] bg-primary text-primary-foreground">YOU</Badge>}
                     </div>
+                    <span
+                      className="inline-flex items-center gap-1 text-[8px] font-bold uppercase tracking-wider"
+                      aria-label={manager.isOnline ? t.presenceOnline : t.presenceOffline}
+                      title={manager.isOnline ? t.presenceOnline : t.presenceOffline}
+                    >
+                      <span className={cn("h-1.5 w-1.5 rounded-full", manager.isOnline ? "bg-emerald-400" : "bg-muted-foreground/40")} />
+                      <span className={manager.isOnline ? "text-emerald-400" : "text-muted-foreground/50"}>
+                        {manager.isOnline ? t.presenceOnline : t.presenceOffline}
+                      </span>
+                    </span>
                     <span className={cn(
                       "text-[9px] font-black uppercase tracking-tight",
                       assocName ? "text-primary" : "text-muted-foreground/40"
