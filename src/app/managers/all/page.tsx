@@ -34,7 +34,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { cn } from '@/lib/utils';
-import { getMoscowTime } from '@/app/lib/time-utils';
 
 type MembershipFilter = 'all' | 'in_assoc' | 'free';
 type SortField = 'level' | 'date';
