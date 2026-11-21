@@ -17,7 +17,7 @@ test('Pyramid Cup UI exposes all frozen participants with their official seed an
 test('Pyramid Cup UI displays the round kickoff and completion progress', () => {
   assert.match(source, /const CUP_ROUND_DAYS = \[2, 3, 4, 5, 6, 7, 8\]/);
   assert.match(source, /formatCupKickoff\(cupData\.seasonStart, activeRound, language\)/);
-  assert.match(source, /roundFinishedCount\/roundMatchCount/);
+  assert.match(source, /roundFinishedCount\}\/\{roundMatchCount/);
   assert.match(source, /Europe\/Moscow/);
 });
 
