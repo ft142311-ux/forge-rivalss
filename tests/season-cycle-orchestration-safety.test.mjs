@@ -145,3 +145,9 @@ test('Pyramid Cup preparation failure blocks next-season publication without swi
   assert.match(gate, /targetSeason: Number\(world\.seasonNumber\)/);
   assert.match(gate, /pyramidCup: pyramidCupPreparation/);
 });
+
+test('season cron treats missing prepared-season Pyramid Cup as a blocked lifecycle outcome', () => {
+  const result = { action: 'PYRAMID_CUP_PREPARATION_BLOCKED', worldReady: true, pyramidCup: { success: false, reason: 'CUP_FIXTURES_MISSING' } };
+  assert.equal(isSeasonOrchestratorSuccessful(result), false);
+  assert.equal(cronResultStatus(result), 409);
+});
