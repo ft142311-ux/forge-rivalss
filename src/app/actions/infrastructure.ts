@@ -16,7 +16,7 @@ const CONFIG: Record<ConstructionSection, { baseCost: number; baseHours: number 
 };
 
 const ALLOWED_IDS: Record<ConstructionSection, string[]> = {
-  arena: ['pressCenterLevel', 'cafeLevel', 'shopLevel', 'screensLevel', 'parkingLevel', 'lightingLevel', 'capacity'],
+  arena: ['pressCenterLevel', 'cafeLevel', 'shopLevel', 'screensLevel', 'parkingLevel', 'lightingLevel'],
   hq: ['hrLevel', 'financeLevel', 'scoutsLevel', 'pressOfficeLevel', 'adminLevel'],
   bootcamp: ['bootcampLevel', 'tacticsHallLevel', 'poolLevel', 'researchLevel'],
   academy: ['youthBootcampLevel', 'streamingLevel', 'scoutsLevel', 'discoLevel'],
@@ -180,7 +180,8 @@ export async function startCapacityExpansionAction(idToken: string, seats: numbe
 export async function accelerateConstructionAction(idToken: string, section: string, id: string, multiplier: number) {
   try {
     const { uid } = await requireServerActor(idToken);
-    if (!(section in CONFIG) || !ALLOWED_IDS[section as ConstructionSection]?.includes(id)) {
+    const isArenaCapacity = section === 'arena' && id === 'capacity';
+    if (!(section in CONFIG) || (!isArenaCapacity && !ALLOWED_IDS[section as ConstructionSection]?.includes(id))) {
       throw new Error('INVALID_ACCELERATION_TARGET');
     }
     const allowedMultiplierPrices: Record<number, number> = { 2: 100, 4: 250, 8: 600 };
