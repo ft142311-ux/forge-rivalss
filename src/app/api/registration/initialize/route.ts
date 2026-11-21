@@ -372,7 +372,7 @@ export async function POST(request: NextRequest) {
         },
         staff: { coach: null },
         strategy: 'Balanced Play',
-        arena: { capacity: 5000 },
+        arena: { capacity: 3000 },
         hq: {},
         bootcamp: {},
         academy: {},
