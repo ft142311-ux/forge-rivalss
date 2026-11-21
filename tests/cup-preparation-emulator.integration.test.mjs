@@ -179,12 +179,21 @@ test('prepared Season 2 receives its complete Pyramid Cup before publication in 
     seriesScore: '1-0',
   });
 
+  // Move the isolated emulator fixture clock into an active, due window so
+  // the real worker can advance every round without waiting for wall-clock days.
+  const runtimeSeasonStart = new Date(Date.now() - 10 * 86400000);
+  await cupRef.update({ seasonStart: runtimeSeasonStart.toISOString() });
+  await Promise.all(firstRound.map(pairing => db.collection(MATCH_COLLECTIONS.cup).doc(pairing.matchId).update({
+    scheduledAt: runtimeSeasonStart,
+    startTime: runtimeSeasonStart,
+    scheduledStartAt: runtimeSeasonStart,
+  })));
   await configRef.set({
     activeSeasonNumber: season,
     phase: 'REGULAR_SEASON',
     worldReady: true,
-    seasonStart: seasonStart.toISOString(),
-    nextSeasonStart: new Date(seasonStart.getTime() + 15 * 86400000).toISOString(),
+    seasonStart: runtimeSeasonStart.toISOString(),
+    nextSeasonStart: new Date(runtimeSeasonStart.getTime() + 15 * 86400000).toISOString(),
     preparedSeasonNumber: null,
     preparedWorldReady: false,
   }, { merge: true });
