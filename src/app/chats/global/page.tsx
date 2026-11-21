@@ -5,6 +5,7 @@ import { useState, useEffect, useRef, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { useUser, useFirestore, useCollection, useMemoFirebase, useDoc, setDocumentNonBlocking } from '@/firebase';
 import { useGameState } from '@/app/lib/store';
+import { sendGlobalChatMessageAction } from '@/app/actions/global-chat';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { 
@@ -13,7 +14,7 @@ import {
   CornerUpLeft, ChevronRight, UserPlus, Crown, UserMinus, Lock
 } from 'lucide-react';
 import Link from 'next/link';
-import { collection, query, orderBy, limit, doc, where, getDocs, writeBatch, addDoc } from 'firebase/firestore';
+import { collection, query, orderBy, limit, doc, where, getDocs, writeBatch } from 'firebase/firestore';
 import { LoadingScreen } from '@/components/game/LoadingScreen';
 import { cn } from '@/lib/utils';
 import {
@@ -31,7 +32,7 @@ export default function GlobalChatPage() {
   const router = useRouter();
   const db = useFirestore();
   const { toast } = useToast();
-  const { language, isLoaded, clubName, clubLogo, isPremium } = useGameState();
+  const { language, isLoaded } = useGameState();
   const [message, setMessage] = useState('');
   const [isSending, setIsSending] = useState(false);
   const [isActionProcessing, setIsActionProcessing] = useState(false);
@@ -96,16 +97,8 @@ export default function GlobalChatPage() {
 
     setIsSending(true);
     try {
-      const now = new Date().toISOString();
-      await addDoc(collection(db, 'global_chat_v2'), {
-        userId: String(user.uid),
-        userName: String(profile.displayName || "Manager"),
-        clubName: String(clubName || profile.displayName || "Manager"),
-        clubLogo: String(clubLogo || ""),
-        isPremium: Boolean(isPremium),
-        text: String(message.trim()),
-        createdAt: now
-      });
+      const result = await sendGlobalChatMessageAction(await user.getIdToken(), message);
+      if (!result.success) throw new Error(result.error);
       setMessage('');
     } catch (e) {
       console.error("Failed to send message", e);

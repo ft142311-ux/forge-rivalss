@@ -114,24 +114,11 @@ service cloud.firestore {
       allow write: if false;
     }
 
-    // Global chat: clients may create messages only as themselves.
-    // No client-side edits/deletes are allowed.
+    // Global chat messages are created by a server action so identity,
+    // club branding, premium status and timestamps always come from trusted data.
     match /global_chat_v2/{msgId} {
       allow read: if signedIn();
-      allow create: if signedIn()
-        && request.resource.data.userId == request.auth.uid
-        && request.resource.data.text is string
-        && request.resource.data.text.size() > 0
-        && request.resource.data.text.size() <= 1000
-        && request.resource.data.createdAt is string
-        // Premium is authoritative profile state, never a client assertion.
-        && request.resource.data.isPremium == (
-          get(/databases/$(database)/documents/players_v14/$(request.auth.uid)).data.isPremium == true
-        )
-        && request.resource.data.keys().hasOnly([
-          'userId', 'userName', 'clubName', 'clubLogo', 'isPremium', 'text', 'createdAt'
-        ]);
-      allow update, delete: if false;
+      allow create, update, delete: if false;
     }
 
     // Friend requests: only sender/recipient may see or mutate a request.

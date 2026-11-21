@@ -2,7 +2,7 @@ const functions = require('firebase-functions');
 const admin = require('firebase-admin');
 const { isEligibleRegistrationSlot, validateRegistrationSchedule, generateStartingSquad, buildRegistrationMatchPlan, transferBotStandingToUser } = require('./registration-core');
 const { recordUserActivityUnlessRetiring } = require('./club-activity-fence');
-const { invokeSeasonOrchestrator, invokeMarketExpirySweep } = require('./season-orchestrator-scheduler');
+const { invokeSeasonOrchestrator, invokeMarketExpirySweep, invokeTournamentSweep } = require('./season-orchestrator-scheduler');
 
 /**
  * @fileOverview Р•РґРёРЅРѕРµ СЃРµСЂРІРµСЂРЅРѕРµ СЏРґСЂРѕ СЂРµРіРёСЃС‚СЂР°С†РёРё v165.
@@ -453,5 +453,28 @@ exports.runMarketExpirySweep = functions
       secret: process.env.CRON_SECRET,
     });
     console.log('[MARKET EXPIRY SCHEDULE]', JSON.stringify(result));
+    return result;
+  });
+
+
+// Runs the protected tournament and Pyramid Cup cycle every five minutes.
+// Cup creation is idempotent and begins on season day 1; round transitions are
+// fenced transactionally by the Cup engine.
+exports.runTournamentSweep = functions
+  .region('us-central1')
+  .runWith({
+    timeoutSeconds: 540,
+    memory: '256MB',
+    maxInstances: 1,
+    secrets: ['CRON_SECRET'],
+  })
+  .pubsub.schedule('every 5 minutes')
+  .timeZone('UTC')
+  .onRun(async () => {
+    const result = await invokeTournamentSweep({
+      seasonOrchestratorUrl: process.env.SEASON_ORCHESTRATOR_URL,
+      secret: process.env.CRON_SECRET,
+    });
+    console.log('[TOURNAMENT AND PYRAMID CUP SCHEDULE]', JSON.stringify(result));
     return result;
   });
