@@ -58,3 +58,14 @@ test('prepared Cup verification rejects fixtures without matching frozen partici
   assert.match(preparation, /homeSnapshot\.players\.length !== 5/);
   assert.match(preparation, /awaySnapshot\.players\.length !== 5/);
 });
+
+test('Pyramid Cup stores frozen rosters separately so bracket documents retain only public participant metadata', () => {
+  assert.match(source, /CUP_PARTICIPANT_SNAPSHOT_COLLECTION = 'cup_participant_snapshots_v1'/);
+  assert.match(source, /function participantSnapshotRef/);
+  assert.match(source, /batch\.create\(participantSnapshotRef\(db, season, team\.id\)/);
+  assert.match(source, /function publicPairing/);
+  assert.match(source, /first\.map\(publicPairing\)/);
+  assert.match(source, /pairings\.map\(publicPairing\)/);
+  assert.match(source, /nextPairings\.map\(publicPairing\)/);
+  assert.match(source, /CUP_PARTICIPANT_SNAPSHOT_MISSING_DURING_ADVANCEMENT/);
+});
