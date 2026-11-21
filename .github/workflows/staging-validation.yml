@@ -53,5 +53,8 @@ jobs:
       - name: Firestore emulator registration transactions
         run: npm run test:registration:emulator
 
+      - name: Pyramid Cup prepared-season emulator scenario
+        run: npm run test:cup:emulator
+
       - name: Production build
         run: npm run build
