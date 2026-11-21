@@ -119,3 +119,29 @@ test('disposable Season 1 rollover diagnostics are restricted to the local demo 
   assert.match(route, /projectId !== 'demo-forge-rivals'/);
   assert.match(route, /writesStarted: false/);
 });
+
+
+test('prepared season Pyramid Cup is generated and verified before publication or activation', () => {
+  assert.match(source, /import \{ preparePyramidCupForSeason, runPyramidCupCycle \} from '\.\/cup-engine'/);
+  const prepared = source.indexOf("if (world?.prepared === true)");
+  const cupPreparation = source.indexOf('preparePyramidCupForSeason(Number(world.seasonNumber))', prepared);
+  const publication = source.indexOf('publishPreparedSeason()', prepared);
+  const activation = source.indexOf('activatePublishedSeason()', prepared);
+  assert.ok(prepared >= 0 && cupPreparation > prepared);
+  assert.ok(publication > cupPreparation && activation > publication);
+  const gate = source.slice(cupPreparation, publication);
+  assert.match(gate, /pyramidCupPreparation\?\.success !== true/);
+  assert.match(gate, /PYRAMID_CUP_PREPARATION_BLOCKED/);
+  assert.doesNotMatch(gate, /publishPreparedSeason\(\)/);
+});
+
+test('Pyramid Cup preparation failure blocks next-season publication without switching the active season', () => {
+  const prepared = source.indexOf("if (world?.prepared === true)");
+  const cupPreparation = source.indexOf('preparePyramidCupForSeason(Number(world.seasonNumber))', prepared);
+  const publication = source.indexOf('publishPreparedSeason()', prepared);
+  const gate = source.slice(cupPreparation, publication);
+  assert.match(gate, /return \{/);
+  assert.match(gate, /action: 'PYRAMID_CUP_PREPARATION_BLOCKED'/);
+  assert.match(gate, /targetSeason: Number\(world\.seasonNumber\)/);
+  assert.match(gate, /pyramidCup: pyramidCupPreparation/);
+});
