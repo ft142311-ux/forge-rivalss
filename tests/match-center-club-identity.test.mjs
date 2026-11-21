@@ -28,3 +28,11 @@ test('match center keeps UID ownership for non-league fixtures and never renames
   assert.match(resolver, /: nameMap\.names\[hRank\] \|\| m\.homeName/);
   assert.match(resolver, /: nameMap\.names\[aRank\] \|\| m\.awayName/);
 });
+
+test('match card highlighting uses the same resolved ownership as the displayed club name', () => {
+  assert.match(source, /isMyHomeClub: isMyHome, isMyAwayClub: isMyAway/);
+  assert.match(source, /const isMeHome = m\.isMyHomeClub === true/);
+  assert.match(source, /const isMeAway = m\.isMyAwayClub === true/);
+  assert.doesNotMatch(source, /Number\(m\.homeRank\) === Number\(myRank\)/);
+  assert.doesNotMatch(source, /Number\(m\.awayRank\) === Number\(myRank\)/);
+});
