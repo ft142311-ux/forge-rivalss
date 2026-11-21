@@ -19,6 +19,7 @@ import { useToast } from '@/hooks/use-toast';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 import { PlaceHolderImages } from '@/app/lib/placeholder-images';
+import { getArenaExpansionQuote } from '@/app/lib/arena-expansion';
 
 const ACCEL_CREWS = [
   { id: 1, multiplier: 2, price: 100, labelRu: 'Малая бригада (2x)', labelEn: 'Small Crew (2x)' },
@@ -38,6 +39,8 @@ export default function ArenaPage() {
   const [showCapacityDialog, setShowCapacityDialog] = useState(false);
   const [isExpanding, setIsExpanding] = useState(false);
   const [expansionSeats, setExpansionSeats] = useState([500]);
+  const selectedExpansionSeats = expansionSeats[0] || 500;
+  const expansionQuote = useMemo(() => getArenaExpansionQuote(selectedExpansionSeats, Number(arena?.capacity || 3000)), [selectedExpansionSeats, arena?.capacity]);
   const [now, setNow] = useState(Date.now());
 
   useEffect(() => {
@@ -164,6 +167,24 @@ export default function ArenaPage() {
       toast({ title: t.inProgress });
       setSelectedFacility(null);
     }
+  };
+
+  const handleCapacityExpansion = async () => {
+    if (isExpanding || isCapacityConstructing) return;
+    setIsExpanding(true);
+    const success = await startCapacityExpansion(selectedExpansionSeats);
+    setIsExpanding(false);
+    if (success) {
+      setShowCapacityDialog(false);
+      toast({ title: language === 'ru' ? 'Расширение арены начато' : 'Arena expansion started' });
+    }
+  };
+
+  const formatDuration = (hours: number) => {
+    const days = Math.floor(hours / 24);
+    const remainingHours = hours % 24;
+    if (language === 'ru') return [days ? `${days} д.` : '', remainingHours ? `${remainingHours} ч.` : ''].filter(Boolean).join(' ') || '0 ч.';
+    return [days ? `${days}d` : '', remainingHours ? `${remainingHours}h` : ''].filter(Boolean).join(' ') || '0h';
   };
 
   const handleAccelerate = async (multiplier: number) => {
@@ -304,6 +325,62 @@ export default function ArenaPage() {
           );
         })}
       </div>
+
+      <Dialog open={showCapacityDialog && !isCapacityConstructing} onOpenChange={setShowCapacityDialog}>
+        <DialogContent className="max-w-md bg-card border-white/10 p-0 overflow-hidden shadow-2xl">
+          <div className="p-6 text-center bg-gradient-to-br from-primary/20 via-background to-accent/10 border-b border-white/5">
+            <DialogTitle className="text-xl font-headline font-bold uppercase tracking-tight text-primary">{t.capacityTitle}</DialogTitle>
+            <DialogDescription className="text-xs mt-2 text-muted-foreground">
+              {language === 'ru' ? 'Выберите размер единовременного расширения. Максимум — 50 000 мест.' : 'Choose a single expansion size. Maximum: 50,000 seats.'}
+            </DialogDescription>
+          </div>
+          <div className="p-6 space-y-5">
+            <div className="flex items-center justify-between">
+              <span className="text-xs uppercase font-black tracking-widest text-muted-foreground">{language === 'ru' ? 'Дополнительные места' : 'Additional seats'}</span>
+              <span className="text-xl font-bold tabular-nums text-white">{selectedExpansionSeats.toLocaleString()}</span>
+            </div>
+            <Slider
+              min={500}
+              max={50000}
+              step={500}
+              value={expansionSeats}
+              onValueChange={setExpansionSeats}
+              disabled={isExpanding}
+            />
+            <div className="flex justify-between text-[10px] text-muted-foreground">
+              <span>500</span>
+              <span>50 000</span>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="bg-secondary/30 p-4 rounded-2xl text-center border border-white/5">
+                <p className="text-[8px] uppercase font-black text-muted-foreground mb-1 tracking-widest">{t.cost}</p>
+                <p className="text-sm font-bold text-accent">€ {expansionQuote.cost.toLocaleString('de-DE')}</p>
+              </div>
+              <div className="bg-secondary/30 p-4 rounded-2xl text-center border border-white/5">
+                <p className="text-[8px] uppercase font-black text-muted-foreground mb-1 tracking-widest">{t.duration}</p>
+                <p className="text-sm font-bold text-primary flex items-center justify-center gap-1.5"><Clock className="w-3.5 h-3.5" /> {formatDuration(expansionQuote.durationHours)}</p>
+              </div>
+            </div>
+            <div className="rounded-xl bg-secondary/20 border border-white/5 p-3 flex items-center justify-between text-xs">
+              <span className="text-muted-foreground">{language === 'ru' ? 'Вместимость после завершения' : 'Capacity after completion'}</span>
+              <strong className="text-white tabular-nums">{expansionQuote.targetCapacity.toLocaleString()}</strong>
+            </div>
+            <div className="flex items-center justify-between text-xs">
+              <span className="text-muted-foreground">{language === 'ru' ? 'Ваш баланс' : 'Your balance'}</span>
+              <strong className={credits < expansionQuote.cost ? 'text-red-400' : 'text-white'}>€ {credits.toLocaleString('de-DE')}</strong>
+            </div>
+          </div>
+          <DialogFooter className="p-4 bg-secondary/20 border-t border-white/5">
+            <Button
+              className="w-full h-14 hero-gradient font-black text-[10px] uppercase tracking-[0.2em]"
+              onClick={handleCapacityExpansion}
+              disabled={isExpanding || credits < expansionQuote.cost}
+            >
+              {isExpanding ? (language === 'ru' ? 'Начинаем строительство...' : 'Starting construction...') : t.confirm}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={!!selectedFacility} onOpenChange={() => setSelectedFacility(null)}>
         {selectedFacility && (
