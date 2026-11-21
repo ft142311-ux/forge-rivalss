@@ -6,7 +6,7 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useUser, useFirestore, useDoc, useMemoFirebase } from '@/firebase';
 import { useGameState } from '@/app/lib/store';
-import { ChevronLeft, Trophy, Swords, Loader2, Medal, Lock, Crown } from 'lucide-react';
+import { ChevronLeft, Trophy, Swords, Loader2, Medal, Lock, Crown, Users, CalendarClock, FileText } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import Link from 'next/link';
@@ -17,6 +17,18 @@ import { cn } from '@/lib/utils';
 const ROUND_COUNT = 7;
 const EXPECTED_MATCHES: Record<number, number> = { 1: 56, 2: 32, 3: 16, 4: 8, 5: 4, 6: 2, 7: 1 };
 const EXPECTED_SLOTS: Record<number, number> = { 1: 64, 2: 32, 3: 16, 4: 8, 5: 4, 6: 2, 7: 1 };
+const CUP_ROUND_DAYS = [2, 3, 4, 5, 6, 7, 8];
+
+function formatCupKickoff(seasonStartValue: unknown, round: number, language: string) {
+  const seasonStart = new Date(String(seasonStartValue || ''));
+  if (!Number.isFinite(seasonStart.getTime())) return '07:00 MSK';
+  const kickoff = new Date(seasonStart.getTime() + (CUP_ROUND_DAYS[round - 1] - 1) * 86400000);
+  kickoff.setUTCHours(4, 0, 0, 0);
+  return kickoff.toLocaleString(language === 'ru' ? 'ru-RU' : 'en-GB', {
+    day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
+    timeZone: 'Europe/Moscow',
+  }) + ' MSK';
+}
 
 export default function PyramidCupPage() {
   const { user, isUserLoading } = useUser();
@@ -24,6 +36,7 @@ export default function PyramidCupPage() {
   const db = useFirestore();
   const { language, isLoaded, activeSeasonNumber, isDataReady } = useGameState();
   const [activeRound, setActiveRound] = useState(1);
+  const [showParticipants, setShowParticipants] = useState(false);
 
   const seasonConfigRef = useMemoFirebase(
     () => db ? doc(db, 'system_v1', 'season_config') : null,
@@ -63,6 +76,10 @@ export default function PyramidCupPage() {
 
   const rounds = (cupData?.rounds || {}) as Record<string, any[]>;
   const matches = Array.isArray(rounds[`r${activeRound}`]) ? rounds[`r${activeRound}`] : [];
+  const participants = Array.isArray(cupData?.participants) ? [...cupData.participants].sort((a: any, b: any) => Number(a.seed) - Number(b.seed)) : [];
+  const roundMatchCount = matches.filter((match: any) => match?.home && match?.away).length;
+  const roundFinishedCount = matches.filter((match: any) => match?.home && match?.away && match.status === 'finished').length;
+  const roundByeCount = matches.filter((match: any) => match?.status === 'bye').length;
   const roundName = activeRound === 1
     ? (ru ? 'ПРЕДВАРИТЕЛЬНЫЙ РАУНД' : 'PRELIMINARY ROUND')
     : activeRound === 7
@@ -95,7 +112,21 @@ export default function PyramidCupPage() {
             ))}
           </div>
 
-          <div className="mb-3 flex items-center justify-between px-1"><div><p className="text-[11px] font-black uppercase tracking-widest text-white">{roundName}</p><p className="text-[8px] text-muted-foreground uppercase">{EXPECTED_MATCHES[activeRound]} {ru ? 'матчей в сетке' : 'bracket matches'}</p></div><Badge status={cupData.status} ru={ru} /></div>
+          <Card className="glass-card border-white/5 mb-4"><CardContent className="p-3">
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0"><p className="text-[11px] font-black uppercase tracking-widest text-white">{roundName}</p><p className="text-[8px] text-muted-foreground uppercase">{roundFinishedCount}/{roundMatchCount || EXPECTED_MATCHES[activeRound]} {ru ? 'матчей завершено' : 'matches completed'}{roundByeCount ? ` · ${roundByeCount} BYE` : ''}</p></div>
+              <Badge status={cupData.status} ru={ru} />
+            </div>
+            <div className="mt-3 flex items-center gap-2 text-[9px] font-bold uppercase text-primary"><CalendarClock className="w-3.5 h-3.5 shrink-0" />{formatCupKickoff(cupData.seasonStart, activeRound, language)}</div>
+          </CardContent></Card>
+
+          <Button variant="outline" className="w-full mb-4 border-white/10 bg-secondary/20 text-[9px] font-black uppercase" onClick={() => setShowParticipants(value => !value)}>
+            <Users className="w-4 h-4 mr-2" />{showParticipants ? (ru ? 'СКРЫТЬ УЧАСТНИКОВ' : 'HIDE PARTICIPANTS') : (ru ? `ВСЕ УЧАСТНИКИ · ${participants.length}/120` : `ALL PARTICIPANTS · ${participants.length}/120`)}
+          </Button>
+          {showParticipants && <Card className="glass-card border-white/5 mb-4"><CardContent className="p-2">
+            <div className="grid grid-cols-[32px_1fr_42px_42px_42px] gap-1 px-2 pb-2 text-[7px] font-black uppercase text-muted-foreground"><span>#</span><span>{ru ? 'КОМАНДА' : 'CLUB'}</span><span>D</span><span>G</span><span>R</span></div>
+            <div className="max-h-[420px] overflow-y-auto space-y-1">{participants.map((team: any) => <div key={team.id} className={cn('grid grid-cols-[32px_1fr_42px_42px_42px] gap-1 items-center rounded-md px-2 py-1.5 text-[9px]', team.id === user.uid && 'bg-primary/10 text-primary')}><span className="font-mono text-muted-foreground">{team.seed}</span><span className="truncate font-bold">{team.name}</span><span>D{team.level}</span><span>G{team.group}</span><span>R{team.rank}</span></div>)}</div>
+          </CardContent></Card>}
 
           <div className="space-y-2">
             {Array.from({ length: EXPECTED_SLOTS[activeRound] }, (_, idx) => matches[idx] || ({ id: `placeholder-${activeRound}-${idx}`, status: 'pending', home: null, away: null })).map((m: any, idx: number) => {
@@ -111,6 +142,7 @@ export default function PyramidCupPage() {
                       <div className="grid grid-cols-[1fr_46px_1fr] items-center gap-1"><div className="text-right truncate"><p className={cn('text-[10px] font-bold uppercase truncate', m.home?.id === user.uid ? 'text-primary' : winner === m.home?.id ? 'text-white' : 'text-muted-foreground')}>{m.home?.name || 'TBD'}</p></div><div className="flex justify-center"><span className="text-sm font-headline font-black">{m.scoreA != null ? `${m.scoreA}:${m.scoreB}` : (m.home && m.away ? <Swords className="w-3.5 h-3.5 text-accent/40" /> : '—')}</span></div><div className="text-left truncate"><p className={cn('text-[10px] font-bold uppercase truncate', m.away?.id === user.uid ? 'text-primary' : winner === m.away?.id ? 'text-white' : 'text-muted-foreground')}>{m.away?.name || 'TBD'}</p></div></div>
                     )}
                     {m.technicalDecision && <p className="mt-2 text-center text-[7px] font-black uppercase text-amber-400">{ru ? 'ТЕХНИЧЕСКИЙ РЕЗУЛЬТАТ' : 'TECHNICAL RESULT'}</p>}
+                    {m.status === 'finished' && m.matchId && <Link href={`/match?id=${encodeURIComponent(m.matchId)}`} className="mt-3 block"><Button variant="outline" size="sm" className="h-8 w-full border-white/10 bg-black/20 text-[8px] font-black uppercase"><FileText className="w-3.5 h-3.5 mr-2" />{ru ? 'ОТЧЁТ БОЯ' : 'MATCH REPORT'}</Button></Link>}
                   </CardContent>
                 </Card>
               );
