@@ -185,7 +185,7 @@ export default function MatchesPage() {
         </CardContent>
       </Card>
     );
-  }, [resolveMatchData, t.tour, user]);
+  }, [rank, resolveMatchData, t.tour, user]);
 
   const renderGrouped = (matches: any[]) => {
     const tours = [...new Set(matches.map(m => m.tour))].sort((a, b) => a - b);
