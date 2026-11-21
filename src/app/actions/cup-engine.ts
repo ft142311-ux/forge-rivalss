@@ -11,6 +11,7 @@ import { resolveSeasonLifecycleWindow } from './season-boundary';
 
 const LEAGUE_ID = 'ALPHA';
 const CUP_COLLECTION = 'cup_pyramid_v1';
+const CUP_PARTICIPANT_SNAPSHOT_COLLECTION = 'cup_participant_snapshots_v1';
 const TOTAL_TEAMS = TOTAL_GROUPS * TEAMS_PER_GROUP;
 const ROUND_COUNT = 7; // preliminary + 64-team round + 32 + 16 + 8 + 4 + final
 const ROUND_DAYS = [2, 3, 4, 5, 6, 7, 8]; // preliminary round follows league Tour 1; every round is daily
@@ -148,6 +149,12 @@ async function loadAllLeagueTeams(db: any, season: number): Promise<Team[]> {
 function publicTeam(team: Team | null) {
   return team ? { id: team.id, name: team.name, level: team.level, group: team.group, rank: team.rank, seed: team.seed, isBot: team.isBot } : null;
 }
+function publicPairing(pairing: Pairing) {
+  return { ...pairing, home: publicTeam(pairing.home), away: publicTeam(pairing.away) };
+}
+function participantSnapshotRef(db: any, season: number, teamId: string) {
+  return db.collection(CUP_PARTICIPANT_SNAPSHOT_COLLECTION).doc(cupId(season)).collection('teams').doc(teamId);
+}
 function makePair(id: string, index: number, firstStrong: Team, secondWeak: Team): Pairing {
   // The stronger team is always AWAY; weaker team is HOME.
   return { id, index, home: secondWeak, away: firstStrong, status: 'scheduled', matchId: null, winnerId: null, scoreA: null, scoreB: null };
@@ -216,6 +223,24 @@ async function commitCupRoundTransition(
     }
 
     const scheduledAt = Timestamp.fromDate(roundDate(seasonStart, ROUND_DAYS[nextRound - 1]));
+    const advancingTeamIds = [...new Set(nextPairings.flatMap(pairing =>
+      [pairing.home?.id, pairing.away?.id].filter((id): id is string => Boolean(id))
+    ))];
+    const participantSnapshots = await Promise.all(advancingTeamIds.map(async teamId => ({
+      teamId,
+      snap: await tx.get(participantSnapshotRef(db, season, teamId)),
+    })));
+    const participantSnapshotById = new Map(participantSnapshots.map(({ teamId, snap }) => [
+      teamId,
+      snap.exists ? (snap.data() || {}).matchSnapshot as MatchTeamSnapshot : null,
+    ]));
+    for (const pairing of nextPairings) {
+      if (pairing.home) pairing.home.matchSnapshot = participantSnapshotById.get(pairing.home.id) || undefined;
+      if (pairing.away) pairing.away.matchSnapshot = participantSnapshotById.get(pairing.away.id) || undefined;
+      if ((pairing.home && !pairing.home.matchSnapshot) || (pairing.away && !pairing.away.matchSnapshot)) {
+        throw new Error('CUP_PARTICIPANT_SNAPSHOT_MISSING_DURING_ADVANCEMENT');
+      }
+    }
     const entries = nextPairings
       .filter(pairing => pairing.home && pairing.away)
       .map(pairing => {
@@ -256,8 +281,8 @@ async function commitCupRoundTransition(
     });
 
     const rounds: Record<string, any[]> = { ...(current.rounds || {}) };
-    rounds[roundKey(expectedRound)] = pairings;
-    rounds[roundKey(nextRound)] = nextPairings;
+    rounds[roundKey(expectedRound)] = pairings.map(publicPairing);
+    rounds[roundKey(nextRound)] = nextPairings.map(publicPairing);
     tx.update(cupRef, {
       rounds,
       currentRound: nextRound,
@@ -282,9 +307,9 @@ async function commitCupRoundState(
       return false;
     }
     const rounds: Record<string, any[]> = { ...(current.rounds || {}) };
-    rounds[roundKey(expectedRound)] = pairings;
+    rounds[roundKey(expectedRound)] = pairings.map(publicPairing);
     if (options.nextRound && options.nextPairings) {
-      rounds[roundKey(options.nextRound)] = options.nextPairings;
+      rounds[roundKey(options.nextRound)] = options.nextPairings.map(publicPairing);
     }
     const patch: Record<string, any> = {
       rounds,
@@ -311,12 +336,22 @@ export async function generatePyramidCup(targetSeasonNumber?: number) {
   const first = createPreliminary(teams);
   const batch = db.batch();
   const scheduledAt = Timestamp.fromDate(roundDate(seasonStart, ROUND_DAYS[0]));
+  for (const team of teams) {
+    if (!team.matchSnapshot) throw new Error('CUP_PARTICIPANT_SNAPSHOT_MISSING');
+    batch.create(participantSnapshotRef(db, season, team.id), {
+      cupId: id,
+      season,
+      teamId: team.id,
+      matchSnapshot: team.matchSnapshot,
+      createdAt: FieldValue.serverTimestamp(),
+    });
+  }
   for (const pairing of first) {
     if (!pairing.home || !pairing.away) continue;
     pairing.matchId = matchId(season, 1, pairing.index);
     batch.set(db.collection(MATCH_COLLECTIONS.cup).doc(pairing.matchId), buildCupRoundMatchData(season, 1, pairing, scheduledAt));
   }
-  const rounds: Record<string, any[]> = { [roundKey(1)]: first };
+  const rounds: Record<string, any[]> = { [roundKey(1)]: first.map(publicPairing) };
   for (let round = 2; round <= ROUND_COUNT; round++) rounds[roundKey(round)] = [];
   // The cup record and all 56 first-round fixtures commit together. A crash
   // cannot leave an existing bracket with no match documents to process.
@@ -532,6 +567,21 @@ async function repairCurrentRoundFixtures(db: any, cup: { ref: any; data: any },
     if (!Array.isArray(rawPairings)) return { repaired: 0, changed: false };
     const pairings: Pairing[] = rawPairings.map((pairing: any) => ({ ...pairing }));
     let changed = false;
+    const participantIds = [...new Set(pairings.flatMap(pairing =>
+      [pairing.home?.id, pairing.away?.id].filter((id): id is string => Boolean(id))
+    ))];
+    const participantSnapshots = await Promise.all(participantIds.map(async teamId => ({
+      teamId,
+      snap: await tx.get(participantSnapshotRef(db, season, teamId)),
+    })));
+    const participantSnapshotById = new Map(participantSnapshots.map(({ teamId, snap }) => [
+      teamId,
+      snap.exists ? (snap.data() || {}).matchSnapshot as MatchTeamSnapshot : null,
+    ]));
+    for (const pairing of pairings) {
+      if (pairing.home) pairing.home.matchSnapshot = participantSnapshotById.get(pairing.home.id) || pairing.home.matchSnapshot;
+      if (pairing.away) pairing.away.matchSnapshot = participantSnapshotById.get(pairing.away.id) || pairing.away.matchSnapshot;
+    }
     const entries = pairings
       .filter(pairing => pairing.home && pairing.away)
       .map(pairing => {
@@ -566,7 +616,7 @@ async function repairCurrentRoundFixtures(db: any, cup: { ref: any; data: any },
       repaired++;
     });
     if (changed || repaired > 0) {
-      rounds[roundKey(round)] = pairings;
+      rounds[roundKey(round)] = pairings.map(publicPairing);
       tx.update(cup.ref, { rounds, updatedAt: FieldValue.serverTimestamp() });
     }
     return { repaired, changed };
