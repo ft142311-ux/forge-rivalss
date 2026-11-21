@@ -85,3 +85,24 @@ test('pre-publication Pyramid Cup preparation verifies all 120 teams, 56 fixture
   assert.match(preparation, /CUP_PREPARED_FIXTURES_MISSING/);
   assert.match(preparation, /CUP_PREPARED_FIXTURE_IDENTITY_INVALID/);
 });
+
+test('Pyramid Cup preliminary round starts after league Tour 1 and all rounds are daily at 07:00 Moscow time', () => {
+  assert.match(source, /const ROUND_DAYS = \[2, 3, 4, 5, 6, 7, 8\]/);
+  const start = source.indexOf('function roundDate');
+  const end = source.indexOf('function normalizeTeam', start);
+  assert.ok(start >= 0 && end > start);
+  const schedule = source.slice(start, end);
+  assert.match(schedule, /seasonDay < 1/);
+  assert.match(schedule, /date\.setUTCHours\(CUP_START_HOUR_UTC, 0, 0, 0\)/);
+  assert.match(source, /const CUP_START_HOUR_UTC = 4/);
+  assert.match(source, /preliminary round follows league Tour 1/);
+});
+
+test('Pyramid Cup ordinary rounds use BO1 and only the final uses BO3', () => {
+  const start = source.indexOf('function buildCupRoundMatchData');
+  const end = source.indexOf('async function commitCupRoundTransition', start);
+  assert.ok(start >= 0 && end > start);
+  const builder = source.slice(start, end);
+  assert.match(builder, /bestOf: isFinal \? 3 : 1/);
+  assert.match(builder, /affectsLeagueStandings: false/);
+});
