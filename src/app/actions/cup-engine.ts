@@ -397,14 +397,14 @@ export async function preparePyramidCupForSeason(targetSeasonNumber: number) {
   // The public participant registry and round-one bracket are two persisted
   // representations of the same field. Verify they contain exactly the same
   // 120 clubs, with the eight strongest seeds receiving the eight BYEs.
-  const participantIds = new Set(participants.map((team: any) => String(team?.id || '')));
-  const bracketTeamIds = new Set(firstRound.flatMap((pairing: any) =>
+  const participantIds = new Set<string>(participants.map((team: any) => String(team?.id || '')));
+  const bracketTeamIds = new Set<string>(firstRound.flatMap((pairing: any) =>
     [pairing?.home?.id, pairing?.away?.id].filter((id: any) => typeof id === 'string' && id.length > 0)
   ));
   const orderedParticipants = [...participants].sort(compareStrength);
-  const byeIds = new Set(firstRound.filter((pairing: any) => pairing?.status === 'bye')
+  const byeIds = new Set<string>(firstRound.filter((pairing: any) => pairing?.status === 'bye')
     .map((pairing: any) => String(pairing?.home?.id || '')));
-  const expectedByeIds = new Set(orderedParticipants.slice(0, 8).map((team: any) => String(team?.id || '')));
+  const expectedByeIds = new Set<string>(orderedParticipants.slice(0, 8).map((team: any) => String(team?.id || '')));
   if (participantIds.size !== TOTAL_TEAMS || bracketTeamIds.size !== TOTAL_TEAMS ||
       [...participantIds].some(id => !bracketTeamIds.has(id)) ||
       [...bracketTeamIds].some(id => !participantIds.has(id)) ||
