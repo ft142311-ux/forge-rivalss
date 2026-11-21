@@ -32,7 +32,7 @@ export default function GlobalChatPage() {
   const router = useRouter();
   const db = useFirestore();
   const { toast } = useToast();
-  const { language, isLoaded } = useGameState();
+  const { language, isLoaded, clubName } = useGameState();
   const [message, setMessage] = useState('');
   const [isSending, setIsSending] = useState(false);
   const [isActionProcessing, setIsActionProcessing] = useState(false);
