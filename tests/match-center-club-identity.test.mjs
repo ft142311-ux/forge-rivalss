@@ -32,7 +32,7 @@ test('match center keeps UID ownership for non-league fixtures and never renames
 test('match card highlighting uses the same resolved ownership as the displayed club name', () => {
   assert.match(source, /isMyHomeClub: isMyHome, isMyAwayClub: isMyAway/);
   const start = source.indexOf('const renderMatchCard = useCallback');
-  const end = source.indexOf('const renderMatchList', start);
+  const end = source.indexOf('const renderGrouped', start);
   assert.ok(start >= 0 && end > start);
   const renderer = source.slice(start, end);
   assert.match(renderer, /const isMeHome = m\.isMyHomeClub === true/);
