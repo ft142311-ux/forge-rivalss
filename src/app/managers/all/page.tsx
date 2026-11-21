@@ -5,6 +5,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { useUser, useFirestore, useCollection, useMemoFirebase, useDoc, setDocumentNonBlocking } from '@/firebase';
 import { listPublicManagersAction } from '@/app/actions/public-managers';
+import { getPublicManagerPresenceAction } from '@/app/actions/manager-presence';
 import { useGameState } from '@/app/lib/store';
 import { collection, query, orderBy, limit, where, doc, onSnapshot, getDocs, writeBatch } from 'firebase/firestore';
 import { 
@@ -109,6 +110,68 @@ export default function AllManagersPage() {
       setIsLoadingMoreManagers(false);
     }
   };
+
+  const managerIdsKey = useMemo(() => managers.map((manager) => manager.id).join('|'), [managers]);
+
+  // Refresh derived online state while the directory is visible. Heartbeats
+  // expire after two minutes, so a one-minute refresh keeps status responsive
+  // without exposing raw timestamps or opening client access to presence docs.
+  useEffect(() => {
+    if (!user || !managerIdsKey) return;
+    const managerIds = managerIdsKey.split('|').filter(Boolean);
+    let active = true;
+    let inFlight = false;
+
+    const refreshPresence = async () => {
+      if (!active || inFlight || document.visibilityState !== 'visible') return;
+      inFlight = true;
+      try {
+        const idToken = await user.getIdToken();
+        const chunks: string[][] = [];
+        for (let index = 0; index < managerIds.length; index += 100) {
+          chunks.push(managerIds.slice(index, index + 100));
+        }
+        const results = await Promise.all(
+          chunks.map((ids) => getPublicManagerPresenceAction(idToken, ids))
+        );
+        if (!active) return;
+
+        const onlineById = new Map<string, boolean>();
+        for (const result of results) {
+          if (!result.success) throw new Error(result.error);
+          result.presence.forEach((entry) => onlineById.set(entry.id, entry.isOnline));
+        }
+
+        setManagers((current) => {
+          let changed = false;
+          const next = current.map((manager) => {
+            const isOnline = onlineById.get(manager.id) === true;
+            if (manager.isOnline === isOnline) return manager;
+            changed = true;
+            return { ...manager, isOnline };
+          });
+          return changed ? next : current;
+        });
+      } catch (error) {
+        console.warn('[MANAGER DIRECTORY] Presence refresh failed:', error);
+      } finally {
+        inFlight = false;
+      }
+    };
+
+    void refreshPresence();
+    const interval = window.setInterval(() => { void refreshPresence(); }, 60_000);
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') void refreshPresence();
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [user, managerIdsKey]);
 
   const assocsQuery = useMemoFirebase(() => {
     if (!db) return null;

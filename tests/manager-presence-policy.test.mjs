@@ -36,3 +36,21 @@ test('accepts Date, ISO string, and Firestore Timestamp-like values', () => {
   assert.equal(isManagerOnline({ toMillis: () => seenAt }, NOW), true);
   assert.equal(isManagerOnline({ toDate: () => new Date(seenAt) }, NOW), true);
 });
+
+
+test('public presence refresh returns derived booleans only and bounds requested IDs', async () => {
+  const action = readFileSync(new URL('../src/app/actions/manager-presence.ts', import.meta.url), 'utf8');
+  assert.match(action, /getPublicManagerPresenceAction/);
+  assert.match(action, /requireServerActor\(idToken\)/);
+  assert.match(action, /managerIds\.length > 100/);
+  assert.match(action, /isOnline:\s*isManagerOnline\(/);
+  assert.doesNotMatch(action, /lastSeen:\s*snapshot\.data/);
+});
+
+test('manager directory refreshes online state periodically and only while visible', () => {
+  const page = readFileSync(new URL('../src/app/managers/all/page.tsx', import.meta.url), 'utf8');
+  assert.match(page, /getPublicManagerPresenceAction\(idToken, ids\)/);
+  assert.match(page, /setInterval\([\s\S]*?60_000\)/);
+  assert.match(page, /document\.visibilityState !== 'visible'/);
+  assert.match(page, /visibilitychange/);
+});
