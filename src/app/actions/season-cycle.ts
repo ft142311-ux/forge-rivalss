@@ -316,19 +316,10 @@ export const generateNextSeasonWorld = buildNextSeasonWorld;
  * scheduled boundary has arrived.
  */
 export async function activateNextSeason() {
-  const db = getAdminDb();
-  const configRef = db.collection('system_v1').doc('season_config');
-  const snap = await configRef.get();
-  if (!snap.exists) return { success: false, action: 'WORLD_NOT_READY', reason: 'SEASON_CONFIG_MISSING' };
-  const config = snap.data() || {};
-
-  if (config.preparedPublished === true) return activatePublishedSeason();
-
-  const build: any = await buildNextSeasonWorld();
-  if (build?.success !== true || build?.world?.prepared !== true) return build;
-  const publication: any = await publishPreparedSeason();
-  if (publication?.success !== true) return publication;
-  return activatePublishedSeason();
+  // Keep every entry point behind the same Cup-preparation, publication and
+  // scheduled-activation gates. A direct build/publish/activate sequence here
+  // could otherwise bypass the Pyramid Cup prerequisite or start early.
+  return runSeasonOrchestrator();
 }
 
 /**
