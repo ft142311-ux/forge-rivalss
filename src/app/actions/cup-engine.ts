@@ -437,11 +437,15 @@ function isMatchDue(value: any, now: number) {
   return Number.isFinite(ms) && ms <= now;
 }
 // Cup prize money is tied to the participant's division and the existing season-economy scale.
-const DIVISION_CHAMPION_PRIZES: Record<number, number> = { 1: 4_000_000, 2: 1_800_000, 3: 900_000, 4: 350_000 };
+const DIVISION_CUP_PRIZES: Record<number, { champion: number; finalist: number }> = {
+  1: { champion: 4_000_000, finalist: 3_600_000 },
+  2: { champion: 1_800_000, finalist: 1_650_000 },
+  3: { champion: 900_000, finalist: 800_000 },
+  4: { champion: 350_000, finalist: 300_000 },
+};
 async function payCupPrize(db: any, season: number, team: Team | null, place: 'champion' | 'finalist') {
   if (!team || !team.id || team.id.startsWith('BOT_')) return 0;
-  const base = DIVISION_CHAMPION_PRIZES[team.level] || 0;
-  const amount = Math.floor(base * (place === 'champion' ? 0.10 : 0.05));
+  const amount = DIVISION_CUP_PRIZES[team.level]?.[place] || 0;
   if (amount <= 0) return 0;
   const playerRef = db.collection('players_v14').doc(team.id);
   const ledgerRef = db.collection('economy_transactions').doc(`pyramid_cup_S${season}_${place}_${team.id}`);
