@@ -220,7 +220,7 @@ export async function POST(request: NextRequest) {
     }
 
     const result = await executeFreshSeasonOneReset(db, target);
-    return respond(200, { success: true, readOnly: false, ...result });
+    return respond(200, { readOnly: false, ...result });
   } catch (error: any) {
     const code = String(error?.message || error || 'RESET_EXECUTION_FAILED').slice(0, 160);
     const status = code.includes('ALREADY_RUNNING') ? 409 : 503;
