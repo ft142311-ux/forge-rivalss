@@ -1880,13 +1880,17 @@ export async function ensureSeasonCalendar(requestedTargetSeason?: number) {
   // canonical collections are empty. This is a read-only check.
   let pristineFirstWorld = false;
   if (!configSnap.exists) {
-    const [tables, slots, matches, players] = await Promise.all([
+    const [system, tables, slots, matches, players, cupBrackets, cupMatches] = await Promise.all([
+      db.collection('system_v1').limit(1).get(),
       db.collection('league_tables_v2').limit(1).get(),
       db.collection('league_slots_v1').limit(1).get(),
       db.collection('matches_v2').limit(1).get(),
       db.collection('players_v14').limit(1).get(),
+      db.collection('cup_pyramid_v1').limit(1).get(),
+      db.collection(MATCH_COLLECTIONS.cup).limit(1).get(),
     ]);
-    pristineFirstWorld = [tables, slots, matches, players].every((snapshot: any) => snapshot.empty === true || snapshot.size === 0);
+    pristineFirstWorld = [system, tables, slots, matches, players, cupBrackets, cupMatches]
+      .every((snapshot: any) => snapshot.empty === true || snapshot.size === 0);
     if (!pristineFirstWorld) {
       return {
         success: false,
