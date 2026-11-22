@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { getApps } from 'firebase-admin/app';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { isCronAuthorized } from '@/app/api/cron/cron-auth';
 import { buildFreshSeasonOneResetPlan } from '@/app/actions/staging-season-one-reset-plan';
@@ -9,6 +10,17 @@ export const dynamic = 'force-dynamic';
 export const maxDuration = 120;
 
 const EXPECTED_PROJECT = 'forge-rivalstest';
+
+function isExpectedProject() {
+  const configuredProject =
+    process.env.GCLOUD_PROJECT ||
+    process.env.GCP_PROJECT ||
+    process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID ||
+    '';
+  const initializedProject = getApps()[0]?.options?.projectId;
+  return configuredProject === EXPECTED_PROJECT &&
+    (!initializedProject || initializedProject === EXPECTED_PROJECT);
+}
 
 function respond(status: number, body: Record<string, unknown>) {
   return NextResponse.json(body, {
@@ -26,12 +38,7 @@ export async function GET(request: NextRequest) {
     return respond(401, { success: false, error: 'UNAUTHORIZED', readOnly: true });
   }
 
-  const configuredProject =
-    process.env.GCLOUD_PROJECT ||
-    process.env.GCP_PROJECT ||
-    process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID ||
-    '';
-  if (configuredProject !== EXPECTED_PROJECT) {
+  if (!isExpectedProject()) {
     return respond(403, { success: false, error: 'STAGING_PROJECT_MISMATCH', readOnly: true });
   }
 
@@ -178,12 +185,7 @@ export async function POST(request: NextRequest) {
     return respond(401, { success: false, error: 'UNAUTHORIZED', readOnly: false });
   }
 
-  const configuredProject =
-    process.env.GCLOUD_PROJECT ||
-    process.env.GCP_PROJECT ||
-    process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID ||
-    '';
-  if (configuredProject !== EXPECTED_PROJECT) {
+  if (!isExpectedProject()) {
     return respond(403, { success: false, error: 'STAGING_PROJECT_MISMATCH', readOnly: false });
   }
 
