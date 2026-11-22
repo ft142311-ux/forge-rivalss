@@ -92,7 +92,7 @@ export async function GET(request: NextRequest) {
       matches: matchesSnap.docs.map(doc => ({ id: doc.id, data: doc.data() || {} })),
       profileIds,
       cupExists: cupSnap.exists,
-      cupMatches: cupMatchesSnap.size + legacyCupSubcollections.size,
+      cupMatches: cupMatchesSnap.size + legacyCupMatchesSnap.size,
       cupSnapshots: cupSnapshotDocs.size,
       archives: archiveSnap.exists ? 1 : 0,
       rollovers: rolloverSnap.exists ? 1 : 0,
