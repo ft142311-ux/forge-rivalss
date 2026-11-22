@@ -838,8 +838,12 @@ export async function runTournamentCycle(cronToken: string) {
   } catch {
     return { success: false, error: 'UNAUTHORIZED' };
   }
-  const generated = await generateDailyTournamentsInternal();
   const db = getAdminDb();
+  const resetConfig = await db.collection('system_v1').doc('season_config').get();
+  if (resetConfig.exists && resetConfig.data()?.stagingSeasonOneResetInProgress === true) {
+    return { success: true, skipped: true, reason: 'STAGING_SEASON_ONE_RESET_IN_PROGRESS' };
+  }
+  const generated = await generateDailyTournamentsInternal();
   const now = Date.now();
   // Retry participant history independently from active tournament stages.
   const pendingHistorySnap = await db.collection('tournaments_v1')
