@@ -396,15 +396,14 @@ test('prepared Season 2 receives its complete Pyramid Cup before publication in 
 });
 
 
-test('a pristine emulator builds Season 1 first, then creates its complete Pyramid Cup before the season is used', {
+test('a pristine emulator publishes Season 1 only after its complete Pyramid Cup is ready', {
   skip: !emulatorHost,
 }, async t => {
   assert.match(emulatorHost, /^(127[.]0[.]0[.]1|localhost):[0-9]+$/);
 
-  const [{ getAdminDb }, { ensureSeasonCalendar }, { generatePyramidCup }, { getTableId, MAX_LEVELS, TEAMS_PER_GROUP }, { MATCH_COLLECTIONS }] = await Promise.all([
+  const [{ getAdminDb }, { ensureSeasonCalendar }, { getTableId, MAX_LEVELS, TEAMS_PER_GROUP }, { MATCH_COLLECTIONS }] = await Promise.all([
     import('../src/lib/firebase-admin.ts'),
     import('../src/app/actions/season-calendar.ts'),
-    import('../src/app/actions/cup-engine.ts'),
     import('../src/app/lib/leagues-data.ts'),
     import('../src/app/lib/match-storage.ts'),
   ]);
@@ -438,6 +437,8 @@ test('a pristine emulator builds Season 1 first, then creates its complete Pyram
   assert.equal(config.activeSeasonNumber, 1);
   assert.equal(config.phase, 'REGULAR_SEASON');
   assert.equal(config.worldReady, true);
+  assert.equal(config.pyramidCupRequired, true);
+  assert.equal(config.pyramidCupReady, true);
 
   const [tablesSnap, slotsSnap, leagueMatchesSnap] = await Promise.all([
     db.collection('league_tables_v2').where('season', '==', 1).where('version', '==', 140).get(),
@@ -449,7 +450,7 @@ test('a pristine emulator builds Season 1 first, then creates its complete Pyram
   assert.equal(leagueMatchesSnap.size, 840);
 
   const leagueTablesBeforeCup = tablesSnap.docs.map(doc => JSON.stringify(doc.data()));
-  const generated = await generatePyramidCup(1);
+  const generated = world.pyramidCup;
   assert.equal(generated.success, true, JSON.stringify(generated));
   assert.equal(generated.created, true);
   assert.equal(generated.participants, 120);
