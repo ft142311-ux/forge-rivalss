@@ -196,6 +196,7 @@ export function failResetOperation(
   operation.state = safeToRetry ? 'PENDING' : 'BLOCKED';
   operation.lastErrorCode = errorCode || 'RESET_OPERATION_FAILED';
   journal.activeOperationId = null;
+  journal.lease = null;
   journal.recoveryRequired = !safeToRetry;
   journal.phase = safeToRetry ? 'PAUSED' : 'PAUSED';
   journal.updatedAtMs = nowMs;
