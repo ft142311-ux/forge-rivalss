@@ -50,7 +50,10 @@ test('reset journal enforces ordered execution and records completion', () => {
 test('expired lease safely returns an idempotent in-flight operation to pending', () => {
   let journal = claimedJournal();
   journal = startResetOperation(journal, 'archive-season-data', 'lease-a', 1200, journal.revision).journal;
-  const expiredClaim = acquireResetLease(journal, 'worker-b', 'lease-b', 7000, 5000, journal.revision);\n  assert.equal(expiredClaim.changed, false);\n  assert.equal(expiredClaim.reason, 'RESET_LEASE_RECOVERY_REQUIRED');\n  const recovered = recoverResetJournal(journal, 7000, journal.revision);
+  const expiredClaim = acquireResetLease(journal, 'worker-b', 'lease-b', 7000, 5000, journal.revision);
+  assert.equal(expiredClaim.changed, false);
+  assert.equal(expiredClaim.reason, 'RESET_LEASE_RECOVERY_REQUIRED');
+  const recovered = recoverResetJournal(journal, 7000, journal.revision);
   assert.equal(recovered.changed, true);
   assert.equal(recovered.journal.lease, null);
   assert.equal(recovered.journal.activeOperationId, null);
@@ -83,7 +86,10 @@ test('failed operations are retried only when explicitly retryable and idempoten
   assert.equal(failed.changed, true);
   assert.equal(failed.journal.operations[0].state, 'PENDING');
   assert.equal(failed.journal.operations[0].attempts, 1);
-  assert.equal(failed.journal.recoveryRequired, false);\n  assert.equal(failed.journal.lease, null);\n  const nextWorker = acquireResetLease(failed.journal, 'worker-b', 'lease-b', 1400, 5000, failed.journal.revision);\n  assert.equal(nextWorker.changed, true);
+  assert.equal(failed.journal.recoveryRequired, false);
+  assert.equal(failed.journal.lease, null);
+  const nextWorker = acquireResetLease(failed.journal, 'worker-b', 'lease-b', 1400, 5000, failed.journal.revision);
+  assert.equal(nextWorker.changed, true);
 });
 
 test('journal rejects invalid operation definitions and does not recover a live lease', () => {
