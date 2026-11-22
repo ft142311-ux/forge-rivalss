@@ -338,7 +338,7 @@ export async function executeFreshSeasonOneReset(db: any, target: ResetJournal['
     if (step <= 0) {
       await assertLease(db, token);
       if (!journal.sourceConfig) throw new Error('RESET_ORIGINAL_CONFIG_ARCHIVE_SOURCE_MISSING');
-      const archive = await createOrVerifyDurableSeasonOneArchive(db, journal.resetId, journal.sourceConfig);
+      const archive = await createOrVerifyDurableSeasonOneArchive(db, journal.resetId, journal.sourceConfig, () => assertLease(db, token));
       await assertLease(db, token);
       const removed = await removeOldSeasonOneData(db);
       await saveStep(db, token, 0, { ...removed, archiveDocuments: archive.archiveDocuments });
