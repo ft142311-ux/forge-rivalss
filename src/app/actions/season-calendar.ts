@@ -1954,7 +1954,16 @@ export async function ensureSeasonCalendar(requestedTargetSeason?: number) {
   }
 
   const directRecoveryBuild = targetSeason > sourceSeason + 1;
-  const beforeLockPreflight = pristineFirstWorld || directRecoveryBuild
+  // A project-fenced Beta reset explicitly marks the active Season 1 as
+  // rebuilding after its old S1 fixtures have been removed. In this one
+  // controlled state, the source-season fixture preflight must not reject the
+  // intentionally empty calendar. Normal calls retain the full integrity gate.
+  const stagingFreshSeasonOneReset =
+    config.stagingFreshSeasonOneReset === true &&
+    sourceSeason === 1 &&
+    targetSeason === 1 &&
+    config.worldReady !== true;
+  const beforeLockPreflight = pristineFirstWorld || directRecoveryBuild || stagingFreshSeasonOneReset
     ? { ready: true, observedCanonicalMatches: 0, diagnostics: [] as any[] }
     : await inspectCalendarRepairPreflight(db, sourceSeason);
   const canClassifyIncompleteSource = targetSeason > sourceSeason &&
@@ -1979,7 +1988,7 @@ export async function ensureSeasonCalendar(requestedTargetSeason?: number) {
     commit: writes => commitSeasonCalendarWrites(db, lock.ownerId, lock.token, writes),
   };
   try {
-    const lockedPreflight = pristineFirstWorld || directRecoveryBuild
+    const lockedPreflight = pristineFirstWorld || directRecoveryBuild || stagingFreshSeasonOneReset
       ? { ready: true, observedCanonicalMatches: 0, diagnostics: [] as any[] }
       : await inspectCalendarRepairPreflight(db, sourceSeason);
     const canClassifyLockedIncompleteSource = targetSeason > sourceSeason &&
@@ -2057,6 +2066,7 @@ export async function ensureSeasonCalendar(requestedTargetSeason?: number) {
         pyramidCupRequired: true,
         pyramidCupReady: true,
         pyramidCupReadySeasonNumber: 1,
+        stagingFreshSeasonOneReset: false,
         pyramidCupReadyAt: FieldValue.serverTimestamp(),
         pyramidCupError: FieldValue.delete(),
         updatedAt: FieldValue.serverTimestamp(),
