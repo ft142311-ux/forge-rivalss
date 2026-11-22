@@ -42,6 +42,11 @@ test('match revenue rejects malformed, negative, fractional and overflowing club
   assert.match(action, /const after = before \+ amount/);
 });
 
+test('latest match economy records its match identity for scoped season cleanup', () => {
+  assert.match(source, /lastMatchEconomy: economy,[\s\S]*?lastMatchId: matchId,/);
+  assert.match(autonomous, /lastMatchEconomy: homeEconomy,[\s\S]*?lastMatchId: matchDoc\.id,/);
+});
+
 test('match revenue credits and ledger receipt use the same validated integer amount', () => {
   const start = source.indexOf('export async function recordMatchEconomy');
   const action = source.slice(start);
