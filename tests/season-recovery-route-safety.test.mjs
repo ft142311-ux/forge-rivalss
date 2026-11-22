@@ -22,6 +22,17 @@ test('legacy season recovery endpoints outside the canonical orchestrator are di
   }
 });
 
+test('manual Season 1 rollover recovery is restricted to the disposable local emulator', () => {
+  const source = read('src/app/api/cron/recover-season-rollover/route.ts');
+  const guard = source.indexOf("action: 'LOCAL_EMULATOR_ONLY'");
+  const database = source.indexOf('const db = getAdminDb()');
+  assert.ok(guard >= 0 && database > guard, 'non-emulator requests must be rejected before Firestore is accessed');
+  assert.match(source, /FIRESTORE_EMULATOR_HOST/);
+  assert.match(source, /projectId !== 'demo-forge-rivals'/);
+  assert.match(source, /writesStarted: false/);
+  assert.match(source, /sourceSeason !== 1/);
+});
+
 test('public staging health endpoint is uncached and does not expose backend exception details', () => {
   const source = read('src/app/api/health/route.ts');
   assert.match(source, /export const dynamic = 'force-dynamic'/);
@@ -29,4 +40,45 @@ test('public staging health endpoint is uncached and does not expose backend exc
   assert.match(source, /error: 'FIRESTORE_UNAVAILABLE'/);
   assert.match(source, /console\.error\('\[HEALTH CHECK FAILED\]:', error\)/);
   assert.doesNotMatch(source, /error:\s*error\.message/);
+});
+
+test('disposable Season 1 preparation action is locally fenced before Firestore access', () => {
+  const source = read('src/app/actions/season-cycle.ts');
+  const start = source.indexOf('export async function finishTestSeason1AndPrepareSeason2()');
+  assert.ok(start >= 0, 'disposable recovery action must remain explicit');
+  const body = source.slice(start);
+  const guard = body.indexOf("action: 'LOCAL_EMULATOR_ONLY'");
+  const database = body.indexOf('const db = getAdminDb()');
+  assert.ok(guard >= 0 && database > guard, 'non-emulator calls must be rejected before Firestore is accessed');
+  assert.match(body, /FIRESTORE_EMULATOR_HOST/);
+  assert.match(body, /projectId !== 'demo-forge-rivals'/);
+  assert.match(body, /writesStarted: false/);
+});
+
+
+test('staging world verification validates all league participants and profiles, not a fixed bot count', () => {
+  const source = read('src/app/api/admin/staging-world-bootstrap/route.ts');
+  assert.match(source, /const EXPECTED_PARTICIPANTS = 120/);
+  assert.match(source, /Object\.entries\(stats as Record<string, any>\)/);
+  assert.match(source, /uniqueParticipantIds\.length !== EXPECTED_PARTICIPANTS/);
+  assert.match(source, /db\.getAll\(\.\.\.uniqueParticipantIds\.map/);
+  assert.match(source, /profile\.data\(\)\?\.id === uniqueParticipantIds\[index\]/);
+  assert.match(source, /counts\.participantProfiles === EXPECTED_PARTICIPANTS/);
+  assert.doesNotMatch(source, /counts\.bots >= EXPECTED_BOTS/);
+});
+
+
+test('staging Pyramid Cup diagnostics are authenticated, project-fenced and read-only', () => {
+  const source = read('src/app/api/admin/staging-cup-diagnostics/route.ts');
+  assert.match(source, /isCronAuthorized\(request\)/);
+  assert.match(source, /EXPECTED_PROJECT = 'forge-rivalstest'/);
+  assert.match(source, /export async function GET/);
+  assert.match(source, /readOnly: true/);
+  assert.match(source, /cup_pyramid_v1/);
+  assert.match(source, /cup_participant_snapshots_v1/);
+  assert.match(source, /cup_matches/);
+  assert.match(source, /matches_v2/);
+  assert.doesNotMatch(source, /\.set\(|\.create\(|\.update\(|\.delete\(|runTransaction\(/);
+  assert.match(source, /Returns aggregate counts and format metadata only/);
+  assert.doesNotMatch(source, /\.data\(\)\.name|\.data\(\)\.credits|\.data\(\)\.tactics/);
 });

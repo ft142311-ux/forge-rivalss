@@ -123,19 +123,37 @@ export async function resolveUniversalMatchDocument(
       t.get(db.collection('players_v14').doc(String(homeId))),
       t.get(db.collection('players_v14').doc(String(awayId))),
     ]);
-    if (!homeSnap.exists || !awaySnap.exists) throw new Error('PLAYER_NOT_FOUND');
+    const homeData: any = homeSnap.exists ? homeSnap.data() || {} : {};
+    const awayData: any = awaySnap.exists ? awaySnap.data() || {} : {};
+    const frozenCupHome = collectionName === 'cup_matches' &&
+      match.homeTeamSnapshot?.id === String(homeId) &&
+      Array.isArray(match.homeTeamSnapshot?.players) &&
+      match.homeTeamSnapshot.players.length === 5
+        ? match.homeTeamSnapshot
+        : null;
+    const frozenCupAway = collectionName === 'cup_matches' &&
+      match.awayTeamSnapshot?.id === String(awayId) &&
+      Array.isArray(match.awayTeamSnapshot?.players) &&
+      match.awayTeamSnapshot.players.length === 5
+        ? match.awayTeamSnapshot
+        : null;
+    if ((!homeSnap.exists && !frozenCupHome) || (!awaySnap.exists && !frozenCupAway)) {
+      throw new Error('PLAYER_NOT_FOUND');
+    }
 
-    const homeData: any = homeSnap.data() || {};
-    const awayData: any = awaySnap.data() || {};
-    const homeName = normalizeName(homeData.clubName || homeData.displayName || match.homeName || match.hostName, 'Home');
-    const awayName = normalizeName(awayData.clubName || awayData.displayName || match.awayName || match.challengerName, 'Away');
-
+    // Cup fixtures use the roster/tactics frozen when the bracket was generated.
+    // This keeps published entries playable even if registration later retires
+    // the replaced bot's live player profile. Other match modes stay live-profile based.
+    const homeName = normalizeName(frozenCupHome?.name || homeData.clubName || homeData.displayName || match.homeName || match.hostName, 'Home');
+    const awayName = normalizeName(frozenCupAway?.name || awayData.clubName || awayData.displayName || match.awayName || match.challengerName, 'Away');
+    const homeTeamSnapshot = frozenCupHome || buildMatchTeamSnapshot(homeData, homeName, String(homeId), matchType);
+    const awayTeamSnapshot = frozenCupAway || buildMatchTeamSnapshot(awayData, awayName, String(awayId), matchType);
 
     const simulation = runMatchEngine({
       mode: matchType,
       matchId,
-      teamA: buildMatchTeamSnapshot(homeData, homeName, String(homeId), matchType),
-      teamB: buildMatchTeamSnapshot(awayData, awayName, String(awayId), matchType),
+      teamA: homeTeamSnapshot,
+      teamB: awayTeamSnapshot,
       bestOf: Number(match.bestOf) === 1 ? 1 : Number(match.bestOf) === 3 ? 3 : 2,
     });
 
@@ -156,8 +174,8 @@ export async function resolveUniversalMatchDocument(
       awayId: String(awayId),
       homeName,
       awayName,
-      homeLogo: homeData.clubLogo || match.homeLogo || null,
-      awayLogo: awayData.clubLogo || match.awayLogo || null,
+      homeLogo: frozenCupHome?.logo || homeData.clubLogo || match.homeLogo || null,
+      awayLogo: frozenCupAway?.logo || awayData.clubLogo || match.awayLogo || null,
       scoreA,
       scoreB,
       homeScore: scoreA,

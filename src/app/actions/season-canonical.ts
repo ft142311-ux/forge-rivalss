@@ -165,17 +165,29 @@ export function evaluateCanonicalDocuments({
     fixtureKeys.add(key);
     const homeId = String(match.homeId || '');
     const awayId = String(match.awayId || '');
-    const expectedHome = teamsByGroup.get(groupId)?.has(homeId) === true;
-    const expectedAway = teamsByGroup.get(groupId)?.has(awayId) === true;
     const homeRankKey = `${groupId}-${homeRank}`;
     const awayRankKey = `${groupId}-${awayRank}`;
-    if (!homeId || !awayId || homeId === awayId || !expectedHome || !expectedAway ||
-        (fixtureParticipantsByRank.has(homeRankKey) && fixtureParticipantsByRank.get(homeRankKey) !== homeId) ||
-        (fixtureParticipantsByRank.has(awayRankKey) && fixtureParticipantsByRank.get(awayRankKey) !== awayId)) {
+    const status = String(match.status || '').toLowerCase();
+    const isHistoricalFixture = match.isFinished === true ||
+      status === 'finished' || status === 'completed';
+
+    // Completed fixtures are immutable historical evidence. Their participants
+    // may be former bots replaced during registration, so validate their shape
+    // and coordinates but do not compare their identities with today's table.
+    // Only pending fixtures define the current participant at each rank.
+    if (!homeId || !awayId || homeId === awayId) {
       reasons.push('MATCH_PARTICIPANT_TABLE_MISMATCH');
+    } else if (!isHistoricalFixture) {
+      const expectedHome = teamsByGroup.get(groupId)?.has(homeId) === true;
+      const expectedAway = teamsByGroup.get(groupId)?.has(awayId) === true;
+      if (!expectedHome || !expectedAway ||
+          (fixtureParticipantsByRank.has(homeRankKey) && fixtureParticipantsByRank.get(homeRankKey) !== homeId) ||
+          (fixtureParticipantsByRank.has(awayRankKey) && fixtureParticipantsByRank.get(awayRankKey) !== awayId)) {
+        reasons.push('MATCH_PARTICIPANT_TABLE_MISMATCH');
+      }
+      fixtureParticipantsByRank.set(homeRankKey, homeId);
+      fixtureParticipantsByRank.set(awayRankKey, awayId);
     }
-    fixtureParticipantsByRank.set(homeRankKey, homeId);
-    fixtureParticipantsByRank.set(awayRankKey, awayId);
     fixtureCounts.set(groupId, (fixtureCounts.get(groupId) || 0) + 1);
   }
 
@@ -184,7 +196,11 @@ export function evaluateCanonicalDocuments({
     const occupant = String(slot.occupantId || '');
     if (!occupant) continue;
     const location = `${groupKey(slot.division ?? slot.level, slot.group)}-${Number(slot.rank)}`;
-    if (fixtureParticipantsByRank.get(location) !== occupant) reasons.push('SLOT_FIXTURE_PARTICIPANT_MISMATCH');
+    // Slot occupants represent the current league state. Compare them only
+    // against pending fixtures; completed fixtures retain historical IDs.
+    if (fixtureParticipantsByRank.has(location) && fixtureParticipantsByRank.get(location) !== occupant) {
+      reasons.push('SLOT_FIXTURE_PARTICIPANT_MISMATCH');
+    }
   }
 
   if (tableKeys.size !== CANONICAL_TOTAL_GROUPS || tables.length !== CANONICAL_TOTAL_GROUPS) reasons.push('TABLE_COUNT_INVALID');

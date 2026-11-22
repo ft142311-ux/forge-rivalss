@@ -7,7 +7,7 @@ import { resolveSeasonLifecycleWindow } from './season-boundary';
 import { logger } from '@/app/lib/logger';
 import { activatePublishedSeason, ensureSeasonCalendar, publishPreparedSeason } from './season-calendar';
 import { runTournamentCycle } from './tournament-system';
-import { runPyramidCupCycle } from './cup-engine';
+import { preparePyramidCupForSeason, runPyramidCupCycle } from './cup-engine';
 import { resolveDailyMatches } from './autonomous-cycle';
 import { prepareSeasonRollover } from './season-rollover';
 import { validateRolloverPlan } from './season-rollover-plan';
@@ -88,6 +88,28 @@ export async function runSeasonOrchestrator() {
       const config = configSnap.exists ? configSnap.data() || {} : {};
       if (config.preparedWorldReady !== true || Number(config.preparedSeasonNumber) !== Number(world.seasonNumber)) {
         return { action: 'WORLD_BUILDING' as const, worldReady: config.worldReady === true, season: config.activeSeasonNumber, reason: 'PREPARED_WORLD_NOT_READY', calendar: world, catchUp };
+      }
+
+      // The Pyramid Cup belongs to the upcoming season and must exist before
+      // publication/activation. Build its immutable participant snapshot from
+      // the prepared calendar, then verify every opening fixture before publish.
+      let pyramidCupPreparation: any;
+      try {
+        pyramidCupPreparation = await preparePyramidCupForSeason(Number(world.seasonNumber));
+      } catch (error: any) {
+        pyramidCupPreparation = { success: false, reason: String(error?.message || 'CUP_PREPARATION_FAILED') };
+      }
+      if (pyramidCupPreparation?.success !== true) {
+        logger.warn('Prepared season is waiting for Pyramid Cup generation', pyramidCupPreparation);
+        return {
+          action: 'PYRAMID_CUP_PREPARATION_BLOCKED' as const,
+          worldReady: true,
+          season: Number(config.activeSeasonNumber || world.seasonNumber),
+          targetSeason: Number(world.seasonNumber),
+          pyramidCup: pyramidCupPreparation,
+          calendar: world,
+          catchUp,
+        };
       }
 
       if (config.preparedPublished !== true) {
@@ -294,19 +316,10 @@ export const generateNextSeasonWorld = buildNextSeasonWorld;
  * scheduled boundary has arrived.
  */
 export async function activateNextSeason() {
-  const db = getAdminDb();
-  const configRef = db.collection('system_v1').doc('season_config');
-  const snap = await configRef.get();
-  if (!snap.exists) return { success: false, action: 'WORLD_NOT_READY', reason: 'SEASON_CONFIG_MISSING' };
-  const config = snap.data() || {};
-
-  if (config.preparedPublished === true) return activatePublishedSeason();
-
-  const build: any = await buildNextSeasonWorld();
-  if (build?.success !== true || build?.world?.prepared !== true) return build;
-  const publication: any = await publishPreparedSeason();
-  if (publication?.success !== true) return publication;
-  return activatePublishedSeason();
+  // Keep every entry point behind the same Cup-preparation, publication and
+  // scheduled-activation gates. A direct build/publish/activate sequence here
+  // could otherwise bypass the Pyramid Cup prerequisite or start early.
+  return runSeasonOrchestrator();
 }
 
 /**
@@ -314,6 +327,14 @@ export async function activateNextSeason() {
  * Do not use for later seasons: their normal strict rollover path is preserved.
  */
 export async function finishTestSeason1AndPrepareSeason2() {
+  // This one-shot recovery exists only for the disposable local emulator.
+  // Keep the guard inside the action as well as at any HTTP entry point so a
+  // future caller cannot accidentally run it against shared staging/Production.
+  const emulatorHost = process.env.FIRESTORE_EMULATOR_HOST || '';
+  const projectId = process.env.GCLOUD_PROJECT || process.env.GOOGLE_CLOUD_PROJECT || '';
+  if (!/^(127[.]0[.]0[.]1|localhost):[0-9]+$/.test(emulatorHost) || projectId !== 'demo-forge-rivals') {
+    return { success: false, action: 'LOCAL_EMULATOR_ONLY', reason: 'DISPOSABLE_SEASON_1_RECOVERY_REQUIRES_LOCAL_EMULATOR', writesStarted: false };
+  }
   const db = getAdminDb();
   const configRef = db.collection('system_v1').doc('season_config');
   const initialSnap = await configRef.get();

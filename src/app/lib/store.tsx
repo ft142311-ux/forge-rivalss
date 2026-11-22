@@ -14,7 +14,7 @@ import { doc, onSnapshot, setDoc, serverTimestamp } from 'firebase/firestore';
 import { claimDailyRewardAction, purchasePremiumAction } from '@/app/actions/economy';
 import { markMatchViewedAction } from '@/app/actions/match-report';
 import { createTrialMatchAction } from '@/app/actions/trial-match-resolver';
-import { startConstructionAction, accelerateConstructionAction, finalizeConstructionsAction } from '@/app/actions/infrastructure';
+import { startConstructionAction, startCapacityExpansionAction, accelerateConstructionAction, finalizeConstructionsAction } from '@/app/actions/infrastructure';
 import { updateLineupAction, startDailyTrainingAction, listPlayerOnMarketAction } from '@/app/actions/gameplay';
 import { setFoundationTrainingFocusAction } from '@/app/actions/foundation-management';
 import { useToast } from '@/hooks/use-toast';
@@ -114,7 +114,7 @@ interface GameState {
   startBootcampConstruction: (id: string, cost?: number) => Promise<boolean>;
   startAcademyConstruction: (id: string, cost?: number) => Promise<boolean>;
   startMedicalConstruction: (id: string, cost?: number) => Promise<boolean>;
-  startCapacityExpansion: (seats: number, cost: number) => boolean;
+  startCapacityExpansion: (seats: number) => Promise<boolean>;
   accelerateConstruction: (type: string, id: string, multiplier: number, price: number) => Promise<boolean>;
   checkConstructions: () => void;
   scoutCandidates: () => void;
@@ -167,7 +167,7 @@ const DEFAULT_STATE: GameState = {
   activeLicenseTier: null, rank: 0, salaryLedger: null, salaryPayments: [],
   rewardDay: 1, lastRewardClaimDate: null, matchHistory: [], lastSeenMatchDay: 0,
   managerSkills: { sponsors: 0, agents: 0, training: 0, medical: 0 },
-  arena: { capacity: 5000 }, hq: {}, bootcamp: {}, academy: {}, medical: {},
+  arena: { capacity: 3000 }, hq: {}, bootcamp: {}, academy: {}, medical: {},
   country: null, isPremium: false, premiumUntil: null, activeSeasonNumber: 1, seasonNumber: 1, seasonDay: 1, isSyncing: false, language: 'ru',
   isDataReady: false, allSeasonMatches: [], nextMatch: null, isMatchesLoading: true,
   lastProcessedSeason: 0, trophies: [], version: 245,
@@ -181,7 +181,7 @@ const DEFAULT_STATE: GameState = {
   markMatchIdAsSeen: async () => {}, deleteMatchHistoryEntry: () => {}, clearMatchHistory: () => {},
   upgradeManagerSkill: () => {},
   startArenaConstruction: async () => false, startHQConstruction: async () => false, startBootcampConstruction: async () => false,
-  startAcademyConstruction: async () => false, startMedicalConstruction: async () => false, startCapacityExpansion: () => false,
+  startAcademyConstruction: async () => false, startMedicalConstruction: async () => false, startCapacityExpansion: async () => false,
   accelerateConstruction: async () => false, checkConstructions: () => {},
   scoutCandidates: () => {}, recruitCandidate: () => {}, clearScoutingReport: () => {},
   payStaffSalaries: async () => {}, healPlayer: () => {}, launchFanCampaign: () => {},
@@ -243,9 +243,19 @@ export function GameStateProvider({ children }: { children: ReactNode }) {
     }
     const { firestore: db } = initializeFirebase();
     const playerRef = doc(db, 'players_v14', user.uid);
+    console.info('[PLAYER SYNC] subscribing', {
+      uid: user.uid,
+      projectId: db.app.options.projectId || 'unknown',
+      path: `players_v14/${user.uid}`,
+    });
     const unsubscribe = onSnapshot(playerRef, (snapshot) => {
       if (snapshot.exists()) {
         const d = snapshot.data();
+        console.info('[PLAYER SYNC] profile snapshot received', {
+          uid: user.uid,
+          projectId: db.app.options.projectId || 'unknown',
+          exists: true,
+        });
         saveToLocal({
           ...d,
           isTeamLoaded: true,
@@ -254,8 +264,46 @@ export function GameStateProvider({ children }: { children: ReactNode }) {
           crystals: Number(d.crystals)
         } as any);
       } else {
-        setState(prev => ({ ...prev, isTeamLoaded: false, isInitialSyncDone: true }));
+        console.error('[PLAYER SYNC] profile document is missing', {
+          uid: user.uid,
+          projectId: db.app.options.projectId || 'unknown',
+          path: `players_v14/${user.uid}`,
+        });
+        setState(prev => {
+          // A missing realtime document must not erase a profile already
+          // verified and hydrated by the authenticated server bootstrap.
+          // Keep the current session usable; AuthGuard can still redirect a
+          // genuinely new account when no matching profile is present.
+          const hasVerifiedLocalProfile =
+            prev.id === user.uid && Array.isArray(prev.ownedPlayers) && prev.ownedPlayers.length > 0;
+          return {
+            ...prev,
+            isTeamLoaded: hasVerifiedLocalProfile,
+            isInitialSyncDone: true,
+          };
+        });
       }
+    }, (error) => {
+      console.error('[PLAYER SYNC] Firestore subscription failed', {
+        uid: user.uid,
+        projectId: db.app.options.projectId || 'unknown',
+        path: `players_v14/${user.uid}`,
+        code: error?.code || 'unknown',
+        message: error?.message || 'unknown',
+        name: error?.name || 'unknown',
+      });
+      setState(prev => {
+        // A transient listener/permission/network failure is not proof that
+        // the authenticated profile was deleted. Preserve a server-hydrated
+        // profile for this UID and let realtime retry in the background.
+        const hasVerifiedLocalProfile =
+          prev.id === user.uid && Array.isArray(prev.ownedPlayers) && prev.ownedPlayers.length > 0;
+        return {
+          ...prev,
+          isTeamLoaded: hasVerifiedLocalProfile,
+          isInitialSyncDone: true,
+        };
+      });
     });
     return () => unsubscribe();
   }, [user?.uid, state.isLoaded, saveToLocal]);
@@ -317,6 +365,22 @@ export function GameStateProvider({ children }: { children: ReactNode }) {
   }, [user?.uid, toast]);
 
   const startArenaConstruction = useCallback((id: string, _cost?: number) => startConstruction('arena', id), [startConstruction]);
+  const startCapacityExpansion = useCallback(async (seats: number): Promise<boolean> => {
+    if (!user?.uid) return false;
+    try {
+      const idToken = await user.getIdToken(true);
+      const res = await startCapacityExpansionAction(idToken, seats);
+      if (!res.success) {
+        toast({ variant: 'destructive', title: ('error' in res ? String(res.error) : 'CAPACITY_EXPANSION_FAILED') });
+        return false;
+      }
+      return true;
+    } catch {
+      toast({ variant: 'destructive', title: 'CAPACITY_EXPANSION_FAILED' });
+      return false;
+    }
+  }, [user?.uid, toast]);
+
   const startHQConstruction = useCallback((id: string, _cost?: number) => startConstruction('hq', id), [startConstruction]);
   const startBootcampConstruction = useCallback((id: string, _cost?: number) => startConstruction('bootcamp', id), [startConstruction]);
   const startAcademyConstruction = useCallback((id: string, _cost?: number) => startConstruction('academy', id), [startConstruction]);
@@ -515,7 +579,7 @@ export function GameStateProvider({ children }: { children: ReactNode }) {
   const value = useMemo(() => ({
     ...state, 
     recordMatch, runTrialMatch, markMatchIdAsSeen, claimReward, purchasePremium, updateLineup, setTrainingFocus, startDailyPlayerTraining, assignToRole,
-    startArenaConstruction, startHQConstruction, startBootcampConstruction, startAcademyConstruction,
+    startArenaConstruction, startCapacityExpansion, startHQConstruction, startBootcampConstruction, startAcademyConstruction,
     startMedicalConstruction, accelerateConstruction, checkConstructions,
     addCrystals: () => console.warn("Client-side state write blocked by security policy."),
     addCredits: () => console.warn("Client-side state write blocked by security policy."),
@@ -525,7 +589,7 @@ export function GameStateProvider({ children }: { children: ReactNode }) {
     saveToLocal,
     resetProfile: async () => { if (typeof window !== 'undefined') localStorage.removeItem(STORAGE_KEY); window.location.reload(); }
   }), [state, claimReward, purchasePremium, updateLineup, setTrainingFocus, startDailyPlayerTraining, assignToRole,
-    startArenaConstruction, startHQConstruction, startBootcampConstruction, startAcademyConstruction,
+    startArenaConstruction, startCapacityExpansion, startHQConstruction, startBootcampConstruction, startAcademyConstruction,
     startMedicalConstruction, accelerateConstruction, checkConstructions, setLanguage, setWorldReady, saveToLocal, recordMatch, runTrialMatch, markMatchIdAsSeen]);
 
   return <GameStateContext.Provider value={value}>{children}</GameStateContext.Provider>;

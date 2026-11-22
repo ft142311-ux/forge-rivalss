@@ -76,6 +76,7 @@ function mapRegistrationError(error: unknown): { status: number; code: string } 
     BOT_PLAYER_INVALID: { status: 503, code: 'BOT_PLAYER_INVALID' },
     INVALID_LEAGUE_SLOT: { status: 409, code: 'INVALID_LEAGUE_SLOT' },
     NO_FREE_SLOTS_IN_LEAGUE: { status: 409, code: 'NO_FREE_SLOTS_IN_LEAGUE' },
+    REGISTRATION_MATCH_CATCH_UP_FAILED: { status: 503, code: 'REGISTRATION_MATCH_CATCH_UP_FAILED' },
     SLOT_MATCH_IN_PROGRESS: { status: 409, code: 'SLOT_MATCH_IN_PROGRESS' },
     SLOT_MATCH_DUE: { status: 409, code: 'SLOT_MATCH_DUE' },
     SLOT_MATCH_TIME_UNKNOWN: { status: 409, code: 'SLOT_MATCH_TIME_UNKNOWN' },
@@ -160,7 +161,7 @@ export async function POST(request: NextRequest) {
     const statsRef = db.collection('system_v1').doc('global_stats');
     const auditRef = db.collection('security_audit_v1').doc();
 
-    const result = await db.runTransaction(async (transaction) => {
+    const initialize = () => db.runTransaction(async (transaction) => {
       // Idempotency: a repeated request for an already-created account returns
       // its existing result and never allocates a second slot or squad.
       const playerSnapshot = await transaction.get(playerRef);
@@ -371,7 +372,7 @@ export async function POST(request: NextRequest) {
         },
         staff: { coach: null },
         strategy: 'Balanced Play',
-        arena: { capacity: 5000 },
+        arena: { capacity: 3000 },
         hq: {},
         bootcamp: {},
         academy: {},
@@ -402,6 +403,39 @@ export async function POST(request: NextRequest) {
         alreadyInitialized: false,
       };
     });
+
+    let result;
+    try {
+      result = await initialize();
+    } catch (error: unknown) {
+      const reason = error instanceof Error ? error.message : '';
+      if (reason !== 'SLOT_MATCH_DUE') throw error;
+
+      // A registration must never take over a fixture whose scheduled start
+      // has passed. Let the canonical, idempotent league resolver settle due
+      // fixtures first, then retry the atomic registration exactly once.
+      // This uses the same guarded simulation/settlement path as the scheduler;
+      // it does not rewrite or force-finish a match from the registration API.
+      console.info('[REGISTRATION API] Due league fixture detected; running canonical catch-up');
+      // Load the server-only orchestrator only when a due fixture actually requires catch-up.
+      // This keeps the registration boundary testable without loading the entire season engine.
+      const { resolveDailyMatches } = await import('@/app/actions/autonomous-cycle');
+      const catchUp = await resolveDailyMatches();
+      if (!catchUp || catchUp.success !== true) {
+        console.warn('[REGISTRATION API] Canonical match catch-up did not complete', {
+          code: catchUp?.code || catchUp?.reason || 'MATCH_CATCH_UP_FAILED',
+          count: catchUp?.count || 0,
+          diagnostics: Array.isArray(catchUp?.diagnostics) ? catchUp.diagnostics : undefined,
+          finishedMatches: catchUp && 'finishedMatches' in catchUp ? catchUp.finishedMatches : undefined,
+          skippedTables: catchUp?.skippedTables,
+        });
+        throw new Error('REGISTRATION_MATCH_CATCH_UP_FAILED');
+      }
+
+      // Re-read every registration invariant inside a fresh transaction.
+      // If a fixture is still due, the normal SLOT_MATCH_DUE guard remains active.
+      result = await initialize();
+    }
 
     return json(200, result);
   } catch (error: unknown) {

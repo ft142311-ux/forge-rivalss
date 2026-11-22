@@ -11,8 +11,16 @@ export async function GET(request: Request) {
     return new NextResponse('Unauthorized', { status: 401 });
   }
   try {
-    const result = await runTournamentCycle(cronSecret);
-    const pyramidCup = await runPyramidCupCycle();
+    const [result, pyramidCup] = await Promise.all([
+      runTournamentCycle(cronSecret).catch((error: any) => {
+        console.error('[CRON TOURNAMENT CYCLE FAILED]', error);
+        return { success: false, error: 'TOURNAMENT_CYCLE_FAILED' };
+      }),
+      runPyramidCupCycle().catch((error: any) => {
+        console.error('[CRON PYRAMID CUP CYCLE FAILED]', error);
+        return { success: false, error: 'PYRAMID_CUP_CYCLE_FAILED' };
+      }),
+    ]);
     const pyramidCupFailed = 'success' in pyramidCup && pyramidCup.success === false;
     const success = result?.success !== false && !pyramidCupFailed;
     return NextResponse.json(

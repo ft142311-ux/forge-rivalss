@@ -1,8 +1,8 @@
 const functions = require('firebase-functions');
 const admin = require('firebase-admin');
-const { isEligibleRegistrationSlot, validateRegistrationSchedule, generateStartingSquad, buildRegistrationMatchPlan, transferBotStandingToUser } = require('./registration-core');
+const { isEligibleRegistrationSlot, validateRegistrationSchedule, generateStartingSquad, buildRegistrationMatchPlan, transferBotStandingToUser, DEFAULT_ARENA_CAPACITY } = require('./registration-core');
 const { recordUserActivityUnlessRetiring } = require('./club-activity-fence');
-const { invokeSeasonOrchestrator, invokeMarketExpirySweep } = require('./season-orchestrator-scheduler');
+const { invokeSeasonOrchestrator, invokeMarketExpirySweep, invokeTournamentSweep } = require('./season-orchestrator-scheduler');
 
 /**
  * @fileOverview Р•РґРёРЅРѕРµ СЃРµСЂРІРµСЂРЅРѕРµ СЏРґСЂРѕ СЂРµРіРёСЃС‚СЂР°С†РёРё v165.
@@ -121,6 +121,12 @@ exports.initializeClub = functions.region('us-central1').https.onCall(async (dat
       if (config.worldReady !== true) {
         console.warn('[INIT] WORLD NOT READY:', { seasonNum, worldReady: config.worldReady });
         throw new functions.https.HttpsError('failed-precondition', 'WORLD_INITIALIZING');
+      }
+
+      // A pristine first-season world is not open for registration until its
+      // canonical Pyramid Cup bracket and all frozen participant snapshots exist.
+      if (config.pyramidCupRequired === true && Number(config.pyramidCupReadySeasonNumber) === seasonNum && config.pyramidCupReady !== true) {
+        throw new functions.https.HttpsError('failed-precondition', 'PYRAMID_CUP_NOT_READY');
       }
 
       if (phase !== 'REGULAR_SEASON' && phase !== 'ACTIVE') {
@@ -317,7 +323,7 @@ exports.initializeClub = functions.region('us-central1').https.onCall(async (dat
           sub_full_support: startingSquad[9].id
         },
         staff: { coach: null }, strategy: "Balanced Play",
-        arena: { capacity: 5000 }, hq: {}, bootcamp: {}, academy: {}, medical: {}
+        arena: { capacity: DEFAULT_ARENA_CAPACITY }, hq: {}, bootcamp: {}, academy: {}, medical: {}
       };
       
       t.set(playerRef, initialState);
@@ -453,5 +459,28 @@ exports.runMarketExpirySweep = functions
       secret: process.env.CRON_SECRET,
     });
     console.log('[MARKET EXPIRY SCHEDULE]', JSON.stringify(result));
+    return result;
+  });
+
+
+// Runs the protected tournament and Pyramid Cup cycle every five minutes.
+// Cup creation is idempotent and begins on season day 1; round transitions are
+// fenced transactionally by the Cup engine.
+exports.runTournamentSweep = functions
+  .region('us-central1')
+  .runWith({
+    timeoutSeconds: 540,
+    memory: '256MB',
+    maxInstances: 1,
+    secrets: ['CRON_SECRET'],
+  })
+  .pubsub.schedule('every 5 minutes')
+  .timeZone('UTC')
+  .onRun(async () => {
+    const result = await invokeTournamentSweep({
+      seasonOrchestratorUrl: process.env.SEASON_ORCHESTRATOR_URL,
+      secret: process.env.CRON_SECRET,
+    });
+    console.log('[TOURNAMENT AND PYRAMID CUP SCHEDULE]', JSON.stringify(result));
     return result;
   });

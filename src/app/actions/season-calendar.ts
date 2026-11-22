@@ -4,6 +4,8 @@ import { FieldValue } from 'firebase-admin/firestore';
 import { commitSeasonActivation } from './season-activation-commit';
 import { completeSeasonHistoryCleanup } from './season-history-cleanup';
 import { prepareSeasonRollover } from './season-rollover';
+import { generatePyramidCup, preparePyramidCupForSeason } from './cup-engine';
+import { MATCH_COLLECTIONS } from '@/app/lib/match-storage';
 import { acquireSeasonCalendarBuildLock, assertSeasonCalendarBuildLock, commitSeasonCalendarPublication, commitSeasonCalendarWrites, commitSeasonHistoryCleanupWrites, releaseSeasonCalendarBuildLock } from './season-rollover-lock';
 import { buildCarryForwardGroups, buildPromotionRelegationGroups, compareRecoveryRolloverPlans, resolveRecoveryPlacementSource, resolveRolloverPlanPruneIds, validateRolloverPlan } from './season-rollover-plan';
 import { getRecoveryRolloverPlanSignature } from './season-rollover-plan-signature';
@@ -956,6 +958,9 @@ async function buildSeasonCalendar(lease: BuildLease, pristineFirstWorld = false
       }),
       rebuildStatus: 'STAGE_3A8_COMPLETE',
       rebuildError: FieldValue.delete(),
+      pyramidCupRequired: pristineFirstWorld ? true : current.pyramidCupRequired === true,
+      pyramidCupReady: pristineFirstWorld ? false : current.pyramidCupReady === true,
+      pyramidCupReadySeasonNumber: pristineFirstWorld ? 1 : Number(current.pyramidCupReadySeasonNumber || 0),
       updatedAt: FieldValue.serverTimestamp(),
     }, options: { merge: true } }]);
   }
@@ -1412,6 +1417,12 @@ export async function publishPreparedSeason() {
   if (!Number.isSafeInteger(targetSeason) || (targetSeason !== sourceSeason + 1 && !multiSeasonRecovery)) {
     return { success: false, action: 'WORLD_NOT_READY', reason: 'INVALID_PUBLICATION_TARGET', sourceSeason, targetSeason };
   }
+  // Enforce the Cup prerequisite at the publication boundary itself, not
+  // only in the scheduler. Direct callers and retries must not bypass it.
+  const cupPreparation = await preparePyramidCupForSeason(targetSeason);
+  if (cupPreparation.success !== true) {
+    return { success: false, action: 'WORLD_BUILDING', reason: 'PYRAMID_CUP_PREPARATION_BLOCKED', cupPreparation, sourceSeason, targetSeason, writesStarted: false };
+  }
   if (initial.preparedPublished === true && Number(initial.preparedSeasonNumber) === targetSeason) {
     const planRef = db.collection('league_season_rollovers_v1').doc(`S${targetSeason}`);
     const [planSnap, readiness] = await Promise.all([
@@ -1635,6 +1646,12 @@ export async function activatePublishedSeason() {
   if (!Number.isSafeInteger(targetSeason) || (targetSeason !== sourceSeason + 1 && !multiSeasonRecovery)) {
     return { success: false, action: 'WORLD_NOT_READY', reason: 'INVALID_ACTIVATION_TARGET', sourceSeason, targetSeason };
   }
+  // Revalidate immediately before activation as well: a Cup removed or
+  // corrupted after publication must block the season boundary.
+  const cupPreparation = await preparePyramidCupForSeason(targetSeason);
+  if (cupPreparation.success !== true) {
+    return { success: false, action: 'WORLD_NOT_READY', reason: 'PYRAMID_CUP_PREPARATION_BLOCKED', cupPreparation, sourceSeason, targetSeason, writesStarted: false };
+  }
   if (initial.preparedPublished !== true || initial.preparedWorldReady !== true ||
       Number(initial.preparedSeasonNumber) !== targetSeason || initial.worldReady !== true) {
     return { success: false, action: 'WORLD_NOT_READY', reason: 'SEASON_NOT_PUBLISHED', sourceSeason, targetSeason, writesStarted: false };
@@ -1750,6 +1767,91 @@ export async function activatePublishedSeason() {
   return { success: true, action: 'SEASON_ACTIVATED', sourceSeason, targetSeason, worldReady: true, recoveryMode, historyCleanup: cleanup, activationAt: new Date(activationAtMs).toISOString(), ...readiness };
 }
 
+
+async function verifyInitialPyramidCup(db: any, seasonStartValue: any) {
+  const id = 'cup_s1_lALPHA';
+  const cupSnap = await db.collection('cup_pyramid_v1').doc(id).get();
+  if (!cupSnap.exists) return { ready: false, reason: 'INITIAL_CUP_DOCUMENT_MISSING' };
+  const cup = cupSnap.data() || {};
+  const participants = Array.isArray(cup.participants) ? cup.participants : [];
+  const firstRound = Array.isArray(cup.rounds?.r1) ? cup.rounds.r1 : [];
+  const ordered = [...participants].sort((a: any, b: any) => Number(a.seed) - Number(b.seed));
+  const eligible = ordered.filter((team: any) => Number(team.level) !== 1);
+  const d1Ids = new Set<string>(participants.filter((team: any) => Number(team.level) === 1).map((team: any) => String(team.id || '')));
+  const restTeams = Array.isArray(cup.openingRoundRestTeams) ? cup.openingRoundRestTeams : [];
+  const restIds = new Set<string>(restTeams.map((team: any) => String(team.id || '')));
+  if (Number(cup.season) !== 1 || cup.status !== 'active' ||
+      cup.name !== 'Кубок Пирамиды' || Number(cup.currentRound) !== 1 || Number(cup.totalRounds) !== 7 ||
+      Number(cup.formatVersion) !== 4 || cup.format !== 'D1_REST_OPENING_ROUND' ||
+      Number(cup.totalParticipants) !== 120 || Number(cup.totalMatches) !== 119 || participants.length !== 120 ||
+      new Set(participants.map((team: any) => String(team?.id || ''))).size !== 120 ||
+      new Set(participants.map((team: any) => Number(team?.seed))).size !== 120 ||
+      ordered.some((team: any, index: number) => Number(team?.seed) !== index + 1 || !team?.id) ||
+      Number(cup.preliminaryMatches) !== 56 || Number(cup.byeCount) !== 0 ||
+      Number(cup.openingRoundRestCount) !== 8 || restTeams.length !== 8 || restIds.size !== 8 ||
+      d1Ids.size !== 8 || [...d1Ids].some(id => !restIds.has(id)) || [...restIds].some(id => !d1Ids.has(id)) ||
+      restTeams.some((team: any) => Number(team.level) !== 1 || !participants.some((candidate: any) => candidate.id === team.id)) ||
+      firstRound.length !== 56 || firstRound.some((pairing: any) => pairing?.status === 'bye')) {
+    return { ready: false, reason: 'INITIAL_CUP_BRACKET_INVALID' };
+  }
+
+  const seasonStart = new Date(seasonStartValue);
+  if (!Number.isFinite(seasonStart.getTime())) {
+    return { ready: false, reason: 'INITIAL_CUP_SEASON_START_INVALID' };
+  }
+  const expectedKickoff = new Date(seasonStart.getTime() + 86400000);
+  expectedKickoff.setUTCHours(4, 0, 0, 0);
+
+  const invalidPairing = firstRound.some((pairing: any, index: number) => {
+    const expectedId = `cup_S1_R1_M${String(index + 1).padStart(2, '0')}`;
+    const stronger = eligible[eligible.length - 2 - index * 2];
+    const weaker = eligible[eligible.length - 1 - index * 2];
+    return pairing?.id !== `r1_m${index + 1}` || pairing?.matchId !== expectedId ||
+      pairing?.status !== 'scheduled' ||
+      pairing?.away?.id !== stronger?.id ||
+      pairing?.home?.id !== weaker?.id;
+  });
+  if (invalidPairing) return { ready: false, reason: 'INITIAL_CUP_PAIRINGS_INVALID' };
+  const fixtureSnapshots = await Promise.all(firstRound.map((_: any, index: number) => {
+    const expectedId = `cup_S1_R1_M${String(index + 1).padStart(2, '0')}`;
+    return db.collection(MATCH_COLLECTIONS.cup).doc(expectedId).get();
+  }));
+  if (fixtureSnapshots.some((fixture: any) => !fixture.exists)) {
+    return { ready: false, reason: 'INITIAL_CUP_FIXTURES_INCOMPLETE' };
+  }
+  for (let index = 0; index < fixtureSnapshots.length; index++) {
+    const fixture = fixtureSnapshots[index].data() || {};
+    const pairing = firstRound[index];
+    const scheduledAtMs = fixture.scheduledAt?.toMillis?.() ?? Date.parse(String(fixture.scheduledAt || ''));
+    if (fixture.cupId !== id || Number(fixture.season) !== 1 ||
+        Number(fixture.cupRound) !== 1 || fixture.bestOf !== 1 ||
+        fixture.homeId !== pairing.home.id || fixture.awayId !== pairing.away.id ||
+        scheduledAtMs !== expectedKickoff.getTime() ||
+        fixture.homeTeamSnapshot?.id !== pairing.home.id ||
+        fixture.awayTeamSnapshot?.id !== pairing.away.id ||
+        !Array.isArray(fixture.homeTeamSnapshot?.players) || fixture.homeTeamSnapshot.players.length !== 5 ||
+        !Array.isArray(fixture.awayTeamSnapshot?.players) || fixture.awayTeamSnapshot.players.length !== 5) {
+      return { ready: false, reason: 'INITIAL_CUP_FIXTURE_IDENTITY_INVALID', matchId: fixture.id || null };
+    }
+  }
+
+  const participantSnapshots = await Promise.all(participants.map((team: any) =>
+    db.collection('cup_participant_snapshots_v1').doc(id).collection('teams').doc(String(team.id)).get()
+  ));
+  if (participantSnapshots.some((snapshot: any, index: number) => {
+    if (!snapshot.exists) return true;
+    const data = snapshot.data() || {};
+    return data.cupId !== id || Number(data.season) !== 1 ||
+      data.teamId !== String(participants[index].id) ||
+      data.matchSnapshot?.id !== String(participants[index].id) ||
+      !Array.isArray(data.matchSnapshot?.players) || data.matchSnapshot.players.length !== 5;
+  })) {
+    return { ready: false, reason: 'INITIAL_CUP_PARTICIPANT_SNAPSHOTS_INCOMPLETE' };
+  }
+
+  return { ready: true, participants: 120, totalMatches: 119, preliminaryMatches: 56, openingRoundRestCount: 8, byes: 0 };
+}
+
 /**
  * Serialize all calendar builders, including callers that reuse an existing
  * rollover plan. The lease is fenced by owner and token before every batch or
@@ -1788,13 +1890,17 @@ export async function ensureSeasonCalendar(requestedTargetSeason?: number) {
   // canonical collections are empty. This is a read-only check.
   let pristineFirstWorld = false;
   if (!configSnap.exists) {
-    const [tables, slots, matches, players] = await Promise.all([
+    const [system, tables, slots, matches, players, cupBrackets, cupMatches] = await Promise.all([
+      db.collection('system_v1').limit(1).get(),
       db.collection('league_tables_v2').limit(1).get(),
       db.collection('league_slots_v1').limit(1).get(),
       db.collection('matches_v2').limit(1).get(),
       db.collection('players_v14').limit(1).get(),
+      db.collection('cup_pyramid_v1').limit(1).get(),
+      db.collection(MATCH_COLLECTIONS.cup).limit(1).get(),
     ]);
-    pristineFirstWorld = [tables, slots, matches, players].every((snapshot: any) => snapshot.empty === true || snapshot.size === 0);
+    pristineFirstWorld = [system, tables, slots, matches, players, cupBrackets, cupMatches]
+      .every((snapshot: any) => snapshot.empty === true || snapshot.size === 0);
     if (!pristineFirstWorld) {
       return {
         success: false,
@@ -1938,7 +2044,44 @@ export async function ensureSeasonCalendar(requestedTargetSeason?: number) {
         updatedAt: FieldValue.serverTimestamp(),
       }, options: { merge: true } }]);
     }
-    return await buildSeasonCalendar(lease, pristineFirstWorld);
+    const world: any = await buildSeasonCalendar(lease, pristineFirstWorld);
+    const cupRequired = pristineFirstWorld || (config.pyramidCupRequired === true && Number(config.activeSeasonNumber || 1) === 1 && Number(config.pyramidCupReadySeasonNumber) === 1);
+    const cupPending = cupRequired && config.pyramidCupReady !== true;
+    if (!cupPending || world?.success !== true || world?.worldReady !== true) return world;
+
+    try {
+      const pyramidCup = await generatePyramidCup(1, { allowInitialBootstrap: true });
+      const verification = await verifyInitialPyramidCup(db, world.seasonStart || config.seasonStart);
+      if (verification.ready !== true) throw new Error(verification.reason || 'INITIAL_CUP_VERIFICATION_FAILED');
+      await db.collection('system_v1').doc('season_config').set({
+        pyramidCupRequired: true,
+        pyramidCupReady: true,
+        pyramidCupReadySeasonNumber: 1,
+        pyramidCupReadyAt: FieldValue.serverTimestamp(),
+        pyramidCupError: FieldValue.delete(),
+        updatedAt: FieldValue.serverTimestamp(),
+      }, { merge: true });
+      return { ...world, pyramidCup, pyramidCupVerification: verification };
+    } catch (error: any) {
+      const reason = String(error?.message || error || 'INITIAL_PYRAMID_CUP_PREPARATION_FAILED');
+      await db.collection('system_v1').doc('season_config').set({
+        worldReady: false,
+        phase: 'REGULAR_SEASON',
+        pyramidCupRequired: true,
+        pyramidCupReady: false,
+        pyramidCupReadySeasonNumber: 1,
+        pyramidCupError: reason,
+        updatedAt: FieldValue.serverTimestamp(),
+      }, { merge: true });
+      return {
+        ...world,
+        success: false,
+        worldReady: false,
+        action: 'WORLD_BUILDING',
+        reason: 'INITIAL_PYRAMID_CUP_PREPARATION_FAILED',
+        pyramidCupError: reason,
+      };
+    }
   } finally {
     await releaseSeasonCalendarBuildLock(db, lock.ownerId, lock.token);
   }

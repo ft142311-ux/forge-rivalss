@@ -121,10 +121,56 @@ async function invokeMarketExpirySweep({
   };
 }
 
+
+async function invokeTournamentSweep({
+  seasonOrchestratorUrl,
+  secret,
+  fetchImpl = globalThis.fetch,
+}) {
+  // Reuse the validated App Hosting origin and derive only the protected
+  // tournaments route; no additional URL or credential is required.
+  const seasonEndpoint = resolveOrchestratorUrl(seasonOrchestratorUrl);
+  const endpoint = new URL(seasonEndpoint);
+  endpoint.pathname = '/api/cron/tournaments';
+  if (typeof secret !== 'string' || secret.trim().length < 32) {
+    throw new Error('CRON_SECRET_MISSING_OR_INVALID');
+  }
+  if (typeof fetchImpl !== 'function') {
+    throw new Error('FETCH_UNAVAILABLE');
+  }
+
+  const response = await fetchImpl(endpoint.toString(), {
+    method: 'GET',
+    headers: {
+      authorization: `Bearer ${secret.trim()}`,
+      accept: 'application/json',
+    },
+    cache: 'no-store',
+    redirect: 'error',
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  });
+  if (!response.ok) throw new Error(`TOURNAMENT_SWEEP_HTTP_${response.status}`);
+
+  let payload;
+  try {
+    payload = await response.json();
+  } catch {
+    throw new Error('TOURNAMENT_SWEEP_INVALID_RESPONSE');
+  }
+  if (payload?.success !== true) throw new Error('TOURNAMENT_SWEEP_UNSUCCESSFUL');
+
+  return {
+    success: true,
+    status: response.status,
+    pyramidCup: payload.pyramidCup || null,
+  };
+}
+
 module.exports = {
   ORCHESTRATOR_PATH,
   REQUEST_TIMEOUT_MS,
   resolveOrchestratorUrl,
   invokeSeasonOrchestrator,
   invokeMarketExpirySweep,
+  invokeTournamentSweep,
 };
