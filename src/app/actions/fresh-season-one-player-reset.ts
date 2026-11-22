@@ -1,3 +1,5 @@
+import { getRandomStartingSquad, type Player } from '@/app/lib/moba-data';
+
 export type FreshSeasonOnePlayer = Record<string, any>;
 export type FreshSeasonOneClubProfile = Record<string, any>;
 
@@ -90,5 +92,82 @@ export function resetFreshSeasonOneClubProfileState<T extends FreshSeasonOneClub
     lastMatchId,
     lastMatchEconomy,
     lastMatchConsequences,
+  };
+}
+
+
+export type FreshSeasonOneClubPlacement = {
+  tier: number;
+  group: number;
+  rank: number;
+};
+
+/**
+ * Creates a genuinely new human club while retaining the Firebase UID and
+ * account-facing identity. The caller must replace the existing players_v14
+ * document (not merge this object) and must never delete the Firebase Auth user.
+ */
+export function createFreshSeasonOneHumanClubProfile(
+  account: Record<string, any>,
+  placement: FreshSeasonOneClubPlacement,
+  seasonNumber = 1,
+  now = new Date(),
+) {
+  const uid = String(account.id || '');
+  if (!uid || uid.startsWith('BOT_')) throw new Error('FRESH_CLUB_ACCOUNT_UID_INVALID');
+  if (![placement.tier, placement.group, placement.rank].every(Number.isInteger) ||
+      placement.tier < 1 || placement.tier > 4 ||
+      placement.group < 1 || placement.group > 2 ** (placement.tier - 1) ||
+      placement.rank < 1 || placement.rank > 8 ||
+      seasonNumber !== 1 || !Number.isFinite(now.getTime())) {
+    throw new Error('FRESH_CLUB_PLACEMENT_INVALID');
+  }
+
+  const clubName = String(account.clubName || account.displayName || 'New Club').trim().slice(0, 25) || 'New Club';
+  const ownedPlayers: Player[] = getRandomStartingSquad();
+  const byRole = (role: string) => ownedPlayers.find(player => player.role === role)?.id || null;
+  const lineup: Record<string, string | null> = {
+    carry: byRole('Carry'),
+    mid: byRole('Midlaner'),
+    offlane: byRole('Tank'),
+    support: byRole('Jungler'),
+    full_support: byRole('Support'),
+    sub_carry: ownedPlayers.filter(player => player.role === 'Carry')[1]?.id || null,
+    sub_mid: ownedPlayers.filter(player => player.role === 'Midlaner')[1]?.id || null,
+    sub_offlane: ownedPlayers.filter(player => player.role === 'Tank')[1]?.id || null,
+    sub_support: ownedPlayers.filter(player => player.role === 'Jungler')[1]?.id || null,
+    sub_full_support: ownedPlayers.filter(player => player.role === 'Support')[1]?.id || null,
+    res1: null, res2: null, res3: null, res4: null, res5: null,
+    res6: null, res7: null, res8: null,
+  };
+
+  return {
+    id: uid,
+    email: String(account.email || ''),
+    displayName: String(account.displayName || clubName),
+    clubName,
+    country: 'International',
+    numericId: Number(account.numericId || 0),
+    credits: 1_000_000,
+    crystals: 50,
+    experiencePoints: 0,
+    managerLevel: 1,
+    selectedLeagueId: 'ALPHA',
+    leagueLevel: placement.tier,
+    groupId: placement.group,
+    rank: placement.rank,
+    ownedPlayers,
+    lineup,
+    staff: { coach: null, analyst: null, scout: null, doctor: null, financier: null },
+    strategy: 'Balanced Play',
+    arena: { capacity: 5000, pressCenterLevel: 1, cafeLevel: 1, shopLevel: 1 },
+    hq: { hrLevel: 1, financeLevel: 1 },
+    bootcamp: { bootcampLevel: 1 },
+    academy: { scoutsLevel: 1 },
+    medical: { massageLevel: 1 },
+    lastProcessedSeason: 1,
+    rewardDay: 1,
+    lastLoginDate: now.toISOString(),
+    version: 140,
   };
 }
