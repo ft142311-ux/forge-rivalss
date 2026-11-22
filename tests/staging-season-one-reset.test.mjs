@@ -572,6 +572,13 @@ test('fresh Season 1 executor is project-scoped, journaled, idempotent and verif
   assert.match(cupWorker, /STAGING_SEASON_ONE_RESET_IN_PROGRESS/);
   const tournamentWorker = read('src/app/actions/tournament-system.ts');
   assert.match(tournamentWorker, /STAGING_SEASON_ONE_RESET_IN_PROGRESS/);
+  assert.match(tournamentWorker, /async function runWorldMutationTransaction/);
+  assert.match(tournamentWorker, /resetConfig\.data\(\)\?\.stagingSeasonOneResetInProgress === true/);
+  assert.match(tournamentWorker, /runWorldMutationTransaction\(db, async/);
+  const cupTransactions = read('src/app/actions/cup-engine.ts');
+  assert.match(cupTransactions, /async function runWorldMutationTransaction/);
+  assert.match(cupTransactions, /resetConfig\.data\(\)\?\.stagingSeasonOneResetInProgress === true/);
+  assert.match(cupTransactions, /runWorldMutationTransaction\(db, async/);
   const marketWorker = read('src/app/lib/auction-expiry-sweep.ts');
   assert.match(marketWorker, /configSnap\.data\(\)\?\.stagingSeasonOneResetInProgress === true/);
   const marketSettlement = read('src/app/lib/auction-expiry-sweep.ts');
