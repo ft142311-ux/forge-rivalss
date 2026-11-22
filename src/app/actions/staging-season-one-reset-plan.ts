@@ -190,7 +190,7 @@ export function buildFreshSeasonOneResetPlan(input: FreshSeasonOneResetInput) {
       groups: EXPECTED_GROUPS,
       tables: EXPECTED_GROUPS,
       slots: EXPECTED_PARTICIPANTS,
-      freeRegistrationSlots: EXPECTED_PARTICIPANTS,
+      freeRegistrationSlots: EXPECTED_PARTICIPANTS - occupiedSlotIds.size,
       leagueMatches: EXPECTED_GROUPS * EXPECTED_MATCHES_PER_GROUP,
       participants: EXPECTED_PARTICIPANTS,
       cupMatches: 119,
