@@ -64,10 +64,52 @@ function createValidInput() {
     }
   }
 
+  const participants = tables.flatMap(table => {
+    const { level, group, stats } = table.data;
+    return Object.values(stats).map((team, index) => ({
+      ...team, level, group, seed: 0,
+    }));
+  }).sort((a, b) => a.level - b.level || a.rank - b.rank || a.group - b.group || a.id.localeCompare(b.id))
+    .map((team, index) => ({ ...team, seed: index + 1 }));
+  const openingEligible = participants.filter(team => team.level !== 1);
+  const openingRound = [];
+  for (let index = 0; index < 56; index++) {
+    const stronger = openingEligible[openingEligible.length - 2 - index * 2];
+    const weaker = openingEligible[openingEligible.length - 1 - index * 2];
+    const id = `cup_S1_R1_M${String(index + 1).padStart(2, '0')}`;
+    openingRound.push({
+      id: `r1_m${index + 1}`, index: index + 1, matchId: id, status: 'scheduled',
+      home: { ...weaker }, away: { ...stronger },
+    });
+  }
+  const cup = {
+    id: 'cup_s1_lALPHA', season: 1, leagueId: 'ALPHA', name: 'Кубок Пирамиды',
+    status: 'active', currentRound: 1, formatVersion: 4, format: 'D1_REST_OPENING_ROUND',
+    totalRounds: 7, totalParticipants: 120, totalMatches: 119, preliminaryMatches: 56,
+    openingRoundRestCount: 8, openingRoundRestTeams: participants.filter(team => team.level === 1),
+    byeCount: 0, participants, rounds: { r1: openingRound, r2: [], r3: [], r4: [], r5: [], r6: [], r7: [] },
+  };
+  const cupFixtures = openingRound.map(pairing => ({
+    id: pairing.matchId,
+    data: {
+      id: pairing.matchId, cupId: 'cup_s1_lALPHA', season: 1, cupRound: 1, bestOf: 1,
+      homeId: pairing.home.id, awayId: pairing.away.id,
+      homeTeamSnapshot: { id: pairing.home.id, players: Array.from({ length: 5 }, (_, i) => ({ id: `h-${i}` })) },
+      awayTeamSnapshot: { id: pairing.away.id, players: Array.from({ length: 5 }, (_, i) => ({ id: `a-${i}` })) },
+    },
+  }));
+  const cupSnapshots = participants.map(team => ({
+    id: team.id,
+    data: {
+      cupId: 'cup_s1_lALPHA', season: 1, teamId: team.id,
+      matchSnapshot: { id: team.id, players: Array.from({ length: 5 }, (_, i) => ({ id: `p-${i}` })) },
+    },
+  }));
+
   return {
     config: { activeSeasonNumber: 1, worldReady: true, phase: 'REGULAR_SEASON' },
     tables, slots, matches, profileIds,
-    cupExists: false, cupMatches: 0, cupSnapshots: 0,
+    cup, cupFixtures, cupSnapshots,
     archives: 0, rollovers: 0, history: 0,
     archiveMatches: 0, matchPlayerEffects: 0, matchRevenueReceipts: 0, cupMatchRevenueReceipts: 0,
     matchConsequenceReceipts: 0, leagueSeasonRewardReceipts: 0, pyramidCupRewardReceipts: 0,
@@ -92,7 +134,7 @@ test('fresh Beta Season 1 preflight is authenticated, project-fenced and read-on
   assert.match(source, /economy_transactions/);
   assert.match(source, /match_consequence_receipts/);
   assert.match(source, /LEAGUE_SEASON_REWARD/);
-  assert.match(source, /PYRAMID_CUP_CHAMPION_REWARD/);
+  assert.match(source, /PYRAMID_CUP_CHAMPION_REWARD/);\n  assert.match(source, /cup_participant_snapshots_v1/);\n  assert.match(source, /PYRAMID_CUP_OPENING_FIXTURES_INCOMPLETE/);
   assert.match(source, /season_rollover_v1/);
   assert.match(source, /season_calendar_build_v1/);
   assert.match(source, /collection\('matches'\)/);
@@ -106,7 +148,7 @@ test('fresh Season 1 reset plan validates 120 participants and complete 840-matc
   assert.equal(plan.preserve.participantProfiles, 120);
   assert.equal(plan.preserve.leagueSlots, 120);
   assert.equal(plan.expected.leagueMatches, 840);
-  assert.equal(plan.replace.matchPlayerEffectLedgers, 0);
+  assert.equal(plan.replace.cupExists, true);\n  assert.equal(plan.replace.cupMatches, 56);\n  assert.equal(plan.replace.cupParticipantSnapshots, 120);\n  assert.equal(plan.replace.matchPlayerEffectLedgers, 0);
   assert.equal(plan.replace.matchRevenueReceipts, 0);
   assert.equal(plan.replace.cupMatchRevenueReceipts, 0);
   assert.equal(plan.replace.matchConsequenceReceipts, 0);
