@@ -4,34 +4,43 @@ import { readFileSync } from 'node:fs';
 
 const source = readFileSync(new URL('../src/app/actions/cup-engine.ts', import.meta.url), 'utf8');
 
-test('Pyramid Cup validates the exact pairing, team and BYE count in every round', () => {
+test('Pyramid Cup validates exact even pairings and zero BYEs in every round', () => {
   const start = source.indexOf('function assertValidCupRoundPairings');
   const end = source.indexOf('export async function runPyramidCupCycle', start);
   assert.ok(start >= 0 && end > start);
   const validator = source.slice(start, end);
   assert.match(validator, /ROUND_PAIRING_COUNTS\[round - 1\]/);
   assert.match(validator, /ROUND_TEAM_COUNTS\[round - 1\]/);
-  assert.match(validator, /ROUND_BYE_COUNTS\[round - 1\]/);
+  assert.match(validator, /ROUND_BYE_COUNTS\[round - 1\] !== 0/);
   assert.match(validator, /CUP_ROUND_PAIRING_COUNT_INVALID/);
   assert.match(validator, /CUP_ROUND_PAIRING_IDENTITY_INVALID/);
-  assert.match(validator, /CUP_ROUND_BYE_INVALID/);
   assert.match(validator, /CUP_ROUND_PARTICIPANTS_INVALID/);
+  assert.doesNotMatch(validator, /pairing\.status === 'bye'/);
 });
 
-test('all 120 clubs enter the opening round and are paired strongest-away against weakest-home', () => {
-  assert.match(source, /return a\.level - b\.level \|\| a\.rank - b\.rank \|\| a\.group - b\.group/);
-  assert.match(source, /for \(let i = 0; i < TOTAL_TEAMS \/ 2; i\+\+\)/);
-  assert.match(source, /ordered\[i\], ordered\[ordered\.length - 1 - i\]/);
-  assert.match(source, /The stronger team is always AWAY; weaker team is HOME/);
-  assert.doesNotMatch(source, /teams\.slice\(8\)/);
-  assert.doesNotMatch(source, /r1_bye_/);
+test('only D2-D4 play the opening round and adjacent weakest seeds are paired', () => {
+  assert.match(source, /const ROUND_PAIRING_COUNTS = \[56, 32, 16, 8, 4, 2, 1\]/);
+  assert.match(source, /const ROUND_TEAM_COUNTS = \[112, 64, 32, 16, 8, 4, 2\]/);
+  assert.match(source, /const ROUND_BYE_COUNTS = \[0, 0, 0, 0, 0, 0, 0\]/);
+  assert.match(source, /teams\.filter\(team => team\.level !== 1\)/);
+  assert.match(source, /const stronger = eligible\[eligible\.length - 2 - i \* 2\]/);
+  assert.match(source, /const weaker = eligible\[eligible\.length - 1 - i \* 2\]/);
+  assert.match(source, /openingRoundRestTeams/);
+  assert.match(source, /D1_REST_OPENING_ROUND/);
+  assert.match(source, /CUP_D1_OPENING_ROUND_REST_COUNT_INVALID/);
+  assert.doesNotMatch(source, /r\$\{round\}_bye_/);
 });
 
-test('the only BYE occurs in round four and is assigned to the strongest remaining seed', () => {
-  assert.match(source, /const byeTeam = teams\.length % 2 === 1 \? teams\.shift\(\) : null/);
-  assert.match(source, /if \(byeTeam && round !== 4\)/);
-  assert.match(source, /id: `r\$\{round\}_bye_1`/);
-  assert.match(source, /ROUND_TEAM_COUNTS\[round\]/);
+test('all eight D1 teams join the 56 opening-round winners before round two', () => {
+  const start = source.indexOf('const winners: Team[] = []');
+  const end = source.indexOf('const nextRound = round + 1', start);
+  assert.ok(start >= 0 && end > start);
+  const progression = source.slice(start, end);
+  assert.match(progression, /if \(round === 1\)/);
+  assert.match(progression, /openingRoundRestTeams/);
+  assert.match(progression, /team\.level !== 1/);
+  assert.match(progression, /winners\.length !== expectedWinners/);
+  assert.match(progression, /ROUND_TEAM_COUNTS\[round\]/);
 });
 
 test('corrupt or skipped Pyramid Cup rounds fail closed instead of advancing an empty bracket', () => {
