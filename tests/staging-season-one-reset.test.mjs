@@ -8,7 +8,7 @@ const read = path => readFileSync(resolve(root, path), 'utf8');
 
 test('fresh Beta Season 1 preflight is authenticated, project-fenced and read-only', () => {
   const source = read('src/app/api/admin/staging-season-one-reset/route.ts');
-  assert.match(source, /isCronAuthorized\(request\)/);
+  assert.match(source, /isCronAuthorized\\(request\\)/);
   assert.match(source, /EXPECTED_PROJECT = 'forge-rivalstest'/);
   assert.match(source, /export async function GET/);
   assert.match(source, /readOnly: true/);
@@ -16,8 +16,8 @@ test('fresh Beta Season 1 preflight is authenticated, project-fenced and read-on
   assert.match(source, /league_slots_v1/);
   assert.match(source, /matches_v2/);
   assert.match(source, /players_v14/);
-  assert.doesNotMatch(source, /\.set\(|\.create\(|\.update\(|\.delete\(|runTransaction\(/);
-  assert.doesNotMatch(source, /participantIds\s*:\s*\[|profileIds\s*:\s*\[/);
+  assert.doesNotMatch(source, /\\.set\\(|\\.create\\(|\\.update\\(|\\.delete\\(|runTransaction\\(/);
+  assert.doesNotMatch(source, /participantIds\\s*:\\s*\\[|profileIds\\s*:\\s*\\[/);
 });
 
 test('fresh Season 1 reset plan preserves every profile and rejects unsafe source worlds', () => {
@@ -31,5 +31,15 @@ test('fresh Season 1 reset plan preserves every profile and rejects unsafe sourc
   assert.match(source, /allPlayerProfiles: true/);
   assert.match(source, /accountCredentials: true/);
   assert.match(source, /nextMoscowSeasonBoundary/);
-  assert.match(source, /17 \* 86400000/);
+  assert.match(source, /17 \\* 86400000/);
+});
+
+test('legacy full-world reset is hard-blocked outside local Firebase Emulator', () => {
+  const source = read('src/app/actions/clean-season1-world.ts');
+  assert.match(source, /'players_v14'/);
+  assert.match(source, /!process\\.env\\.FIRESTORE_EMULATOR_HOST/);
+  assert.match(source, /process\\.env\\.VERCEL === '1'/);
+  assert.match(source, /configuredProject === 'forge-rivalstest'/);
+  assert.match(source, /EMULATOR_ONLY_RESET_BLOCKED/);
+  assert.ok(source.indexOf('EMULATOR_ONLY_RESET_BLOCKED') < source.indexOf('const db = getAdminDb()'));
 });
