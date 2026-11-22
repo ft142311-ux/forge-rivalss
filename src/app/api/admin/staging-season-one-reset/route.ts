@@ -63,6 +63,22 @@ export async function GET(request: NextRequest) {
       db.collection('system_v1').doc('season_calendar_build_v1').get(),
     ]);
 
+    const isLeagueFixture = (data: Record<string, any>) => {
+      const type = String(data.matchType || data.type || data.competitionType || '').toLowerCase();
+      return String(data.leagueId || '') === 'ALPHA' && !data.cupId && !data.tournamentId &&
+        !data.isFriendly && !/(cup|tournament|friendly|scrim|association)/.test(type);
+    };
+    const isKnownIndependentFixture = (data: Record<string, any>) => {
+      const type = String(data.matchType || data.type || data.competitionType || '').toLowerCase();
+      return Boolean(data.cupId || data.tournamentId || data.isFriendly ||
+        /(cup|tournament|friendly|scrim|association)/.test(type));
+    };
+    const leagueMatchDocs = matchesSnap.docs.filter(doc => isLeagueFixture(doc.data() || {}));
+    const unclassifiedMatches = matchesSnap.docs.filter(doc => {
+      const data = doc.data() || {};
+      return !isLeagueFixture(data) && !isKnownIndependentFixture(data);
+    }).length;
+
     const participantIds = new Set<string>();
     let standingsShapeValid = tablesSnap.size === 15;
     for (const table of tablesSnap.docs) {
@@ -101,7 +117,7 @@ export async function GET(request: NextRequest) {
       config: configSnap.exists ? configSnap.data() || {} : null,
       tables: tablesSnap.docs.map(doc => ({ id: doc.id, data: doc.data() || {} })),
       slots: slotsSnap.docs.map(doc => ({ id: doc.id, data: doc.data() || {} })),
-      matches: matchesSnap.docs.map(doc => ({ id: doc.id, data: doc.data() || {} })),
+      matches: leagueMatchDocs.map(doc => ({ id: doc.id, data: doc.data() || {} })),
       profileIds,
       cupExists: cupSnap.exists,
       cupMatches: cupMatchesSnap.size + legacyCupMatchesSnap.size,
@@ -117,6 +133,7 @@ export async function GET(request: NextRequest) {
       leagueSeasonRewardReceipts: leagueSeasonRewardSnap.docs.filter(doc => doc.data()?.type === 'LEAGUE_SEASON_REWARD').length,
       pyramidCupRewardReceipts: pyramidCupRewardSnap.docs.filter(doc =>
         ['PYRAMID_CUP_CHAMPION_REWARD', 'PYRAMID_CUP_FINALIST_REWARD'].includes(String(doc.data()?.type || ''))).length,
+      unclassifiedMatches,
       liveLocks: [rolloverLockSnap, calendarLockSnap].flatMap((snap, index) => {
         if (!snap.exists || Number(snap.data()?.expiresAtMs || 0) <= Date.now()) return [];
         return [index === 0 ? 'season_rollover_v1' : 'season_calendar_build_v1'];
