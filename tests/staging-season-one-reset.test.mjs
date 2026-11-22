@@ -154,6 +154,27 @@ test('fresh Beta Season 1 preflight is authenticated, project-fenced and read-on
   assert.doesNotMatch(source, /participantIds\s*:\s*\[|profileIds\s*:\s*\[/);
 });
 
+test('fresh Season 1 destructive route orders authentication, project fence and exact confirmation before execution', () => {
+  const source = read('src/app/api/admin/staging-season-one-reset/route.ts');
+  const post = source.slice(source.indexOf('export async function POST'));
+  const auth = post.indexOf('isCronAuthorized(request)');
+  const projectFence = post.indexOf('isExpectedProject()');
+  const bodyParse = post.indexOf('await request.json()');
+  const confirmation = post.indexOf("body?.confirmation !== 'RESET_BETA_SEASON_ONE'");
+  const dbAccess = post.indexOf('getAdminDb()');
+  const execution = post.indexOf('executeFreshSeasonOneReset(db, target)');
+  assert.ok(auth >= 0 && projectFence > auth, 'authorization must precede project inspection');
+  assert.ok(bodyParse > projectFence && confirmation > bodyParse, 'exact confirmation must be checked before database access');
+  assert.ok(dbAccess > confirmation && execution > dbAccess, 'database access and executor must follow all request gates');
+
+  const firstRunPreflight = post.indexOf('const preflight = await GET(request)');
+  const journalBranch = post.indexOf('if (journalSnap.exists)');
+  assert.ok(journalBranch >= 0 && firstRunPreflight > journalBranch && firstRunPreflight < execution,
+    'a new reset must complete read-only preflight before execution');
+  assert.match(post, /journal\.status === 'COMPLETED'[\s\S]*?alreadyCompleted: true/);
+  assert.match(post, /RESET_JOURNAL_TARGET_INVALID/);
+});
+
 test('fresh Season 1 reset preflight blocks extra orphaned club profiles', () => {
   const input = createValidInput();
   input.unexpectedProfileCount = 1;
