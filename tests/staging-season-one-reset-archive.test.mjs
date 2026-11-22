@@ -62,8 +62,8 @@ test('Season 1 backup allowlist includes canonical documents and complete profil
   assert.equal(built.entries.length, sources.length);
   const completeness = validateSeasonOneArchiveCompleteness(built.entries);
   assert.equal(completeness.valid, true, completeness.reasons.join(','));
-  const profile = built.entries.find(entry => entry.sourcePath === 'players_v14/club-1');
-  assert.deepEqual(profile.data, sources.find(source => source.path === 'players_v14/club-1').data);
+  const profile = built.entries.find(entry => entry.sourcePath === 'players_v14/club-1-1-1');
+  assert.deepEqual(profile.data, sources.find(source => source.path === 'players_v14/club-1-1-1').data);
 });
 
 test('Season 1 backup rejects account, credential, and unrelated collection paths', () => {
@@ -83,21 +83,28 @@ test('Season 1 backup rejects account, credential, and unrelated collection path
 
 test('Season 1 backup rejects duplicate paths and malformed document payloads', () => {
   const duplicate = validateSeasonOneArchiveSources([
-    { path: 'players_v14/club-1', data: { id: 'club-1' } },
-    { path: 'players_v14/club-1', data: { id: 'club-1' } },
+    { path: 'players_v14/club-1-1-1', data: { id: 'club-1' } },
+    { path: 'players_v14/club-1-1-1', data: { id: 'club-1' } },
   ]);
   assert.equal(duplicate.valid, false);
   assert.ok(duplicate.reasons.includes('ARCHIVE_SOURCE_PATH_DUPLICATED'));
 
   const malformed = validateSeasonOneArchiveSources([
-    { path: 'players_v14/club-1', data: [] },
+    { path: 'players_v14/club-1-1-1', data: [] },
   ]);
   assert.equal(malformed.valid, false);
   assert.ok(malformed.reasons.includes('ARCHIVE_SOURCE_DOCUMENT_INVALID'));
 });
 
 test('Season 1 backup cannot be marked complete when any canonical collection is short', () => {
-  const sources = canonicalSources().filter(source => source.path !== 'matches_v2/match-840');
+  let removedMatch = false;
+  const sources = canonicalSources().filter(source => {
+    if (!removedMatch && source.path.startsWith('matches_v2/')) {
+      removedMatch = true;
+      return false;
+    }
+    return true;
+  });
   const built = buildSeasonOneArchiveEntries(sources);
   assert.equal(built.ready, true);
   const result = validateSeasonOneArchiveCompleteness(built.entries);
