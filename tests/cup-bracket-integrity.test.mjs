@@ -19,6 +19,7 @@ test('Pyramid Cup validates the exact pairing, team and BYE count in every round
 });
 
 test('all 120 clubs enter the opening round and are paired strongest-away against weakest-home', () => {
+  assert.match(source, /return a\\.level - b\\.level \\|\\| a\\.rank - b\\.rank \\|\\| a\\.group - b\\.group/);
   assert.match(source, /for \(let i = 0; i < TOTAL_TEAMS \/ 2; i\+\+\)/);
   assert.match(source, /ordered\[i\], ordered\[ordered\.length - 1 - i\]/);
   assert.match(source, /The stronger team is always AWAY; weaker team is HOME/);
