@@ -104,9 +104,9 @@ async function deleteDocs(db: any, docs: any[]) {
   return docs.length;
 }
 
-async function deleteQuery(query: any) {
+async function deleteQuery(db: any, query: any) {
   const snapshot = await query.get();
-  return deleteDocs(snapshot.docs);
+  return deleteDocs(db, snapshot.docs);
 }
 
 function isLeagueFixture(data: Record<string, any>) {
@@ -133,7 +133,7 @@ async function removeOldSeasonOneData(db: any) {
   deleted += await deleteDocs(db, cupMatches.docs);
   deleted += await deleteDocs(db, cupSnapshots.docs);
   deleted += await deleteDocs(db, archiveMatches.docs);
-  deleted += await deleteQuery(db.collection('match_player_effects_v1')
+  deleted += await deleteQuery(db, db.collection('match_player_effects_v1')
     .where('matchId', '>=', MATCH_PREFIX).where('matchId', '<', MATCH_PREFIX + '\uf8ff'));
   deleted += await deleteQuery(db.collection('match_player_effects_v1')
     .where('matchId', '>=', 'cup_S1_').where('matchId', '<', 'cup_S1_\uf8ff'));
