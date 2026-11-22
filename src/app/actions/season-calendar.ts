@@ -1801,8 +1801,8 @@ async function verifyInitialPyramidCup(db: any, seasonStartValue: any) {
 
   const invalidPairing = firstRound.some((pairing: any, index: number) => {
     const expectedId = `cup_S1_R1_M${String(index + 1).padStart(2, '0')}`;
-    const stronger = eligible[eligible.length - 1 - index * 2];
-    const weaker = eligible[eligible.length - 2 - index * 2];
+    const stronger = eligible[eligible.length - 2 - index * 2];
+    const weaker = eligible[eligible.length - 1 - index * 2];
     return pairing?.id !== `r1_m${index + 1}` || pairing?.matchId !== expectedId ||
       pairing?.status !== 'scheduled' ||
       pairing?.away?.id !== stronger?.id ||
