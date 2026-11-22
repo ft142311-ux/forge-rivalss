@@ -109,7 +109,7 @@ function createValidInput() {
 
   return {
     config: { activeSeasonNumber: 1, worldReady: true, phase: 'REGULAR_SEASON', seasonStart: '2026-11-09T15:00:00.000Z' },
-    tables, slots, matches, profileIds,
+    tables, slots, matches, profileIds, legacyCupMatches: 0,
     cup, cupFixtures, cupSnapshots,
     archives: 0, rollovers: 0, history: 0,
     archiveMatches: 0, matchPlayerEffects: 0, matchRevenueReceipts: 0, cupMatchRevenueReceipts: 0,
@@ -208,35 +208,27 @@ test('fresh Season 1 reset classifies old archives and rollover records as repla
   assert.equal(plan.replace.archivedLeagueMatches, 56);
 });
 
-test('fresh Season 1 preflight rejects a Cup season-start mismatch', () => {
+test('fresh Season 1 reset treats malformed old Cup and league fixtures as replaceable', () => {
   const input = createValidInput();
   input.cup.seasonStart = '2026-11-10T15:00:00.000Z';
-  const plan = buildFreshSeasonOneResetPlan(input);
-  assert.equal(plan.ready, false);
-  assert.ok(plan.reasons.includes('PYRAMID_CUP_SEASON_START_MISMATCH'));
-});
-
-test('fresh Season 1 preflight rejects an opening fixture scheduled outside the canonical Cup slot', () => {
-  const input = createValidInput();
   input.cupFixtures[0].data.scheduledAt = new Date('2026-11-10T05:00:00.000Z');
+  input.matches[0].data.homeId = input.matches[0].data.awayId;
+  input.legacyCupMatches = 3;
   const plan = buildFreshSeasonOneResetPlan(input);
-  assert.equal(plan.ready, false);
-  assert.ok(plan.reasons.includes('PYRAMID_CUP_OPENING_SCHEDULE_INVALID'));
+  assert.equal(plan.ready, true, plan.reasons.join(','));
+  assert.equal(plan.replace.cupExists, true);
+  assert.equal(plan.replace.cupMatches, 56);
+  assert.equal(plan.replace.cupParticipantSnapshots, 120);
+  assert.equal(plan.replace.legacyCupMatches, 3);
 });
 
-test('fresh Season 1 preflight rejects slot identity and match round-robin corruption', () => {
-  const slotInput = createValidInput();
-  slotInput.slots[0].data.status = 'OCCUPIED';
-  slotInput.slots[0].data.occupantId = 'unrelated-user';
-  const slotPlan = buildFreshSeasonOneResetPlan(slotInput);
-  assert.equal(slotPlan.ready, false);
-  assert.ok(slotPlan.reasons.includes('OCCUPIED_SLOT_STANDINGS_MISMATCH'));
-
-  const matchInput = createValidInput();
-  matchInput.matches[0].data.homeId = matchInput.matches[0].data.awayId;
-  const matchPlan = buildFreshSeasonOneResetPlan(matchInput);
-  assert.equal(matchPlan.ready, false);
-  assert.ok(matchPlan.reasons.includes('LEAGUE_MATCH_SCOPE_INVALID'));
+test('fresh Season 1 preflight still rejects slot identity corruption', () => {
+  const input = createValidInput();
+  input.slots[0].data.status = 'OCCUPIED';
+  input.slots[0].data.occupantId = 'unrelated-user';
+  const plan = buildFreshSeasonOneResetPlan(input);
+  assert.equal(plan.ready, false);
+  assert.ok(plan.reasons.includes('OCCUPIED_SLOT_STANDINGS_MISMATCH'));
 });
 
 test('fresh Season 1 reset plan rejects missing profiles and a prepared next season', () => {
