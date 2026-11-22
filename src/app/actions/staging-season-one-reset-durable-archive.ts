@@ -95,15 +95,15 @@ export async function createOrVerifyDurableSeasonOneArchive(
     collectQuery(db.collection('cup_participant_snapshots_v1').doc('cup_s1_lALPHA').collection('teams')),
     collectQuery(db.collection('league_season_archives_v1').doc('S1').collection('matches')),
     collectQuery(db.collection('league_slot_history_v1').where('season', '==', 1).where('leagueId', '==', 'ALPHA')),
-    collectQuery(db.collection('match_player_effects_v1').where('matchId', '>=', 'match_v140_S1_LALPHA_').where('matchId', '<', 'match_v140_S1_LALPHA_\\uf8ff')),
-    collectQuery(db.collection('match_player_effects_v1').where('matchId', '>=', 'cup_S1_').where('matchId', '<', 'cup_S1_\\uf8ff')),
-    collectQuery(db.collection('economy_transactions').where('referenceId', '>=', 'match_v140_S1_LALPHA_').where('referenceId', '<', 'match_v140_S1_LALPHA_\\uf8ff')),
-    collectQuery(db.collection('economy_transactions').where('referenceId', '>=', 'cup_S1_').where('referenceId', '<', 'cup_S1_\\uf8ff')),
+    collectQuery(db.collection('match_player_effects_v1').where('matchId', '>=', 'match_v140_S1_LALPHA_').where('matchId', '<', 'match_v140_S1_LALPHA_\uf8ff')),
+    collectQuery(db.collection('match_player_effects_v1').where('matchId', '>=', 'cup_S1_').where('matchId', '<', 'cup_S1_\uf8ff')),
+    collectQuery(db.collection('economy_transactions').where('referenceId', '>=', 'match_v140_S1_LALPHA_').where('referenceId', '<', 'match_v140_S1_LALPHA_\uf8ff')),
+    collectQuery(db.collection('economy_transactions').where('referenceId', '>=', 'cup_S1_').where('referenceId', '<', 'cup_S1_\uf8ff')),
     collectQuery(db.collection('economy_transactions').where('referenceId', '==', 'S1'), (doc: any) => doc.data()?.type === 'LEAGUE_SEASON_REWARD'),
     collectQuery(db.collection('economy_transactions').where('referenceId', '==', 'cup_s1_lALPHA'), (doc: any) =>
       ['PYRAMID_CUP_CHAMPION_REWARD', 'PYRAMID_CUP_FINALIST_REWARD'].includes(String(doc.data()?.type || ''))),
-    collectQuery(db.collection('match_consequence_receipts').where('matchId', '>=', 'match_v140_S1_LALPHA_').where('matchId', '<', 'match_v140_S1_LALPHA_\\uf8ff')),
-    collectQuery(db.collection('match_consequence_receipts').where('matchId', '>=', 'cup_S1_').where('matchId', '<', 'cup_S1_\\uf8ff')),
+    collectQuery(db.collection('match_consequence_receipts').where('matchId', '>=', 'match_v140_S1_LALPHA_').where('matchId', '<', 'match_v140_S1_LALPHA_\uf8ff')),
+    collectQuery(db.collection('match_consequence_receipts').where('matchId', '>=', 'cup_S1_').where('matchId', '<', 'cup_S1_\uf8ff')),
   ]);
 
   const profileIds = new Set<string>();
@@ -271,12 +271,12 @@ export async function restoreSeasonOneFromDurableArchive(
     db.collection('cup_participant_snapshots_v1').doc('cup_s1_lALPHA').collection('teams'),
     db.collection('league_season_archives_v1').doc('S1').collection('matches'),
     db.collection('league_slot_history_v1').where('season', '==', 1).where('leagueId', '==', 'ALPHA'),
-    db.collection('match_player_effects_v1').where('matchId', '>=', 'match_v140_S1_LALPHA_').where('matchId', '<', 'match_v140_S1_LALPHA_\\uf8ff'),
-    db.collection('match_player_effects_v1').where('matchId', '>=', 'cup_S1_').where('matchId', '<', 'cup_S1_\\uf8ff'),
-    db.collection('economy_transactions').where('referenceId', '>=', 'match_v140_S1_LALPHA_').where('referenceId', '<', 'match_v140_S1_LALPHA_\\uf8ff'),
-    db.collection('economy_transactions').where('referenceId', '>=', 'cup_S1_').where('referenceId', '<', 'cup_S1_\\uf8ff'),
-    db.collection('match_consequence_receipts').where('matchId', '>=', 'match_v140_S1_LALPHA_').where('matchId', '<', 'match_v140_S1_LALPHA_\\uf8ff'),
-    db.collection('match_consequence_receipts').where('matchId', '>=', 'cup_S1_').where('matchId', '<', 'cup_S1_\\uf8ff'),
+    db.collection('match_player_effects_v1').where('matchId', '>=', 'match_v140_S1_LALPHA_').where('matchId', '<', 'match_v140_S1_LALPHA_\uf8ff'),
+    db.collection('match_player_effects_v1').where('matchId', '>=', 'cup_S1_').where('matchId', '<', 'cup_S1_\uf8ff'),
+    db.collection('economy_transactions').where('referenceId', '>=', 'match_v140_S1_LALPHA_').where('referenceId', '<', 'match_v140_S1_LALPHA_\uf8ff'),
+    db.collection('economy_transactions').where('referenceId', '>=', 'cup_S1_').where('referenceId', '<', 'cup_S1_\uf8ff'),
+    db.collection('match_consequence_receipts').where('matchId', '>=', 'match_v140_S1_LALPHA_').where('matchId', '<', 'match_v140_S1_LALPHA_\uf8ff'),
+    db.collection('match_consequence_receipts').where('matchId', '>=', 'cup_S1_').where('matchId', '<', 'cup_S1_\uf8ff'),
   ];
   for (const query of cleanupQueries) {
     await assertOwnership?.();
