@@ -1777,7 +1777,9 @@ async function verifyInitialPyramidCup(db: any, seasonStartValue: any) {
   const firstRound = Array.isArray(cup.rounds?.r1) ? cup.rounds.r1 : [];
   const ordered = [...participants].sort((a: any, b: any) => Number(a.seed) - Number(b.seed));
   const eligible = ordered.filter((team: any) => Number(team.level) !== 1);
+  const d1Ids = new Set<string>(participants.filter((team: any) => Number(team.level) === 1).map((team: any) => String(team.id || '')));
   const restTeams = Array.isArray(cup.openingRoundRestTeams) ? cup.openingRoundRestTeams : [];
+  const restIds = new Set<string>(restTeams.map((team: any) => String(team.id || '')));
   if (Number(cup.season) !== 1 || cup.status !== 'active' ||
       cup.name !== 'Кубок Пирамиды' || Number(cup.currentRound) !== 1 || Number(cup.totalRounds) !== 7 ||
       Number(cup.formatVersion) !== 4 || cup.format !== 'D1_REST_OPENING_ROUND' ||
@@ -1786,7 +1788,8 @@ async function verifyInitialPyramidCup(db: any, seasonStartValue: any) {
       new Set(participants.map((team: any) => Number(team?.seed))).size !== 120 ||
       ordered.some((team: any, index: number) => Number(team?.seed) !== index + 1 || !team?.id) ||
       Number(cup.preliminaryMatches) !== 56 || Number(cup.byeCount) !== 0 ||
-      Number(cup.openingRoundRestCount) !== 8 || restTeams.length !== 8 ||
+      Number(cup.openingRoundRestCount) !== 8 || restTeams.length !== 8 || restIds.size !== 8 ||
+      d1Ids.size !== 8 || [...d1Ids].some(id => !restIds.has(id)) || [...restIds].some(id => !d1Ids.has(id)) ||
       restTeams.some((team: any) => Number(team.level) !== 1 || !participants.some((candidate: any) => candidate.id === team.id)) ||
       firstRound.length !== 56 || firstRound.some((pairing: any) => pairing?.status === 'bye')) {
     return { ready: false, reason: 'INITIAL_CUP_BRACKET_INVALID' };
