@@ -57,5 +57,8 @@ jobs:
       - name: Pyramid Cup prepared-season emulator scenario
         run: npm run test:cup:emulator
 
+      - name: Fresh Season 1 reset Firestore emulator scenario
+        run: firebase emulators:exec --only auth,firestore --project demo-forge-rivals-reset-test "node --conditions=react-server --import tsx --test tests/fresh-season-one-reset-emulator.integration.test.mjs"
+
       - name: Production build
         run: npm run build
