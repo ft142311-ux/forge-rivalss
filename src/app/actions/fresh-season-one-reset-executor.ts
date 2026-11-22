@@ -2,6 +2,7 @@ import { randomUUID } from 'crypto';
 import { FieldValue } from 'firebase-admin/firestore';
 import { buildFreshSeasonOneWorldDocuments } from './fresh-season-one-world-builder';
 import { ensureSeasonCalendar } from './season-calendar';
+import { createOrVerifyDurableSeasonOneArchive } from './staging-season-one-reset-durable-archive';
 
 const JOURNAL_ID = 'staging_fresh_season_one_reset_v1';
 const LEASE_MS = 20 * 60 * 1000;
@@ -17,6 +18,7 @@ type ResetJournal = {
   updatedAtMs: number;
   target: { seasonStart: string; nextSeasonStart: string };
   counts: Record<string, number>;
+  sourceConfig?: Record<string, any>;
   lease: { token: string; expiresAtMs: number } | null;
   lastError?: string;
 };
@@ -44,6 +46,7 @@ async function claim(db: any, target: ResetJournal['target']) {
       return { busy: true, journal: current };
     }
     const config = configSnap.exists ? configSnap.data() || {} : {};
+    if (current && !current.sourceConfig) throw new Error('RESET_ORIGINAL_CONFIG_ARCHIVE_SOURCE_MISSING');
     if (!current && (!configSnap.exists || Number(config.activeSeasonNumber) !== 1 ||
         config.worldReady !== true || !['REGULAR_SEASON', 'ACTIVE'].includes(String(config.phase || '').toUpperCase()))) {
       throw new Error('RESET_PREFLIGHT_STATE_CHANGED');
@@ -67,6 +70,7 @@ async function claim(db: any, target: ResetJournal['target']) {
       updatedAtMs: now,
       target,
       counts: {},
+      sourceConfig: config,
       lease: { token, expiresAtMs: now + LEASE_MS },
     };
     if (current && (current.target.seasonStart !== target.seasonStart ||
@@ -333,7 +337,11 @@ export async function executeFreshSeasonOneReset(db: any, target: ResetJournal['
     let step = Number(journal.stepIndex || 0);
     if (step <= 0) {
       await assertLease(db, token);
+      if (!journal.sourceConfig) throw new Error('RESET_ORIGINAL_CONFIG_ARCHIVE_SOURCE_MISSING');
+      const archive = await createOrVerifyDurableSeasonOneArchive(db, journal.resetId, journal.sourceConfig);
+      await assertLease(db, token);
       const removed = await removeOldSeasonOneData(db);
+      removed.archiveDocuments = archive.archiveDocuments;
       await saveStep(db, token, 0, removed);
       step = 1;
     }
