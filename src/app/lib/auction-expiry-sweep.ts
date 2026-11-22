@@ -181,6 +181,10 @@ export async function runTransferMarketExpirySweepWithDb(
 ) {
   const now = options.now || (() => Date.now());
   const startedAt = now();
+  const initialConfig = await db.collection('system_v1').doc('season_config').get();
+  if (initialConfig.exists && initialConfig.data()?.stagingSeasonOneResetInProgress === true) {
+    return { success: true, skipped: true, reason: 'STAGING_SEASON_ONE_RESET_IN_PROGRESS', scanned: 0, settled: 0 };
+  }
   const maxRuntimeMs = Number.isSafeInteger(options.maxRuntimeMs) && options.maxRuntimeMs! > 0
     ? options.maxRuntimeMs!
     : 210_000;
@@ -210,8 +214,12 @@ export async function runTransferMarketExpirySweepWithDb(
   let complete = false;
   let continuation = false;
 
+  const configRef = db.collection('system_v1').doc('season_config');
   const lease = await db.runTransaction(async (tx: any) => {
-    const snapshot = await tx.get(stateRef);
+    const [snapshot, configSnap] = await Promise.all([tx.get(stateRef), tx.get(configRef)]);
+    if (configSnap.exists && configSnap.data()?.stagingSeasonOneResetInProgress === true) {
+      return { acquired: false, cursorId: null, resetInProgress: true };
+    }
     const state = snapshot.exists ? snapshot.data() || {} : {};
     const activeUntil = typeof state.leaseUntilMs === 'number' ? state.leaseUntilMs : 0;
     if (typeof state.leaseOwner === 'string' && state.leaseOwner && activeUntil > now()) {
