@@ -1783,7 +1783,7 @@ async function verifyInitialPyramidCup(db: any, seasonStartValue: any) {
   if (Number(cup.season) !== 1 || cup.status !== 'active' ||
       cup.name !== 'Кубок Пирамиды' || Number(cup.currentRound) !== 1 || Number(cup.totalRounds) !== 7 ||
       Number(cup.formatVersion) !== 4 || cup.format !== 'D1_REST_OPENING_ROUND' ||
-      Number(cup.totalParticipants) !== 120 || participants.length !== 120 ||
+      Number(cup.totalParticipants) !== 120 || Number(cup.totalMatches) !== 119 || participants.length !== 120 ||
       new Set(participants.map((team: any) => String(team?.id || ''))).size !== 120 ||
       new Set(participants.map((team: any) => Number(team?.seed))).size !== 120 ||
       ordered.some((team: any, index: number) => Number(team?.seed) !== index + 1 || !team?.id) ||
@@ -1849,7 +1849,7 @@ async function verifyInitialPyramidCup(db: any, seasonStartValue: any) {
     return { ready: false, reason: 'INITIAL_CUP_PARTICIPANT_SNAPSHOTS_INCOMPLETE' };
   }
 
-  return { ready: true, participants: 120, preliminaryMatches: 56, openingRoundRestCount: 8, byes: 0 };
+  return { ready: true, participants: 120, totalMatches: 119, preliminaryMatches: 56, openingRoundRestCount: 8, byes: 0 };
 }
 
 /**
