@@ -184,7 +184,7 @@ async function verifyWorld(db: Firestore) {
   const uniqueParticipantIds = [...new Set(participantIds)];
   if (uniqueParticipantIds.length !== EXPECTED_PARTICIPANTS) standingsValid = false;
 
-  const participantProfiles = uniqueParticipantIds.length > 0
+  const participantProfiles = standingsValid && uniqueParticipantIds.length === EXPECTED_PARTICIPANTS
     ? await db.getAll(...uniqueParticipantIds.map((id) => db.collection('players_v14').doc(id)))
     : [];
   const validProfiles = participantProfiles.filter((profile, index) =>
