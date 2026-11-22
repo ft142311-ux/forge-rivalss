@@ -553,6 +553,7 @@ test('fresh Season 1 executor verifies a durable per-document archive before any
   const deleteCall = executor.indexOf('removeOldSeasonOneData(db)');
   assert.ok(archiveCall >= 0 && deleteCall > archiveCall, 'archive must complete before the first delete');
   assert.match(executor, /sourceConfig: config/);
+  assert.match(executor, /journal.sourceConfig, \(\) => assertLease\(db, token\)/);
   assert.match(executor, /RESET_ORIGINAL_CONFIG_ARCHIVE_SOURCE_MISSING/);
 
   const archive = read('src/app/actions/staging-season-one-reset-durable-archive.ts');
@@ -565,6 +566,7 @@ test('fresh Season 1 executor verifies a durable per-document archive before any
   assert.match(archive, /SEASON_ONE_ARCHIVE_READBACK_MISMATCH/);
   assert.match(archive, /SEASON_ONE_ARCHIVE_COMPLETION_NOT_DURABLE/);
   assert.match(archive, /existingManifest.status === 'COMPLETE'/);
+  assert.match(archive, /assertOwnership\?\.\(\)/);
   assert.match(archive, /SEASON_ONE_ARCHIVE_COMPLETED_MANIFEST_INVALID/);
   assert.match(archive, /league_slot_history_v1/);
   assert.match(archive, /system_v1\\/season_config/);
