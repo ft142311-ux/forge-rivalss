@@ -125,6 +125,7 @@ export async function recordMatchEconomy(
       credits: after,
       updatedAt: FieldValue.serverTimestamp(),
       lastMatchEconomy: economy,
+      lastMatchId: matchId,
       [`matchEconomy.${matchId}`]: economy,
     });
 
