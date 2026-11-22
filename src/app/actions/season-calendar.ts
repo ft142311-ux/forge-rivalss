@@ -732,12 +732,15 @@ async function buildSeasonCalendar(lease: BuildLease, pristineFirstWorld = false
   // A reset executor deliberately removes the old Season 1 fixtures before
   // rebuilding the calendar. Do not run the normal source-season repair gate
   // against that intentionally empty intermediate state.
-  const sourceRepairPreflight = directRecovery || requestedRecoveryTarget <= sourceSeasonNumber || stagingFreshSeasonOneReset
+  const skipSourceRepair = directRecovery ||
+    requestedRecoveryTarget <= sourceSeasonNumber ||
+    stagingFreshSeasonOneReset;
+  const sourceRepairPreflight = skipSourceRepair
     ? null
     : await inspectCalendarRepairPreflight(db, sourceSeasonNumber);
   const sourceFixturesIncomplete = Boolean(sourceRepairPreflight &&
     Number(sourceRepairPreflight.observedCanonicalMatches || 0) < TOTAL_GROUPS * 56);
-  const repairedSourceTables = directRecovery || sourceFixturesIncomplete
+  const repairedSourceTables = skipSourceRepair || sourceFixturesIncomplete
     ? 0
     : await repairCanonicalSeasonTables(db, sourceSeasonNumber, lease);
   let seasonNumber = Number(current.activeSeasonNumber || 1);
