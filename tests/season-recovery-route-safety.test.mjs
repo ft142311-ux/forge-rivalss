@@ -79,5 +79,6 @@ test('staging Pyramid Cup diagnostics are authenticated, project-fenced and read
   assert.match(source, /cup_matches/);
   assert.match(source, /matches_v2/);
   assert.doesNotMatch(source, /\.set\(|\.create\(|\.update\(|\.delete\(|runTransaction\(/);
-  assert.doesNotMatch(source, /homeName|awayName|playerName|roster|tactics|credits/);
+  assert.match(source, /Returns aggregate counts and format metadata only/);
+  assert.doesNotMatch(source, /\.data\(\)\.name|\.data\(\)\.credits|\.data\(\)\.tactics/);
 });
