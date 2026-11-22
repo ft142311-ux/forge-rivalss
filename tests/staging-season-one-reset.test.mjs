@@ -71,6 +71,7 @@ function createValidInput() {
     archives: 0, rollovers: 0, history: 0,
     archiveMatches: 0, matchPlayerEffects: 0, matchRevenueReceipts: 0,
     matchConsequenceReceipts: 0, leagueSeasonRewardReceipts: 0, pyramidCupRewardReceipts: 0,
+    liveLocks: [],
     now: new Date('2026-11-22T14:00:00.000Z'),
   };
 }
@@ -90,6 +91,8 @@ test('fresh Beta Season 1 preflight is authenticated, project-fenced and read-on
   assert.match(source, /match_consequence_receipts/);
   assert.match(source, /LEAGUE_SEASON_REWARD/);
   assert.match(source, /PYRAMID_CUP_CHAMPION_REWARD/);
+  assert.match(source, /season_rollover_v1/);
+  assert.match(source, /season_calendar_build_v1/);
   assert.match(source, /collection\('matches'\)/);
   assert.doesNotMatch(source, /\.set\(|\.create\(|\.update\(|\.delete\(|runTransaction\(/);
   assert.doesNotMatch(source, /participantIds\s*:\s*\[|profileIds\s*:\s*\[/);
@@ -221,4 +224,18 @@ test('fresh Season 1 player reset clears only season counters and stale competit
     'skillCaps', 'fatigue', 'form', 'tilt', 'isInjured', 'injuredUntil',
     'credits', 'totalMatchesPlayed', 'matchesPlayedToday', 'lastMatchDateXP', 'titles',
   ]) assert.deepEqual(reset[key], player[key], `preserves ${key}`);
+});
+
+test('fresh Season 1 preflight refuses active settlement and season worker locks', () => {
+  const processing = createValidInput();
+  processing.matches[0].data.isProcessing = true;
+  const processingPlan = buildFreshSeasonOneResetPlan(processing);
+  assert.equal(processingPlan.ready, false);
+  assert.ok(processingPlan.reasons.includes('MATCH_SETTLEMENT_IN_PROGRESS'));
+
+  const locked = createValidInput();
+  locked.liveLocks = ['season_calendar_build_v1'];
+  const lockedPlan = buildFreshSeasonOneResetPlan(locked);
+  assert.equal(lockedPlan.ready, false);
+  assert.ok(lockedPlan.reasons.includes('SEASON_WORKER_LOCKED'));
 });
