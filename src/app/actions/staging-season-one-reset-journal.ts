@@ -111,7 +111,10 @@ export function acquireResetLease(
   if (journal.phase === 'COMPLETED' || journal.recoveryRequired) {
     return { journal: source, changed: false, reason: 'RESET_NOT_CLAIMABLE' };
   }
-  if (journal.lease && journal.lease.expiresAtMs <= nowMs) {\n    return { journal: source, changed: false, reason: 'RESET_LEASE_RECOVERY_REQUIRED' };\n  }\n  if (journal.lease && journal.lease.expiresAtMs > nowMs && journal.lease.token !== token) {
+  if (journal.lease && journal.lease.expiresAtMs <= nowMs) {
+    return { journal: source, changed: false, reason: 'RESET_LEASE_RECOVERY_REQUIRED' };
+  }
+  if (journal.lease && journal.lease.expiresAtMs > nowMs && journal.lease.token !== token) {
     return { journal: source, changed: false, reason: 'RESET_LOCKED' };
   }
   if (journal.lease && journal.lease.token === token && journal.lease.ownerId !== ownerId) {
