@@ -135,15 +135,15 @@ async function removeOldSeasonOneData(db: any) {
   deleted += await deleteDocs(db, archiveMatches.docs);
   deleted += await deleteQuery(db, db.collection('match_player_effects_v1')
     .where('matchId', '>=', MATCH_PREFIX).where('matchId', '<', MATCH_PREFIX + '\uf8ff'));
-  deleted += await deleteQuery(db.collection('match_player_effects_v1')
+  deleted += await deleteQuery(db, db.collection('match_player_effects_v1')
     .where('matchId', '>=', 'cup_S1_').where('matchId', '<', 'cup_S1_\uf8ff'));
-  deleted += await deleteQuery(db.collection('economy_transactions')
+  deleted += await deleteQuery(db, db.collection('economy_transactions')
     .where('referenceId', '>=', MATCH_PREFIX).where('referenceId', '<', MATCH_PREFIX + '\uf8ff'));
-  deleted += await deleteQuery(db.collection('economy_transactions')
+  deleted += await deleteQuery(db, db.collection('economy_transactions')
     .where('referenceId', '>=', 'cup_S1_').where('referenceId', '<', 'cup_S1_\uf8ff'));
-  deleted += await deleteQuery(db.collection('match_consequence_receipts')
+  deleted += await deleteQuery(db, db.collection('match_consequence_receipts')
     .where('matchId', '>=', MATCH_PREFIX).where('matchId', '<', MATCH_PREFIX + '\uf8ff'));
-  deleted += await deleteQuery(db.collection('match_consequence_receipts')
+  deleted += await deleteQuery(db, db.collection('match_consequence_receipts')
     .where('matchId', '>=', 'cup_S1_').where('matchId', '<', 'cup_S1_\uf8ff'));
 
   const leagueRewards = await db.collection('economy_transactions').where('referenceId', '==', 'S1').get();
