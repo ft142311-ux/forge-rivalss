@@ -638,3 +638,17 @@ test('fresh Season 1 executor is project-scoped, journaled, idempotent and verif
   assert.match(seasonInit, /transaction\.get\(configRef\)/);
   assert.match(seasonInit, /STAGING_SEASON_ONE_RESET_IN_PROGRESS/);
 });
+
+
+test('fresh Season 1 destructive cleanup renews lease before every delete batch and root deletion', () => {
+  const executor = read('src/app/actions/fresh-season-one-reset-executor.ts');
+  assert.match(executor, /async function deleteDocs\(db: any, docs: any\[\], assertOwnership\?/);
+  assert.match(executor, /for \(let offset = 0; offset < docs.length; offset \+= 400\) \{\s*await assertOwnership\?\.\(\);\s*const batch = db\.batch\(\);/);
+  assert.match(executor, /async function deleteQuery\(db: any, query: any, assertOwnership\?/);
+  assert.match(executor, /async function removeOldSeasonOneData\(db: any, assertOwnership\?/);
+  assert.match(executor, /removeOldSeasonOneData\(db, \(\) => assertLease\(db, token\)\)/);
+  const cleanup = executor.slice(executor.indexOf('async function removeOldSeasonOneData'), executor.indexOf('async function rebuildLeagueIdentity'));
+  assert.equal((cleanup.match(/await assertOwnership\?\.\(\);/g) || []).length, 4);
+  assert.match(cleanup, /deleteQuery\([\s\S]*?assertOwnership\)/);
+  assert.match(cleanup, /deleteDocs\([\s\S]*?assertOwnership\)/);
+});
