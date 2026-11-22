@@ -28,6 +28,22 @@ const EXPECTED_MATCHES_PER_GROUP = 56;
 const EXPECTED_PARTICIPANTS = 120;
 const EXPECTED_TOURS = 14;
 
+function toValidDate(value: any): Date | null {
+  if (value === null || value === undefined || value === '') return null;
+  const date = value instanceof Date
+    ? new Date(value.getTime())
+    : value && typeof value.toDate === 'function'
+      ? value.toDate()
+      : new Date(value);
+  return date instanceof Date && Number.isFinite(date.getTime()) ? date : null;
+}
+
+function expectedCupOpeningTime(seasonStart: Date): number {
+  const date = new Date(seasonStart.getTime() + 86400000);
+  date.setUTCHours(4, 0, 0, 0);
+  return date.getTime();
+}
+
 function nextMoscowSeasonBoundary(now: Date) {
   const next = new Date(now.getTime());
   next.setUTCHours(15, 0, 0, 0); // 18:00 Moscow time
@@ -60,6 +76,15 @@ export function buildFreshSeasonOneResetPlan(input: FreshSeasonOneResetInput) {
   const leagueParticipantIds = new Set<string>();
   // Populated after canonical league standings have been inspected below.
   if (!cup) reasons.push('PYRAMID_CUP_DOCUMENT_MISSING');
+  const configuredSeasonStart = toValidDate(config.seasonStart);
+  const cupSeasonStart = toValidDate(cup?.seasonStart);
+  if (!configuredSeasonStart || !cupSeasonStart ||
+      configuredSeasonStart.getTime() !== cupSeasonStart.getTime()) {
+    reasons.push('PYRAMID_CUP_SEASON_START_MISMATCH');
+  }
+  const expectedOpeningTime = configuredSeasonStart
+    ? expectedCupOpeningTime(configuredSeasonStart)
+    : null;
   if (cup && (Number(cup.season) !== 1 || cup.status !== 'active' ||
       cup.name !== 'Кубок Пирамиды' || Number(cup.currentRound) !== 1 ||
       Number(cup.totalRounds) !== 7 || Number(cup.formatVersion) !== 4 ||
@@ -194,7 +219,14 @@ export function buildFreshSeasonOneResetPlan(input: FreshSeasonOneResetInput) {
           fixture.homeTeamSnapshot?.id !== homeId || fixture.awayTeamSnapshot?.id !== awayId ||
           !Array.isArray(fixture.homeTeamSnapshot?.players) || fixture.homeTeamSnapshot.players.length !== 5 ||
           !Array.isArray(fixture.awayTeamSnapshot?.players) || fixture.awayTeamSnapshot.players.length !== 5) {
-        reasons.push('PYRAMID_CUP_OPENING_FIXTURE_IDENTITY_INVALID');
+        reasons.push('PYRAMID_CUP_OPENING_FIXTURE_IDENTITY_INVALID');      const scheduledValue = fixture.scheduledAt ?? fixture.startTime ?? fixture.scheduledStartAt;
+      const scheduledDate = toValidDate(scheduledValue);
+      if (expectedOpeningTime === null || !scheduledDate ||
+          scheduledDate.getTime() !== expectedOpeningTime) {
+        reasons.push('PYRAMID_CUP_OPENING_SCHEDULE_INVALID');
+        break;
+      }
+
         break;
       }
     }
