@@ -70,7 +70,10 @@ export function resetFreshSeasonOneClubProfileState<T extends FreshSeasonOneClub
     ? null
     : profile.lastMatchConsequences;
 
-  const lastMatchEconomy = isSeasonOneCompetitionMatchId(profile.lastMatchId)
+  const lastMatchId = isSeasonOneCompetitionMatchId(profile.lastMatchId)
+    ? null
+    : profile.lastMatchId;
+  const lastMatchEconomy = lastMatchId === null
     ? null
     : profile.lastMatchEconomy;
 
@@ -84,6 +87,7 @@ export function resetFreshSeasonOneClubProfileState<T extends FreshSeasonOneClub
     seasonAwards,
     trophies,
     matchEconomy,
+    lastMatchId,
     lastMatchEconomy,
     lastMatchConsequences,
   };
