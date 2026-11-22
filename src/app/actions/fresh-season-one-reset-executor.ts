@@ -266,10 +266,16 @@ async function verifyFreshSeasonOne(db: any) {
     db.collection('cup_pyramid_v1').doc(CUP_ID).get(),
     db.collection('cup_matches').where('cupId', '==', CUP_ID).get(),
   ]);
-  if (!configSnap.exists || configSnap.data()?.worldReady !== true ||
-      configSnap.data()?.pyramidCupReady !== true || configSnap.data()?.stagingSeasonOneResetInProgress === true ||
+  const config = configSnap.exists ? configSnap.data() || {} : {};
+  // The reset marker must remain set through every verification read. The
+  // executor clears it only in the final transaction after this verification
+  // and the journal step have both completed.
+  if (!configSnap.exists || config.worldReady !== true ||
+      config.pyramidCupReady !== true || config.stagingSeasonOneResetInProgress !== true ||
       tablesSnap.size !== 15 || slotsSnap.size !== 120) {
-    throw new Error('FRESH_SEASON_ONE_WORLD_CONFIG_OR_COUNTS_INVALID');
+    throw new Error(
+      `FRESH_SEASON_ONE_WORLD_CONFIG_OR_COUNTS_INVALID:worldReady=${String(config.worldReady)},cupReady=${String(config.pyramidCupReady)},resetMarker=${String(config.stagingSeasonOneResetInProgress)},tables=${tablesSnap.size},slots=${slotsSnap.size}`,
+    );
   }
   const leagueMatches = matchesSnap.docs.filter((doc: any) => isLeagueFixture(doc.data() || {}));
   if (leagueMatches.length !== 840) throw new Error(`FRESH_SEASON_ONE_LEAGUE_MATCH_COUNT_INVALID:${leagueMatches.length}`);
