@@ -105,8 +105,9 @@ export async function GET(request: NextRequest) {
     const profileSnaps = standingsShapeValid && participantIds.size === 120
       ? await db.getAll(...[...participantIds].map(id => db.collection('players_v14').doc(id)))
       : [];
-    const profileIds = new Set(profileSnaps.filter((profile, index) =>
-      profile.exists && profile.data()?.id === [...participantIds][index] &&
+    const profileIds = new Set(profileSnaps.filter(profile =>
+      profile.exists && participantIds.has(String(profile.id)) &&
+      profile.data()?.id === String(profile.id) &&
       Array.isArray(profile.data()?.ownedPlayers) && profile.data()!.ownedPlayers.length >= 5
     ).map(profile => String(profile.id)));
 
