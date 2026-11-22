@@ -168,20 +168,18 @@ test('fresh Season 1 reset plan validates 120 participants and complete 840-matc
   assert.equal(plan.target.nextSeasonStart, '2026-12-09T15:00:00.000Z');
 });
 
-test('fresh Season 1 preflight blocks existing archives, rollover plans, history and orphan archive matches', () => {
-  const cases = [
-    ['archives', 'EXISTING_SEASON_ONE_ARCHIVE'],
-    ['rollovers', 'EXISTING_SEASON_TWO_ROLLOVER_PLAN'],
-    ['history', 'EXISTING_SEASON_ONE_HISTORY'],
-    ['archiveMatches', 'ORPHANED_SEASON_ONE_ARCHIVE_MATCHES'],
-  ];
-  for (const [field, reason] of cases) {
-    const input = createValidInput();
-    input[field] = 1;
-    const plan = buildFreshSeasonOneResetPlan(input);
-    assert.equal(plan.ready, false, field);
-    assert.ok(plan.reasons.includes(reason), field);
-  }
+test('fresh Season 1 reset plan classifies old archives and rollover records as replaceable season data', () => {
+  const input = createValidInput();
+  input.archives = 1;
+  input.rollovers = 1;
+  input.history = 1;
+  input.archiveMatches = 56;
+  const plan = buildFreshSeasonOneResetPlan(input);
+  assert.equal(plan.ready, true, plan.reasons.join(','));
+  assert.equal(plan.replace.seasonArchives, 1);
+  assert.equal(plan.replace.rolloverPlans, 1);
+  assert.equal(plan.replace.seasonHistoryEntries, 1);
+  assert.equal(plan.replace.archivedLeagueMatches, 56);
 });
 
 test('fresh Season 1 preflight rejects a Cup season-start mismatch', () => {
