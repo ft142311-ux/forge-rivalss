@@ -27,6 +27,34 @@ test('Pyramid Cup reward balance and ledger are created in the same transaction'
   const end = source.indexOf('async function finishTechnically', start);
   const payout = source.slice(start, end);
   assert.match(payout, /return db\.runTransaction\(async \(tx: any\) =>/);
-  assert.match(payout, /tx\.update\(playerRef, \{ credits: before \+ amount/);
+  assert.match(payout, /tx\.update\(playerRef, \{[\s\S]*credits: before \+ amount/);
+  assert.match(payout, /tx\.create\(ledgerRef, \{/);
+});
+
+
+test('Pyramid Cup preserves the existing division-based champion prize and finalist percentage policy', () => {
+  assert.match(source, /DIVISION_CHAMPION_PRIZES: Record<number, number> = \{ 1: 4_000_000, 2: 1_800_000, 3: 900_000, 4: 350_000 \}/);
+  assert.match(source, /Math\.floor\(base \* \(place === 'champion' \? 0\.10 : 0\.05\)\)/);
+  assert.doesNotMatch(source, /DIVISION_CUP_PRIZES/);
+});
+
+test('Pyramid Cup never pays bots and never creates a zero-value receipt', () => {
+  const start = source.indexOf('async function payCupPrize');
+  const end = source.indexOf('async function finishTechnically', start);
+  const payout = source.slice(start, end);
+  assert.match(payout, /team\.id\.startsWith\('BOT_'\)/);
+  assert.match(payout, /if \(amount <= 0\) return 0/);
+});
+
+test('Pyramid Cup champion receives one separate trophy in the same payout transaction; finalist receives none', () => {
+  const start = source.indexOf('async function payCupPrize');
+  const end = source.indexOf('async function finishTechnically', start);
+  const payout = source.slice(start, end);
+  assert.match(payout, /const trophyId = `pyramid-cup-season-\$\{season\}`/);
+  assert.match(payout, /const shouldAddTrophy = place === 'champion' && !hasPyramidCupTrophy/);
+  assert.match(payout, /type: 'pyramid_cup_champion'/);
+  assert.match(payout, /name: `Кубок Пирамиды — сезон \$\{season\}`/);
+  assert.match(payout, /trophies: \[\.\.\.existingTrophies/);
+  assert.match(payout, /tx\.update\(playerRef, \{/);
   assert.match(payout, /tx\.create\(ledgerRef, \{/);
 });

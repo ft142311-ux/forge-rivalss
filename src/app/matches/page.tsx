@@ -28,7 +28,7 @@ export default function MatchesPage() {
   const { 
     isLoaded, language,
     selectedLeagueId, leagueLevel, groupId,
-    clubLogo: myClubLogo, seasonNumber, matchHistory, rank
+    clubLogo: myClubLogo, clubName: myClubName, seasonNumber, matchHistory, rank
   } = useGameState();
   
   const [view, setView] = useState<MatchView>('menu');
@@ -39,17 +39,9 @@ export default function MatchesPage() {
     return () => clearInterval(timer);
   }, []);
 
-  // ИСПОЛЬЗУЕМ ТОЛЬКО v14
-  const groupPlayersQuery = useMemoFirebase(() => {
-    if (!db || !selectedLeagueId) return null;
-    return query(collection(db, 'players_v14'), 
-      where('selectedLeagueId', '==', selectedLeagueId),
-      where('leagueLevel', '==', leagueLevel),
-      where('groupId', '==', groupId)
-    );
-  }, [db, selectedLeagueId, leagueLevel, groupId]);
-
-  const { data: players } = useCollection(groupPlayersQuery);
+  // Rank is already hydrated from the authenticated manager profile.
+  // Do not query other managers' private players_v14 documents from the client:
+  // Firestore rules intentionally restrict those documents to their owner.
 
   // ФИЛЬТРАЦИЯ ПО ВЕРСИИ 140
   const groupMatchesQuery = useMemoFirebase(() => {
@@ -62,7 +54,7 @@ export default function MatchesPage() {
     );
   }, [db, selectedLeagueId, leagueLevel, groupId, seasonNumber]);
 
-  const { data: fixedMatches, isLoading: isMatchesLoading } = useCollection(groupMatchesQuery);
+  const { data: fixedMatches, isLoading: isMatchesLoading, error: matchesError } = useCollection(groupMatchesQuery);
 
   // Все завершённые матчи конкретного менеджера, включая товарищеские.
   // Friendly-отчёты не имеют leagueId/level/groupId, поэтому они не попадают
@@ -127,14 +119,10 @@ export default function MatchesPage() {
   const nameMap = useMemo(() => {
     const names: Record<number, string> = {};
     const logos: Record<number, string> = {};
-    if (players) {
-      players.forEach(p => {
-        names[p.rank] = p.clubName || p.displayName;
-        logos[p.rank] = p.clubLogo;
-      });
-    }
+    // Match documents carry public participant names; private player profiles
+    // are intentionally not queried from this client page.
     return { names, logos };
-  }, [players]);
+  }, []);
 
   const resolveMatchData = useCallback((m: any) => {
     const hRank = Number(m.homeRank);
@@ -142,20 +130,38 @@ export default function MatchesPage() {
     const botHome = `BOT_ALPHA_L${leagueLevel}_G${groupId}_R${hRank}`;
     const botAway = `BOT_ALPHA_L${leagueLevel}_G${groupId}_R${aRank}`;
 
-    const homeName = nameMap.names[hRank] || m.homeName || botHome;
-    const awayName = nameMap.names[aRank] || m.awayName || botAway;
-    const homeLogo = nameMap.logos[hRank] || null;
-    const awayLogo = nameMap.logos[aRank] || null;
-    return { ...m, homeName, awayName, homeLogo, awayLogo };
-  }, [nameMap, leagueLevel, groupId]);
+    // A league slot keeps its season-to-date history when a bot is replaced
+    // by a newly registered manager. For official fixtures in this exact
+    // league/group/season, the authenticated manager owns their current rank
+    // slot even when an already-finished fixture still contains the old bot ID.
+    // Non-league matches continue to require the immutable authenticated UID.
+    const isMyLeagueFixture = Boolean(
+      m.leagueId === selectedLeagueId &&
+      Number(m.level) === Number(leagueLevel) &&
+      Number(m.groupId) === Number(groupId) &&
+      Number(m.season) === Number(seasonNumber)
+    );
+    const isMyHome = Boolean(user?.uid && m.homeId === user.uid) ||
+      (isMyLeagueFixture && Number(m.homeRank) === Number(rank));
+    const isMyAway = Boolean(user?.uid && m.awayId === user.uid) ||
+      (isMyLeagueFixture && Number(m.awayRank) === Number(rank));
+    const homeName = isMyHome && myClubName
+      ? myClubName
+      : nameMap.names[hRank] || m.homeName || botHome;
+    const awayName = isMyAway && myClubName
+      ? myClubName
+      : nameMap.names[aRank] || m.awayName || botAway;
+    const homeLogo = isMyHome ? myClubLogo || null : nameMap.logos[hRank] || null;
+    const awayLogo = isMyAway ? myClubLogo || null : nameMap.logos[aRank] || null;
+    return { ...m, homeName, awayName, homeLogo, awayLogo, isMyHomeClub: isMyHome, isMyAwayClub: isMyAway };
+  }, [nameMap, selectedLeagueId, leagueLevel, groupId, seasonNumber, rank, myClubName, myClubLogo, user?.uid]);
 
   const renderMatchCard = useCallback((raw: any, idx: number) => {
     const m = resolveMatchData(raw);
     const isLive = isMatchLive(m.startTime);
     const isFinished = m.isFinished;
-    const myRank = players?.find(p => p.id === user?.uid)?.rank || 0;
-    const isMeHome = Number(m.homeRank) === Number(myRank) || m.homeId === user?.uid;
-    const isMeAway = Number(m.awayRank) === Number(myRank) || m.awayId === user?.uid;
+    const isMeHome = m.isMyHomeClub === true;
+    const isMeAway = m.isMyAwayClub === true;
 
     return (
       <Card key={m.id || idx} className={cn(
@@ -197,7 +203,7 @@ export default function MatchesPage() {
         </CardContent>
       </Card>
     );
-  }, [players, resolveMatchData, t.tour, user]);
+  }, [rank, resolveMatchData, t.tour, user]);
 
   const renderGrouped = (matches: any[]) => {
     const tours = [...new Set(matches.map(m => m.tour))].sort((a, b) => a - b);
@@ -210,6 +216,14 @@ export default function MatchesPage() {
   };
 
   const renderContent = () => {
+    if (matchesError) {
+      return (
+        <div role="alert" className="rounded-xl border border-destructive/30 bg-destructive/10 p-4 text-center">
+          <p className="text-xs font-bold">Не удалось загрузить расписание лиги</p>
+          <p className="mt-2 break-words text-[10px] text-muted-foreground">{matchesError.message}</p>
+        </div>
+      );
+    }
     if (isMatchesLoading || isHomeHistoryLoading || isAwayHistoryLoading) {
       return (
         <div className="py-20 flex flex-col items-center justify-center space-y-4 opacity-50">
@@ -220,7 +234,7 @@ export default function MatchesPage() {
     }
 
     const allMatches = [...(fixedMatches || [])].sort((a, b) => a.tour - b.tour);
-    const myRank = players?.find(p => p.id === user?.uid)?.rank || 0;
+    const myRank = Number(rank || 0);
 
     switch(view) {
       case 'next':

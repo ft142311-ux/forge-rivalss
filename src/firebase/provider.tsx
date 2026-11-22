@@ -6,6 +6,7 @@ import { FirebaseApp } from 'firebase/app';
 import { Firestore } from 'firebase/firestore';
 import { Auth, onIdTokenChanged, User, signOut } from 'firebase/auth';
 import { recordUserActivityAction } from '@/app/actions/user-activity';
+import { recordManagerPresenceAction } from '@/app/actions/manager-presence';
 
 /**
  * ПРОВАЙДЕР FIREBASE v3.1 (Passive Mode).
@@ -113,6 +114,58 @@ export const FirebaseProvider: React.FC<{ children: ReactNode; firebaseApp: Fire
 
     return () => unsubscribe();
   }, [auth]);
+
+  // Presence is independent from Auth's slower ID-token refresh cadence.
+  // A visible tab refreshes its server-verified heartbeat every 45 seconds;
+  // hidden tabs stop heartbeating and naturally become offline after 2 minutes.
+  useEffect(() => {
+    const activeUser = userAuthState.user;
+    if (!auth || !activeUser) return;
+
+    let active = true;
+    let inFlight = false;
+
+    const heartbeat = async () => {
+      if (!active || inFlight || document.visibilityState !== 'visible') return;
+      inFlight = true;
+      try {
+        const idToken = await activeUser.getIdToken();
+        if (!active) return;
+        const result = await recordManagerPresenceAction(idToken);
+        if (!result?.success) {
+          const terminalErrors = [
+            'ACCOUNT_DISABLED',
+            'ACCOUNT_RETIRING',
+            'ACCOUNT_RETIRED',
+            'AUTH_TOKEN_REVOKED',
+            'AUTH_TOKEN_INVALID',
+          ];
+          if (terminalErrors.includes(String(result?.error || ''))) {
+            try { await signOut(auth); } catch { /* Auth listener settles state. */ }
+            return;
+          }
+          console.warn('[PRESENCE] Heartbeat was not acknowledged:', result?.error || 'UNKNOWN');
+        }
+      } catch (error) {
+        console.warn('[PRESENCE] Heartbeat failed:', error);
+      } finally {
+        inFlight = false;
+      }
+    };
+
+    void heartbeat();
+    const interval = window.setInterval(() => { void heartbeat(); }, 45_000);
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') void heartbeat();
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [auth, userAuthState.user]);
 
   const contextValue = useMemo((): FirebaseContextState => ({
     areServicesAvailable: !!firebaseApp && !!firestore && !!auth,

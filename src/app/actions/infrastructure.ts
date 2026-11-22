@@ -3,6 +3,7 @@
 import { FieldValue } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { requireServerActor } from '@/lib/server-auth';
+import { getArenaExpansionQuote } from '@/app/lib/arena-expansion';
 
 export type ConstructionSection = 'arena' | 'hq' | 'bootcamp' | 'academy' | 'medical';
 
@@ -45,7 +46,7 @@ export async function startConstructionAction(idToken: string, section: Construc
 
       // One active project per infrastructure section/tab.
       const now = Date.now();
-      for (const [activeId, finish] of Object.entries(finishes)) {
+      for (const finish of Object.values(finishes)) {
         const finishMs = new Date(String(finish)).getTime();
         if (Number.isFinite(finishMs) && finishMs > now) {
           throw new Error('CONSTRUCTION_ALREADY_IN_PROGRESS');
@@ -98,10 +99,89 @@ export async function startConstructionAction(idToken: string, section: Construc
   }
 }
 
+export async function startCapacityExpansionAction(idToken: string, seats: number) {
+  try {
+    const { uid } = await requireServerActor(idToken);
+    const db = getAdminDb();
+    const playerRef = db.collection('players_v14').doc(uid);
+
+    await db.runTransaction(async (t) => {
+      const snap = await t.get(playerRef);
+      if (!snap.exists) throw new Error('PLAYER_NOT_FOUND');
+      const p = snap.data() || {};
+      const arena = { ...(p.arena || {}) };
+      const currentCapacity = Number(arena.capacity ?? 3000);
+      const quote = getArenaExpansionQuote(seats, currentCapacity);
+      const finishes = { ...(arena.constructionFinishes || {}) };
+      const starts = { ...(arena.constructionStarts || {}) };
+      const now = Date.now();
+
+      for (const finish of Object.values(finishes)) {
+        const finishMs = new Date(String(finish)).getTime();
+        if (!Number.isFinite(finishMs)) throw new Error('INVALID_CONSTRUCTION_STATE');
+        if (finishMs <= now) throw new Error('CONSTRUCTION_COMPLETION_PENDING');
+        throw new Error('CONSTRUCTION_ALREADY_IN_PROGRESS');
+      }
+
+      const credits = Number(p.credits ?? 0);
+      if (!Number.isSafeInteger(credits) || credits < 0) throw new Error('INVALID_BALANCE');
+      if (credits < quote.cost) throw new Error('INSUFFICIENT_FUNDS');
+
+      const startIso = new Date(now).toISOString();
+      const finishIso = new Date(now + quote.durationMs).toISOString();
+      const targets = { ...(arena.constructionTargets || {}), capacity: quote.targetCapacity };
+      const accelerated = { ...(arena.isAccelerated || {}), capacity: false };
+      const details = { ...(arena.constructionDetails || {}), capacity: {
+        seats: quote.seats,
+        cost: quote.cost,
+        durationHours: quote.durationHours,
+        capacityBefore: currentCapacity,
+        capacityAfter: quote.targetCapacity,
+      } };
+
+      starts.capacity = startIso;
+      finishes.capacity = finishIso;
+      arena.constructionStarts = starts;
+      arena.constructionFinishes = finishes;
+      arena.constructionTargets = targets;
+      arena.isAccelerated = accelerated;
+      arena.constructionDetails = details;
+
+      t.update(playerRef, {
+        credits: credits - quote.cost,
+        arena,
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+
+      const txRef = db.collection('economy_transactions').doc();
+      t.set(txRef, {
+        userId: uid,
+        amount: -quote.cost,
+        currency: 'credits',
+        type: 'ARENA_CAPACITY_EXPANSION',
+        referenceId: `arena:capacity:+${quote.seats}:${quote.targetCapacity}`,
+        description: `Arena capacity expansion by ${quote.seats} seats`,
+        seats: quote.seats,
+        capacityBefore: currentCapacity,
+        capacityAfter: quote.targetCapacity,
+        durationHours: quote.durationHours,
+        balanceBefore: credits,
+        balanceAfter: credits - quote.cost,
+        timestamp: FieldValue.serverTimestamp(),
+      });
+    });
+
+    return { success: true };
+  } catch (e) {
+    return { success: false, error: errorMessage(e) };
+  }
+}
+
 export async function accelerateConstructionAction(idToken: string, section: string, id: string, multiplier: number) {
   try {
     const { uid } = await requireServerActor(idToken);
-    if (!(section in CONFIG) || !ALLOWED_IDS[section as ConstructionSection]?.includes(id)) {
+    const isArenaCapacity = section === 'arena' && id === 'capacity';
+    if (!(section in CONFIG) || (!isArenaCapacity && !ALLOWED_IDS[section as ConstructionSection]?.includes(id))) {
       throw new Error('INVALID_ACCELERATION_TARGET');
     }
     const allowedMultiplierPrices: Record<number, number> = { 2: 100, 4: 250, 8: 600 };
@@ -165,13 +245,14 @@ export async function finalizeConstructionsAction(idToken: string) {
         const starts = { ...(state.constructionStarts || {}) };
         const targets = { ...(state.constructionTargets || {}) };
         const accelerated = { ...(state.isAccelerated || {}) };
+        const details = { ...(state.constructionDetails || {}) };
         let changed = false;
 
         for (const [id, finish] of Object.entries(finishes)) {
           if (new Date(String(finish)).getTime() > now) continue;
           const target = Number(targets[id] || Number(state[id] || 0) + 1);
           state[id] = target;
-          delete finishes[id]; delete starts[id]; delete targets[id]; delete accelerated[id];
+          delete finishes[id]; delete starts[id]; delete targets[id]; delete accelerated[id]; delete details[id];
           changed = true;
         }
 
@@ -180,6 +261,7 @@ export async function finalizeConstructionsAction(idToken: string) {
           state.constructionStarts = starts;
           state.constructionTargets = targets;
           state.isAccelerated = accelerated;
+          state.constructionDetails = details;
           updates[section] = state;
         }
       }

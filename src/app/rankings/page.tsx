@@ -44,6 +44,7 @@ export default function RankingsPage() {
   const [busyVote, setBusyVote] = useState<string | null>(null);
   const [tableLoadAttempt, setTableLoadAttempt] = useState(0);
   const [tableLoadTimedOut, setTableLoadTimedOut] = useState(false);
+  const [tableDiagnostic, setTableDiagnostic] = useState<Record<string, any> | null>(null);
   const [selectedArchiveSeason, setSelectedArchiveSeason] = useState<number | null>(null);
   const [archiveGroup, setArchiveGroup] = useState('D1-G1');
 
@@ -91,6 +92,33 @@ export default function RankingsPage() {
 
   const { data: tableData, isLoading: isTableLoading, error: tableError } = useDoc(tableRef);
 
+  // When Firestore denies the standings read, ask the server to inspect only
+  // this authenticated account's retirement markers and canonical table.
+  useEffect(() => {
+    if (!tableError || !user) {
+      setTableDiagnostic(null);
+      return;
+    }
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const token = await user.getIdToken();
+        const response = await fetch('/api/diagnostics/league-table', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}` },
+          cache: 'no-store',
+        });
+        const result = await response.json();
+        if (!cancelled) setTableDiagnostic(result);
+      } catch {
+        if (!cancelled) setTableDiagnostic({ success: false, code: 'DIAGNOSTIC_UNAVAILABLE' });
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [tableError, user, tableId]);
+
   const pyramidCupRef = useMemoFirebase(() => db ? doc(db, 'cup_pyramid_v1', `cup_s${tableSeasonNumber}_lALPHA`) : null, [db, tableSeasonNumber]);
   const { data: pyramidCup, isLoading: isPyramidCupLoading } = useDoc(pyramidCupRef);
 
@@ -112,29 +140,8 @@ export default function RankingsPage() {
     setTableLoadAttempt(attempt => attempt + 1);
   };
 
-  const groupPlayersQuery = useMemoFirebase(() => {
-    if (!db) return null;
-    return query(collection(db, 'players_v14'), 
-      where('selectedLeagueId', '==', contextLeagueId),
-      where('leagueLevel', '==', contextLevel),
-      where('groupId', '==', contextGroup)
-    );
-  }, [db, contextLeagueId, contextLevel, contextGroup]);
-
-  const { data: groupPlayers } = useCollection(groupPlayersQuery);
-
   const awardsQuery = useMemoFirebase(() => db && user ? query(collection(db, 'player_awards_v1'), where('seasonId', '==', 'current')) : null, [db, user]);
   const { data: awardVotes } = useCollection(awardsQuery);
-
-  const logoMap = useMemo(() => {
-    const map: Record<string, string> = {};
-    if (groupPlayers) {
-      groupPlayers.forEach(p => {
-        if (p.clubLogo) map[p.id] = p.clubLogo;
-      });
-    }
-    return { logos: map };
-  }, [groupPlayers]);
 
   const standings = useMemo(() => {
     if (!tableData?.stats) return [];
@@ -359,6 +366,13 @@ export default function RankingsPage() {
                {tableError && (
                  <p className="text-[10px] text-muted-foreground break-words">{tableError.message}</p>
                )}
+               {tableDiagnostic && (
+                 <p className="text-[10px] text-amber-200/80 break-words">
+                   {tableDiagnostic.success
+                     ? `Диагностика: проект ${tableDiagnostic.projectId || 'не определён'}; таблица Admin SDK ${tableDiagnostic.tableExists ? 'найдена' : 'не найдена'}; чтение по правилам ${tableDiagnostic.rulesProbe?.allowed ? 'разрешено' : `отклонено (${tableDiagnostic.rulesProbe?.status || tableDiagnostic.rulesProbe?.code || 'нет ответа'})`}; маркеры выхода/неактивности ${tableDiagnostic.accessFence?.pendingRetirement || tableDiagnostic.accessFence?.retired ? 'обнаружены' : 'отсутствуют'}.`
+                     : `Диагностика недоступна: ${tableDiagnostic.code || 'UNKNOWN'}`}
+                 </p>
+               )}
                <Button variant="outline" className="border-amber-400/30" onClick={retryTableLoad}>
                  <RefreshCw className="w-4 h-4 mr-2" />{t.retry}
                </Button>
@@ -371,7 +385,7 @@ export default function RankingsPage() {
                {standings.map((entry: any, i: number) => {
                  const pos = i + 1;
                  const isMe = entry.id === user?.uid;
-                 const clubLogo = logoMap.logos[entry.id] || entry.clubLogo;
+                 const clubLogo = entry.clubLogo || null;
                  
                  const isChampionZone = pos === 1;
                  const isRelegationZone = pos >= 7;

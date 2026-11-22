@@ -3,8 +3,9 @@
 
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
-import { useUser, useFirestore, useCollection, useMemoFirebase, useDoc, addDocumentNonBlocking, setDocumentNonBlocking } from '@/firebase';
+import { useUser, useFirestore, useCollection, useMemoFirebase, useDoc, setDocumentNonBlocking } from '@/firebase';
 import { useGameState } from '@/app/lib/store';
+import { sendGlobalChatMessageAction } from '@/app/actions/global-chat';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { 
@@ -31,7 +32,7 @@ export default function GlobalChatPage() {
   const router = useRouter();
   const db = useFirestore();
   const { toast } = useToast();
-  const { language, isLoaded, clubName, clubLogo, isPremium } = useGameState();
+  const { language, isLoaded, clubName } = useGameState();
   const [message, setMessage] = useState('');
   const [isSending, setIsSending] = useState(false);
   const [isActionProcessing, setIsActionProcessing] = useState(false);
@@ -54,7 +55,7 @@ export default function GlobalChatPage() {
     );
   }, [db]);
 
-  const { data: messages, isLoading: isChatLoading } = useCollection(chatQuery);
+  const { data: messages, isLoading: isChatLoading, error: chatError } = useCollection(chatQuery);
 
   const outgoingFriendsQuery = useMemoFirebase(() => {
     if (!db || !user?.uid) return null;
@@ -96,19 +97,16 @@ export default function GlobalChatPage() {
 
     setIsSending(true);
     try {
-      const now = new Date().toISOString();
-      await addDocumentNonBlocking(collection(db, 'global_chat_v2'), {
-        userId: String(user.uid),
-        userName: String(profile.displayName || "Manager"),
-        clubName: String(clubName || profile.displayName || "Manager"),
-        clubLogo: String(clubLogo || ""),
-        isPremium: Boolean(isPremium),
-        text: String(message.trim()),
-        createdAt: now
-      });
+      const result = await sendGlobalChatMessageAction(await user.getIdToken(), message);
+      if (!result.success) throw new Error(result.error);
       setMessage('');
     } catch (e) {
       console.error("Failed to send message", e);
+      toast({
+        title: language === 'ru' ? 'Не удалось отправить сообщение' : 'Message could not be sent',
+        description: language === 'ru' ? 'Проверьте подключение и попробуйте снова.' : 'Check your connection and try again.',
+        variant: 'destructive',
+      });
     } finally {
       setIsSending(false);
     }
@@ -195,6 +193,7 @@ export default function GlobalChatPage() {
       placeholder: "Type message...",
       send: "SEND",
       connecting: "Establishing connection...",
+      loadError: "Could not load global chat. Check Firestore access and connection, then reload.",
       noTransmissions: "No transmissions detected on this frequency.",
       userMenu: "Operational Dossier",
       userMenuDesc: "Direct command options for",
@@ -214,6 +213,7 @@ export default function GlobalChatPage() {
       placeholder: "Введите сообщение...",
       send: "ОТПР",
       connecting: "Установка связи...",
+      loadError: "Не удалось загрузить общий чат. Проверьте подключение и права Firestore, затем обновите страницу.",
       noTransmissions: "Сигналов на данной частоте не обнаружено.",
       userMenu: "Оперативное досье",
       userMenuDesc: "Команды взаимодействия с",
@@ -289,7 +289,13 @@ export default function GlobalChatPage() {
       </header>
 
       <div className="flex-1 overflow-y-auto space-y-1 scrollbar-hide pt-4 pb-24" ref={scrollRef}>
-        {isChatLoading ? (
+        {chatError ? (
+          <div role="alert" className="mx-4 my-6 rounded-xl border border-destructive/30 bg-destructive/10 p-4 text-center">
+            <AlertTriangle className="mx-auto mb-2 h-6 w-6 text-destructive" />
+            <p className="text-xs font-bold">{t.loadError}</p>
+            <p className="mt-2 break-words text-[10px] text-muted-foreground">{chatError.message}</p>
+          </div>
+        ) : isChatLoading ? (
           <div className="h-full flex flex-col items-center justify-center space-y-4 opacity-50">
             <Loader2 className="w-8 h-8 animate-spin text-primary" />
             <p className="text-[10px] uppercase font-bold tracking-widest">{t.connecting}</p>
