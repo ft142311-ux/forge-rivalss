@@ -188,8 +188,8 @@ function createPreliminary(teams: Team[]): Pairing[] {
   }
   const pairs: Pairing[] = [];
   for (let i = 0; i < eligible.length / 2; i++) {
-    const stronger = eligible[eligible.length - 1 - i * 2];
-    const weaker = eligible[eligible.length - 2 - i * 2];
+    const stronger = eligible[eligible.length - 2 - i * 2];
+    const weaker = eligible[eligible.length - 1 - i * 2];
     pairs.push(makePair(`r1_m${i + 1}`, i + 1, stronger, weaker));
   }
   return pairs;
