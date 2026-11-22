@@ -92,7 +92,8 @@ function createValidInput() {
   const cupFixtures = openingRound.map(pairing => ({
     id: pairing.matchId,
     data: {
-      id: pairing.matchId, cupId: 'cup_s1_lALPHA', season: 1, cupRound: 1, bestOf: 1,\n      scheduledAt: new Date('2026-11-10T04:00:00.000Z'),
+      id: pairing.matchId, cupId: 'cup_s1_lALPHA', season: 1, cupRound: 1, bestOf: 1,
+      scheduledAt: new Date('2026-11-10T04:00:00.000Z'),
       homeId: pairing.home.id, awayId: pairing.away.id,
       homeTeamSnapshot: { id: pairing.home.id, players: Array.from({ length: 5 }, (_, i) => ({ id: `h-${i}` })) },
       awayTeamSnapshot: { id: pairing.away.id, players: Array.from({ length: 5 }, (_, i) => ({ id: `a-${i}` })) },
