@@ -38,7 +38,7 @@ export async function GET(request: NextRequest) {
     const db = getAdminDb();
     const matchPrefix = 'match_v140_S1_LALPHA_';
     const [configSnap, tablesSnap, slotsSnap, matchesSnap, cupSnap, cupMatchesSnap,
-      legacyCupMatchesSnap, archiveSnap, archiveMatchesSnap, rolloverSnap, historySnap,
+      archiveSnap, archiveMatchesSnap, rolloverSnap, historySnap,
       matchEffectsSnap, matchRevenueSnap, cupMatchRevenueSnap, leagueConsequenceSnap, cupConsequenceSnap,
       leagueSeasonRewardSnap, pyramidCupRewardSnap, rolloverLockSnap, calendarLockSnap] = await Promise.all([
       db.collection('system_v1').doc('season_config').get(),
@@ -47,7 +47,6 @@ export async function GET(request: NextRequest) {
       db.collection('matches_v2').where('season', '==', 1).where('version', '==', 140).get(),
       db.collection('cup_pyramid_v1').doc('cup_s1_lALPHA').get(),
       db.collection('cup_matches').where('cupId', '==', 'cup_s1_lALPHA').get(),
-      db.collection('matches_v2').where('cupId', '==', 'cup_s1_lALPHA').get(),
       db.collection('league_season_archives_v1').doc('S1').get(),
       db.collection('league_season_archives_v1').doc('S1').collection('matches').get(),
       db.collection('league_season_rollovers_v1').doc('S1').get(),
@@ -114,15 +113,18 @@ export async function GET(request: NextRequest) {
     const cupSnapshotDocs = await db.collection('cup_participant_snapshots_v1')
       .doc('cup_s1_lALPHA').collection('teams').get();
 
+    const cupSnapshots = await db.collection('cup_participant_snapshots_v1')
+      .doc('cup_s1_lALPHA').collection('teams').get();
+
     const plan = buildFreshSeasonOneResetPlan({
       config: configSnap.exists ? configSnap.data() || {} : null,
       tables: tablesSnap.docs.map(doc => ({ id: doc.id, data: doc.data() || {} })),
       slots: slotsSnap.docs.map(doc => ({ id: doc.id, data: doc.data() || {} })),
       matches: leagueMatchDocs.map(doc => ({ id: doc.id, data: doc.data() || {} })),
       profileIds,
-      cupExists: cupSnap.exists,
-      cupMatches: cupMatchesSnap.size + legacyCupMatchesSnap.size,
-      cupSnapshots: cupSnapshotDocs.size,
+      cup: cupSnap.exists ? cupSnap.data() || {} : null,
+      cupFixtures: cupMatchesSnap.docs.map(doc => ({ id: doc.id, data: doc.data() || {} })),
+      cupSnapshots: cupSnapshots.docs.map(doc => ({ id: doc.id, data: doc.data() || {} })),
       archives: archiveSnap.exists ? 1 : 0,
       rollovers: rolloverSnap.exists ? 1 : 0,
       history: historySnap.exists ? 1 : 0,
