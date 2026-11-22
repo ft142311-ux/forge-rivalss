@@ -15,7 +15,7 @@ const VERSION = 140;
 const EXPECTED_GROUPS = 15;
 const EXPECTED_SLOTS = 120;
 const EXPECTED_MATCHES = 840;
-const EXPECTED_BOTS = 120;
+const EXPECTED_PARTICIPANTS = 120;
 
 const GUARDED_COLLECTIONS = [
   'system_v1',
@@ -133,7 +133,7 @@ export async function POST(request: NextRequest) {
 }
 
 async function verifyWorld(db: Firestore) {
-  const [configSnap, tablesSnap, slotsSnap, matchesSnap, botsSnap] = await Promise.all([
+  const [configSnap, tablesSnap, slotsSnap, matchesSnap] = await Promise.all([
     db.collection('system_v1').doc('season_config').get(),
     db.collection('league_tables_v2')
       .where('season', '==', SEASON)
@@ -147,7 +147,6 @@ async function verifyWorld(db: Firestore) {
       .where('season', '==', SEASON)
       .where('version', '==', VERSION)
       .get(),
-    db.collection('players_v14').where('isBot', '==', true).get(),
   ]);
 
   const config = configSnap.exists ? configSnap.data() || {} : {};
@@ -157,12 +156,52 @@ async function verifyWorld(db: Firestore) {
       return `${Number(data.level)}:${Number(data.group)}`;
     }),
   );
+  // League standings, not the bot count, define the 120 canonical
+  // participants. Registration legitimately deletes the replaced bot profile
+  // after transferring its standings row to the human manager's UID.
+  const participantIds: string[] = [];
+  let standingsValid = tablesSnap.size === EXPECTED_GROUPS;
+  for (const tableDoc of tablesSnap.docs) {
+    const stats = tableDoc.data()?.stats;
+    if (!stats || typeof stats !== 'object' || Array.isArray(stats)) {
+      standingsValid = false;
+      continue;
+    }
+    const rows = Object.entries(stats as Record<string, any>);
+    if (rows.length !== 8) standingsValid = false;
+    const ranks = new Set<number>();
+    for (const [participantId, row] of rows) {
+      const rank = Number(row?.rank);
+      if (!participantId || (row?.id != null && row.id !== participantId) ||
+          !Number.isInteger(rank) || rank < 1 || rank > 8 || ranks.has(rank)) {
+        standingsValid = false;
+      }
+      ranks.add(rank);
+      participantIds.push(participantId);
+    }
+    if (ranks.size !== 8) standingsValid = false;
+  }
+  const uniqueParticipantIds = [...new Set(participantIds)];
+  if (uniqueParticipantIds.length !== EXPECTED_PARTICIPANTS) standingsValid = false;
+
+  const participantProfiles = standingsValid && uniqueParticipantIds.length === EXPECTED_PARTICIPANTS
+    ? await db.getAll(...uniqueParticipantIds.map((id) => db.collection('players_v14').doc(id)))
+    : [];
+  const validProfiles = participantProfiles.filter((profile, index) =>
+    profile.exists && profile.data()?.id === uniqueParticipantIds[index]
+  );
+  const botProfiles = participantProfiles.filter((profile, index) =>
+    profile.exists && profile.data()?.id === uniqueParticipantIds[index] &&
+    profile.data()?.isBot === true
+  );
   const counts = {
     groups: groups.size,
     tables: tablesSnap.size,
     slots: slotsSnap.size,
     matches: matchesSnap.size,
-    bots: botsSnap.size,
+    participants: uniqueParticipantIds.length,
+    participantProfiles: validProfiles.length,
+    bots: botProfiles.length,
   };
   const ready =
     configSnap.exists &&
@@ -173,7 +212,9 @@ async function verifyWorld(db: Firestore) {
     counts.tables === EXPECTED_GROUPS &&
     counts.slots === EXPECTED_SLOTS &&
     counts.matches === EXPECTED_MATCHES &&
-    counts.bots >= EXPECTED_BOTS;
+    standingsValid &&
+    counts.participants === EXPECTED_PARTICIPANTS &&
+    counts.participantProfiles === EXPECTED_PARTICIPANTS;
 
   return {
     ready,
@@ -186,7 +227,8 @@ async function verifyWorld(db: Firestore) {
       tables: EXPECTED_GROUPS,
       slots: EXPECTED_SLOTS,
       matches: EXPECTED_MATCHES,
-      bots: EXPECTED_BOTS,
+      participants: EXPECTED_PARTICIPANTS,
+      participantProfiles: EXPECTED_PARTICIPANTS,
     },
   };
 }
