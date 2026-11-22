@@ -23,11 +23,21 @@ import { isCalendarReady } from './season-calendar-gate';
  */
 export async function runSeasonOrchestrator() {
   try {
+    const db = getAdminDb();
+    const resetConfigSnap = await db.collection('system_v1').doc('season_config').get();
+    const resetConfig = resetConfigSnap.exists ? resetConfigSnap.data() || {} : {};
+    if (resetConfig.stagingSeasonOneResetInProgress === true) {
+      return {
+        action: 'WORLD_BUILDING' as const,
+        worldReady: false,
+        reason: 'STAGING_SEASON_ONE_RESET_IN_PROGRESS',
+        writesStarted: false,
+      };
+    }
     let world: any = await ensureSeasonCalendar();
     // Do not run the broad daily match resolver when the calendar is blocked on
     // season rollover. prepareSeasonRollover owns settlement of the prior season
     // and validates the canonical fixture set before allowing the new season.
-    const db = getAdminDb();
     let catchUp: any = { skipped: true, reason: 'ROLLOVER_GATE_FIRST' };
     const preparedWorldCanPublish = world?.prepared === true && world?.worldReady !== true;
     if (!world?.waitingForSeasonResults && !isCalendarReady(world) && !preparedWorldCanPublish) {
