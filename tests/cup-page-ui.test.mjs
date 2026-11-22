@@ -14,10 +14,10 @@ test('Pyramid Cup UI exposes all frozen participants with their official seed an
   assert.match(source, /team\.rank/);
 });
 
-test('Pyramid Cup UI displays the round kickoff and completion progress', () => {
-  assert.match(source, /EXPECTED_MATCHES: Record<number, number> = \{ 1: 60, 2: 30, 3: 15, 4: 7, 5: 4, 6: 2, 7: 1 \}/);
-  assert.match(source, /EXPECTED_SLOTS: Record<number, number> = \{ 1: 60, 2: 30, 3: 15, 4: 8, 5: 4, 6: 2, 7: 1 \}/);
-  assert.match(source, /const CUP_ROUND_DAYS = \[2, 3, 4, 5, 6, 7, 8\]/);
+test('Pyramid Cup UI shows the D1 round-two entry and correct no-BYE match counts', () => {
+  assert.match(source, /EXPECTED_MATCHES: Record<number, number> = { 1: 56, 2: 32, 3: 16, 4: 8, 5: 4, 6: 2, 7: 1 }/);
+  assert.match(source, /EXPECTED_SLOTS: Record<number, number> = { 1: 56, 2: 32, 3: 16, 4: 8, 5: 4, 6: 2, 7: 1 }/);
+  assert.match(source, /const CUP_ROUND_DAYS = \[2, 3, 4, 5, 6, 7, 8\]/);\n  assert.match(source, /D2, D3 and D4 play the opening round/);\n  assert.match(source, /D1 teams enter in round two/);\n  assert.match(source, /РАУНД 2 · ПОДКЛЮЧАЕТСЯ D1/);
   assert.match(source, /formatCupKickoff\(cupData\.seasonStart, activeRound, language\)/);
   assert.match(source, /roundFinishedCount\}\/\{roundMatchCount/);
   assert.match(source, /Europe\/Moscow/);
