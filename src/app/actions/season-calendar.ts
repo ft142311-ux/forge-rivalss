@@ -2040,7 +2040,7 @@ export async function ensureSeasonCalendar(requestedTargetSeason?: number) {
     if (!cupPending || world?.success !== true || world?.worldReady !== true) return world;
 
     try {
-      const pyramidCup = await generatePyramidCup(1);
+      const pyramidCup = await generatePyramidCup(1, { allowInitialBootstrap: true });
       const verification = await verifyInitialPyramidCup(db, world.seasonStart || config.seasonStart);
       if (verification.ready !== true) throw new Error(verification.reason || 'INITIAL_CUP_VERIFICATION_FAILED');
       await db.collection('system_v1').doc('season_config').set({
