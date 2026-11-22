@@ -90,7 +90,8 @@ export async function GET(request: NextRequest) {
       ? await db.getAll(...[...participantIds].map(id => db.collection('players_v14').doc(id)))
       : [];
     const profileIds = new Set(profileSnaps.filter((profile, index) =>
-      profile.exists && profile.data()?.id === [...participantIds][index]
+      profile.exists && profile.data()?.id === [...participantIds][index] &&
+      Array.isArray(profile.data()?.ownedPlayers) && profile.data()!.ownedPlayers.length >= 5
     ).map(profile => String(profile.id)));
 
     const cupSnapshotDocs = await db.collection('cup_participant_snapshots_v1')
