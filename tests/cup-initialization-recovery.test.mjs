@@ -121,7 +121,7 @@ test('a pristine Season 1 is not registration-ready until its Pyramid Cup is ver
   const calendar = readFileSync(new URL('../src/app/actions/season-calendar.ts', import.meta.url), 'utf8');
   const registration = readFileSync(new URL('../functions/index.js', import.meta.url), 'utf8');
   assert.match(calendar, /const cupRequired = pristineFirstWorld/);
-  assert.match(calendar, /generatePyramidCup\(1\)/);
+  assert.match(calendar, /generatePyramidCup\(1, \{ allowInitialBootstrap: true \}\)/);
   assert.match(calendar, /verifyInitialPyramidCup\(db/);
   assert.match(calendar, /pyramidCupReady: true/);
   assert.match(calendar, /worldReady: false,[\s\S]*pyramidCupReady: false/);
