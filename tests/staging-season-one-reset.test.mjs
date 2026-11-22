@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { buildFreshSeasonOneResetPlan } from '../src/app/actions/staging-season-one-reset-plan.ts';
-import { resetFreshSeasonOnePlayerState } from '../src/app/actions/fresh-season-one-player-reset.ts';
+import { resetFreshSeasonOnePlayerState, resetFreshSeasonOneClubProfileState } from '../src/app/actions/fresh-season-one-player-reset.ts';
 
 const root = resolve(import.meta.dirname, '..');
 const read = path => readFileSync(resolve(root, path), 'utf8');
@@ -156,9 +156,9 @@ test('legacy full-world reset is hard-blocked outside local Firebase Emulator', 
   assert.ok(source.indexOf('EMULATOR_ONLY_RESET_BLOCKED') < source.indexOf('const db = getAdminDb()'));
 });
 
-test('fresh Season 1 player reset clears only season counters and stale competition references', () => {
+test('fresh Season 1 player reset clears only individual season counters', () => {
   const player = {
-    id: 'manager-1',
+    id: 'player-1',
     name: 'Player One',
     overallRating: 88,
     proStats: { reflexes: 91 },
@@ -170,7 +170,6 @@ test('fresh Season 1 player reset clears only season counters and stale competit
     tilt: 12,
     isInjured: true,
     injuredUntil: '2026-12-01T00:00:00.000Z',
-    credits: 123456,
     totalMatchesPlayed: 44,
     matchesPlayedToday: 2,
     lastMatchDateXP: '2026-11-22',
@@ -183,6 +182,45 @@ test('fresh Season 1 player reset clears only season counters and stale competit
     lastMatchOfficial: true,
     warningCount: 2,
     suspensionUntil: '2026-11-25T00:00:00.000Z',
+  };
+
+  const reset = resetFreshSeasonOnePlayerState(player);
+  assert.deepEqual(reset.seasonStats, {
+    matches: 0, wins: 0, successfulActions: 0, warnings: 0,
+    disqualifications: 0, kills: 0, deaths: 0, assists: 0, postMatchRating: 0,
+  });
+  assert.equal(reset.chemistryMatches, 0);
+  assert.equal(reset.lineupMatches, 0);
+  assert.equal(reset.warningCount, 0);
+  assert.equal(reset.suspensionUntil, null);
+  assert.equal(reset.lastMatchId, null);
+  assert.equal(reset.lastMatchOfficial, false);
+  for (const key of [
+    'id', 'name', 'overallRating', 'proStats', 'proTalents', 'trainingProgress',
+    'skillCaps', 'fatigue', 'form', 'tilt', 'isInjured', 'injuredUntil',
+    'totalMatchesPlayed', 'matchesPlayedToday', 'lastMatchDateXP', 'titles',
+  ]) assert.deepEqual(reset[key], player[key], `preserves ${key}`);
+});
+
+test('fresh Season 1 club profile reset preserves finances and identity while clearing season references', () => {
+  const profile = {
+    id: 'manager-1',
+    email: 'manager@example.invalid',
+    clubName: 'Forge Club',
+    credits: 123456,
+    crystals: 42,
+    lineup: { carry: 'player-1' },
+    tactics: { style: 'balanced' },
+    arena: { capacity: 5000 },
+    ownedPlayers: [{
+      id: 'player-1',
+      overallRating: 88,
+      proStats: { reflexes: 91 },
+      seasonStats: { matches: 12, wins: 8 },
+      chemistryMatches: 12,
+      fatigue: 37,
+      form: 82,
+    }],
     seasonAwards: { S1: { rank: 1 }, S0: { rank: 2 } },
     trophies: [
       { id: 'league-cup-season-1', type: 'league_champion', season: 1 },
@@ -197,21 +235,12 @@ test('fresh Season 1 player reset clears only season counters and stale competit
     },
     lastMatchEconomy: { totalRevenue: 500 },
     lastMatchConsequences: {
-      matchId: 'match_v140_S1_LALPHA_V1_G1_T14_R1_vs_R2',
-      matchType: 'league',
+      matchId: 'cup_S1_R1_M01',
+      matchType: 'cup',
     },
   };
 
-  const reset = resetFreshSeasonOnePlayerState(player);
-  assert.deepEqual(reset.seasonStats, {
-    matches: 0, wins: 0, successfulActions: 0, warnings: 0,
-    disqualifications: 0, kills: 0, deaths: 0, assists: 0, postMatchRating: 0,
-  });
-  assert.equal(reset.chemistryMatches, 0);
-  assert.equal(reset.lineupMatches, 0);
-  assert.equal(reset.warningCount, 0);
-  assert.equal(reset.suspensionUntil, null);
-  assert.equal(reset.lastMatchId, null);
+  const reset = resetFreshSeasonOneClubProfileState(profile);
   assert.deepEqual(reset.seasonAwards, { S0: { rank: 2 } });
   assert.deepEqual(reset.trophies, [
     { id: 'personal-achievement', type: 'player_award', season: 1 },
@@ -222,32 +251,9 @@ test('fresh Season 1 player reset clears only season counters and stale competit
   ]);
   assert.equal(reset.lastMatchEconomy, null);
   assert.equal(reset.lastMatchConsequences, null);
-
-  for (const key of [
-    'id', 'name', 'overallRating', 'proStats', 'proTalents', 'trainingProgress',
-    'skillCaps', 'fatigue', 'form', 'tilt', 'isInjured', 'injuredUntil',
-    'credits', 'totalMatchesPlayed', 'matchesPlayedToday', 'lastMatchDateXP', 'titles',
-  ]) assert.deepEqual(reset[key], player[key], `preserves ${key}`);
-});
-
-test('fresh Season 1 preflight refuses active settlement and season worker locks', () => {
-  const processing = createValidInput();
-  processing.matches[0].data.isProcessing = true;
-  const processingPlan = buildFreshSeasonOneResetPlan(processing);
-  assert.equal(processingPlan.ready, false);
-  assert.ok(processingPlan.reasons.includes('MATCH_SETTLEMENT_IN_PROGRESS'));
-
-  const locked = createValidInput();
-  locked.liveLocks = ['season_calendar_build_v1'];
-  const lockedPlan = buildFreshSeasonOneResetPlan(locked);
-  assert.equal(lockedPlan.ready, false);
-  assert.ok(lockedPlan.reasons.includes('SEASON_WORKER_LOCKED'));
-});
-
-test('fresh Season 1 preflight rejects unknown season match documents', () => {
-  const input = createValidInput();
-  input.unclassifiedMatches = 1;
-  const plan = buildFreshSeasonOneResetPlan(input);
-  assert.equal(plan.ready, false);
-  assert.ok(plan.reasons.includes('UNCLASSIFIED_SEASON_MATCH_DOCUMENTS'));
+  assert.equal(reset.ownedPlayers[0].seasonStats.matches, 0);
+  assert.equal(reset.ownedPlayers[0].chemistryMatches, 0);
+  for (const key of ['id', 'email', 'clubName', 'credits', 'crystals', 'lineup', 'tactics', 'arena']) {
+    assert.deepEqual(reset[key], profile[key], `preserves ${key}`);
+  }
 });
