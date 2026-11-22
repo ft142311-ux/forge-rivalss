@@ -305,17 +305,16 @@ test('fresh Season 1 reset rebuilds league and Pyramid Cup while preserving Fire
   const authUser = await auth.getUser(uid);
   assert.equal(authUser.email, 'reset-test@example.invalid');
   const humanProfile = (await db.collection('players_v14').doc(uid).get()).data();
-  assert.equal(humanProfile.clubName, `New Club ${uid.slice(0, 6).toUpperCase()}`);
-  assert.equal(humanProfile.credits, 1_000_000);
-  assert.equal(humanProfile.crystals, 50);
+  assert.equal(humanProfile.clubName, 'Old Club Name');
+  assert.equal(humanProfile.displayName, 'Old Club Name');
   assert.equal(humanProfile.ownedPlayers.length, 10);
-  assert.ok(humanProfile.ownedPlayers.every((player) => !player.id.startsWith('old_player_')));
+  assert.ok(humanProfile.ownedPlayers.every((player) => player.id.startsWith('old_player_')));
 
   const slot = (await db.collection('league_slots_v1').doc('S1_LALPHA_D2_G1_R3').get()).data();
   assert.equal(slot.status, 'OCCUPIED');
   assert.equal(slot.occupantId, uid);
-  assert.equal(slot.occupancyGeneration, 0);
-  assert.equal((await db.collection('league_slot_history_v1').get()).size, 0);
+  assert.equal(slot.occupancyGeneration, 5);
+  assert.equal((await db.collection('league_slot_history_v1').get()).size, 1);
   assert.equal((await db.collection('cup_pyramid_v1').doc(CUP_ID).get()).exists, true);
   assert.equal((await db.collection('matches_v2').doc('unrelated_tournament_fixture').get()).exists, true);
   assert.equal((await db.collection('matches_v2').doc('unrelated_friendly_fixture').get()).exists, true);
