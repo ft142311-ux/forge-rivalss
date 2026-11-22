@@ -184,6 +184,16 @@ test('fresh Season 1 reset preflight does not require the old Cup, Cup snapshots
   assert.equal(plan.replace.leagueMatches, 0);
 });
 
+test('fresh Season 1 reset allows orphaned old Cup fixtures and snapshots when the Cup root is absent', () => {
+  const input = createValidInput();
+  input.cup = null;
+  const plan = buildFreshSeasonOneResetPlan(input);
+  assert.equal(plan.ready, true, plan.reasons.join(','));
+  assert.equal(plan.replace.cupExists, false);
+  assert.equal(plan.replace.cupMatches, 56);
+  assert.equal(plan.replace.cupParticipantSnapshots, 120);
+});
+
 test('fresh Season 1 reset blocks immutable archives, rollover plans, history and orphan archive matches', () => {
   for (const [field, reason] of [
     ['archives', 'EXISTING_SEASON_ONE_ARCHIVE'],
