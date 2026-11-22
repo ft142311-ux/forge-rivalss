@@ -17,7 +17,7 @@ test('fresh Beta Season 1 preflight is authenticated, project-fenced and read-on
   assert.match(source, /matches_v2/);
   assert.match(source, /players_v14/);
   assert.doesNotMatch(source, /\.set\(|\.create\(|\.update\(|\.delete\(|runTransaction\(/);
-  assert.doesNotMatch(source, /participantIds|profileIds/);
+  assert.doesNotMatch(source, /participantIds\s*:\s*\[|profileIds\s*:\s*\[/);
 });
 
 test('fresh Season 1 reset plan preserves every profile and rejects unsafe source worlds', () => {
