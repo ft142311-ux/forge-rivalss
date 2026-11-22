@@ -254,7 +254,6 @@ test('fresh Season 1 reset rebuilds league and Pyramid Cup while preserving Fire
   assert.ok(archivedDocs.docs.some(doc => doc.data().sourcePath === 'system_v1/season_config'));
   assert.ok(archivedDocs.docs.some(doc => doc.data().sourcePath === 'league_slot_history_v1/S1_LALPHA_D2_G1_R3_G5'));
   const resetJournalData = (await db.collection('system_v1').doc('staging_fresh_season_one_reset_v1').get()).data();
-  const { createOrVerifyDurableSeasonOneArchive } = await import('../src/app/actions/staging-season-one-reset-durable-archive.ts');
   const reusedArchive = await createOrVerifyDurableSeasonOneArchive(db, result.resetId, resetJournalData.sourceConfig);
   assert.equal(reusedArchive.reusedCompletedArchive, true);
   assert.equal(reusedArchive.archiveDocuments, durableArchive.sourceCount);
