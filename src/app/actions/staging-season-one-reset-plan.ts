@@ -219,6 +219,8 @@ export function buildFreshSeasonOneResetPlan(input: FreshSeasonOneResetInput) {
       leagueSlots: input.slots.length,
       allPlayerProfiles: true,
       accountCredentials: true,
+      playerIdentityDevelopmentConditionAndContracts: true,
+      lifetimeMatchAndCareerTitleCounters: true,
     },
     replace: {
       leagueMatches: input.matches.length,
@@ -228,6 +230,8 @@ export function buildFreshSeasonOneResetPlan(input: FreshSeasonOneResetInput) {
       seasonArchives: input.archives,
       rolloverPlans: input.rollovers,
       seasonHistoryEntries: input.history,
+      playerSeasonStatsChemistryDisciplineAndSeasonOneAwardReferences: true,
+      seasonOnePlayerMatchEconomyReferences: true,
       archivedLeagueMatches: input.archiveMatches,
       matchPlayerEffectLedgers: input.matchPlayerEffects,
       matchRevenueReceipts: input.matchRevenueReceipts,
