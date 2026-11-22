@@ -18,6 +18,7 @@ export type FreshSeasonOneResetInput = {
   matchConsequenceReceipts: number;
   leagueSeasonRewardReceipts: number;
   pyramidCupRewardReceipts: number;
+  slotHistoryEvents?: number;
   liveLocks: string[];
   unclassifiedMatches: number;
   now?: Date;
@@ -157,15 +158,14 @@ export function buildFreshSeasonOneResetPlan(input: FreshSeasonOneResetInput) {
     preserve: {
       firebaseAuthAccounts: true,
       firebaseAuthUids: [...participants.keys()].filter(id => !id.startsWith('BOT_')).length,
-      accountCredentials: true,
     },
     replace: {
       clubProfiles: validProfiles,
       humanClubProfiles: [...participants.keys()].filter(id => !id.startsWith('BOT_')).length,
       botClubProfiles: [...participants.keys()].filter(id => id.startsWith('BOT_')).length,
-      clubRostersAndStartingPlayers: true,
       leagueTables: input.tables.length,
       leagueSlots: input.slots.length,
+      slotHistoryEvents: Number(input.slotHistoryEvents || 0),
       leagueMatches: input.matches.length,
       legacyCupMatches: Number(input.legacyCupMatches || 0),
       cupExists: Boolean(input.cup),
@@ -190,6 +190,7 @@ export function buildFreshSeasonOneResetPlan(input: FreshSeasonOneResetInput) {
       groups: EXPECTED_GROUPS,
       tables: EXPECTED_GROUPS,
       slots: EXPECTED_PARTICIPANTS,
+      freeRegistrationSlots: EXPECTED_PARTICIPANTS,
       leagueMatches: EXPECTED_GROUPS * EXPECTED_MATCHES_PER_GROUP,
       participants: EXPECTED_PARTICIPANTS,
       cupMatches: 119,
