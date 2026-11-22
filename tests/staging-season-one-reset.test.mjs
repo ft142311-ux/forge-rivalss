@@ -217,6 +217,8 @@ test('fresh Season 1 reset preserves human Firebase UIDs but replaces their club
 
 test('fresh Season 1 world builder replaces all club rosters while preserving human UIDs and ranks', () => {
   const input = createValidInput();
+  input.tables[0].data.championId = 'stale-season-champion';
+  input.tables[0].data.previousSeasonSummary = { points: 999 };
   const table = input.tables.find(item => item.id === 'table_v140_S1_LALPHA_V2_G1');
   const slot = input.slots.find(item => item.id === 'S1_LALPHA_D2_G1_R3');
   const botId = 'BOT_ALPHA_L2_G1_R3';
@@ -260,6 +262,20 @@ test('fresh Season 1 world builder replaces all club rosters while preserving hu
   assert.equal(freshSlot.data.status, 'OCCUPIED');
   assert.equal(freshSlot.data.occupantId, uid);
   assert.equal(freshSlot.data.occupancyGeneration, 0);
+  const cleanTable = result.tables.find(item => item.id === input.tables[0].id);
+  assert.equal(Object.hasOwn(cleanTable.data, 'championId'), false);
+  assert.equal(Object.hasOwn(cleanTable.data, 'previousSeasonSummary'), false);
+
+  const repeated = buildFreshSeasonOneWorldDocuments({
+    tables: input.tables, slots: input.slots,
+    profiles: new Map([[uid, oldProfile]]),
+    now: new Date('2026-11-22T15:00:00.000Z'),
+  });
+  assert.deepEqual(
+    repeated.profiles.find(profile => profile.id === uid).data.ownedPlayers.map(player => player.id),
+    human.data.ownedPlayers.map(player => player.id),
+    'retry with the same reset timestamp must reproduce identical player IDs',
+  );
 });
 
 test('fresh Season 1 reset allows orphaned old Cup fixtures and snapshots when the Cup root is absent', () => {
