@@ -204,9 +204,10 @@ export async function createOrVerifyDurableSeasonOneArchive(
 }
 
 
-async function deleteArchiveQuery(db: any, query: any) {
+async function deleteArchiveQuery(db: any, query: any, assertOwnership?: () => Promise<void>) {
   const snap = await query.get();
   for (let offset = 0; offset < snap.docs.length; offset += 350) {
+    await assertOwnership?.();
     const batch = db.batch();
     snap.docs.slice(offset, offset + 350).forEach((doc: any) => batch.delete(doc.ref));
     await batch.commit();
@@ -280,7 +281,7 @@ export async function restoreSeasonOneFromDurableArchive(
   ];
   for (const query of cleanupQueries) {
     await assertOwnership?.();
-    await deleteArchiveQuery(db, query);
+    await deleteArchiveQuery(db, query, assertOwnership);
   }
   const seasonRewards = await db.collection('economy_transactions').where('referenceId', '==', 'S1').get();
   const cupRewards = await db.collection('economy_transactions').where('referenceId', '==', 'cup_s1_lALPHA').get();
