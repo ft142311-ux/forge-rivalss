@@ -70,6 +70,10 @@ export function resetFreshSeasonOneClubProfileState<T extends FreshSeasonOneClub
     ? null
     : profile.lastMatchConsequences;
 
+  const lastMatchEconomy = isSeasonOneCompetitionMatchId(profile.lastMatchId)
+    ? null
+    : profile.lastMatchEconomy;
+
   const ownedPlayers = Array.isArray(profile.ownedPlayers)
     ? profile.ownedPlayers.map((player: FreshSeasonOnePlayer) => resetFreshSeasonOnePlayerState(player))
     : profile.ownedPlayers;
@@ -80,7 +84,7 @@ export function resetFreshSeasonOneClubProfileState<T extends FreshSeasonOneClub
     seasonAwards,
     trophies,
     matchEconomy,
-    lastMatchEconomy: null,
+    lastMatchEconomy,
     lastMatchConsequences,
   };
 }
