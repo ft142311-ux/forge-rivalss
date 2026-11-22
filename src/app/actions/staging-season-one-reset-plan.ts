@@ -16,6 +16,7 @@ export type FreshSeasonOneResetInput = {
   matchConsequenceReceipts: number;
   leagueSeasonRewardReceipts: number;
   pyramidCupRewardReceipts: number;
+  liveLocks: string[];
   now?: Date;
 };
 
@@ -42,6 +43,9 @@ export function buildFreshSeasonOneResetPlan(input: FreshSeasonOneResetInput) {
     reasons.push('PREPARED_NEXT_SEASON_EXISTS');
   }
   if (config.stagingSeasonOneResetInProgress === true) reasons.push('RESET_ALREADY_IN_PROGRESS');
+  if (config.historyCleanupPending === true) reasons.push('SEASON_HISTORY_CLEANUP_PENDING');
+  if (!['REGULAR_SEASON', 'ACTIVE'].includes(String(config.phase || '').toUpperCase())) reasons.push('SEASON_PHASE_NOT_RESETTABLE');
+  if (input.liveLocks.length) reasons.push('SEASON_WORKER_LOCKED');
 
   const groups = new Set<string>();
   const participants = new Map<string, { level: number; group: number; rank: number; isBot: boolean }>();
@@ -128,6 +132,7 @@ export function buildFreshSeasonOneResetPlan(input: FreshSeasonOneResetInput) {
   const fixturesByGroup = new Map<string, Array<{ id: string; data: Record<string, any> }>>();
   for (const match of input.matches) {
     const data = match.data || {};
+    if (data.isProcessing === true || String(data.status || '').toLowerCase() === 'processing') reasons.push('MATCH_SETTLEMENT_IN_PROGRESS');
     const level = Number(data.level || data.division);
     const group = Number(data.groupId || data.group);
     const key = `${level}:${group}`;
@@ -241,6 +246,7 @@ export function buildFreshSeasonOneResetPlan(input: FreshSeasonOneResetInput) {
       matchConsequenceReceipts: input.matchConsequenceReceipts,
       leagueSeasonRewardReceipts: input.leagueSeasonRewardReceipts,
       pyramidCupRewardReceipts: input.pyramidCupRewardReceipts,
+      activeWorkerLocks: input.liveLocks.length,
     },
     expected: {
       groups: EXPECTED_GROUPS,
