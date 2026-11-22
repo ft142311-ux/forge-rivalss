@@ -72,16 +72,16 @@ test('Pyramid Cup can be generated from a fully prepared future season before ac
   assert.match(generation, /const seasonStart = context\.seasonStart/);
 });
 
-test('pre-publication Pyramid Cup preparation verifies all 120 teams and 60 first-round fixtures', () => {
+test('pre-publication Pyramid Cup preparation verifies 120 participants, 8 D1 round-two entrants and 56 first-round fixtures', () => {
   const start = source.indexOf('export async function preparePyramidCupForSeason');
   const end = source.indexOf('async function loadCup', start);
   assert.ok(start >= 0 && end > start);
   const preparation = source.slice(start, end);
   assert.match(preparation, /context\.prepared !== true/);
   assert.match(preparation, /participants\.length !== TOTAL_TEAMS/);
-  assert.match(preparation, /firstRound\.length !== 60/);
-  assert.match(preparation, /firstRound\.filter\(\(pairing: any\) => pairing\?\.status === 'bye'\)\.length !== 0/);
-  assert.match(preparation, /fixtures\.length !== 60/);
+  assert.match(preparation, /firstRound\.length !== 56/);
+  assert.match(preparation, /firstRound\.length !== 56/);\n  assert.match(preparation, /openingRoundRestTeams/);\n  assert.match(preparation, /formatVersion\) !== CUP_FORMAT_VERSION/);
+  assert.match(preparation, /fixtures\.length !== 56/);
   assert.match(preparation, /CUP_PREPARED_FIXTURES_MISSING/);
   assert.match(preparation, /CUP_PREPARED_FIXTURE_IDENTITY_INVALID/);
 });
