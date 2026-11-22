@@ -341,8 +341,7 @@ export async function executeFreshSeasonOneReset(db: any, target: ResetJournal['
       const archive = await createOrVerifyDurableSeasonOneArchive(db, journal.resetId, journal.sourceConfig);
       await assertLease(db, token);
       const removed = await removeOldSeasonOneData(db);
-      removed.archiveDocuments = archive.archiveDocuments;
-      await saveStep(db, token, 0, removed);
+      await saveStep(db, token, 0, { ...removed, archiveDocuments: archive.archiveDocuments });
       step = 1;
     }
     if (step <= 1) {
