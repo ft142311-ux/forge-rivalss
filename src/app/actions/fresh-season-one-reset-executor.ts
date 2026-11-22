@@ -95,9 +95,9 @@ async function saveStep(db: any, token: string, stepIndex: number, counts?: Reco
   });
 }
 
-async function deleteDocs(docs: any[]) {
+async function deleteDocs(db: any, docs: any[]) {
   for (let offset = 0; offset < docs.length; offset += 400) {
-    const batch = docs[offset].ref.firestore.batch();
+    const batch = db.batch();
     for (const doc of docs.slice(offset, offset + 400)) batch.delete(doc.ref);
     await batch.commit();
   }
@@ -129,10 +129,10 @@ async function removeOldSeasonOneData(db: any) {
     return isLeagueFixture(data) || data.cupId === CUP_ID || doc.id.startsWith('cup_S1_');
   });
   let deleted = 0;
-  deleted += await deleteDocs(disposableMatches);
-  deleted += await deleteDocs(cupMatches.docs);
-  deleted += await deleteDocs(cupSnapshots.docs);
-  deleted += await deleteDocs(archiveMatches.docs);
+  deleted += await deleteDocs(db, disposableMatches);
+  deleted += await deleteDocs(db, cupMatches.docs);
+  deleted += await deleteDocs(db, cupSnapshots.docs);
+  deleted += await deleteDocs(db, archiveMatches.docs);
   deleted += await deleteQuery(db.collection('match_player_effects_v1')
     .where('matchId', '>=', MATCH_PREFIX).where('matchId', '<', MATCH_PREFIX + '\uf8ff'));
   deleted += await deleteQuery(db.collection('match_player_effects_v1')
@@ -147,11 +147,11 @@ async function removeOldSeasonOneData(db: any) {
     .where('matchId', '>=', 'cup_S1_').where('matchId', '<', 'cup_S1_\uf8ff'));
 
   const leagueRewards = await db.collection('economy_transactions').where('referenceId', '==', 'S1').get();
-  deleted += await deleteDocs(leagueRewards.docs.filter((doc: any) => doc.data()?.type === 'LEAGUE_SEASON_REWARD'));
+  deleted += await deleteDocs(db, leagueRewards.docs.filter((doc: any) => doc.data()?.type === 'LEAGUE_SEASON_REWARD'));
   const cupRewards = await db.collection('economy_transactions').where('referenceId', '==', CUP_ID).get();
-  deleted += await deleteDocs(cupRewards.docs.filter((doc: any) =>
+  deleted += await deleteDocs(db, cupRewards.docs.filter((doc: any) =>
     ['PYRAMID_CUP_CHAMPION_REWARD', 'PYRAMID_CUP_FINALIST_REWARD'].includes(String(doc.data()?.type || ''))));
-  deleted += await deleteDocs(slotHistory.docs);
+  deleted += await deleteDocs(db, slotHistory.docs);
 
   await db.collection('cup_pyramid_v1').doc(CUP_ID).delete().catch((error: any) => {
     if (error?.code !== 5) throw error;
