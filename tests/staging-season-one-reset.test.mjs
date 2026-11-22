@@ -71,7 +71,7 @@ function createValidInput() {
     archives: 0, rollovers: 0, history: 0,
     archiveMatches: 0, matchPlayerEffects: 0, matchRevenueReceipts: 0, cupMatchRevenueReceipts: 0,
     matchConsequenceReceipts: 0, leagueSeasonRewardReceipts: 0, pyramidCupRewardReceipts: 0,
-    liveLocks: [],
+    liveLocks: [], unclassifiedMatches: 0,
     now: new Date('2026-11-22T14:00:00.000Z'),
   };
 }
@@ -87,6 +87,7 @@ test('fresh Beta Season 1 preflight is authenticated, project-fenced and read-on
   assert.match(source, /matches_v2/);
   assert.match(source, /players_v14/);
   assert.match(source, /ownedPlayers/);
+  assert.match(source, /unclassifiedMatches/);
   assert.match(source, /match_player_effects_v1/);
   assert.match(source, /economy_transactions/);
   assert.match(source, /match_consequence_receipts/);
@@ -241,4 +242,12 @@ test('fresh Season 1 preflight refuses active settlement and season worker locks
   const lockedPlan = buildFreshSeasonOneResetPlan(locked);
   assert.equal(lockedPlan.ready, false);
   assert.ok(lockedPlan.reasons.includes('SEASON_WORKER_LOCKED'));
+});
+
+test('fresh Season 1 preflight rejects unknown season match documents', () => {
+  const input = createValidInput();
+  input.unclassifiedMatches = 1;
+  const plan = buildFreshSeasonOneResetPlan(input);
+  assert.equal(plan.ready, false);
+  assert.ok(plan.reasons.includes('UNCLASSIFIED_SEASON_MATCH_DOCUMENTS'));
 });
