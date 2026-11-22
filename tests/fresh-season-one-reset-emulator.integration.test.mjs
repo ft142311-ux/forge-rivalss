@@ -211,7 +211,7 @@ test('fresh Season 1 reset rebuilds league and Pyramid Cup while preserving Fire
   assert.equal(frozenConfig.worldReady, false);
   assert.equal(frozenConfig.stagingSeasonOneResetInProgress, true);
   assert.equal((await db.collection('matches_v2').doc('old_s1_league_1').get()).exists, true);
-  assert.equal((await db.collection('staging_season_one_reset_archives_v1').doc(failedJournal.resetId).get()).data()?.status, 'WRITING');
+  assert.equal((await db.collection('staging_season_one_reset_archives_v1').doc(failedJournal.resetId).get()).exists, false);
   await db.collection('players_v14').doc(uid).set(oldHumanProfile);
 
   const result = await executeFreshSeasonOneReset(db, target);
