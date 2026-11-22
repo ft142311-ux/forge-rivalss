@@ -151,8 +151,11 @@ test('fresh Beta Season 1 preflight is authenticated, project-fenced and read-on
 test('fresh Season 1 reset plan validates 120 participants and complete 840-match round robin', () => {
   const plan = buildFreshSeasonOneResetPlan(createValidInput());
   assert.equal(plan.ready, true, plan.reasons.join(','));
-  assert.equal(plan.preserve.participantProfiles, 120);
-  assert.equal(plan.preserve.leagueSlots, 120);
+  assert.equal(plan.preserve.firebaseAuthAccounts, true);
+  assert.equal(plan.preserve.firebaseAuthUids, 0);
+  assert.equal(plan.replace.clubProfiles, 120);
+  assert.equal(plan.replace.botClubProfiles, 120);
+  assert.equal(plan.replace.leagueSlots, 120);
   assert.equal(plan.expected.leagueMatches, 840);
   assert.equal(plan.replace.cupExists, true);
   assert.equal(plan.replace.cupMatches, 56);
@@ -176,8 +179,9 @@ test('fresh Season 1 reset preflight does not require the old Cup, Cup snapshots
   input.matches = [];
   const plan = buildFreshSeasonOneResetPlan(input);
   assert.equal(plan.ready, true, plan.reasons.join(','));
-  assert.equal(plan.preserve.participantProfiles, 120);
-  assert.equal(plan.preserve.leagueSlots, 120);
+  assert.equal(plan.preserve.firebaseAuthAccounts, true);
+  assert.equal(plan.replace.clubProfiles, 120);
+  assert.equal(plan.replace.leagueSlots, 120);
   assert.equal(plan.replace.cupExists, false);
   assert.equal(plan.replace.cupMatches, 0);
   assert.equal(plan.replace.cupParticipantSnapshots, 0);
