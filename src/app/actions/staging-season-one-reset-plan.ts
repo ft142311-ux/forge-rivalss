@@ -130,6 +130,34 @@ export function buildFreshSeasonOneResetPlan(input: FreshSeasonOneResetInput) {
       [...leagueParticipantIds].some(id => !participantIds.has(id)))) {
     reasons.push('PYRAMID_CUP_PARTICIPANT_IDENTITY_MISMATCH');
   }
+  if (cup) {
+    const expectedSeeds = [...participants.entries()].sort(([idA, a], [idB, b]) =>
+      a.level - b.level || a.rank - b.rank || a.group - b.group || idA.localeCompare(idB));
+    const cupById = new Map(cupParticipants.map((team: any) => [String(team?.id || ''), team]));
+    if (expectedSeeds.some(([id, team], index) => {
+      const cupTeam: any = cupById.get(id);
+      return !cupTeam || Number(cupTeam.seed) !== index + 1 ||
+        Number(cupTeam.level) !== team.level || Number(cupTeam.group) !== team.group ||
+        Number(cupTeam.rank) !== team.rank || Boolean(cupTeam.isBot) !== team.isBot;
+    })) {
+      reasons.push('PYRAMID_CUP_PARTICIPANT_SEEDING_INVALID');
+    }
+    if (cupRoundOne.length === 56) {
+      const eligible = cupParticipants.filter((team: any) => Number(team.level) !== 1)
+        .sort((a: any, b: any) => Number(a.level) - Number(b.level) ||
+          Number(a.rank) - Number(b.rank) || Number(a.group) - Number(b.group) ||
+          String(a.id).localeCompare(String(b.id)));
+      for (let index = 0; index < 56; index++) {
+        const pairing = cupRoundOne[index] || {};
+        const stronger = eligible[eligible.length - 2 - index * 2];
+        const weaker = eligible[eligible.length - 1 - index * 2];
+        if (pairing?.away?.id !== stronger?.id || pairing?.home?.id !== weaker?.id) {
+          reasons.push('PYRAMID_CUP_OPENING_SEED_PAIRINGS_INVALID');
+          break;
+        }
+      }
+    }
+  }
   if (cup && Array.isArray(cup.openingRoundRestTeams)) {
     const rest = cup.openingRoundRestTeams;
     const expectedRest = [...participants.entries()]
