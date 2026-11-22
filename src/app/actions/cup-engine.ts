@@ -13,15 +13,16 @@ const LEAGUE_ID = 'ALPHA';
 const CUP_COLLECTION = 'cup_pyramid_v1';
 const CUP_PARTICIPANT_SNAPSHOT_COLLECTION = 'cup_participant_snapshots_v1';
 const TOTAL_TEAMS = TOTAL_GROUPS * TEAMS_PER_GROUP;
-const ROUND_COUNT = 7; // 60 -> 30 -> 15 -> 8 -> 4 -> 2 -> final
-const ROUND_PAIRING_COUNTS = [60, 30, 15, 8, 4, 2, 1];
-const ROUND_TEAM_COUNTS = [120, 60, 30, 15, 8, 4, 2];
-const ROUND_BYE_COUNTS = [0, 0, 0, 1, 0, 0, 0];
+const ROUND_COUNT = 7; // 112 -> 64 (D1 joins) -> 32 -> 16 -> 8 -> 4 -> 2 -> final
+const ROUND_PAIRING_COUNTS = [56, 32, 16, 8, 4, 2, 1];
+const ROUND_TEAM_COUNTS = [112, 64, 32, 16, 8, 4, 2];
+const ROUND_BYE_COUNTS = [0, 0, 0, 0, 0, 0, 0];
+const CUP_FORMAT_VERSION = 4;
 const ROUND_DAYS = [2, 3, 4, 5, 6, 7, 8]; // preliminary round follows league Tour 1; every round is daily
 const CUP_START_HOUR_UTC = 4; // 07:00 Moscow time
 
 type Team = { id: string; name: string; level: number; group: number; rank: number; isBot: boolean; seed: number; matchSnapshot?: MatchTeamSnapshot };
-type Pairing = { id: string; index: number; home: Team | null; away: Team | null; status: 'scheduled' | 'bye' | 'finished'; matchId?: string | null; winnerId?: string | null; scoreA?: number | null; scoreB?: number | null; technicalDecision?: boolean };
+type Pairing = { id: string; index: number; home: Team; away: Team; status: 'scheduled' | 'finished'; matchId?: string | null; winnerId?: string | null; scoreA?: number | null; scoreB?: number | null; technicalDecision?: boolean };
 
 function resolveCupDate(value: any): Date {
   if (value === null || value === undefined || value === '') throw new Error('CUP_SEASON_START_INVALID');
@@ -178,12 +179,18 @@ function makePair(id: string, index: number, firstStrong: Team, secondWeak: Team
   return { id, index, home: secondWeak, away: firstStrong, status: 'scheduled', matchId: null, winnerId: null, scoreA: null, scoreB: null };
 }
 function createPreliminary(teams: Team[]): Pairing[] {
-  // All 120 clubs enter in round one: strongest vs weakest, then second strongest vs second weakest.
-  const ordered = [...teams].sort(compareStrength);
-  if (ordered.length !== TOTAL_TEAMS) throw new Error('CUP_PARTICIPANT_COUNT_INVALID');
+  // D1 rests in the opening round by competition format. D2-D4 are paired
+  // from the bottom upward so teams of adjacent strength meet: weakest vs
+  // next-weakest, then the next two, with the stronger side always AWAY.
+  const eligible = teams.filter(team => team.level !== 1).sort(compareStrength);
+  if (teams.length !== TOTAL_TEAMS || eligible.length !== TOTAL_TEAMS - TEAMS_PER_GROUP) {
+    throw new Error('CUP_OPENING_ROUND_FIELD_INVALID');
+  }
   const pairs: Pairing[] = [];
-  for (let i = 0; i < TOTAL_TEAMS / 2; i++) {
-    pairs.push(makePair(`r1_m${i + 1}`, i + 1, ordered[i], ordered[ordered.length - 1 - i]));
+  for (let i = 0; i < eligible.length / 2; i++) {
+    const stronger = eligible[eligible.length - 1 - i * 2];
+    const weaker = eligible[eligible.length - 2 - i * 2];
+    pairs.push(makePair(`r1_m${i + 1}`, i + 1, stronger, weaker));
   }
   return pairs;
 }
@@ -193,15 +200,11 @@ function teamFromPublic(value: any): Team | null {
 }
 function buildRoundPairings(round: number, input: Team[]): Pairing[] {
   const teams = [...input].sort(compareStrength);
-  const byeTeam = teams.length % 2 === 1 ? teams.shift() : null;
-  if (byeTeam && round !== 4) throw new Error(`CUP_ODD_PARTICIPANT_COUNT:R${round}:${teams.length + 1}`);
+  if (teams.length % 2 !== 0) throw new Error(`CUP_ODD_PARTICIPANT_COUNT:R${round}:${teams.length}`);
   const pairs: Pairing[] = [];
   for (let i = 0; i < teams.length / 2; i++) {
     // Strongest remaining vs weakest remaining, next strongest vs next weakest, etc.
     pairs.push(makePair(`r${round}_m${i + 1}`, i + 1, teams[i], teams[teams.length - 1 - i]));
-  }
-  if (byeTeam) {
-    pairs.push({ id: `r${round}_bye_1`, index: pairs.length + 1, home: byeTeam, away: null, status: 'bye', winnerId: byeTeam.id, scoreA: null, scoreB: null });
   }
   return pairs;
 }
@@ -375,18 +378,23 @@ export async function generatePyramidCup(
     pairing.matchId = matchId(season, 1, pairing.index);
     batch.set(db.collection(MATCH_COLLECTIONS.cup).doc(pairing.matchId), buildCupRoundMatchData(season, 1, pairing, scheduledAt));
   }
+  const openingRoundRestTeams = teams.filter(team => team.level === 1);
+  if (openingRoundRestTeams.length !== TEAMS_PER_GROUP) throw new Error('CUP_D1_OPENING_ROUND_REST_COUNT_INVALID');
   const rounds: Record<string, any[]> = { [roundKey(1)]: first.map(publicPairing) };
   for (let round = 2; round <= ROUND_COUNT; round++) rounds[roundKey(round)] = [];
-  // The cup record and all 60 first-round fixtures commit together. A crash
-  // cannot leave an existing bracket with no match documents to process.
+  // The cup record and all 56 opening-round fixtures commit together. D1's
+  // eight teams are explicitly recorded as round-two entrants, not BYEs.
   batch.create(ref, {
     id, season, leagueId: LEAGUE_ID, name: 'Кубок Пирамиды', status: 'active', currentRound: 1,
-    totalRounds: ROUND_COUNT, totalParticipants: TOTAL_TEAMS, preliminaryMatches: 60, byeCount: 0,
-    participants: teams.map(publicTeam), rounds, winnerId: null, winnerName: null,
-    seasonStart: seasonStart.toISOString(), createdAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp(), version: 3,
+    formatVersion: CUP_FORMAT_VERSION, format: 'D1_REST_OPENING_ROUND',
+    totalRounds: ROUND_COUNT, totalParticipants: TOTAL_TEAMS, preliminaryMatches: 56,
+    openingRoundRestCount: openingRoundRestTeams.length,
+    openingRoundRestTeams: openingRoundRestTeams.map(publicTeam),
+    byeCount: 0, participants: teams.map(publicTeam), rounds, winnerId: null, winnerName: null,
+    seasonStart: seasonStart.toISOString(), createdAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp(), version: 4,
   });
   await batch.commit();
-  return { success: true, created: true, cupId: id, participants: TOTAL_TEAMS, preliminaryMatches: 60 };
+  return { success: true, created: true, cupId: id, participants: TOTAL_TEAMS, preliminaryMatches: 56, openingRoundRestCount: openingRoundRestTeams.length };
 }
 /**
  * Build and verify the next season's cup before that season is published.
@@ -408,34 +416,44 @@ export async function preparePyramidCupForSeason(targetSeasonNumber: number) {
   const rounds = cup.rounds && typeof cup.rounds === 'object' ? cup.rounds : {};
   const firstRound = Array.isArray(rounds.r1) ? rounds.r1 : [];
   if (Number(cup.season) !== targetSeasonNumber || cup.name !== 'Кубок Пирамиды' ||
-      cup.status !== 'active' || participants.length !== TOTAL_TEAMS ||
+      cup.status !== 'active' || Number(cup.formatVersion) !== CUP_FORMAT_VERSION ||
+      cup.format !== 'D1_REST_OPENING_ROUND' || participants.length !== TOTAL_TEAMS ||
       new Set(participants.map((team: any) => String(team?.id || ''))).size !== TOTAL_TEAMS ||
-      firstRound.length !== 60 || firstRound.filter((pairing: any) => pairing?.status === 'bye').length !== 0) {
+      firstRound.length !== 56 || firstRound.some((pairing: any) => pairing?.status === 'bye')) {
     return { success: false, reason: 'CUP_PREPARED_BRACKET_INVALID', cupId: ref.id };
   }
 
-  // The public participant registry and round-one bracket are two persisted
-  // representations of the same field. Every one of the 120 clubs must play
-  // in round one, with the strongest seed away against the weakest seed home.
+  // All 120 clubs are registered. Only D2-D4 play in round one; all eight
+  // D1 teams are stored as explicit round-two entrants and never as BYEs.
   const participantIds = new Set<string>(participants.map((team: any) => String(team?.id || '')));
+  const orderedParticipants = [...participants].sort(compareStrength);
+  const orderedEligible = orderedParticipants.filter((team: any) => Number(team.level) !== 1);
+  const restTeams = Array.isArray(cup.openingRoundRestTeams) ? cup.openingRoundRestTeams : [];
+  const restIds = new Set<string>(restTeams.map((team: any) => String(team?.id || '')));
   const bracketTeamIds = new Set<string>(firstRound.flatMap((pairing: any) =>
     [pairing?.home?.id, pairing?.away?.id].filter((id: any) => typeof id === 'string' && id.length > 0)
   ));
-  const orderedParticipants = [...participants].sort(compareStrength);
-  if (participantIds.size !== TOTAL_TEAMS || bracketTeamIds.size !== TOTAL_TEAMS ||
-      [...participantIds].some(id => !bracketTeamIds.has(id)) ||
+  if (participantIds.size !== TOTAL_TEAMS || orderedEligible.length !== TOTAL_TEAMS - TEAMS_PER_GROUP ||
+      bracketTeamIds.size !== TOTAL_TEAMS - TEAMS_PER_GROUP ||
       [...bracketTeamIds].some(id => !participantIds.has(id)) ||
       participants.some((team: any) => !Number.isSafeInteger(Number(team?.seed)) || Number(team.seed) < 1 || Number(team.seed) > TOTAL_TEAMS) ||
       new Set(participants.map((team: any) => Number(team?.seed))).size !== TOTAL_TEAMS ||
-      firstRound.some((pairing: any, index: number) =>
-        pairing?.away?.id !== orderedParticipants[index]?.id ||
-        pairing?.home?.id !== orderedParticipants[TOTAL_TEAMS - 1 - index]?.id
-      )) {
+      restTeams.length !== TEAMS_PER_GROUP || restIds.size !== TEAMS_PER_GROUP ||
+      Number(cup.openingRoundRestCount) !== TEAMS_PER_GROUP ||
+      restTeams.some((team: any) => Number(team.level) !== 1 || !participantIds.has(String(team.id || ''))) ||
+      [...restIds].some(id => bracketTeamIds.has(id)) ||
+      [...participantIds].some(id => !bracketTeamIds.has(id) && !restIds.has(id)) ||
+      [...restIds].some(id => !participantIds.has(id)) ||
+      firstRound.some((pairing: any, index: number) => {
+        const stronger = orderedEligible[orderedEligible.length - 1 - index * 2];
+        const weaker = orderedEligible[orderedEligible.length - 2 - index * 2];
+        return pairing?.away?.id !== stronger?.id || pairing?.home?.id !== weaker?.id;
+      })) {
     return { success: false, reason: 'CUP_PREPARED_BRACKET_MEMBERSHIP_INVALID', cupId: ref.id };
   }
 
-  // Verify every frozen participant snapshot, including clubs that will later
-  // receive the single round-four BYE. Fixture-only checks would miss deleted snapshots.
+  // Verify every frozen participant snapshot, including D1 teams that enter
+  // in round two. Fixture-only checks would miss deleted snapshots.
   const participantSnapshots = await Promise.all(participants.map((team: any) =>
     participantSnapshotRef(db, targetSeasonNumber, String(team?.id || '')).get()
   ));
@@ -469,7 +487,7 @@ export async function preparePyramidCupForSeason(targetSeasonNumber: number) {
   }
 
   const fixtures = firstRound.filter((pairing: any) => pairing?.home && pairing?.away);
-  if (fixtures.length !== 60 || fixtures.some((pairing: any) =>
+  if (fixtures.length !== 56 || fixtures.some((pairing: any) =>
     pairing.matchId !== matchId(targetSeasonNumber, 1, Number(pairing.index))
   )) return { success: false, reason: 'CUP_PREPARED_FIXTURE_COUNT_INVALID', cupId: ref.id };
   const fixtureSnapshots = await Promise.all(fixtures.map((pairing: any) =>
@@ -508,6 +526,7 @@ export async function preparePyramidCupForSeason(targetSeasonNumber: number) {
     season: targetSeasonNumber,
     participants: participants.length,
     preliminaryMatches: fixtures.length,
+    openingRoundRestCount: TEAMS_PER_GROUP,
     byes: 0,
     scheduledAt: roundDate(context.seasonStart, ROUND_DAYS[0]).toISOString(),
   };
@@ -733,7 +752,6 @@ function assertValidCupRoundPairings(pairings: Pairing[], round: number) {
   const pairingIds = new Set<string>();
   const indexes = new Set<number>();
   const teamIds = new Set<string>();
-  let byes = 0;
   for (const pairing of pairings) {
     if (!pairing || typeof pairing.id !== 'string' || !pairing.id ||
         !Number.isSafeInteger(Number(pairing.index)) || Number(pairing.index) < 1 ||
@@ -742,15 +760,6 @@ function assertValidCupRoundPairings(pairings: Pairing[], round: number) {
     }
     pairingIds.add(pairing.id);
     indexes.add(Number(pairing.index));
-    if (pairing.status === 'bye') {
-      if (round !== 4 || !pairing.home || pairing.away || pairing.winnerId !== pairing.home.id ||
-          teamIds.has(pairing.home.id)) {
-        throw new Error('CUP_ROUND_BYE_INVALID');
-      }
-      teamIds.add(pairing.home.id);
-      byes++;
-      continue;
-    }
     if (!['scheduled', 'finished'].includes(String(pairing.status)) ||
         !pairing.home?.id || !pairing.away?.id || pairing.home.id === pairing.away.id ||
         teamIds.has(pairing.home.id) || teamIds.has(pairing.away.id) ||
@@ -760,10 +769,10 @@ function assertValidCupRoundPairings(pairings: Pairing[], round: number) {
     teamIds.add(pairing.home.id);
     teamIds.add(pairing.away.id);
   }
-  if (byes !== ROUND_BYE_COUNTS[round - 1] || teamIds.size !== ROUND_TEAM_COUNTS[round - 1]) {
+  if (ROUND_BYE_COUNTS[round - 1] !== 0 || teamIds.size !== ROUND_TEAM_COUNTS[round - 1]) {
     throw new Error('CUP_ROUND_BYE_COUNT_INVALID');
   }
-  return { pairings: pairings.length, byes, teams: teamIds.size };
+  return { pairings: pairings.length, byes: 0, teams: teamIds.size };
 }
 
 export async function runPyramidCupCycle() {
@@ -865,11 +874,22 @@ export async function runPyramidCupCycle() {
 
   const winners: Team[] = [];
   for (const pairing of pairings) {
-    if (pairing.status === 'bye' && pairing.winnerId) {
-      const team = teamFromPublic(pairing.home); if (team) winners.push(team);
-    } else if (pairing.winnerId) {
+    if (pairing.winnerId) {
       const source = pairing.home?.id === pairing.winnerId ? pairing.home : pairing.away?.id === pairing.winnerId ? pairing.away : null;
       const team = teamFromPublic(source); if (team) winners.push(team);
+    }
+  }
+  // D1's eight teams were explicitly rested in round one. They join the 56
+  // opening-round winners now, creating a complete 64-team round-two field.
+  if (round === 1) {
+    const restTeams = Array.isArray(cup.data.openingRoundRestTeams) ? cup.data.openingRoundRestTeams : [];
+    if (restTeams.length !== TEAMS_PER_GROUP) throw new Error('CUP_D1_OPENING_ROUND_REST_COUNT_INVALID');
+    for (const value of restTeams) {
+      const team = teamFromPublic(value);
+      if (!team || team.level !== 1 || winners.some(existing => existing.id === team.id)) {
+        throw new Error('CUP_D1_OPENING_ROUND_REST_TEAM_INVALID');
+      }
+      winners.push(team);
     }
   }
   const expectedWinners = ROUND_TEAM_COUNTS[round];
