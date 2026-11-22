@@ -79,9 +79,9 @@ test('pre-publication Pyramid Cup preparation verifies all 120 teams and 60 firs
   const preparation = source.slice(start, end);
   assert.match(preparation, /context\.prepared !== true/);
   assert.match(preparation, /participants\.length !== TOTAL_TEAMS/);
-  assert.match(preparation, /firstRound\.length !== 64/);
-  assert.match(preparation, /filter\(\(pairing: any\) => pairing\?\.status === 'bye'\)\.length !== 8/);
-  assert.match(preparation, /fixtures\.length !== 56/);
+  assert.match(preparation, /firstRound\.length !== 60/);
+  assert.match(preparation, /firstRound\.filter\(\(pairing: any\) => pairing\?\.status === 'bye'\)\.length !== 0/);
+  assert.match(preparation, /fixtures\.length !== 60/);
   assert.match(preparation, /CUP_PREPARED_FIXTURES_MISSING/);
   assert.match(preparation, /CUP_PREPARED_FIXTURE_IDENTITY_INVALID/);
 });
