@@ -194,19 +194,18 @@ test('fresh Season 1 reset allows orphaned old Cup fixtures and snapshots when t
   assert.equal(plan.replace.cupParticipantSnapshots, 120);
 });
 
-test('fresh Season 1 reset blocks immutable archives, rollover plans, history and orphan archive matches', () => {
-  for (const [field, reason] of [
-    ['archives', 'EXISTING_SEASON_ONE_ARCHIVE'],
-    ['rollovers', 'EXISTING_SEASON_TWO_ROLLOVER_PLAN'],
-    ['history', 'EXISTING_SEASON_ONE_HISTORY'],
-    ['archiveMatches', 'ORPHANED_SEASON_ONE_ARCHIVE_MATCHES'],
-  ]) {
-    const input = createValidInput();
-    input[field] = 1;
-    const plan = buildFreshSeasonOneResetPlan(input);
-    assert.equal(plan.ready, false, field);
-    assert.ok(plan.reasons.includes(reason), field);
-  }
+test('fresh Season 1 reset classifies old archives and rollover records as replaceable test data', () => {
+  const input = createValidInput();
+  input.archives = 1;
+  input.rollovers = 1;
+  input.history = 1;
+  input.archiveMatches = 56;
+  const plan = buildFreshSeasonOneResetPlan(input);
+  assert.equal(plan.ready, true, plan.reasons.join(','));
+  assert.equal(plan.replace.seasonArchives, 1);
+  assert.equal(plan.replace.rolloverPlans, 1);
+  assert.equal(plan.replace.seasonHistoryEntries, 1);
+  assert.equal(plan.replace.archivedLeagueMatches, 56);
 });
 
 test('fresh Season 1 preflight rejects a Cup season-start mismatch', () => {
