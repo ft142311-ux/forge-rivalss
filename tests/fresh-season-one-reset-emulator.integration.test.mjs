@@ -28,7 +28,7 @@ test('fresh Season 1 reset rebuilds league and Pyramid Cup while preserving Fire
     'cup_pyramid_v1', 'cup_matches', 'cup_participant_snapshots_v1',
     'league_season_archives_v1', 'league_season_rollovers_v1', 'league_season_history_v1',
     'league_slot_history_v1', 'match_player_effects_v1', 'economy_transactions',
-    'match_consequence_receipts',
+    'match_consequence_receipts', 'staging_season_one_reset_archives_v1',
   ];
   const clearCollection = async (name) => {
     const snap = await db.collection(name).get();
@@ -202,15 +202,16 @@ test('fresh Season 1 reset rebuilds league and Pyramid Cup while preserving Fire
     db.collection('match_consequence_receipts').doc('old-consequence').set({ matchId: 'match_v140_S1_LALPHA_OLD' }),
   ]);
 
-  // Simulate an interrupted reset after the old competition records are
-  // removed: the human profile is unavailable during the club rebuild phase.
-  await assert.rejects(executeFreshSeasonOneReset(db, target), /FRESH_SEASON_ONE_ACCOUNT_PROFILE_MISSING/);
+  // A missing source profile must stop before deletion; the archive cannot be marked complete.
+  await assert.rejects(executeFreshSeasonOneReset(db, target), /SEASON_ONE_ARCHIVE_CORE_WORLD_INCOMPLETE/);
   const failedJournal = (await db.collection('system_v1').doc('staging_fresh_season_one_reset_v1').get()).data();
   assert.equal(failedJournal.status, 'FAILED');
-  assert.equal(failedJournal.stepIndex, 1);
+  assert.equal(failedJournal.stepIndex, 0);
   const frozenConfig = (await db.collection('system_v1').doc('season_config').get()).data();
   assert.equal(frozenConfig.worldReady, false);
   assert.equal(frozenConfig.stagingSeasonOneResetInProgress, true);
+  assert.equal((await db.collection('matches_v2').doc('old_s1_league_1').get()).exists, true);
+  assert.equal((await db.collection('staging_season_one_reset_archives_v1').doc(failedJournal.resetId).get()).data()?.status, 'WRITING');
   await db.collection('players_v14').doc(uid).set(oldHumanProfile);
 
   const result = await executeFreshSeasonOneReset(db, target);
@@ -223,6 +224,15 @@ test('fresh Season 1 reset rebuilds league and Pyramid Cup while preserving Fire
   assert.equal(result.verification.cupParticipantSnapshots, 120);
   assert.equal(result.verification.humanClubs, 1);
   assert.equal(result.verification.botClubs, 119);
+  const durableArchiveRef = db.collection('staging_season_one_reset_archives_v1').doc(result.resetId);
+  const durableArchive = (await durableArchiveRef.get()).data();
+  assert.equal(durableArchive.status, 'COMPLETE');
+  assert.equal(durableArchive.sourceCount, durableArchive.persistedCount);
+  assert.ok(durableArchive.sourceCount >= 300);
+  const archivedDocs = await durableArchiveRef.collection('documents').get();
+  assert.equal(archivedDocs.size, durableArchive.sourceCount);
+  assert.ok(archivedDocs.docs.some(doc => doc.data().sourcePath === 'system_v1/season_config'));
+  assert.ok(archivedDocs.docs.some(doc => doc.data().sourcePath === 'league_slot_history_v1/S1_LALPHA_D2_G1_R3_G5'));
 
   const authUser = await auth.getUser(uid);
   assert.equal(authUser.email, 'reset-test@example.invalid');
