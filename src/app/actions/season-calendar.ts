@@ -1776,14 +1776,19 @@ async function verifyInitialPyramidCup(db: any, seasonStartValue: any) {
   const participants = Array.isArray(cup.participants) ? cup.participants : [];
   const firstRound = Array.isArray(cup.rounds?.r1) ? cup.rounds.r1 : [];
   const ordered = [...participants].sort((a: any, b: any) => Number(a.seed) - Number(b.seed));
+  const eligible = ordered.filter((team: any) => Number(team.level) !== 1);
+  const restTeams = Array.isArray(cup.openingRoundRestTeams) ? cup.openingRoundRestTeams : [];
   if (Number(cup.season) !== 1 || cup.status !== 'active' ||
       cup.name !== 'Кубок Пирамиды' || Number(cup.currentRound) !== 1 || Number(cup.totalRounds) !== 7 ||
+      Number(cup.formatVersion) !== 4 || cup.format !== 'D1_REST_OPENING_ROUND' ||
       Number(cup.totalParticipants) !== 120 || participants.length !== 120 ||
       new Set(participants.map((team: any) => String(team?.id || ''))).size !== 120 ||
       new Set(participants.map((team: any) => Number(team?.seed))).size !== 120 ||
       ordered.some((team: any, index: number) => Number(team?.seed) !== index + 1 || !team?.id) ||
-      Number(cup.preliminaryMatches) !== 60 || Number(cup.byeCount) !== 0 ||
-      firstRound.length !== 60 || firstRound.some((pairing: any) => pairing?.status === 'bye')) {
+      Number(cup.preliminaryMatches) !== 56 || Number(cup.byeCount) !== 0 ||
+      Number(cup.openingRoundRestCount) !== 8 || restTeams.length !== 8 ||
+      restTeams.some((team: any) => Number(team.level) !== 1 || !participants.some((candidate: any) => candidate.id === team.id)) ||
+      firstRound.length !== 56 || firstRound.some((pairing: any) => pairing?.status === 'bye')) {
     return { ready: false, reason: 'INITIAL_CUP_BRACKET_INVALID' };
   }
 
@@ -1796,10 +1801,12 @@ async function verifyInitialPyramidCup(db: any, seasonStartValue: any) {
 
   const invalidPairing = firstRound.some((pairing: any, index: number) => {
     const expectedId = `cup_S1_R1_M${String(index + 1).padStart(2, '0')}`;
+    const stronger = eligible[eligible.length - 1 - index * 2];
+    const weaker = eligible[eligible.length - 2 - index * 2];
     return pairing?.id !== `r1_m${index + 1}` || pairing?.matchId !== expectedId ||
       pairing?.status !== 'scheduled' ||
-      pairing?.away?.id !== ordered[index]?.id ||
-      pairing?.home?.id !== ordered[119 - index]?.id;
+      pairing?.away?.id !== stronger?.id ||
+      pairing?.home?.id !== weaker?.id;
   });
   if (invalidPairing) return { ready: false, reason: 'INITIAL_CUP_PAIRINGS_INVALID' };
   const fixtureSnapshots = await Promise.all(firstRound.map((_: any, index: number) => {
@@ -1839,7 +1846,7 @@ async function verifyInitialPyramidCup(db: any, seasonStartValue: any) {
     return { ready: false, reason: 'INITIAL_CUP_PARTICIPANT_SNAPSHOTS_INCOMPLETE' };
   }
 
-  return { ready: true, participants: 120, preliminaryMatches: 60, byes: 0 };
+  return { ready: true, participants: 120, preliminaryMatches: 56, openingRoundRestCount: 8, byes: 0 };
 }
 
 /**
