@@ -5,6 +5,7 @@ export type FreshSeasonOneResetInput = {
   matches: Array<{ id: string; data: Record<string, any> }>;
   legacyCupMatches?: number;
   profileIds: Set<string>;
+  unexpectedProfileCount?: number;
   cup: Record<string, any> | null;
   cupFixtures: Array<{ id: string; data: Record<string, any> }>;
   cupSnapshots: Array<{ id: string; data: Record<string, any> }>;
@@ -139,6 +140,7 @@ export function buildFreshSeasonOneResetPlan(input: FreshSeasonOneResetInput) {
     for (const id of participants.keys()) if (input.profileIds.has(id)) validProfiles++;
   }
   if (validProfiles !== EXPECTED_PARTICIPANTS) reasons.push('PARTICIPANT_PROFILE_MISSING');
+  if (Number(input.unexpectedProfileCount || 0) > 0) reasons.push('UNEXPECTED_CLUB_PROFILES_PRESENT');
 
   const now = input.now instanceof Date ? input.now : new Date();
   const seasonStart = nextMoscowSeasonBoundary(now);
