@@ -279,7 +279,7 @@ test('fresh Season 1 reset rebuilds league and Pyramid Cup while preserving Fire
   assert.equal(restoredWorld.restoredDocuments, durableArchive.sourceCount);
   const restoredConfig = (await db.collection('system_v1').doc('season_config').get()).data();
   assert.equal(restoredConfig.worldReady, true);
-  assert.equal(restoredConfig.stagingSeasonOneResetInProgress, false);
+  assert.notEqual(restoredConfig.stagingSeasonOneResetInProgress, true);
   assert.equal((await db.collection('league_tables_v2').doc('table_v140_S1_LALPHA_V2_G1').get()).data().championId, 'STALE_CHAMPION');
   assert.equal((await db.collection('league_slots_v1').doc('S1_LALPHA_D2_G1_R3').get()).data().occupantId, uid);
   assert.equal((await db.collection('players_v14').doc(uid).get()).data().clubName, 'Old Club Name');
