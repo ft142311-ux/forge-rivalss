@@ -17,6 +17,7 @@ const ROUND_COUNT = 7; // 112 -> 64 (D1 joins) -> 32 -> 16 -> 8 -> 4 -> 2 -> fin
 const ROUND_PAIRING_COUNTS = [56, 32, 16, 8, 4, 2, 1];
 const ROUND_TEAM_COUNTS = [112, 64, 32, 16, 8, 4, 2];
 const ROUND_BYE_COUNTS = [0, 0, 0, 0, 0, 0, 0];
+const TOTAL_CUP_MATCHES = ROUND_PAIRING_COUNTS.reduce((sum, count) => sum + count, 0);
 const CUP_FORMAT_VERSION = 4;
 const ROUND_DAYS = [2, 3, 4, 5, 6, 7, 8]; // preliminary round follows league Tour 1; every round is daily
 const CUP_START_HOUR_UTC = 4; // 07:00 Moscow time
@@ -387,14 +388,14 @@ export async function generatePyramidCup(
   batch.create(ref, {
     id, season, leagueId: LEAGUE_ID, name: 'Кубок Пирамиды', status: 'active', currentRound: 1,
     formatVersion: CUP_FORMAT_VERSION, format: 'D1_REST_OPENING_ROUND',
-    totalRounds: ROUND_COUNT, totalParticipants: TOTAL_TEAMS, preliminaryMatches: 56,
+    totalRounds: ROUND_COUNT, totalParticipants: TOTAL_TEAMS, totalMatches: TOTAL_CUP_MATCHES, preliminaryMatches: 56,
     openingRoundRestCount: openingRoundRestTeams.length,
     openingRoundRestTeams: openingRoundRestTeams.map(publicTeam),
     byeCount: 0, participants: teams.map(publicTeam), rounds, winnerId: null, winnerName: null,
     seasonStart: seasonStart.toISOString(), createdAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp(), version: 4,
   });
   await batch.commit();
-  return { success: true, created: true, cupId: id, participants: TOTAL_TEAMS, preliminaryMatches: 56, openingRoundRestCount: openingRoundRestTeams.length };
+  return { success: true, created: true, cupId: id, participants: TOTAL_TEAMS, totalMatches: TOTAL_CUP_MATCHES, preliminaryMatches: 56, openingRoundRestCount: openingRoundRestTeams.length };
 }
 /**
  * Build and verify the next season's cup before that season is published.
@@ -430,6 +431,7 @@ export async function preparePyramidCupForSeason(targetSeasonNumber: number) {
   const orderedEligible = orderedParticipants.filter((team: any) => Number(team.level) !== 1);
   const restTeams = Array.isArray(cup.openingRoundRestTeams) ? cup.openingRoundRestTeams : [];
   const restIds = new Set<string>(restTeams.map((team: any) => String(team?.id || '')));
+  const d1Ids = new Set<string>(participants.filter((team: any) => Number(team?.level) === 1).map((team: any) => String(team?.id || '')));
   const bracketTeamIds = new Set<string>(firstRound.flatMap((pairing: any) =>
     [pairing?.home?.id, pairing?.away?.id].filter((id: any) => typeof id === 'string' && id.length > 0)
   ));
@@ -440,6 +442,8 @@ export async function preparePyramidCupForSeason(targetSeasonNumber: number) {
       new Set(participants.map((team: any) => Number(team?.seed))).size !== TOTAL_TEAMS ||
       restTeams.length !== TEAMS_PER_GROUP || restIds.size !== TEAMS_PER_GROUP ||
       Number(cup.openingRoundRestCount) !== TEAMS_PER_GROUP ||
+      d1Ids.size !== TEAMS_PER_GROUP || [...d1Ids].some(id => !restIds.has(id)) ||
+      [...restIds].some(id => !d1Ids.has(id)) ||
       restTeams.some((team: any) => Number(team.level) !== 1 || !participantIds.has(String(team.id || ''))) ||
       [...restIds].some(id => bracketTeamIds.has(id)) ||
       [...participantIds].some(id => !bracketTeamIds.has(id) && !restIds.has(id)) ||
@@ -525,6 +529,7 @@ export async function preparePyramidCupForSeason(targetSeasonNumber: number) {
     cupId: ref.id,
     season: targetSeasonNumber,
     participants: participants.length,
+    totalMatches: TOTAL_CUP_MATCHES,
     preliminaryMatches: fixtures.length,
     openingRoundRestCount: TEAMS_PER_GROUP,
     byes: 0,
@@ -792,6 +797,9 @@ export async function runPyramidCupCycle() {
     }
   }
   if (cup.data.status === 'completed') return { generated: false, resolved: 0, advanced: 0, completed: true };
+  if (Number(cup.data.formatVersion) !== CUP_FORMAT_VERSION || cup.data.format !== 'D1_REST_OPENING_ROUND') {
+    return { generated: false, resolved: 0, advanced: 0, incompatibleFormat: true, reason: 'CUP_FORMAT_VERSION_MISMATCH' };
+  }
 
   const activeSeasonStart = resolveCupDate(cup.data.seasonStart || context.seasonStart);
   const fixtureRepair = await repairCurrentRoundFixtures(db, cup, activeSeasonStart);
