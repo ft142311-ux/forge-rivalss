@@ -88,7 +88,9 @@ export async function createOrVerifyDurableSeasonOneArchive(
         .map((snap: any) => ({ path: snap.ref.path, data: snap.data() || {} }))
     : [];
 
-  if (profiles.length !== profileIds.size) throw new Error('SEASON_ONE_ARCHIVE_PROFILE_SET_INCOMPLETE');
+  if (tables.length !== 15 || slots.length !== 120 || profileIds.size !== 120 || profiles.length !== 120) {
+    throw new Error('SEASON_ONE_ARCHIVE_CORE_WORLD_INCOMPLETE');
+  }
 
   const exact = await Promise.all([
     collectExact(db, 'system_v1/season_config'),
