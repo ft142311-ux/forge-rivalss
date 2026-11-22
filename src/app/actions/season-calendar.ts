@@ -1868,10 +1868,24 @@ async function verifyInitialPyramidCup(db: any, seasonStartValue: any) {
  * rollover plan. The lease is fenced by owner and token before every batch or
  * publication write, so an expired process cannot publish a new world.
  */
-export async function ensureSeasonCalendar(requestedTargetSeason?: number) {
+export async function ensureSeasonCalendar(
+  requestedTargetSeason?: number,
+  options: { allowDuringStagingReset?: boolean } = {},
+) {
   const db = getAdminDb();
   const configSnap = await db.collection('system_v1').doc('season_config').get();
   let config = configSnap.exists ? configSnap.data() || {} : {};
+  // The reset executor is the only caller allowed to build the calendar while
+  // the reset marker is asserted. Every ordinary cron/user path fails closed.
+  if (config.stagingSeasonOneResetInProgress === true && options.allowDuringStagingReset !== true) {
+    return {
+      success: false,
+      worldReady: false,
+      action: 'WORLD_BUILDING',
+      reason: 'STAGING_SEASON_ONE_RESET_IN_PROGRESS',
+      writesStarted: false,
+    };
+  }
   if (config.historyCleanupPending === true) {
     try {
       await pruneSeasonHistoryAfterActivation(db, Number(config.historyCleanupTargetSeason || config.activeSeasonNumber || 1),
