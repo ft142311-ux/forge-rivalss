@@ -125,7 +125,7 @@ exports.initializeClub = functions.region('us-central1').https.onCall(async (dat
 
       // A pristine first-season world is not open for registration until its
       // canonical Pyramid Cup bracket and all frozen participant snapshots exist.
-      if (config.pyramidCupRequired === true && config.pyramidCupReady !== true) {
+      if (config.pyramidCupRequired === true && Number(config.pyramidCupReadySeasonNumber) === seasonNum && config.pyramidCupReady !== true) {
         throw new functions.https.HttpsError('failed-precondition', 'PYRAMID_CUP_NOT_READY');
       }
 
