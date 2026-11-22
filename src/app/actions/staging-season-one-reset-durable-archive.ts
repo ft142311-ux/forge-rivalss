@@ -52,6 +52,35 @@ export async function createOrVerifyDurableSeasonOneArchive(
     throw new Error('SEASON_ONE_ARCHIVE_INPUT_INVALID');
   }
 
+  const archiveRef = db.collection('staging_season_one_reset_archives_v1').doc(resetId);
+  const documentsRef = archiveRef.collection('documents');
+  const existingManifestSnap = await archiveRef.get();
+  const existingManifest = existingManifestSnap.exists ? existingManifestSnap.data() || {} : {};
+  if (existingManifest.status === 'COMPLETE') {
+    const existingDocs = await documentsRef.get();
+    if (existingDocs.size !== Number(existingManifest.sourceCount) ||
+        existingDocs.size !== Number(existingManifest.persistedCount)) {
+      throw new Error('SEASON_ONE_ARCHIVE_COMPLETED_DOCUMENT_COUNT_INVALID');
+    }
+    const restoredManifest = existingDocs.docs.map((doc: any) => {
+      const item = doc.data() || {};
+      if (!item.sourcePath || digest(item.data) !== item.sourceSha256) {
+        throw new Error('SEASON_ONE_ARCHIVE_COMPLETED_CHECKSUM_INVALID');
+      }
+      return { path: String(item.sourcePath), sha256: String(item.sourceSha256) };
+    }).sort((left: any, right: any) => left.path.localeCompare(right.path));
+    if (new Set(restoredManifest.map((item: any) => item.path)).size !== restoredManifest.length ||
+        digest(restoredManifest) !== existingManifest.archiveSha256) {
+      throw new Error('SEASON_ONE_ARCHIVE_COMPLETED_MANIFEST_INVALID');
+    }
+    return {
+      archiveDocuments: existingDocs.size,
+      archiveSha256: existingManifest.archiveSha256,
+      archiveStatus: 'COMPLETE',
+      reusedCompletedArchive: true,
+    };
+  }
+
   const [tables, slots, matches, cupMatches, cupSnapshots, archiveMatches, slotHistory,
     effectsLeague, effectsCup, economyLeague, economyCup, economySeason, economyCupRewards,
     consequencesLeague, consequencesCup] = await Promise.all([
@@ -113,8 +142,6 @@ export async function createOrVerifyDurableSeasonOneArchive(
     throw new Error('SEASON_ONE_ARCHIVE_CONFIG_MISSING');
   }
 
-  const archiveRef = db.collection('staging_season_one_reset_archives_v1').doc(resetId);
-  const documentsRef = archiveRef.collection('documents');
   const manifestRef = archiveRef;
   const sourceManifest = sources.map(source => ({ path: source.path, sha256: digest(source.data) }));
   const archiveDigest = digest(sourceManifest);
