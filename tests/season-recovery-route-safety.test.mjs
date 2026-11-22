@@ -66,3 +66,18 @@ test('staging world verification validates all league participants and profiles,
   assert.match(source, /counts\.participantProfiles === EXPECTED_PARTICIPANTS/);
   assert.doesNotMatch(source, /counts\.bots >= EXPECTED_BOTS/);
 });
+
+
+test('staging Pyramid Cup diagnostics are authenticated, project-fenced and read-only', () => {
+  const source = read('src/app/api/admin/staging-cup-diagnostics/route.ts');
+  assert.match(source, /isCronAuthorized\(request\)/);
+  assert.match(source, /EXPECTED_PROJECT = 'forge-rivalstest'/);
+  assert.match(source, /export async function GET/);
+  assert.match(source, /readOnly: true/);
+  assert.match(source, /cup_pyramid_v1/);
+  assert.match(source, /cup_participant_snapshots_v1/);
+  assert.match(source, /cup_matches/);
+  assert.match(source, /matches_v2/);
+  assert.doesNotMatch(source, /\.set\(|\.create\(|\.update\(|\.delete\(|runTransaction\(/);
+  assert.doesNotMatch(source, /homeName|awayName|playerName|roster|tactics|credits/);
+});
