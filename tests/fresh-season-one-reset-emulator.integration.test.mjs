@@ -41,6 +41,14 @@ test('fresh Season 1 reset rebuilds league and Pyramid Cup while preserving Fire
 
   await auth.createUser({ uid, email: 'reset-test@example.invalid', password: 'emulator-only-password' });
   t.after(async () => {
+    const nestedSnapshots = await db.collection('cup_participant_snapshots_v1').doc(CUP_ID).collection('teams').get().catch(() => null);
+    if (nestedSnapshots) for (let offset = 0; offset < nestedSnapshots.docs.length; offset += 400) {
+      const batch = db.batch();
+      nestedSnapshots.docs.slice(offset, offset + 400).forEach(doc => batch.delete(doc.ref));
+      await batch.commit().catch(() => undefined);
+    }
+    const nestedArchive = await db.collection('league_season_archives_v1').doc('S1').collection('matches').get().catch(() => null);
+    if (nestedArchive) for (const doc of nestedArchive.docs) await doc.ref.delete().catch(() => undefined);
     for (const name of collections) await clearCollection(name).catch(() => undefined);
     await auth.deleteUser(uid).catch(() => undefined);
     const defaultApp = getApps().find(candidate => candidate.name === '[DEFAULT]');
