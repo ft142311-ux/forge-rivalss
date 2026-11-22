@@ -26,6 +26,9 @@ test('fresh Season 1 reset plan preserves every profile and rejects unsafe sourc
   assert.match(source, /PREPARED_NEXT_SEASON_EXISTS/);
   assert.match(source, /PARTICIPANT_PROFILE_MISSING/);
   assert.match(source, /OCCUPIED_SLOT_STANDINGS_MISMATCH/);
+  assert.match(source, /FREE_SLOT_STANDINGS_MISMATCH/);
+  assert.match(source, /LEAGUE_MATCH_ROUND_ROBIN_INVALID/);
+  assert.match(source, /match_v140_S1_LALPHA/);
   assert.match(source, /worldGeneration: 'CLEAN_S1_V1'/);
   assert.match(source, /participantProfiles: validProfiles/);
   assert.match(source, /allPlayerProfiles: true/);
