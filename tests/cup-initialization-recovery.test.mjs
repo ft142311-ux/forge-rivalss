@@ -116,3 +116,15 @@ test('legacy activateNextSeason entry point cannot bypass Pyramid Cup or schedul
   assert.match(entryPoint, /return runSeasonOrchestrator\(\)/);
   assert.doesNotMatch(entryPoint, /publishPreparedSeason\(|activatePublishedSeason\(/);
 });
+
+test('a pristine Season 1 is not registration-ready until its Pyramid Cup is verified', () => {
+  const calendar = readFileSync(new URL('../src/app/actions/season-calendar.ts', import.meta.url), 'utf8');
+  const registration = readFileSync(new URL('../functions/index.js', import.meta.url), 'utf8');
+  assert.match(calendar, /const cupRequired = pristineFirstWorld/);
+  assert.match(calendar, /generatePyramidCup\(1\)/);
+  assert.match(calendar, /verifyInitialPyramidCup\(db/);
+  assert.match(calendar, /pyramidCupReady: true/);
+  assert.match(calendar, /worldReady: false,[\s\S]*pyramidCupReady: false/);
+  assert.match(registration, /config\.pyramidCupRequired === true && Number\(config\.pyramidCupReadySeasonNumber\) === seasonNum && config\.pyramidCupReady !== true/);
+  assert.match(registration, /PYRAMID_CUP_NOT_READY/);
+});
