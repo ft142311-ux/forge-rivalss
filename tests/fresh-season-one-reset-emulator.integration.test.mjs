@@ -47,6 +47,16 @@ test('fresh Season 1 reset rebuilds league and Pyramid Cup while preserving Fire
       nestedSnapshots.docs.slice(offset, offset + 400).forEach(doc => batch.delete(doc.ref));
       await batch.commit().catch(() => undefined);
     }
+    const resetJournal = await db.collection('system_v1').doc('staging_fresh_season_one_reset_v1').get().catch(() => null);
+    const resetId = resetJournal?.data()?.resetId;
+    const durableArchiveDocs = resetId
+      ? await db.collection('staging_season_one_reset_archives_v1').doc(resetId).collection('documents').get().catch(() => null)
+      : null;
+    if (durableArchiveDocs) for (let offset = 0; offset < durableArchiveDocs.docs.length; offset += 400) {
+      const batch = db.batch();
+      durableArchiveDocs.docs.slice(offset, offset + 400).forEach(doc => batch.delete(doc.ref));
+      await batch.commit().catch(() => undefined);
+    }
     const nestedArchive = await db.collection('league_season_archives_v1').doc('S1').collection('matches').get().catch(() => null);
     if (nestedArchive) for (const doc of nestedArchive.docs) await doc.ref.delete().catch(() => undefined);
     for (const name of collections) await clearCollection(name).catch(() => undefined);
