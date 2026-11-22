@@ -49,7 +49,7 @@ export async function GET(request: NextRequest) {
       db.collection('cup_matches').where('cupId', '==', 'cup_s1_lALPHA').get(),
       db.collection('league_season_archives_v1').doc('S1').get(),
       db.collection('league_season_archives_v1').doc('S1').collection('matches').get(),
-      db.collection('league_season_rollovers_v1').doc('S1').get(),
+      db.collection('league_season_rollovers_v1').doc('S2').get(),
       db.collection('league_season_history_v1').doc('S1').get(),
       db.collection('match_player_effects_v1').where('matchId', '>=', matchPrefix).where('matchId', '<', `${matchPrefix}\uf8ff`).get(),
       db.collection('economy_transactions').where('referenceId', '>=', matchPrefix).where('referenceId', '<', `${matchPrefix}\uf8ff`).get(),
