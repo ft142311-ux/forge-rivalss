@@ -200,6 +200,16 @@ test('fresh Season 1 reset rebuilds league and Pyramid Cup while preserving Fire
     db.collection('match_consequence_receipts').doc('old-consequence').set({ matchId: 'match_v140_S1_LALPHA_OLD' }),
   ]);
 
+  // Force a controlled calendar-lock conflict after destructive cleanup and
+  // identity replacement. The journal must resume at the calendar phase.
+  const calendarLockRef = db.collection('system_v1').doc('season_calendar_build_v1');
+  await calendarLockRef.set({ ownerId: 'emulator-test-lock', token: 'locked', expiresAtMs: Date.now() + 10 * 60 * 1000 });
+  await assert.rejects(executeFreshSeasonOneReset(db, target), /FRESH_SEASON_ONE_CALENDAR_BUILD_FAILED/);
+  const failedJournal = (await db.collection('system_v1').doc('staging_fresh_season_one_reset_v1').get()).data();
+  assert.equal(failedJournal.status, 'FAILED');
+  assert.equal(failedJournal.stepIndex, 2);
+  await calendarLockRef.delete();
+
   const result = await executeFreshSeasonOneReset(db, target);
   assert.equal(result.success, true);
   assert.equal(result.verification.tables, 15);
