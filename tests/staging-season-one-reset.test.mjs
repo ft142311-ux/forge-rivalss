@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { buildFreshSeasonOneResetPlan } from '../src/app/actions/staging-season-one-reset-plan.ts';
-import { resetFreshSeasonOnePlayerState, resetFreshSeasonOneClubProfileState } from '../src/app/actions/fresh-season-one-player-reset.ts';
+import { resetFreshSeasonOnePlayerState, resetFreshSeasonOneClubProfileState, createFreshSeasonOneHumanClubProfile } from '../src/app/actions/fresh-season-one-player-reset.ts';
 
 const root = resolve(import.meta.dirname, '..');
 const read = path => readFileSync(resolve(root, path), 'utf8');
@@ -304,6 +304,57 @@ test('legacy full-world reset is hard-blocked outside local Firebase Emulator', 
   assert.match(source, /configuredProject === 'forge-rivalstest'/);
   assert.match(source, /EMULATOR_ONLY_RESET_BLOCKED/);
   assert.ok(source.indexOf('EMULATOR_ONLY_RESET_BLOCKED') < source.indexOf('const db = getAdminDb()'));
+});
+
+test('fresh Season 1 club provisioning retains account UID but creates a new starter club', () => {
+  const oldProfile = {
+    id: 'existing-manager-uid',
+    email: 'manager@example.invalid',
+    displayName: 'Manager',
+    clubName: 'Old Club',
+    numericId: 1042,
+    credits: 987654,
+    crystals: 900,
+    ownedPlayers: [{ id: 'old-player-1' }, { id: 'old-player-2' }],
+  };
+  const fresh = createFreshSeasonOneHumanClubProfile(
+    oldProfile,
+    { tier: 3, group: 2, rank: 6 },
+    1,
+    new Date('2026-11-22T15:00:00.000Z'),
+  );
+
+  assert.equal(fresh.id, oldProfile.id);
+  assert.equal(fresh.email, oldProfile.email);
+  assert.equal(fresh.displayName, oldProfile.displayName);
+  assert.equal(fresh.clubName, oldProfile.clubName);
+  assert.equal(fresh.numericId, oldProfile.numericId);
+  assert.equal(fresh.credits, 1_000_000);
+  assert.equal(fresh.crystals, 50);
+  assert.equal(fresh.experiencePoints, 0);
+  assert.equal(fresh.managerLevel, 1);
+  assert.equal(fresh.selectedLeagueId, 'ALPHA');
+  assert.equal(fresh.leagueLevel, 3);
+  assert.equal(fresh.groupId, 2);
+  assert.equal(fresh.rank, 6);
+  assert.equal(fresh.lastProcessedSeason, 1);
+  assert.equal(fresh.ownedPlayers.length, 10);
+  assert.equal(new Set(fresh.ownedPlayers.map(player => player.id)).size, 10);
+  assert.ok(fresh.ownedPlayers.every(player => !['old-player-1', 'old-player-2'].includes(player.id)));
+  assert.ok(fresh.ownedPlayers.every(player => player.overallRating >= 28 && player.overallRating <= 37));
+  assert.equal(fresh.lineup.carry, fresh.ownedPlayers.find(player => player.role === 'Carry').id);
+  assert.equal(fresh.lineup.sub_carry, fresh.ownedPlayers.filter(player => player.role === 'Carry')[1].id);
+  assert.equal(fresh.lastLoginDate, '2026-11-22T15:00:00.000Z');
+  assert.equal(Object.hasOwn(fresh, 'trophies'), false);
+});
+
+test('fresh Season 1 club provisioning rejects bot identities and invalid placements', () => {
+  assert.throws(() => createFreshSeasonOneHumanClubProfile(
+    { id: 'BOT_ALPHA_L1_G1_R1' }, { tier: 1, group: 1, rank: 1 },
+  ), /FRESH_CLUB_ACCOUNT_UID_INVALID/);
+  assert.throws(() => createFreshSeasonOneHumanClubProfile(
+    { id: 'uid-1' }, { tier: 4, group: 9, rank: 1 },
+  ), /FRESH_CLUB_PLACEMENT_INVALID/);
 });
 
 test('fresh Season 1 player reset clears only individual season counters', () => {
