@@ -394,3 +394,98 @@ test('prepared Season 2 receives its complete Pyramid Cup before publication in 
   assert.deepEqual(leagueTablesAfterCup, leagueTablesBeforeCup,
     'Pyramid Cup matches and rewards must not change any of the 15 league tables');
 });
+
+
+test('a pristine emulator builds Season 1 first, then creates its complete Pyramid Cup before the season is used', {
+  skip: !emulatorHost,
+}, async t => {
+  assert.match(emulatorHost, /^(127[.]0[.]0[.]1|localhost):[0-9]+$/);
+
+  const [{ getAdminDb }, { ensureSeasonCalendar }, { generatePyramidCup }, { getTableId, MAX_LEVELS, TEAMS_PER_GROUP }, { MATCH_COLLECTIONS }] = await Promise.all([
+    import('../src/lib/firebase-admin.ts'),
+    import('../src/app/actions/season-calendar.ts'),
+    import('../src/app/actions/cup-engine.ts'),
+    import('../src/app/lib/leagues-data.ts'),
+    import('../src/app/lib/match-storage.ts'),
+  ]);
+  const db = getAdminDb();
+  const configRef = db.collection('system_v1').doc('season_config');
+  const app = getApps().find(candidate => candidate.name === '[DEFAULT]');
+  t.after(async () => {
+    if (app) await deleteApp(app).catch(() => undefined);
+  });
+
+  // The isolated emulator must be genuinely empty before the first canonical build.
+  const [existingConfig, existingTables, existingSlots, existingMatches, existingPlayers] = await Promise.all([
+    configRef.get(),
+    db.collection('league_tables_v2').limit(1).get(),
+    db.collection('league_slots_v1').limit(1).get(),
+    db.collection('matches_v2').limit(1).get(),
+    db.collection('players_v14').limit(1).get(),
+  ]);
+  assert.equal(existingConfig.exists, false);
+  assert.equal(existingTables.empty, true);
+  assert.equal(existingSlots.empty, true);
+  assert.equal(existingMatches.empty, true);
+  assert.equal(existingPlayers.empty, true);
+
+  const world = await ensureSeasonCalendar(1);
+  assert.equal(world.success, true, JSON.stringify(world));
+  assert.equal(world.worldReady, true);
+  assert.equal(world.seasonNumber, 1);
+
+  const config = (await configRef.get()).data();
+  assert.equal(config.activeSeasonNumber, 1);
+  assert.equal(config.phase, 'REGULAR_SEASON');
+  assert.equal(config.worldReady, true);
+
+  const [tablesSnap, slotsSnap, leagueMatchesSnap] = await Promise.all([
+    db.collection('league_tables_v2').where('season', '==', 1).where('version', '==', 140).get(),
+    db.collection('league_slots_v1').where('season', '==', 1).where('leagueId', '==', 'ALPHA').get(),
+    db.collection('matches_v2').where('season', '==', 1).where('version', '==', 140).get(),
+  ]);
+  assert.equal(tablesSnap.size, 15);
+  assert.equal(slotsSnap.size, 120);
+  assert.equal(leagueMatchesSnap.size, 840);
+
+  const leagueTablesBeforeCup = tablesSnap.docs.map(doc => JSON.stringify(doc.data()));
+  const generated = await generatePyramidCup(1);
+  assert.equal(generated.success, true, JSON.stringify(generated));
+  assert.equal(generated.created, true);
+  assert.equal(generated.participants, 120);
+  assert.equal(generated.preliminaryMatches, 60);
+
+  const cupRef = db.collection('cup_pyramid_v1').doc('cup_s1_lALPHA');
+  const cupSnap = await cupRef.get();
+  assert.equal(cupSnap.exists, true);
+  const cup = cupSnap.data();
+  assert.equal(cup.status, 'active');
+  assert.equal(cup.season, 1);
+  assert.equal(cup.totalParticipants, 120);
+  assert.equal(cup.preliminaryMatches, 60);
+  assert.equal(cup.byeCount, 0);
+  assert.equal(cup.rounds.r1.length, 60);
+
+  const firstRound = cup.rounds.r1;
+  for (const [index, pairing] of firstRound.entries()) {
+    assert.equal(pairing.away.seed, index + 1);
+    assert.equal(pairing.home.seed, 120 - index);
+    assert.equal(pairing.status, 'scheduled');
+    const fixture = await db.collection(MATCH_COLLECTIONS.cup).doc(pairing.matchId).get();
+    assert.equal(fixture.exists, true);
+    assert.equal(fixture.data().bestOf, 1);
+    assert.equal(fixture.data().awayId, pairing.away.id);
+    assert.equal(fixture.data().homeId, pairing.home.id);
+  }
+
+  const participantSnapshots = await db.collection('cup_participant_snapshots_v1')
+    .doc(cupRef.id).collection('teams').get();
+  assert.equal(participantSnapshots.size, 120);
+
+  const leagueTablesAfterCup = await Promise.all(tablesSnap.docs.map(async tableDoc => {
+    const current = await tableDoc.ref.get();
+    return JSON.stringify(current.data());
+  }));
+  assert.deepEqual(leagueTablesAfterCup, leagueTablesBeforeCup,
+    'creating the Pyramid Cup must not alter the 15 canonical league tables');
+});
