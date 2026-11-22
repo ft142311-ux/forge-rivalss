@@ -400,6 +400,9 @@ export async function recoverStuckSeason1MatchAction(cronToken: string) {
   const db = getAdminDb();
   const configSnap = await db.collection('system_v1').doc('season_config').get();
   const config = configSnap.exists ? (configSnap.data() || {}) : {};
+  if (config.stagingSeasonOneResetInProgress === true) {
+    return { success: true, count: 0, skipped: true, reason: 'STAGING_SEASON_ONE_RESET_IN_PROGRESS', writesStarted: false };
+  }
   console.info('[TARGETED MATCH RECOVERY] season config read', { exists: configSnap.exists, activeSeasonNumber: config.activeSeasonNumber });
   if (Number(config.activeSeasonNumber || 1) !== 1) {
     console.warn('[TARGETED MATCH RECOVERY] rejected: active season mismatch', { activeSeasonNumber: config.activeSeasonNumber });
@@ -660,7 +663,8 @@ export async function resolveDailyMatches() {
       if (current.isFinished === true || ['finished', 'completed'].includes(String(current.status || '').toLowerCase())) return false;
       if (String(current.type || 'league').toLowerCase() !== 'league' ||
           Number(current.season) !== currentSeason || Number(current.version) !== 140) return false;
-      if (Number(freshConfig.activeSeasonNumber || 0) !== currentSeason || freshConfig.worldReady !== true ||
+      if (freshConfig.stagingSeasonOneResetInProgress === true ||
+          Number(freshConfig.activeSeasonNumber || 0) !== currentSeason || freshConfig.worldReady !== true ||
           (freshRolloverLock && !isSeasonRolloverLockStale(freshRolloverLock, Date.now()))) return false;
       try {
         const freshLifecycle = resolveSeasonLifecycleWindow({
@@ -734,7 +738,8 @@ export async function resolveDailyMatches() {
             Number(m.season) !== currentSeason || Number(m.version) !== 140) {
           throw new Error('MATCH_IDENTITY_CHANGED_DURING_SETTLEMENT');
         }
-        if (Number(settlementConfig.activeSeasonNumber || 0) !== currentSeason || settlementConfig.worldReady !== true ||
+        if (settlementConfig.stagingSeasonOneResetInProgress === true ||
+            Number(settlementConfig.activeSeasonNumber || 0) !== currentSeason || settlementConfig.worldReady !== true ||
             (settlementRolloverLock && !isSeasonRolloverLockStale(settlementRolloverLock, Date.now()))) {
           throw new Error('MATCH_ROLLOVER_IN_PROGRESS');
         }
