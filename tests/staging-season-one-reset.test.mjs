@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { buildFreshSeasonOneResetPlan } from '../src/app/actions/staging-season-one-reset-plan.ts';
+import { resetFreshSeasonOnePlayerState } from '../src/app/actions/fresh-season-one-player-reset.ts';
 
 const root = resolve(import.meta.dirname, '..');
 const read = path => readFileSync(resolve(root, path), 'utf8');
@@ -140,4 +141,77 @@ test('legacy full-world reset is hard-blocked outside local Firebase Emulator', 
   assert.match(source, /configuredProject === 'forge-rivalstest'/);
   assert.match(source, /EMULATOR_ONLY_RESET_BLOCKED/);
   assert.ok(source.indexOf('EMULATOR_ONLY_RESET_BLOCKED') < source.indexOf('const db = getAdminDb()'));
+});
+
+test('fresh Season 1 player reset clears only season counters and stale competition references', () => {
+  const player = {
+    id: 'manager-1',
+    name: 'Player One',
+    overallRating: 88,
+    proStats: { reflexes: 91 },
+    proTalents: { reflexes: 80 },
+    trainingProgress: { reflexes: 0.75 },
+    skillCaps: { reflexes: 99 },
+    fatigue: 37,
+    form: 82,
+    tilt: 12,
+    isInjured: true,
+    injuredUntil: '2026-12-01T00:00:00.000Z',
+    credits: 123456,
+    totalMatchesPlayed: 44,
+    matchesPlayedToday: 2,
+    lastMatchDateXP: '2026-11-22',
+    titles: { league: 1, cup: 2, friendly: 3 },
+    seasonStats: { matches: 12, wins: 8, kills: 77, warnings: 2 },
+    chemistryMatches: 12,
+    lineupMatches: 12,
+    lastMatchMinutes: 56,
+    lastMatchId: 'match_v140_S1_LALPHA_V1_G1_T14_R1_vs_R2',
+    lastMatchOfficial: true,
+    warningCount: 2,
+    suspensionUntil: '2026-11-25T00:00:00.000Z',
+    seasonAwards: { S1: { rank: 1 }, S0: { rank: 2 } },
+    trophies: [
+      { id: 'league-cup-season-1', type: 'league_champion', season: 1 },
+      { id: 'pyramid-cup-season-1', type: 'pyramid_cup_champion', season: 1 },
+      { id: 'personal-achievement', type: 'player_award', season: 1 },
+      { id: 'league-cup-season-2', type: 'league_champion', season: 2 },
+    ],
+    matchEconomy: {
+      match_v140_S1_LALPHA_V1_G1_T14_R1_vs_R2: { totalRevenue: 500 },
+      match_v140_S2_LALPHA_V1_G1_T1_R1_vs_R2: { totalRevenue: 700 },
+    },
+    lastMatchEconomy: { totalRevenue: 500 },
+    lastMatchConsequences: {
+      matchId: 'match_v140_S1_LALPHA_V1_G1_T14_R1_vs_R2',
+      matchType: 'league',
+    },
+  };
+
+  const reset = resetFreshSeasonOnePlayerState(player);
+  assert.deepEqual(reset.seasonStats, {
+    matches: 0, wins: 0, successfulActions: 0, warnings: 0,
+    disqualifications: 0, kills: 0, deaths: 0, assists: 0, postMatchRating: 0,
+  });
+  assert.equal(reset.chemistryMatches, 0);
+  assert.equal(reset.lineupMatches, 0);
+  assert.equal(reset.warningCount, 0);
+  assert.equal(reset.suspensionUntil, null);
+  assert.equal(reset.lastMatchId, null);
+  assert.deepEqual(reset.seasonAwards, { S0: { rank: 2 } });
+  assert.deepEqual(reset.trophies, [
+    { id: 'personal-achievement', type: 'player_award', season: 1 },
+    { id: 'league-cup-season-2', type: 'league_champion', season: 2 },
+  ]);
+  assert.deepEqual(Object.keys(reset.matchEconomy), [
+    'match_v140_S2_LALPHA_V1_G1_T1_R1_vs_R2',
+  ]);
+  assert.equal(reset.lastMatchEconomy, null);
+  assert.equal(reset.lastMatchConsequences, null);
+
+  for (const key of [
+    'id', 'name', 'overallRating', 'proStats', 'proTalents', 'trainingProgress',
+    'skillCaps', 'fatigue', 'form', 'tilt', 'isInjured', 'injuredUntil',
+    'credits', 'totalMatchesPlayed', 'matchesPlayedToday', 'lastMatchDateXP', 'titles',
+  ]) assert.deepEqual(reset[key], player[key], `preserves ${key}`);
 });
