@@ -30,7 +30,7 @@ test('fresh Season 1 reset rebuilds league and Pyramid Cup while preserving Fire
     'league_slot_history_v1', 'match_player_effects_v1', 'economy_transactions',
     'match_consequence_receipts',
   ];
-  const clearCollection = async (name: string) => {
+  const clearCollection = async (name) => {
     const snap = await db.collection(name).get();
     for (let offset = 0; offset < snap.docs.length; offset += 400) {
       const batch = db.batch();
@@ -70,14 +70,14 @@ test('fresh Season 1 reset rebuilds league and Pyramid Cup while preserving Fire
   });
   await db.collection('system_v1').doc('global_stats').set({ totalPlayers: 1200 });
 
-  const tableWrites: Array<{ ref: any; data: any }> = [];
-  const slotWrites: Array<{ ref: any; data: any }> = [];
-  const profileWrites: Array<{ ref: any; data: any }> = [];
-  let oldHumanProfile: any = null;
-  const participants: Array<{ id: string; name: string; level: number; group: number; rank: number; isBot: boolean }> = [];
+  const tableWrites = [];
+  const slotWrites = [];
+  const profileWrites = [];
+  let oldHumanProfile = null;
+  const participants = [];
   for (let level = 1; level <= 4; level++) {
     for (let group = 1; group <= 2 ** (level - 1); group++) {
-      const stats: Record<string, any> = {};
+      const stats = {};
       for (let rank = 1; rank <= 8; rank++) {
         const isHuman = level === 2 && group === 1 && rank === 3;
         const id = isHuman ? uid : `BOT_ALPHA_L${level}_G${group}_R${rank}`;
@@ -107,7 +107,7 @@ test('fresh Season 1 reset rebuilds league and Pyramid Cup while preserving Fire
         if (isHuman) {
           profile.clubName = 'Old Club Name';
           profile.displayName = 'Old Club Name';
-          profile.ownedPlayers = profile.ownedPlayers.map((player: any, index: number) => ({ ...player, id: `old_player_${index}` }));
+          profile.ownedPlayers = profile.ownedPlayers.map((player, index) => ({ ...player, id: `old_player_${index}` }));
         }
         if (isHuman) oldHumanProfile = profile;
         else profileWrites.push({ ref: db.collection('players_v14').doc(id), data: profile });
@@ -231,7 +231,7 @@ test('fresh Season 1 reset rebuilds league and Pyramid Cup while preserving Fire
   assert.equal(humanProfile.credits, 1_000_000);
   assert.equal(humanProfile.crystals, 50);
   assert.equal(humanProfile.ownedPlayers.length, 10);
-  assert.ok(humanProfile.ownedPlayers.every((player: any) => !player.id.startsWith('old_player_')));
+  assert.ok(humanProfile.ownedPlayers.every((player) => !player.id.startsWith('old_player_')));
 
   const slot = (await db.collection('league_slots_v1').doc('S1_LALPHA_D2_G1_R3').get()).data();
   assert.equal(slot.status, 'OCCUPIED');
