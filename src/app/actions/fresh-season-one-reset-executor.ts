@@ -104,7 +104,8 @@ async function saveStep(db: any, token: string, stepIndex: number, counts?: Reco
   await db.runTransaction(async (tx: any) => {
     const snap = await tx.get(ref);
     const current = snap.exists ? snap.data() as ResetJournal : null;
-    if (!current || current.lease?.token !== token || current.stepIndex !== stepIndex) {
+    if (!current || current.status !== 'RUNNING' || current.lease?.token !== token ||
+        Number(current.lease.expiresAtMs) <= Date.now() || current.stepIndex !== stepIndex) {
       throw new Error('FRESH_SEASON_ONE_RESET_JOURNAL_CONFLICT');
     }
     tx.set(ref, {
@@ -193,7 +194,7 @@ async function removeOldSeasonOneData(db: any, assertOwnership?: () => Promise<v
   return { deletedDocuments: deleted, oldLeagueFixtures: disposableMatches.filter((doc: any) => isLeagueFixture(doc.data() || {})).length };
 }
 
-async function rebuildLeagueIdentity(db: any, now: Date) {
+async function rebuildLeagueIdentity(db: any, now: Date, assertOwnership?: () => Promise<void>) {
   const [tablesSnap, slotsSnap] = await Promise.all([
     db.collection('league_tables_v2').where('season', '==', 1).where('version', '==', 140).get(),
     db.collection('league_slots_v1').where('season', '==', 1).where('leagueId', '==', 'ALPHA').get(),
@@ -228,6 +229,7 @@ async function rebuildLeagueIdentity(db: any, now: Date) {
     ...built.profiles.map(item => ({ ref: db.collection('players_v14').doc(item.id), data: item.data })),
   ];
   for (let offset = 0; offset < writes.length; offset += 400) {
+    await assertOwnership?.();
     const batch = db.batch();
     for (const write of writes.slice(offset, offset + 400)) batch.set(write.ref, write.data);
     await batch.commit();
@@ -235,7 +237,12 @@ async function rebuildLeagueIdentity(db: any, now: Date) {
   return built.counts;
 }
 
-async function configureAndBuildCalendar(db: any, target: ResetJournal['target']) {
+async function configureAndBuildCalendar(
+  db: any,
+  target: ResetJournal['target'],
+  assertOwnership?: () => Promise<void>,
+) {
+  await assertOwnership?.();
   await db.collection('system_v1').doc('season_config').set({
     activeSeasonNumber: 1,
     phase: 'REGULAR_SEASON',
@@ -259,7 +266,9 @@ async function configureAndBuildCalendar(db: any, target: ResetJournal['target']
     updatedAt: FieldValue.serverTimestamp(),
   }, { merge: true });
 
+  await assertOwnership?.();
   const result: any = await ensureSeasonCalendar(1, { allowDuringStagingReset: true });
+  await assertOwnership?.();
   if (result?.success !== true || result?.worldReady !== true) {
     throw new Error(`FRESH_SEASON_ONE_CALENDAR_BUILD_FAILED:${String(result?.reason || result?.action || 'UNKNOWN')}`);
   }
@@ -351,13 +360,13 @@ export async function executeFreshSeasonOneReset(db: any, target: ResetJournal['
     }
     if (step <= 1) {
       await assertLease(db, token);
-      const counts = await rebuildLeagueIdentity(db, resetAt);
+      const counts = await rebuildLeagueIdentity(db, resetAt, () => assertLease(db, token));
       await saveStep(db, token, 1, counts);
       step = 2;
     }
     if (step <= 2) {
       await assertLease(db, token);
-      const calendar = await configureAndBuildCalendar(db, target);
+      const calendar = await configureAndBuildCalendar(db, target, () => assertLease(db, token));
       await saveStep(db, token, 2, {
         calendarMatches: Number(calendar.totalExpectedMatches || 840),
         calendarWorldReady: calendar.worldReady === true ? 1 : 0,
@@ -373,7 +382,8 @@ export async function executeFreshSeasonOneReset(db: any, target: ResetJournal['
     await db.runTransaction(async (tx: any) => {
       const snap = await tx.get(journalRef);
       const current = snap.exists ? snap.data() as ResetJournal : null;
-      if (!current || current.lease?.token !== token || current.stepIndex !== 4) {
+      if (!current || current.status !== 'RUNNING' || current.lease?.token !== token ||
+          Number(current.lease.expiresAtMs) <= Date.now() || current.stepIndex !== 4) {
         throw new Error('FRESH_SEASON_ONE_RESET_FINALIZE_CONFLICT');
       }
       tx.set(journalRef, {
