@@ -257,6 +257,16 @@ test('fresh Season 1 club reset preserves latest match economy when it belongs t
   assert.deepEqual(reset.matchEconomy, profile.matchEconomy);
 });
 
+test('calendar bypasses the old fixture gate only for an explicitly marked Beta Season 1 rebuild', () => {
+  const source = read('src/app/actions/season-calendar.ts');
+  assert.match(source, /config\.stagingFreshSeasonOneReset === true/);
+  assert.match(source, /sourceSeason === 1/);
+  assert.match(source, /targetSeason === 1/);
+  assert.match(source, /config\.worldReady !== true/);
+  assert.match(source, /lockedPreflight = pristineFirstWorld \|\| directRecoveryBuild \|\| stagingFreshSeasonOneReset/);
+  assert.match(source, /stagingFreshSeasonOneReset: false/);
+});
+
 test('legacy full-world reset is hard-blocked outside local Firebase Emulator', () => {
   const source = read('src/app/actions/clean-season1-world.ts');
   assert.match(source, /'players_v14'/);
