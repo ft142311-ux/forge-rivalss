@@ -80,10 +80,8 @@ export async function GET(request: NextRequest) {
       profile.exists && profile.data()?.id === [...participantIds][index]
     ).map(profile => String(profile.id)));
 
-    const [cupSnapshotDocs, legacyCupSubcollections] = await Promise.all([
-      db.collection('cup_participant_snapshots_v1').doc('cup_s1_lALPHA').collection('teams').get(),
-      db.collection('matches_v2').where('cupId', '==', 'cup_s1_lALPHA').get(),
-    ]);
+    const cupSnapshotDocs = await db.collection('cup_participant_snapshots_v1')
+      .doc('cup_s1_lALPHA').collection('teams').get();
 
     const plan = buildFreshSeasonOneResetPlan({
       config: configSnap.exists ? configSnap.data() || {} : null,
