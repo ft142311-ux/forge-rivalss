@@ -38,7 +38,6 @@ export function buildFreshSeasonOneResetPlan(input: FreshSeasonOneResetInput) {
 
   const groups = new Set<string>();
   const participants = new Map<string, { level: number; group: number; rank: number; isBot: boolean }>();
-  const groupMatchCounts = new Map<string, number>();
   for (const table of input.tables) {
     const data = table.data || {};
     const level = Number(data.level);
