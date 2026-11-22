@@ -137,29 +137,99 @@ export function buildSeasonOneArchiveEntries(sources: SeasonOneArchiveSource[]) 
   return { ready: true as const, reasons: [] as string[], entries };
 }
 
-/** Canonical source counts required before a backup may be called complete. */
+/** Canonical identity and cross-collection checks required before a backup is complete. */
 export function validateSeasonOneArchiveCompleteness(entries: SeasonOneArchiveEntry[]) {
-  const counts = new Map<string, number>();
+  const reasons: string[] = [];
+  const byCollection = new Map<string, SeasonOneArchiveEntry[]>();
   for (const entry of entries) {
-    counts.set(entry.sourceCollection, (counts.get(entry.sourceCollection) || 0) + 1);
+    const bucket = byCollection.get(entry.sourceCollection) || [];
+    bucket.push(entry);
+    byCollection.set(entry.sourceCollection, bucket);
   }
-  const expected: Record<string, number> = {
-    league_tables_v2: 15,
-    league_slots_v1: 120,
-    matches_v2: 840,
-    players_v14: 120,
-    cup_pyramid_v1: 1,
-    cup_matches: 56,
+  const get = (collection: string) => byCollection.get(collection) || [];
+  const exactIds = (actual: Set<string>, expected: Set<string>, reason: string) => {
+    if (actual.size !== expected.size || [...expected].some(id => !actual.has(id))) reasons.push(reason);
   };
-  const reasons = Object.entries(expected)
-    .filter(([collection, count]) => counts.get(collection) !== count)
-    .map(([collection]) => `ARCHIVE_CORE_SOURCE_COUNT_INVALID:${collection}`);
 
-  const cupSnapshots = entries.filter(entry =>
-    entry.sourcePath.startsWith('cup_participant_snapshots_v1/cup_s1_lALPHA/teams/'));
-  if (cupSnapshots.length !== 120) reasons.push('ARCHIVE_CUP_SNAPSHOT_COUNT_INVALID');
+  const expectedTables = new Set<string>();
+  const expectedSlots = new Set<string>();
+  const expectedMatchKeys = new Set<string>();
+  for (let level = 1; level <= 4; level++) {
+    const groups = 2 ** (level - 1);
+    for (let group = 1; group <= groups; group++) {
+      expectedTables.add(`table_v140_S1_LALPHA_V${level}_G${group}`);
+      for (let rank = 1; rank <= 8; rank++) {
+        expectedSlots.add(`S1_LALPHA_D${level}_G${group}_R${rank}`);
+      }
+      for (let tour = 1; tour <= 14; tour++) {
+        expectedMatchKeys.add(`${level}:${group}:${tour}`);
+      }
+    }
+  }
+
+  const tableIds = new Set(get('league_tables_v2').map(entry => entry.sourceId));
+  exactIds(tableIds, expectedTables, 'ARCHIVE_TABLE_ID_SET_INVALID');
+  const slotIds = new Set(get('league_slots_v1').map(entry => entry.sourceId));
+  exactIds(slotIds, expectedSlots, 'ARCHIVE_SLOT_ID_SET_INVALID');
+
+  const playerEntries = get('players_v14');
+  const playerIds = new Set(playerEntries.map(entry => entry.sourceId));
+  if (playerEntries.length !== 120 || playerIds.size !== 120) {
+    reasons.push('ARCHIVE_PROFILE_ID_SET_INVALID');
+  }
+
+  const snapshotEntries = get('cup_participant_snapshots_v1');
+  const snapshotTeamIds = new Set(snapshotEntries.map(entry => String(entry.data.teamId || '')));
+  if (snapshotEntries.length !== 120 || snapshotTeamIds.size !== 120) {
+    reasons.push('ARCHIVE_CUP_SNAPSHOT_ID_SET_INVALID');
+  }
+  exactIds(snapshotTeamIds, playerIds, 'ARCHIVE_PROFILE_SNAPSHOT_SET_MISMATCH');
+
+  const matchEntries = get('matches_v2');
+  const matchesByGroupTour = new Map<string, Set<number>>();
+  for (const entry of matchEntries) {
+    const match = /^match_v140_S1_LALPHA_V([1-4])_G([1-8])_T(1[0-4]|[1-9])_R([1-8])_vs_R([1-8])$/.exec(entry.sourceId);
+    if (!match) {
+      reasons.push('ARCHIVE_MATCH_ID_INVALID');
+      continue;
+    }
+    const [, levelRaw, groupRaw, tourRaw, homeRaw, awayRaw] = match;
+    const level = Number(levelRaw);
+    const group = Number(groupRaw);
+    const tour = Number(tourRaw);
+    const home = Number(homeRaw);
+    const away = Number(awayRaw);
+    if (group > 2 ** (level - 1) || home === away) {
+      reasons.push('ARCHIVE_MATCH_ID_INVALID');
+      continue;
+    }
+    const key = `${level}:${group}:${tour}`;
+    const ranks = matchesByGroupTour.get(key) || new Set<number>();
+    if (ranks.has(home) || ranks.has(away)) reasons.push('ARCHIVE_MATCH_ROUND_PAIRING_INVALID');
+    ranks.add(home);
+    ranks.add(away);
+    matchesByGroupTour.set(key, ranks);
+  }
+  if (matchEntries.length !== 840 || matchesByGroupTour.size !== expectedMatchKeys.size ||
+      [...expectedMatchKeys].some(key => {
+        const ranks = matchesByGroupTour.get(key);
+        return !ranks || ranks.size !== 8;
+      })) {
+    reasons.push('ARCHIVE_MATCH_FIXTURE_COVERAGE_INVALID');
+  }
+
+  const expectedCupMatches = new Set(Array.from({ length: 56 }, (_, index) =>
+    `cup_S1_R1_M${String(index + 1).padStart(2, '0')}`));
+  const cupMatchIds = new Set(get('cup_matches').map(entry => entry.sourceId));
+  exactIds(cupMatchIds, expectedCupMatches, 'ARCHIVE_CUP_FIXTURE_ID_SET_INVALID');
+  if (get('cup_matches').length !== 56) reasons.push('ARCHIVE_CUP_FIXTURE_ID_SET_INVALID');
+  if (get('cup_pyramid_v1').length !== 1 ||
+      get('cup_pyramid_v1')[0]?.sourceId !== 'cup_s1_lALPHA') {
+    reasons.push('ARCHIVE_CUP_DOCUMENT_INVALID');
+  }
+
   if (new Set(entries.map(entry => entry.sourcePath)).size !== entries.length) {
     reasons.push('ARCHIVE_SOURCE_PATH_DUPLICATED');
   }
-  return { valid: reasons.length === 0, reasons };
+  return { valid: reasons.length === 0, reasons: [...new Set(reasons)] };
 }
