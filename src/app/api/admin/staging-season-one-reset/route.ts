@@ -73,9 +73,16 @@ export async function GET(request: NextRequest) {
         /(cup|tournament|friendly|scrim|association)/.test(type));
     };
     const leagueMatchDocs = matchesSnap.docs.filter(doc => isLeagueFixture(doc.data() || {}));
+    // Some older Cup matches were stored in matches_v2 before cup_matches became
+    // the dedicated collection. Count them separately so reset can delete only
+    // the exact Season 1 Pyramid Cup records without touching other competitions.
+    const legacyCupMatchDocs = matchesSnap.docs.filter(doc => {
+      const data = doc.data() || {};
+      return data.cupId === 'cup_s1_lALPHA' || doc.id.startsWith('cup_S1_');
+    });
     const unclassifiedMatches = matchesSnap.docs.filter(doc => {
       const data = doc.data() || {};
-      return !isLeagueFixture(data) && !isKnownIndependentFixture(data);
+      return !isLeagueFixture(data) && !isKnownIndependentFixture(data) && !doc.id.startsWith('cup_S1_');
     }).length;
 
     const participantIds = new Set<string>();
@@ -118,6 +125,7 @@ export async function GET(request: NextRequest) {
       tables: tablesSnap.docs.map(doc => ({ id: doc.id, data: doc.data() || {} })),
       slots: slotsSnap.docs.map(doc => ({ id: doc.id, data: doc.data() || {} })),
       matches: leagueMatchDocs.map(doc => ({ id: doc.id, data: doc.data() || {} })),
+      legacyCupMatches: legacyCupMatchDocs.length,
       profileIds,
       cup: cupSnap.exists ? cupSnap.data() || {} : null,
       cupFixtures: cupMatchesSnap.docs.map(doc => ({ id: doc.id, data: doc.data() || {} })),
