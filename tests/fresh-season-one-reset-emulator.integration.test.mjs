@@ -214,6 +214,26 @@ test('fresh Season 1 reset rebuilds league and Pyramid Cup while preserving Fire
   assert.equal((await db.collection('staging_season_one_reset_archives_v1').doc(failedJournal.resetId).get()).exists, false);
   await db.collection('players_v14').doc(uid).set(oldHumanProfile);
 
+  // Force a mid-archive interruption after the first 350-document batch,
+  // then resume the same reset archive deterministically before deletion.
+  const { createOrVerifyDurableSeasonOneArchive } = await import('../src/app/actions/staging-season-one-reset-durable-archive.ts');
+  let ownershipChecks = 0;
+  await assert.rejects(
+    createOrVerifyDurableSeasonOneArchive(db, failedJournal.resetId, failedJournal.sourceConfig, async () => {
+      ownershipChecks++;
+      if (ownershipChecks === 3) throw new Error('SIMULATED_ARCHIVE_INTERRUPTION');
+    }),
+    /SIMULATED_ARCHIVE_INTERRUPTION/,
+  );
+  const interruptedArchiveRef = db.collection('staging_season_one_reset_archives_v1').doc(failedJournal.resetId);
+  const interruptedManifest = (await interruptedArchiveRef.get()).data();
+  assert.equal(interruptedManifest.status, 'WRITING');
+  assert.equal(interruptedManifest.persistedCount, 350);
+  assert.equal((await interruptedArchiveRef.collection('documents').get()).size, 350);
+  const resumedArchive = await createOrVerifyDurableSeasonOneArchive(db, failedJournal.resetId, failedJournal.sourceConfig);
+  assert.equal(resumedArchive.archiveStatus, 'COMPLETE');
+  assert.ok(resumedArchive.archiveDocuments > 350);
+
   const result = await executeFreshSeasonOneReset(db, target);
   assert.equal(result.success, true);
   assert.equal(result.verification.tables, 15);
