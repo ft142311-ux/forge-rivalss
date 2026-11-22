@@ -72,28 +72,25 @@ export function buildFreshSeasonOneResetPlan(input: FreshSeasonOneResetInput) {
   if (input.history > 0) reasons.push('EXISTING_SEASON_ONE_HISTORY');
   if (input.archiveMatches > 0) reasons.push('ORPHANED_SEASON_ONE_ARCHIVE_MATCHES');
 
-  // Validate the old Cup thoroughly when present; an absent Cup is a valid
-  // reset target because the fresh bracket is generated after the league.
-  if (input.cup) {
-    // A fresh Season 1 is not ready until its canonical 120-team Pyramid Cup
-    // exists with all 56 opening fixtures and all 120 frozen roster snapshots.
-    const cup = input.cup;
-    const cupParticipants = Array.isArray(cup?.participants) ? cup!.participants : [];
-    const cupRoundOne = Array.isArray(cup?.rounds?.r1) ? cup!.rounds.r1 : [];
-    const participantIds = new Set(cupParticipants.map((team: any) => String(team?.id || '')));
-    const cupSeeds = new Set(cupParticipants.map((team: any) => Number(team?.seed)));
-    const leagueParticipantIds = new Set<string>();
-    // Populated after canonical league standings have been inspected below.
-    const configuredSeasonStart = toValidDate(config.seasonStart);
-    const cupSeasonStart = toValidDate(cup?.seasonStart);
+  // The existing Cup is disposable, but when present its structure is validated
+  // before any destructive operation. An absent Cup is a valid fresh-reset target.
+  const cup = input.cup;
+  const cupParticipants = Array.isArray(cup?.participants) ? cup!.participants : [];
+  const cupRoundOne = Array.isArray(cup?.rounds?.r1) ? cup!.rounds.r1 : [];
+  const participantIds = new Set(cupParticipants.map((team: any) => String(team?.id || '')));
+  const cupSeeds = new Set(cupParticipants.map((team: any) => Number(team?.seed)));
+  const leagueParticipantIds = new Set<string>();
+  const configuredSeasonStart = toValidDate(config.seasonStart);
+  const cupSeasonStart = toValidDate(cup?.seasonStart);
+  const expectedOpeningTime = configuredSeasonStart
+    ? expectedCupOpeningTime(configuredSeasonStart)
+    : null;
+  if (cup) {
     if (!configuredSeasonStart || !cupSeasonStart ||
         configuredSeasonStart.getTime() !== cupSeasonStart.getTime()) {
       reasons.push('PYRAMID_CUP_SEASON_START_MISMATCH');
     }
-    const expectedOpeningTime = configuredSeasonStart
-      ? expectedCupOpeningTime(configuredSeasonStart)
-      : null;
-    if (cup && (Number(cup.season) !== 1 || cup.status !== 'active' ||
+    if (Number(cup.season) !== 1 || cup.status !== 'active' ||
         cup.name !== 'Кубок Пирамиды' || Number(cup.currentRound) !== 1 ||
         Number(cup.totalRounds) !== 7 || Number(cup.formatVersion) !== 4 ||
         cup.format !== 'D1_REST_OPENING_ROUND' || Number(cup.totalParticipants) !== EXPECTED_PARTICIPANTS ||
@@ -101,7 +98,7 @@ export function buildFreshSeasonOneResetPlan(input: FreshSeasonOneResetInput) {
         Number(cup.byeCount) !== 0 || Number(cup.openingRoundRestCount) !== 8 ||
         cupParticipants.length !== EXPECTED_PARTICIPANTS || participantIds.size !== EXPECTED_PARTICIPANTS ||
         cupSeeds.size !== EXPECTED_PARTICIPANTS || [...cupSeeds].some(seed => !Number.isInteger(seed) || seed < 1 || seed > 120) ||
-        cupRoundOne.length !== 56)) {
+        cupRoundOne.length !== 56) {
       reasons.push('PYRAMID_CUP_BRACKET_METADATA_INVALID');
     }
     if (input.cupSnapshots.length !== EXPECTED_PARTICIPANTS ||
@@ -112,8 +109,6 @@ export function buildFreshSeasonOneResetPlan(input: FreshSeasonOneResetInput) {
         new Set(input.cupFixtures.map(fixture => fixture.id)).size !== 56) {
       reasons.push('PYRAMID_CUP_OPENING_FIXTURES_INCOMPLETE');
     }
-  
-  
   }
 
   const groups = new Set<string>();
