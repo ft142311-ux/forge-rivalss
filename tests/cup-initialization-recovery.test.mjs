@@ -72,7 +72,7 @@ test('Pyramid Cup can be generated from a fully prepared future season before ac
   assert.match(generation, /const seasonStart = context\.seasonStart/);
 });
 
-test('pre-publication Pyramid Cup preparation verifies all 120 teams, 56 fixtures and 8 byes', () => {
+test('pre-publication Pyramid Cup preparation verifies all 120 teams and 60 first-round fixtures', () => {
   const start = source.indexOf('export async function preparePyramidCupForSeason');
   const end = source.indexOf('async function loadCup', start);
   assert.ok(start >= 0 && end > start);
