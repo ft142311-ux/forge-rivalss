@@ -202,3 +202,113 @@ export async function createOrVerifyDurableSeasonOneArchive(
   }
   return { archiveDocuments: sources.length, archiveSha256: archiveDigest, archiveStatus: 'COMPLETE' };
 }
+
+
+async function deleteArchiveQuery(db: any, query: any) {
+  const snap = await query.get();
+  for (let offset = 0; offset < snap.docs.length; offset += 350) {
+    const batch = db.batch();
+    snap.docs.slice(offset, offset + 350).forEach((doc: any) => batch.delete(doc.ref));
+    await batch.commit();
+  }
+  return snap.docs.length;
+}
+
+/**
+ * Restores the exact allowlisted source documents from a verified archive.
+ * This is an explicit rollback primitive, not part of the normal reset path.
+ */
+export async function restoreSeasonOneFromDurableArchive(
+  db: any,
+  resetId: string,
+  confirmation: string,
+  assertOwnership?: () => Promise<void>,
+) {
+  if (confirmation !== 'RESTORE_BETA_SEASON_ONE_ARCHIVE') {
+    throw new Error('SEASON_ONE_ARCHIVE_RESTORE_CONFIRMATION_REQUIRED');
+  }
+  if (!resetId) throw new Error('SEASON_ONE_ARCHIVE_RESET_ID_REQUIRED');
+  const archiveRef = db.collection('staging_season_one_reset_archives_v1').doc(resetId);
+  const manifestSnap = await archiveRef.get();
+  const manifest = manifestSnap.exists ? manifestSnap.data() || {} : {};
+  if (manifest.status !== 'COMPLETE') throw new Error('SEASON_ONE_ARCHIVE_NOT_COMPLETE');
+  const docsSnap = await archiveRef.collection('documents').get();
+  if (docsSnap.size !== Number(manifest.sourceCount) ||
+      docsSnap.size !== Number(manifest.persistedCount)) {
+    throw new Error('SEASON_ONE_ARCHIVE_RESTORE_DOCUMENT_COUNT_INVALID');
+  }
+
+  const restored = docsSnap.docs.map((doc: any) => {
+    const item = doc.data() || {};
+    if (!item.sourcePath || typeof item.sourcePath !== 'string' ||
+        !item.data || typeof item.data !== 'object' ||
+        digest(item.data) !== item.sourceSha256) {
+      throw new Error('SEASON_ONE_ARCHIVE_RESTORE_CHECKSUM_INVALID');
+    }
+    return { path: item.sourcePath, data: item.data, sha256: item.sourceSha256 };
+  }).sort((left: any, right: any) => left.path.localeCompare(right.path));
+  if (new Set(restored.map((item: any) => item.path)).size !== restored.length ||
+      digest(restored.map((item: any) => ({ path: item.path, sha256: item.sha256 }))) !== manifest.archiveSha256) {
+    throw new Error('SEASON_ONE_ARCHIVE_RESTORE_MANIFEST_INVALID');
+  }
+  const configIndex = restored.findIndex((item: any) => item.path === 'system_v1/season_config');
+  if (configIndex < 0) throw new Error('SEASON_ONE_ARCHIVE_RESTORE_CONFIG_MISSING');
+
+  await assertOwnership?.();
+  const currentMatches = await db.collection('matches_v2').where('season', '==', 1).get();
+  const disposableMatches = currentMatches.docs.filter((doc: any) => {
+    const data = doc.data() || {};
+    return isLeagueFixture(data) || data.cupId === 'cup_s1_lALPHA' || doc.id.startsWith('cup_S1_');
+  });
+  for (let offset = 0; offset < disposableMatches.length; offset += 350) {
+    await assertOwnership?.();
+    const batch = db.batch();
+    disposableMatches.slice(offset, offset + 350).forEach((doc: any) => batch.delete(doc.ref));
+    await batch.commit();
+  }
+  const cleanupQueries = [
+    db.collection('cup_matches').where('cupId', '==', 'cup_s1_lALPHA'),
+    db.collection('cup_participant_snapshots_v1').doc('cup_s1_lALPHA').collection('teams'),
+    db.collection('league_season_archives_v1').doc('S1').collection('matches'),
+    db.collection('league_slot_history_v1').where('season', '==', 1).where('leagueId', '==', 'ALPHA'),
+    db.collection('match_player_effects_v1').where('matchId', '>=', 'match_v140_S1_LALPHA_').where('matchId', '<', 'match_v140_S1_LALPHA_\\uf8ff'),
+    db.collection('match_player_effects_v1').where('matchId', '>=', 'cup_S1_').where('matchId', '<', 'cup_S1_\\uf8ff'),
+    db.collection('economy_transactions').where('referenceId', '>=', 'match_v140_S1_LALPHA_').where('referenceId', '<', 'match_v140_S1_LALPHA_\\uf8ff'),
+    db.collection('economy_transactions').where('referenceId', '>=', 'cup_S1_').where('referenceId', '<', 'cup_S1_\\uf8ff'),
+    db.collection('match_consequence_receipts').where('matchId', '>=', 'match_v140_S1_LALPHA_').where('matchId', '<', 'match_v140_S1_LALPHA_\\uf8ff'),
+    db.collection('match_consequence_receipts').where('matchId', '>=', 'cup_S1_').where('matchId', '<', 'cup_S1_\\uf8ff'),
+  ];
+  for (const query of cleanupQueries) {
+    await assertOwnership?.();
+    await deleteArchiveQuery(db, query);
+  }
+  for (const [collection, document] of [
+    ['cup_pyramid_v1', 'cup_s1_lALPHA'],
+    ['league_season_archives_v1', 'S1'],
+    ['league_season_rollovers_v1', 'S2'],
+    ['league_season_history_v1', 'S1'],
+  ]) {
+    await assertOwnership?.();
+    await db.collection(collection).doc(document).delete().catch((error: any) => {
+      if (error?.code !== 5) throw error;
+    });
+  }
+
+  const nonConfig = restored.filter((item: any) => item.path !== 'system_v1/season_config');
+  for (let offset = 0; offset < nonConfig.length; offset += 350) {
+    await assertOwnership?.();
+    const batch = db.batch();
+    for (const item of nonConfig.slice(offset, offset + 350)) batch.set(db.doc(item.path), item.data);
+    await batch.commit();
+  }
+  await assertOwnership?.();
+  await db.doc('system_v1/season_config').set(restored[configIndex].data);
+
+  for (const item of restored) {
+    const snap = await db.doc(item.path).get();
+    if (!snap.exists || digest(snap.data()) !== item.sha256) {
+      throw new Error('SEASON_ONE_ARCHIVE_RESTORE_READBACK_MISMATCH');
+    }
+  }
+  return { success: true, restoredDocuments: restored.length, archiveSha256: manifest.archiveSha256 };
+}
