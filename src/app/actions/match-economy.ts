@@ -91,7 +91,13 @@ export async function recordMatchEconomy(
   const txRef = db.collection('economy_transactions').doc(`match_${matchId}_${uid}`);
 
   await db.runTransaction(async (t) => {
-    const [playerSnap, txSnap] = await Promise.all([t.get(playerRef), t.get(txRef)]);
+    const configRef = db.collection('system_v1').doc('season_config');
+    const [playerSnap, txSnap, configSnap] = await Promise.all([
+      t.get(playerRef), t.get(txRef), t.get(configRef),
+    ]);
+    if (configSnap.exists && configSnap.data()?.stagingSeasonOneResetInProgress === true) {
+      throw new Error('STAGING_SEASON_ONE_RESET_IN_PROGRESS');
+    }
     if (!playerSnap.exists) throw new Error('PLAYER_NOT_FOUND');
     if (txSnap.exists) {
       const receipt = txSnap.data() || {};
