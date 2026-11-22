@@ -652,3 +652,14 @@ test('fresh Season 1 destructive cleanup renews lease before every delete batch 
   assert.match(cleanup, /deleteQuery\([\s\S]*?assertOwnership\)/);
   assert.match(cleanup, /deleteDocs\([\s\S]*?assertOwnership\)/);
 });
+
+test('fresh Season 1 rebuild batches, calendar entry and finalization require the live reset lease', () => {
+  const executor = read('src/app/actions/fresh-season-one-reset-executor.ts');
+  assert.match(executor, /async function rebuildLeagueIdentity\(db: any, now: Date, assertOwnership\?/);
+  const rebuild = executor.slice(executor.indexOf('async function rebuildLeagueIdentity'), executor.indexOf('async function configureAndBuildCalendar'));
+  assert.match(rebuild, /for \(let offset = 0; offset < writes.length; offset \+= 400\) \{\s*await assertOwnership\?\.\(\);\s*const batch = db\.batch\(\);/);
+  assert.match(executor, /rebuildLeagueIdentity\(db, resetAt, \(\) => assertLease\(db, token\)\)/);
+  assert.match(executor, /configureAndBuildCalendar\(db, target, \(\) => assertLease\(db, token\)\)/);
+  assert.match(executor, /Number\(current\.lease\.expiresAtMs\) <= Date\.now\(\) \|\| current\.stepIndex !== stepIndex/);
+  assert.match(executor, /Number\(current\.lease\.expiresAtMs\) <= Date\.now\(\) \|\| current\.stepIndex !== 4/);
+});
