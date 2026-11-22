@@ -125,6 +125,9 @@ test('fresh Beta Season 1 preflight is authenticated, project-fenced and read-on
   assert.match(source, /isCronAuthorized\(request\)/);
   assert.match(source, /EXPECTED_PROJECT = 'forge-rivalstest'/);
   assert.match(source, /export async function GET/);
+  assert.match(source, /export async function POST/);
+  assert.match(source, /RESET_BETA_SEASON_ONE/);
+  assert.match(source, /executeFreshSeasonOneReset/);
   assert.match(source, /readOnly: true/);
   assert.match(source, /league_tables_v2/);
   assert.match(source, /league_slots_v1/);
@@ -147,6 +150,14 @@ test('fresh Beta Season 1 preflight is authenticated, project-fenced and read-on
   assert.match(source, /collection\('matches'\)/);
   assert.doesNotMatch(source, /\.set\(|\.create\(|\.update\(|\.delete\(|runTransaction\(/);
   assert.doesNotMatch(source, /participantIds\s*:\s*\[|profileIds\s*:\s*\[/);
+});
+
+test('fresh Season 1 reset preflight blocks extra orphaned club profiles', () => {
+  const input = createValidInput();
+  input.unexpectedProfileCount = 1;
+  const plan = buildFreshSeasonOneResetPlan(input);
+  assert.equal(plan.ready, false);
+  assert.ok(plan.reasons.includes('UNEXPECTED_CLUB_PROFILES_PRESENT'));
 });
 
 test('fresh Season 1 reset plan validates 120 participants and complete 840-match round robin', () => {
@@ -532,4 +543,20 @@ test('fresh Season 1 club profile reset preserves finances and identity while cl
   for (const key of ['id', 'email', 'credits', 'crystals', 'lineup', 'tactics', 'arena']) {
     assert.deepEqual(reset[key], profile[key], `preserves ${key}`);
   }
+});
+
+test('fresh Season 1 executor is project-scoped, journaled, idempotent and verifies the Pyramid Cup', () => {
+  const source = read('src/app/actions/fresh-season-one-reset-executor.ts');
+  assert.match(source, /staging_fresh_season_one_reset_v1/);
+  assert.match(source, /stepIndex/);
+  assert.match(source, /lease/);
+  assert.match(source, /FRESH_SEASON_ONE_RESET_LEASE_LOST/);
+  assert.match(source, /buildFreshSeasonOneWorldDocuments/);
+  assert.match(source, /ensureSeasonCalendar\(1\)/);
+  assert.match(source, /totalMatches\) !== 119/);
+  assert.match(source, /rounds\?\.r1\) \|\| cup\.rounds\.r1\.length !== 56/);
+  assert.match(source, /snapshotDocs\.size !== 120/);
+  assert.match(source, /leagueMatches\.length !== 840/);
+  assert.match(source, /RESET_TARGET_CHANGED_DURING_RECOVERY/);
+  assert.doesNotMatch(source, /admin\.auth\(\)\.deleteUser|deleteUsers\(/);
 });
