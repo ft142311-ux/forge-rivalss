@@ -155,7 +155,9 @@ test('fresh Season 1 reset plan validates 120 participants and complete 840-matc
   assert.equal(plan.preserve.firebaseAuthUids, 0);
   assert.equal(plan.replace.clubProfiles, 120);
   assert.equal(plan.replace.botClubProfiles, 120);
+  assert.equal(plan.expected.freeRegistrationSlots, 120);
   assert.equal(plan.replace.leagueSlots, 120);
+  assert.equal(plan.replace.slotHistoryEvents, 0);
   assert.equal(plan.expected.leagueMatches, 840);
   assert.equal(plan.replace.cupExists, true);
   assert.equal(plan.replace.cupMatches, 56);
@@ -209,6 +211,7 @@ test('fresh Season 1 reset preserves human Firebase UIDs but replaces their club
   assert.equal(plan.replace.humanClubProfiles, 1);
   assert.equal(plan.replace.botClubProfiles, 119);
   assert.equal(plan.replace.clubProfiles, 120);
+  assert.equal(plan.expected.freeRegistrationSlots, 119);
 });
 
 test('fresh Season 1 reset allows orphaned old Cup fixtures and snapshots when the Cup root is absent', () => {
@@ -339,6 +342,8 @@ test('fresh Season 1 club provisioning retains account UID but creates a new sta
   assert.equal(fresh.rank, 6);
   assert.equal(fresh.lastProcessedSeason, 1);
   assert.equal(fresh.ownedPlayers.length, 10);
+  assert.notEqual(fresh.credits, oldProfile.credits);
+  assert.notEqual(fresh.crystals, oldProfile.crystals);
   assert.equal(new Set(fresh.ownedPlayers.map(player => player.id)).size, 10);
   assert.ok(fresh.ownedPlayers.every(player => !['old-player-1', 'old-player-2'].includes(player.id)));
   assert.ok(fresh.ownedPlayers.every(player => player.overallRating >= 28 && player.overallRating <= 37));
