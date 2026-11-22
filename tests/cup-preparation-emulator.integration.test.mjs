@@ -159,6 +159,12 @@ test('prepared Season 2 receives its complete Pyramid Cup before publication in 
 
   const firstRound = cup.rounds.r1.filter(pairing => pairing.home && pairing.away);
   assert.equal(firstRound.length, 56);
+  const openingIds = new Set(firstRound.flatMap(pairing => [pairing.home.id, pairing.away.id]));
+  const restedIds = new Set(cup.openingRoundRestTeams.map(team => team.id));
+  assert.equal(openingIds.size, 112);
+  assert.equal(restedIds.size, 8);
+  assert.ok(cup.participants.every(team => openingIds.has(team.id) !== restedIds.has(team.id)));
+  assert.ok(cup.participants.filter(team => team.level === 1).every(team => restedIds.has(team.id)));
   for (const [pairIndex, pairing] of firstRound.entries()) {
     assert.equal(pairing.away.seed, 119 - pairIndex * 2, 'adjacent stronger team must be AWAY');
     assert.equal(pairing.home.seed, 120 - pairIndex * 2, 'adjacent weaker team must be HOME');
@@ -485,6 +491,8 @@ test('a pristine emulator publishes Season 1 only after its complete Pyramid Cup
   assert.equal(cup.byeCount, 0);
   assert.equal(cup.formatVersion, 4);
   assert.equal(cup.openingRoundRestCount, 8);
+  assert.equal(cup.openingRoundRestTeams.length, 8);
+  assert.ok(cup.openingRoundRestTeams.every(team => team.level === 1));
   assert.equal(cup.rounds.r1.length, 56);
 
   const firstRound = cup.rounds.r1;
