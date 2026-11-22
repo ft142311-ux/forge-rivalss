@@ -145,13 +145,17 @@ test('prepared Season 2 receives its complete Pyramid Cup before publication in 
   assert.equal(cup.status, 'active');
   assert.equal(cup.currentRound, 1);
   assert.equal(cup.participants.length, 120);
+  assert.equal(cup.preliminaryMatches, 60);
+  assert.equal(cup.byeCount, 0);
   assert.equal(cup.rounds.r1.length, 60);
   assert.equal(cup.rounds.r1[0].home.matchSnapshot, undefined, 'large roster snapshots must not inflate the bracket document');
   assert.equal(cup.rounds.r1.filter(pairing => pairing.status === 'bye').length, 0);
 
   const firstRound = cup.rounds.r1.filter(pairing => pairing.home && pairing.away);
   assert.equal(firstRound.length, 60);
-  for (const pairing of firstRound) {
+  for (const [pairIndex, pairing] of firstRound.entries()) {
+    assert.equal(pairing.away.seed, pairIndex + 1, 'opening-round away side must follow strongest-to-weakest seeding');
+    assert.equal(pairing.home.seed, 120 - pairIndex, 'opening-round home side must follow weakest-to-strongest seeding');
     const fixtureRef = db.collection(MATCH_COLLECTIONS.cup).doc(pairing.matchId);
     fixtureRefs.push(fixtureRef);
     const fixtureSnap = await fixtureRef.get();
@@ -311,6 +315,12 @@ test('prepared Season 2 receives its complete Pyramid Cup before publication in 
     const nextPairings = nextCup.rounds[`r${round + 1}`];
     assert.equal(nextPairings.filter(value => value.home && value.away).length, EXPECTED_MATCHES[round + 1]);
     assert.equal(nextPairings.length, EXPECTED_PAIRINGS[round + 1]);
+    if (round + 1 === 4) {
+      const bye = nextPairings.find(value => value.status === 'bye');
+      assert.ok(bye, 'round four must contain the single BYE after 15 teams advance');
+      const strongestAdvancingSeed = Math.min(...pairings.map(value => value.home.seed));
+      assert.equal(bye.home.seed, strongestAdvancingSeed, 'the strongest remaining team receives the round-four BYE');
+    }
     for (const pairing of nextPairings.filter(value => value.home && value.away)) {
       const nextFixtureRef = db.collection(MATCH_COLLECTIONS.cup).doc(pairing.matchId);
       fixtureRefs.push(nextFixtureRef);
