@@ -573,6 +573,7 @@ test('fresh Season 1 executor verifies a durable per-document archive before any
   assert.match(archive, /restoreSeasonOneFromDurableArchive/);
   assert.match(archive, /RESTORE_BETA_SEASON_ONE_ARCHIVE/);
   assert.match(archive, /SEASON_ONE_ARCHIVE_RESTORE_READBACK_MISMATCH/);
+  assert.match(archive, /SEASON_ONE_ARCHIVE_RESTORE_CHECKSUM_INVALID/);
 });
 
 test('fresh Season 1 executor is project-scoped, journaled, idempotent and verifies the Pyramid Cup', () => {
