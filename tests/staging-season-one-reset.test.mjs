@@ -595,6 +595,9 @@ test('fresh Season 1 executor verifies a durable per-document archive before any
   assert.match(archive, /RESTORE_BETA_SEASON_ONE_ARCHIVE/);
   assert.match(archive, /SEASON_ONE_ARCHIVE_RESTORE_READBACK_MISMATCH/);
   assert.match(archive, /SEASON_ONE_ARCHIVE_RESTORE_CHECKSUM_INVALID/);
+  assert.match(archive, /async function deleteArchiveQuery\(db: any, query: any, assertOwnership\?/);
+  assert.match(archive, /for \(let offset = 0; offset < snap\.docs\.length; offset \+= 350\) \{\s*await assertOwnership\?\.\(\);/);
+  assert.match(archive, /deleteArchiveQuery\(db, query, assertOwnership\)/);
 });
 
 test('fresh Season 1 executor is project-scoped, journaled, idempotent and verifies the Pyramid Cup', () => {
