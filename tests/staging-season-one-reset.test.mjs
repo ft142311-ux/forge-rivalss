@@ -394,7 +394,7 @@ test('fresh Season 1 club provisioning retains account UID but creates a new sta
 
   assert.equal(fresh.id, oldProfile.id);
   assert.equal(fresh.email, oldProfile.email);
-  assert.equal(fresh.displayName, oldProfile.displayName);
+  assert.equal(fresh.displayName, fresh.clubName);
   assert.match(fresh.clubName, /^New Club /);
   assert.notEqual(fresh.clubName, oldProfile.clubName);
   assert.equal(fresh.numericId, oldProfile.numericId);
@@ -416,6 +416,7 @@ test('fresh Season 1 club provisioning retains account UID but creates a new sta
   assert.equal(fresh.lineup.carry, fresh.ownedPlayers.find(player => player.role === 'Carry').id);
   assert.equal(fresh.lineup.sub_carry, fresh.ownedPlayers.filter(player => player.role === 'Carry')[1].id);
   assert.equal(fresh.lastLoginDate, '2026-11-22T15:00:00.000Z');
+  assert.ok(fresh.ownedPlayers.every(player => player.hiredAt === '2026-11-22T15:00:00.000Z'));
   assert.equal(Object.hasOwn(fresh, 'trophies'), false);
 });
 
