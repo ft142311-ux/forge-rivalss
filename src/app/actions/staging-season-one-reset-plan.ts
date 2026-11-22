@@ -65,12 +65,6 @@ export function buildFreshSeasonOneResetPlan(input: FreshSeasonOneResetInput) {
   if (!['REGULAR_SEASON', 'ACTIVE'].includes(String(config.phase || '').toUpperCase())) reasons.push('SEASON_PHASE_NOT_RESETTABLE');
   if (input.liveLocks.length) reasons.push('SEASON_WORKER_LOCKED');
   if (input.unclassifiedMatches > 0) reasons.push('UNCLASSIFIED_SEASON_MATCH_DOCUMENTS');
-  // Existing canonical archives/history are immutable evidence and must be
-  // reconciled before reusing the S1/S2 document IDs. Never overwrite them.
-  if (input.archives > 0) reasons.push('EXISTING_SEASON_ONE_ARCHIVE');
-  if (input.rollovers > 0) reasons.push('EXISTING_SEASON_TWO_ROLLOVER_PLAN');
-  if (input.history > 0) reasons.push('EXISTING_SEASON_ONE_HISTORY');
-  if (input.archiveMatches > 0) reasons.push('ORPHANED_SEASON_ONE_ARCHIVE_MATCHES');
 
   // The existing Cup is disposable, but when present its structure is validated
   // before any destructive operation. An absent Cup is a valid fresh-reset target.
