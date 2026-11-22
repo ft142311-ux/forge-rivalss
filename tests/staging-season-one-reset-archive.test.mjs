@@ -109,5 +109,17 @@ test('Season 1 backup cannot be marked complete when any canonical collection is
   assert.equal(built.ready, true);
   const result = validateSeasonOneArchiveCompleteness(built.entries);
   assert.equal(result.valid, false);
-  assert.ok(result.reasons.includes('ARCHIVE_CORE_SOURCE_COUNT_INVALID:matches_v2'));
+  assert.ok(result.reasons.includes('ARCHIVE_MATCH_FIXTURE_COVERAGE_INVALID'));
+});
+
+
+test('Season 1 backup requires exact participant and Cup snapshot identity equality', () => {
+  const sources = canonicalSources();
+  const snapshot = sources.find(source => source.path === 'cup_participant_snapshots_v1/cup_s1_lALPHA/teams/club-1-1-1');
+  snapshot.data.teamId = 'unrelated-club';
+  const built = buildSeasonOneArchiveEntries(sources);
+  assert.equal(built.ready, true);
+  const result = validateSeasonOneArchiveCompleteness(built.entries);
+  assert.equal(result.valid, false);
+  assert.ok(result.reasons.includes('ARCHIVE_PROFILE_SNAPSHOT_SET_MISMATCH'));
 });
