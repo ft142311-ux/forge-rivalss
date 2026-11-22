@@ -888,6 +888,7 @@ export async function resolveDailyMatches() {
           Object.assign(homeUpdate, {
             credits: after,
             lastMatchEconomy: homeEconomy,
+            lastMatchId: matchDoc.id,
             [`matchEconomy.${matchDoc.id}`]: homeEconomy,
           });
           tx.set(economyTxRef!, {
