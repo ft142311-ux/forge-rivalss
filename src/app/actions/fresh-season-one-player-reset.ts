@@ -1,4 +1,4 @@
-import { getRandomStartingSquad, type Player } from '@/app/lib/moba-data';
+import { getRandomStartingSquad, type Player } from '../lib/moba-data';
 
 export type FreshSeasonOnePlayer = Record<string, any>;
 export type FreshSeasonOneClubProfile = Record<string, any>;
