@@ -47,6 +47,7 @@ export async function createOrVerifyDurableSeasonOneArchive(
   db: any,
   resetId: string,
   originalConfig: Record<string, any>,
+  assertOwnership?: () => Promise<void>,
 ) {
   if (!resetId || !originalConfig || typeof originalConfig !== 'object') {
     throw new Error('SEASON_ONE_ARCHIVE_INPUT_INVALID');
@@ -150,9 +151,11 @@ export async function createOrVerifyDurableSeasonOneArchive(
     sourceCount: sources.length, persistedCount: 0,
     archiveSha256: archiveDigest, createdAt: new Date().toISOString(),
   };
+  await assertOwnership?.();
   await manifestRef.set(initialManifest, { merge: true });
 
   for (let offset = 0; offset < sources.length; offset += 350) {
+    await assertOwnership?.();
     const batch = db.batch();
     for (const source of sources.slice(offset, offset + 350)) {
       const id = createHash('sha256').update(source.path).digest('hex');
@@ -185,6 +188,7 @@ export async function createOrVerifyDurableSeasonOneArchive(
   });
   if (digest(verifiedManifest) !== archiveDigest) throw new Error('SEASON_ONE_ARCHIVE_MANIFEST_CHECKSUM_INVALID');
 
+  await assertOwnership?.();
   const complete = {
     schemaVersion: 1, resetId, status: 'COMPLETE',
     sourceCount: sources.length, persistedCount: archived.size,
