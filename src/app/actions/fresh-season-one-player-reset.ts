@@ -1,4 +1,4 @@
-import { getRandomStartingSquad, type Player } from '../lib/moba-data';
+import { generateUniquePlayer, type Player, type Role } from '../lib/moba-data';
 
 export type FreshSeasonOnePlayer = Record<string, any>;
 export type FreshSeasonOneClubProfile = Record<string, any>;
@@ -124,7 +124,11 @@ export function createFreshSeasonOneHumanClubProfile(
   }
 
   const clubName = String(account.clubName || account.displayName || 'New Club').trim().slice(0, 25) || 'New Club';
-  const ownedPlayers: Player[] = getRandomStartingSquad();
+  const roles: Role[] = ['Carry', 'Midlaner', 'Tank', 'Jungler', 'Support', 'Carry', 'Midlaner', 'Tank', 'Jungler', 'Support'];
+  const rosterSeed = `fresh_s1_${uid}_${now.getTime()}_${Math.random().toString(36).slice(2)}`;
+  const ownedPlayers: Player[] = roles.map((role, index) =>
+    generateUniquePlayer(role, index, true, `${rosterSeed}_${index}`)
+  );
   const byRole = (role: string) => ownedPlayers.find(player => player.role === role)?.id || null;
   const lineup: Record<string, string | null> = {
     carry: byRole('Carry'),
