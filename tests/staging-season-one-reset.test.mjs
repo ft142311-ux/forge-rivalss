@@ -168,6 +168,22 @@ test('fresh Season 1 reset plan validates 120 participants and complete 840-matc
   assert.equal(plan.target.nextSeasonStart, '2026-12-09T15:00:00.000Z');
 });
 
+test('fresh Season 1 reset preflight does not require the old Cup, Cup snapshots or existing league fixtures', () => {
+  const input = createValidInput();
+  input.cup = null;
+  input.cupFixtures = [];
+  input.cupSnapshots = [];
+  input.matches = [];
+  const plan = buildFreshSeasonOneResetPlan(input);
+  assert.equal(plan.ready, true, plan.reasons.join(','));
+  assert.equal(plan.preserve.participantProfiles, 120);
+  assert.equal(plan.preserve.leagueSlots, 120);
+  assert.equal(plan.replace.cupExists, false);
+  assert.equal(plan.replace.cupMatches, 0);
+  assert.equal(plan.replace.cupParticipantSnapshots, 0);
+  assert.equal(plan.replace.leagueMatches, 0);
+});
+
 test('fresh Season 1 reset plan classifies old archives and rollover records as replaceable season data', () => {
   const input = createValidInput();
   input.archives = 1;
