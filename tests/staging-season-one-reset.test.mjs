@@ -258,6 +258,7 @@ test('fresh Season 1 world builder replaces all club rosters while preserving hu
   assert.equal(freshTable.data.stats[uid].wins, 0);
   assert.equal(freshTable.data.stats[uid].points, 0);
   assert.equal(freshTable.data.stats[uid].isBot, false);
+  assert.equal(freshTable.data.stats[uid].name, human.data.clubName);
   const freshSlot = result.slots.find(item => item.id === slot.id);
   assert.equal(freshSlot.data.status, 'OCCUPIED');
   assert.equal(freshSlot.data.occupantId, uid);
@@ -394,7 +395,8 @@ test('fresh Season 1 club provisioning retains account UID but creates a new sta
   assert.equal(fresh.id, oldProfile.id);
   assert.equal(fresh.email, oldProfile.email);
   assert.equal(fresh.displayName, oldProfile.displayName);
-  assert.equal(fresh.clubName, oldProfile.clubName);
+  assert.match(fresh.clubName, /^New Club /);
+  assert.notEqual(fresh.clubName, oldProfile.clubName);
   assert.equal(fresh.numericId, oldProfile.numericId);
   assert.equal(fresh.credits, 1_000_000);
   assert.equal(fresh.crystals, 50);
@@ -526,7 +528,7 @@ test('fresh Season 1 club profile reset preserves finances and identity while cl
   assert.equal(reset.lastMatchConsequences, null);
   assert.equal(reset.ownedPlayers[0].seasonStats.matches, 0);
   assert.equal(reset.ownedPlayers[0].chemistryMatches, 0);
-  for (const key of ['id', 'email', 'clubName', 'credits', 'crystals', 'lineup', 'tactics', 'arena']) {
+  for (const key of ['id', 'email', 'credits', 'crystals', 'lineup', 'tactics', 'arena']) {
     assert.deepEqual(reset[key], profile[key], `preserves ${key}`);
   }
 });
