@@ -128,3 +128,10 @@ test('a pristine Season 1 is not registration-ready until its Pyramid Cup is ver
   assert.match(registration, /config\.pyramidCupRequired === true && Number\(config\.pyramidCupReadySeasonNumber\) === seasonNum && config\.pyramidCupReady !== true/);
   assert.match(registration, /PYRAMID_CUP_NOT_READY/);
 });
+
+test('the scheduled Cup worker cannot race the initial Season 1 bootstrap', () => {
+  assert.match(source, /INITIAL_PYRAMID_CUP_NOT_READY/);
+  assert.match(source, /options\.allowInitialBootstrap !== true/);
+  const calendar = readFileSync(new URL('../src/app/actions/season-calendar.ts', import.meta.url), 'utf8');
+  assert.match(calendar, /generatePyramidCup\(1, \{ allowInitialBootstrap: true \}\)/);
+});
