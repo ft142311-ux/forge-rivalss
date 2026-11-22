@@ -36,7 +36,12 @@ function resolveCupDate(value: any): Date {
   return date;
 }
 
-async function readActiveCupSeasonContext(db: any, nowMs = Date.now(), requestedSeason?: number) {
+async function readActiveCupSeasonContext(
+  db: any,
+  nowMs = Date.now(),
+  requestedSeason?: number,
+  options: { allowInitialBootstrap?: boolean } = {},
+) {
   const configSnap = await db.collection('system_v1').doc('season_config').get();
   if (!configSnap.exists) return { ready: false as const, reason: 'SEASON_CONFIG_MISSING' };
   const config = configSnap.data() || {};
@@ -58,6 +63,12 @@ async function readActiveCupSeasonContext(db: any, nowMs = Date.now(), requested
   }
   if (config.worldReady !== true || !['REGULAR_SEASON', 'ACTIVE'].includes(phase)) {
     return { ready: false as const, reason: 'ACTIVE_SEASON_NOT_READY', season, phase };
+  }
+  if (config.pyramidCupRequired === true &&
+      Number(config.pyramidCupReadySeasonNumber) === activeSeason &&
+      config.pyramidCupReady !== true &&
+      options.allowInitialBootstrap !== true) {
+    return { ready: false as const, reason: 'INITIAL_PYRAMID_CUP_NOT_READY', season, phase };
   }
   const seasonStart = resolveCupDate(config.seasonStart);
   const nextSeasonStart = resolveCupDate(config.nextSeasonStart);
@@ -332,9 +343,12 @@ async function commitCupRoundState(
   });
 }
 
-export async function generatePyramidCup(targetSeasonNumber?: number) {
+export async function generatePyramidCup(
+  targetSeasonNumber?: number,
+  options: { allowInitialBootstrap?: boolean } = {},
+) {
   const db = getAdminDb();
-  const context = await readActiveCupSeasonContext(db, Date.now(), targetSeasonNumber);
+  const context = await readActiveCupSeasonContext(db, Date.now(), targetSeasonNumber, options);
   if (!context.ready) throw new Error(context.reason);
   const season = Number(targetSeasonNumber || context.season);
   if (season !== context.season) throw new Error('CUP_TARGET_SEASON_NOT_ACTIVE');
