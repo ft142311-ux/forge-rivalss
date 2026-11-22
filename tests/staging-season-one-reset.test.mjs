@@ -70,6 +70,7 @@ function createValidInput() {
     cupExists: false, cupMatches: 0, cupSnapshots: 0,
     archives: 0, rollovers: 0, history: 0,
     archiveMatches: 0, matchPlayerEffects: 0, matchRevenueReceipts: 0,
+    matchConsequenceReceipts: 0, leagueSeasonRewardReceipts: 0, pyramidCupRewardReceipts: 0,
     now: new Date('2026-11-22T14:00:00.000Z'),
   };
 }
@@ -86,6 +87,9 @@ test('fresh Beta Season 1 preflight is authenticated, project-fenced and read-on
   assert.match(source, /players_v14/);
   assert.match(source, /match_player_effects_v1/);
   assert.match(source, /economy_transactions/);
+  assert.match(source, /match_consequence_receipts/);
+  assert.match(source, /LEAGUE_SEASON_REWARD/);
+  assert.match(source, /PYRAMID_CUP_CHAMPION_REWARD/);
   assert.match(source, /collection\('matches'\)/);
   assert.doesNotMatch(source, /\.set\(|\.create\(|\.update\(|\.delete\(|runTransaction\(/);
   assert.doesNotMatch(source, /participantIds\s*:\s*\[|profileIds\s*:\s*\[/);
@@ -99,6 +103,9 @@ test('fresh Season 1 reset plan validates 120 participants and complete 840-matc
   assert.equal(plan.expected.leagueMatches, 840);
   assert.equal(plan.replace.matchPlayerEffectLedgers, 0);
   assert.equal(plan.replace.matchRevenueReceipts, 0);
+  assert.equal(plan.replace.matchConsequenceReceipts, 0);
+  assert.equal(plan.replace.leagueSeasonRewardReceipts, 0);
+  assert.equal(plan.replace.pyramidCupRewardReceipts, 0);
   assert.equal(plan.replace.archivedLeagueMatches, 0);
   assert.equal(plan.target.seasonStart, '2026-11-22T15:00:00.000Z');
   assert.equal(plan.target.nextSeasonStart, '2026-12-09T15:00:00.000Z');
