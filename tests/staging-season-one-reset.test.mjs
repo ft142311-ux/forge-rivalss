@@ -84,7 +84,7 @@ function createValidInput() {
   }
   const cup = {
     id: 'cup_s1_lALPHA', season: 1, leagueId: 'ALPHA', name: 'Кубок Пирамиды',
-    status: 'active', currentRound: 1, formatVersion: 4, format: 'D1_REST_OPENING_ROUND',
+    status: 'active', currentRound: 1, seasonStart: '2026-11-09T15:00:00.000Z', formatVersion: 4, format: 'D1_REST_OPENING_ROUND',
     totalRounds: 7, totalParticipants: 120, totalMatches: 119, preliminaryMatches: 56,
     openingRoundRestCount: 8, openingRoundRestTeams: participants.filter(team => team.level === 1),
     byeCount: 0, participants, rounds: { r1: openingRound, r2: [], r3: [], r4: [], r5: [], r6: [], r7: [] },
@@ -92,7 +92,7 @@ function createValidInput() {
   const cupFixtures = openingRound.map(pairing => ({
     id: pairing.matchId,
     data: {
-      id: pairing.matchId, cupId: 'cup_s1_lALPHA', season: 1, cupRound: 1, bestOf: 1,
+      id: pairing.matchId, cupId: 'cup_s1_lALPHA', season: 1, cupRound: 1, bestOf: 1,\n      scheduledAt: new Date('2026-11-10T04:00:00.000Z'),
       homeId: pairing.home.id, awayId: pairing.away.id,
       homeTeamSnapshot: { id: pairing.home.id, players: Array.from({ length: 5 }, (_, i) => ({ id: `h-${i}` })) },
       awayTeamSnapshot: { id: pairing.away.id, players: Array.from({ length: 5 }, (_, i) => ({ id: `a-${i}` })) },
@@ -107,7 +107,7 @@ function createValidInput() {
   }));
 
   return {
-    config: { activeSeasonNumber: 1, worldReady: true, phase: 'REGULAR_SEASON' },
+    config: { activeSeasonNumber: 1, worldReady: true, phase: 'REGULAR_SEASON', seasonStart: '2026-11-09T15:00:00.000Z' },
     tables, slots, matches, profileIds,
     cup, cupFixtures, cupSnapshots,
     archives: 0, rollovers: 0, history: 0,
@@ -162,6 +162,22 @@ test('fresh Season 1 reset plan validates 120 participants and complete 840-matc
   assert.equal(plan.replace.archivedLeagueMatches, 0);
   assert.equal(plan.target.seasonStart, '2026-11-22T15:00:00.000Z');
   assert.equal(plan.target.nextSeasonStart, '2026-12-09T15:00:00.000Z');
+});
+
+test('fresh Season 1 preflight rejects a Cup season-start mismatch', () => {
+  const input = createValidInput();
+  input.cup.seasonStart = '2026-11-10T15:00:00.000Z';
+  const plan = buildFreshSeasonOneResetPlan(input);
+  assert.equal(plan.ready, false);
+  assert.ok(plan.reasons.includes('PYRAMID_CUP_SEASON_START_MISMATCH'));
+});
+
+test('fresh Season 1 preflight rejects an opening fixture scheduled outside the canonical Cup slot', () => {
+  const input = createValidInput();
+  input.cupFixtures[0].data.scheduledAt = new Date('2026-11-10T05:00:00.000Z');
+  const plan = buildFreshSeasonOneResetPlan(input);
+  assert.equal(plan.ready, false);
+  assert.ok(plan.reasons.includes('PYRAMID_CUP_OPENING_SCHEDULE_INVALID'));
 });
 
 test('fresh Season 1 preflight rejects slot identity and match round-robin corruption', () => {
