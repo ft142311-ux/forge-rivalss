@@ -584,4 +584,9 @@ test('fresh Season 1 executor is project-scoped, journaled, idempotent and verif
   const marketSettlement = read('src/app/lib/auction-expiry-sweep.ts');
   assert.match(marketSettlement, /const \[lotSnap, resetConfigSnap\] = await Promise\.all\(\[tx\.get\(lotRef\), tx\.get\(resetConfigRef\)\]\)/);
   assert.match(marketSettlement, /resetConfigSnap\.data\(\)\?\.stagingSeasonOneResetInProgress === true/);
+  const matchEconomy = read('src/app/actions/match-economy.ts');
+  assert.match(matchEconomy, /configSnap\.data\(\)\?\.stagingSeasonOneResetInProgress === true/);
+  const seasonInit = read('src/app/actions/season-init.ts');
+  assert.match(seasonInit, /transaction\.get\(configRef\)/);
+  assert.match(seasonInit, /STAGING_SEASON_ONE_RESET_IN_PROGRESS/);
 });
