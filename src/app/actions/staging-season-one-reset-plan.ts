@@ -18,6 +18,7 @@ export type FreshSeasonOneResetInput = {
   leagueSeasonRewardReceipts: number;
   pyramidCupRewardReceipts: number;
   liveLocks: string[];
+  unclassifiedMatches: number;
   now?: Date;
 };
 
@@ -47,6 +48,7 @@ export function buildFreshSeasonOneResetPlan(input: FreshSeasonOneResetInput) {
   if (config.historyCleanupPending === true) reasons.push('SEASON_HISTORY_CLEANUP_PENDING');
   if (!['REGULAR_SEASON', 'ACTIVE'].includes(String(config.phase || '').toUpperCase())) reasons.push('SEASON_PHASE_NOT_RESETTABLE');
   if (input.liveLocks.length) reasons.push('SEASON_WORKER_LOCKED');
+  if (input.unclassifiedMatches > 0) reasons.push('UNCLASSIFIED_SEASON_MATCH_DOCUMENTS');
 
   const groups = new Set<string>();
   const participants = new Map<string, { level: number; group: number; rank: number; isBot: boolean }>();
@@ -249,6 +251,7 @@ export function buildFreshSeasonOneResetPlan(input: FreshSeasonOneResetInput) {
       leagueSeasonRewardReceipts: input.leagueSeasonRewardReceipts,
       pyramidCupRewardReceipts: input.pyramidCupRewardReceipts,
       activeWorkerLocks: input.liveLocks.length,
+      unclassifiedSeasonMatches: input.unclassifiedMatches,
     },
     expected: {
       groups: EXPECTED_GROUPS,
