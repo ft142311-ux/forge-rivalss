@@ -418,7 +418,7 @@ export async function preparePyramidCupForSeason(targetSeasonNumber: number) {
   const firstRound = Array.isArray(rounds.r1) ? rounds.r1 : [];
   if (Number(cup.season) !== targetSeasonNumber || cup.name !== 'Кубок Пирамиды' ||
       cup.status !== 'active' || Number(cup.formatVersion) !== CUP_FORMAT_VERSION ||
-      cup.format !== 'D1_REST_OPENING_ROUND' || participants.length !== TOTAL_TEAMS ||
+      cup.format !== 'D1_REST_OPENING_ROUND' || Number(cup.totalMatches) !== TOTAL_CUP_MATCHES || participants.length !== TOTAL_TEAMS ||
       new Set(participants.map((team: any) => String(team?.id || ''))).size !== TOTAL_TEAMS ||
       firstRound.length !== 56 || firstRound.some((pairing: any) => pairing?.status === 'bye')) {
     return { success: false, reason: 'CUP_PREPARED_BRACKET_INVALID', cupId: ref.id };
@@ -797,7 +797,8 @@ export async function runPyramidCupCycle() {
     }
   }
   if (cup.data.status === 'completed') return { generated: false, resolved: 0, advanced: 0, completed: true };
-  if (Number(cup.data.formatVersion) !== CUP_FORMAT_VERSION || cup.data.format !== 'D1_REST_OPENING_ROUND') {
+  if (Number(cup.data.formatVersion) !== CUP_FORMAT_VERSION || cup.data.format !== 'D1_REST_OPENING_ROUND' ||
+      Number(cup.data.totalMatches) !== TOTAL_CUP_MATCHES) {
     return { generated: false, resolved: 0, advanced: 0, incompatibleFormat: true, reason: 'CUP_FORMAT_VERSION_MISMATCH' };
   }
 
