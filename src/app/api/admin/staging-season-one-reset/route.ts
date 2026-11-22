@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { isCronAuthorized } from '@/app/api/cron/cron-auth';
 import { buildFreshSeasonOneResetPlan } from '@/app/actions/staging-season-one-reset-plan';
+import { executeFreshSeasonOneReset } from '@/app/actions/fresh-season-one-reset-executor';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -37,7 +38,7 @@ export async function GET(request: NextRequest) {
   try {
     const db = getAdminDb();
     const matchPrefix = 'match_v140_S1_LALPHA_';
-    const [configSnap, tablesSnap, slotsSnap, matchesSnap, cupSnap, cupMatchesSnap,
+    const [configSnap, tablesSnap, slotsSnap, matchesSnap, allProfilesSnap, cupSnap, cupMatchesSnap,
       archiveSnap, archiveMatchesSnap, rolloverSnap, historySnap,
       matchEffectsSnap, matchRevenueSnap, cupMatchRevenueSnap, leagueConsequenceSnap, cupConsequenceSnap,
       leagueSeasonRewardSnap, pyramidCupRewardSnap, slotHistorySnap, rolloverLockSnap, calendarLockSnap] = await Promise.all([
@@ -45,6 +46,7 @@ export async function GET(request: NextRequest) {
       db.collection('league_tables_v2').where('season', '==', 1).where('version', '==', 140).get(),
       db.collection('league_slots_v1').where('season', '==', 1).where('leagueId', '==', 'ALPHA').get(),
       db.collection('matches_v2').where('season', '==', 1).where('version', '==', 140).get(),
+      db.collection('players_v14').get(),
       db.collection('cup_pyramid_v1').doc('cup_s1_lALPHA').get(),
       db.collection('cup_matches').where('cupId', '==', 'cup_s1_lALPHA').get(),
       db.collection('league_season_archives_v1').doc('S1').get(),
@@ -128,6 +130,7 @@ export async function GET(request: NextRequest) {
       matches: leagueMatchDocs.map(doc => ({ id: doc.id, data: doc.data() || {} })),
       legacyCupMatches: legacyCupMatchDocs.length,
       profileIds,
+      unexpectedProfileCount: allProfilesSnap.docs.filter(doc => !participantIds.has(doc.id)).length,
       cup: cupSnap.exists ? cupSnap.data() || {} : null,
       cupFixtures: cupMatchesSnap.docs.map(doc => ({ id: doc.id, data: doc.data() || {} })),
       cupSnapshots: cupSnapshots.docs.map(doc => ({ id: doc.id, data: doc.data() || {} })),
@@ -163,5 +166,65 @@ export async function GET(request: NextRequest) {
       readOnly: true,
       error: 'STAGING_SEASON_ONE_PREFLIGHT_UNAVAILABLE',
     });
+  }
+}
+
+/**
+ * Explicitly confirmed Beta-only executor. GET remains a read-only preflight.
+ * This endpoint is intentionally not invoked automatically by the application.
+ */
+export async function POST(request: NextRequest) {
+  if (!isCronAuthorized(request)) {
+    return respond(401, { success: false, error: 'UNAUTHORIZED', readOnly: false });
+  }
+
+  const configuredProject =
+    process.env.GCLOUD_PROJECT ||
+    process.env.GCP_PROJECT ||
+    process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID ||
+    '';
+  if (configuredProject !== EXPECTED_PROJECT) {
+    return respond(403, { success: false, error: 'STAGING_PROJECT_MISMATCH', readOnly: false });
+  }
+
+  let body: any = {};
+  try { body = await request.json(); } catch { /* invalid body handled below */ }
+  if (body?.confirmation !== 'RESET_BETA_SEASON_ONE') {
+    return respond(400, { success: false, error: 'EXPLICIT_RESET_CONFIRMATION_REQUIRED' });
+  }
+
+  try {
+    const db = getAdminDb();
+    const journalSnap = await db.collection('system_v1').doc('staging_fresh_season_one_reset_v1').get();
+    let target: { seasonStart: string; nextSeasonStart: string };
+
+    if (journalSnap.exists) {
+      const journal = journalSnap.data() || {};
+      if (journal.status === 'COMPLETED') {
+        return respond(200, { success: true, alreadyCompleted: true, verification: journal.counts || {} });
+      }
+      if (!journal.target?.seasonStart || !journal.target?.nextSeasonStart) {
+        return respond(409, { success: false, error: 'RESET_JOURNAL_TARGET_INVALID' });
+      }
+      target = journal.target;
+    } else {
+      const preflight = await GET(request);
+      const result: any = await preflight.json();
+      if (!result?.success || !result?.plan?.ready) {
+        return respond(409, { success: false, error: 'RESET_PREFLIGHT_BLOCKED', preflight: result?.plan || result?.error });
+      }
+      target = {
+        seasonStart: String(result.plan.target.seasonStart),
+        nextSeasonStart: String(result.plan.target.nextSeasonStart),
+      };
+    }
+
+    const result = await executeFreshSeasonOneReset(db, target);
+    return respond(200, { success: true, readOnly: false, ...result });
+  } catch (error: any) {
+    const code = String(error?.message || error || 'RESET_EXECUTION_FAILED').slice(0, 160);
+    const status = code.includes('ALREADY_RUNNING') ? 409 : 503;
+    console.error('[STAGING SEASON ONE RESET EXECUTOR] Failed:', code);
+    return respond(status, { success: false, readOnly: false, error: code });
   }
 }
