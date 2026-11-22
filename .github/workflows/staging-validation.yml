@@ -7,6 +7,7 @@ on:
       - hosting/vercel-staging
       - feature/season-lifecycle-autonomy
       - feature/staging-safe-world-bootstrap
+      - feature/beta-fresh-season-one
   pull_request:
     branches:
       - hosting/vercel-free-staging
