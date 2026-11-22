@@ -15,7 +15,13 @@ async function settleCandidate(candidate: any, db: any) {
     try {
       const result = await db.runTransaction(async (tx: any) => {
         const lotRef = db.collection('market_v7').doc(candidate.id);
-        const lotSnap = await tx.get(lotRef);
+        const resetConfigRef = db.collection('system_v1').doc('season_config');
+        const [lotSnap, resetConfigSnap] = await Promise.all([tx.get(lotRef), tx.get(resetConfigRef)]);
+        // Recheck inside the settlement transaction: a sweep may have acquired
+        // its lease before the reset marker was asserted.
+        if (resetConfigSnap.exists && resetConfigSnap.data()?.stagingSeasonOneResetInProgress === true) {
+          return 'SKIPPED';
+        }
         if (!lotSnap.exists) return 'SKIPPED';
         const lot: any = lotSnap.data() || {};
         if (lot.status === 'settled' || lot.status === 'expired') return 'SKIPPED';
