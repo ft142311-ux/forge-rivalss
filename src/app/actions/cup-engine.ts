@@ -13,7 +13,10 @@ const LEAGUE_ID = 'ALPHA';
 const CUP_COLLECTION = 'cup_pyramid_v1';
 const CUP_PARTICIPANT_SNAPSHOT_COLLECTION = 'cup_participant_snapshots_v1';
 const TOTAL_TEAMS = TOTAL_GROUPS * TEAMS_PER_GROUP;
-const ROUND_COUNT = 7; // preliminary + 64-team round + 32 + 16 + 8 + 4 + final
+const ROUND_COUNT = 7; // 60 -> 30 -> 15 -> 8 -> 4 -> 2 -> final
+const ROUND_PAIRING_COUNTS = [60, 30, 15, 8, 4, 2, 1];
+const ROUND_TEAM_COUNTS = [120, 60, 30, 15, 8, 4, 2];
+const ROUND_BYE_COUNTS = [0, 0, 0, 1, 0, 0, 0];
 const ROUND_DAYS = [2, 3, 4, 5, 6, 7, 8]; // preliminary round follows league Tour 1; every round is daily
 const CUP_START_HOUR_UTC = 4; // 07:00 Moscow time
 
@@ -164,13 +167,12 @@ function makePair(id: string, index: number, firstStrong: Team, secondWeak: Team
   return { id, index, home: secondWeak, away: firstStrong, status: 'scheduled', matchId: null, winnerId: null, scoreA: null, scoreB: null };
 }
 function createPreliminary(teams: Team[]): Pairing[] {
-  // The eight D1 teams are the strongest and wait. The other 112 teams play 56 preliminary matches.
-  const eligible = teams.slice(8).sort(compareStrength);
+  // All 120 clubs enter in round one: strongest vs weakest, then second strongest vs second weakest.
+  const ordered = [...teams].sort(compareStrength);
+  if (ordered.length !== TOTAL_TEAMS) throw new Error('CUP_PARTICIPANT_COUNT_INVALID');
   const pairs: Pairing[] = [];
-  for (let i = 0; i < 56; i++) pairs.push(makePair(`r1_m${i + 1}`, i + 1, eligible[i], eligible[eligible.length - 1 - i]));
-  for (let i = 0; i < 8; i++) {
-    const team = teams[i];
-    pairs.push({ id: `r1_bye_${i + 1}`, index: 56 + i + 1, home: team, away: null, status: 'bye', winnerId: team.id, scoreA: null, scoreB: null });
+  for (let i = 0; i < TOTAL_TEAMS / 2; i++) {
+    pairs.push(makePair(`r1_m${i + 1}`, i + 1, ordered[i], ordered[ordered.length - 1 - i]));
   }
   return pairs;
 }
@@ -180,11 +182,15 @@ function teamFromPublic(value: any): Team | null {
 }
 function buildRoundPairings(round: number, input: Team[]): Pairing[] {
   const teams = [...input].sort(compareStrength);
-  if (teams.length % 2 !== 0) throw new Error(`CUP_ODD_PARTICIPANT_COUNT:R${round}:${teams.length}`);
+  const byeTeam = teams.length % 2 === 1 ? teams.shift() : null;
+  if (byeTeam && round !== 4) throw new Error(`CUP_ODD_PARTICIPANT_COUNT:R${round}:${teams.length + 1}`);
   const pairs: Pairing[] = [];
   for (let i = 0; i < teams.length / 2; i++) {
     // Strongest remaining vs weakest remaining, next strongest vs next weakest, etc.
     pairs.push(makePair(`r${round}_m${i + 1}`, i + 1, teams[i], teams[teams.length - 1 - i]));
+  }
+  if (byeTeam) {
+    pairs.push({ id: `r${round}_bye_1`, index: pairs.length + 1, home: byeTeam, away: null, status: 'bye', winnerId: byeTeam.id, scoreA: null, scoreB: null });
   }
   return pairs;
 }
@@ -357,16 +363,16 @@ export async function generatePyramidCup(targetSeasonNumber?: number) {
   }
   const rounds: Record<string, any[]> = { [roundKey(1)]: first.map(publicPairing) };
   for (let round = 2; round <= ROUND_COUNT; round++) rounds[roundKey(round)] = [];
-  // The cup record and all 56 first-round fixtures commit together. A crash
+  // The cup record and all 60 first-round fixtures commit together. A crash
   // cannot leave an existing bracket with no match documents to process.
   batch.create(ref, {
     id, season, leagueId: LEAGUE_ID, name: 'Кубок Пирамиды', status: 'active', currentRound: 1,
-    totalRounds: ROUND_COUNT, totalParticipants: TOTAL_TEAMS, preliminaryMatches: 56, byeCount: 8,
+    totalRounds: ROUND_COUNT, totalParticipants: TOTAL_TEAMS, preliminaryMatches: 60, byeCount: 0,
     participants: teams.map(publicTeam), rounds, winnerId: null, winnerName: null,
     seasonStart: seasonStart.toISOString(), createdAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp(), version: 3,
   });
   await batch.commit();
-  return { success: true, created: true, cupId: id, participants: TOTAL_TEAMS, preliminaryMatches: 56 };
+  return { success: true, created: true, cupId: id, participants: TOTAL_TEAMS, preliminaryMatches: 60 };
 }
 /**
  * Build and verify the next season's cup before that season is published.
@@ -390,34 +396,32 @@ export async function preparePyramidCupForSeason(targetSeasonNumber: number) {
   if (Number(cup.season) !== targetSeasonNumber || cup.name !== 'Кубок Пирамиды' ||
       cup.status !== 'active' || participants.length !== TOTAL_TEAMS ||
       new Set(participants.map((team: any) => String(team?.id || ''))).size !== TOTAL_TEAMS ||
-      firstRound.length !== 64 || firstRound.filter((pairing: any) => pairing?.status === 'bye').length !== 8) {
+      firstRound.length !== 60 || firstRound.filter((pairing: any) => pairing?.status === 'bye').length !== 0) {
     return { success: false, reason: 'CUP_PREPARED_BRACKET_INVALID', cupId: ref.id };
   }
 
   // The public participant registry and round-one bracket are two persisted
-  // representations of the same field. Verify they contain exactly the same
-  // 120 clubs, with the eight strongest seeds receiving the eight BYEs.
+  // representations of the same field. Every one of the 120 clubs must play
+  // in round one, with the strongest seed away against the weakest seed home.
   const participantIds = new Set<string>(participants.map((team: any) => String(team?.id || '')));
   const bracketTeamIds = new Set<string>(firstRound.flatMap((pairing: any) =>
     [pairing?.home?.id, pairing?.away?.id].filter((id: any) => typeof id === 'string' && id.length > 0)
   ));
   const orderedParticipants = [...participants].sort(compareStrength);
-  const byeIds = new Set<string>(firstRound.filter((pairing: any) => pairing?.status === 'bye')
-    .map((pairing: any) => String(pairing?.home?.id || '')));
-  const expectedByeIds = new Set<string>(orderedParticipants.slice(0, 8).map((team: any) => String(team?.id || '')));
   if (participantIds.size !== TOTAL_TEAMS || bracketTeamIds.size !== TOTAL_TEAMS ||
       [...participantIds].some(id => !bracketTeamIds.has(id)) ||
       [...bracketTeamIds].some(id => !participantIds.has(id)) ||
       participants.some((team: any) => !Number.isSafeInteger(Number(team?.seed)) || Number(team.seed) < 1 || Number(team.seed) > TOTAL_TEAMS) ||
       new Set(participants.map((team: any) => Number(team?.seed))).size !== TOTAL_TEAMS ||
-      byeIds.size !== 8 || [...expectedByeIds].some(id => !byeIds.has(id)) ||
-      [...byeIds].some(id => !expectedByeIds.has(id))) {
+      firstRound.some((pairing: any, index: number) =>
+        pairing?.away?.id !== orderedParticipants[index]?.id ||
+        pairing?.home?.id !== orderedParticipants[TOTAL_TEAMS - 1 - index]?.id
+      )) {
     return { success: false, reason: 'CUP_PREPARED_BRACKET_MEMBERSHIP_INVALID', cupId: ref.id };
   }
 
-  // Verify every frozen participant snapshot, including the eight D1 BYE
-  // teams that do not appear in a preliminary fixture. Fixture-only checks
-  // would otherwise miss a partially deleted participant snapshot collection.
+  // Verify every frozen participant snapshot, including clubs that will later
+  // receive the single round-four BYE. Fixture-only checks would miss deleted snapshots.
   const participantSnapshots = await Promise.all(participants.map((team: any) =>
     participantSnapshotRef(db, targetSeasonNumber, String(team?.id || '')).get()
   ));
@@ -444,14 +448,14 @@ export async function preparePyramidCupForSeason(targetSeasonNumber: number) {
   const orderedPairings = [...firstRound].sort((a: any, b: any) => Number(a.index) - Number(b.index));
   if (orderedPairings.some((pairing: any, index: number) => {
     const expectedIndex = index + 1;
-    const expectedPairingId = expectedIndex <= 56 ? `r1_m${expectedIndex}` : `r1_bye_${expectedIndex - 56}`;
+    const expectedPairingId = `r1_m${expectedIndex}`;
     return Number(pairing.index) !== expectedIndex || pairing.id !== expectedPairingId;
   })) {
     return { success: false, reason: 'CUP_PREPARED_BRACKET_PAIRINGS_INVALID', cupId: ref.id };
   }
 
   const fixtures = firstRound.filter((pairing: any) => pairing?.home && pairing?.away);
-  if (fixtures.length !== 56 || fixtures.some((pairing: any) =>
+  if (fixtures.length !== 60 || fixtures.some((pairing: any) =>
     pairing.matchId !== matchId(targetSeasonNumber, 1, Number(pairing.index))
   )) return { success: false, reason: 'CUP_PREPARED_FIXTURE_COUNT_INVALID', cupId: ref.id };
   const fixtureSnapshots = await Promise.all(fixtures.map((pairing: any) =>
@@ -490,7 +494,7 @@ export async function preparePyramidCupForSeason(targetSeasonNumber: number) {
     season: targetSeasonNumber,
     participants: participants.length,
     preliminaryMatches: fixtures.length,
-    byes: 8,
+    byes: 0,
     scheduledAt: roundDate(context.seasonStart, ROUND_DAYS[0]).toISOString(),
   };
 }
@@ -708,7 +712,7 @@ async function repairCurrentRoundFixtures(db: any, cup: { ref: any; data: any },
 }
 
 function assertValidCupRoundPairings(pairings: Pairing[], round: number) {
-  const expectedCount = round === 1 ? 64 : Math.pow(2, ROUND_COUNT - round);
+  const expectedCount = ROUND_PAIRING_COUNTS[round - 1];
   if (!Array.isArray(pairings) || pairings.length !== expectedCount) {
     throw new Error('CUP_ROUND_PAIRING_COUNT_INVALID');
   }
@@ -725,7 +729,7 @@ function assertValidCupRoundPairings(pairings: Pairing[], round: number) {
     pairingIds.add(pairing.id);
     indexes.add(Number(pairing.index));
     if (pairing.status === 'bye') {
-      if (round !== 1 || !pairing.home || pairing.away || pairing.winnerId !== pairing.home.id ||
+      if (round !== 4 || !pairing.home || pairing.away || pairing.winnerId !== pairing.home.id ||
           teamIds.has(pairing.home.id)) {
         throw new Error('CUP_ROUND_BYE_INVALID');
       }
@@ -742,7 +746,7 @@ function assertValidCupRoundPairings(pairings: Pairing[], round: number) {
     teamIds.add(pairing.home.id);
     teamIds.add(pairing.away.id);
   }
-  if ((round === 1 && byes !== 8) || (round > 1 && byes !== 0)) {
+  if (byes !== ROUND_BYE_COUNTS[round - 1] || teamIds.size !== ROUND_TEAM_COUNTS[round - 1]) {
     throw new Error('CUP_ROUND_BYE_COUNT_INVALID');
   }
   return { pairings: pairings.length, byes, teams: teamIds.size };
@@ -854,7 +858,7 @@ export async function runPyramidCupCycle() {
       const team = teamFromPublic(source); if (team) winners.push(team);
     }
   }
-  const expectedWinners = 64 / Math.pow(2, round - 1);
+  const expectedWinners = ROUND_TEAM_COUNTS[round];
   if (winners.length !== expectedWinners) throw new Error(`CUP_WINNER_COUNT_INVALID:R${round}:${winners.length}:EXPECTED:${expectedWinners}`);
   const nextRound = round + 1;
   const nextPairs = buildRoundPairings(nextRound, winners);
