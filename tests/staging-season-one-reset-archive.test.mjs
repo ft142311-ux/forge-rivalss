@@ -116,6 +116,7 @@ test('Season 1 backup cannot be marked complete when any canonical collection is
 test('Season 1 backup requires exact participant and Cup snapshot identity equality', () => {
   const sources = canonicalSources();
   const snapshot = sources.find(source => source.path === 'cup_participant_snapshots_v1/cup_s1_lALPHA/teams/club-1-1-1');
+  snapshot.path = 'cup_participant_snapshots_v1/cup_s1_lALPHA/teams/unrelated-club';
   snapshot.data.teamId = 'unrelated-club';
   const built = buildSeasonOneArchiveEntries(sources);
   assert.equal(built.ready, true);
