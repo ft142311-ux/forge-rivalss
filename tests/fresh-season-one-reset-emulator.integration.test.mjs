@@ -303,6 +303,26 @@ test('fresh Season 1 reset rebuilds league and Pyramid Cup while preserving Fire
   assert.equal((await db.collection('system_v1').doc('season_config').get()).data().worldReady, true);
   await configArchiveDoc.ref.set(originalArchivedConfig);
 
+  let restoreOwnershipChecks = 0;
+  await assert.rejects(
+    restoreSeasonOneFromDurableArchive(
+      db,
+      result.resetId,
+      'RESTORE_BETA_SEASON_ONE_ARCHIVE',
+      async () => {
+        restoreOwnershipChecks++;
+        if (restoreOwnershipChecks === 3) throw new Error('SIMULATED_RESTORE_LEASE_LOSS');
+      },
+    ),
+    /SIMULATED_RESTORE_LEASE_LOSS/,
+  );
+  assert.equal(restoreOwnershipChecks, 3);
+  assert.equal(
+    (await db.collection('matches_v2').where('season', '==', 1).get()).size,
+    490,
+    'restore must stop after the first 350-document delete batch when its lease is lost',
+  );
+
   const restoredWorld = await restoreSeasonOneFromDurableArchive(
     db, result.resetId, 'RESTORE_BETA_SEASON_ONE_ARCHIVE',
   );
