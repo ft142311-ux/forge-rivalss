@@ -782,6 +782,10 @@ function assertValidCupRoundPairings(pairings: Pairing[], round: number) {
 
 export async function runPyramidCupCycle() {
   const db = getAdminDb();
+  const resetConfig = await db.collection('system_v1').doc('season_config').get();
+  if (resetConfig.exists && resetConfig.data()?.stagingSeasonOneResetInProgress === true) {
+    return { generated: false, resolved: 0, advanced: 0, skipped: true, reason: 'STAGING_SEASON_ONE_RESET_IN_PROGRESS' };
+  }
   const context = await readActiveCupSeasonContext(db);
   if (!context.ready) {
     return { generated: false, resolved: 0, advanced: 0, waitingForSeason: true, reason: context.reason };
