@@ -1,5 +1,5 @@
 import { buildBotClub } from './bot-roster';
-import { createFreshSeasonOneHumanClubProfile } from './fresh-season-one-player-reset';
+import { createFreshSeasonOneHumanClubProfile, getFreshSeasonOneClubName } from './fresh-season-one-player-reset';
 
 type SourceDoc = { id: string; data: Record<string, any> };
 type FreshProfile = { id: string; data: Record<string, any> };
@@ -112,7 +112,7 @@ export function buildFreshSeasonOneWorldDocuments(input: {
       const team = teamBySlot.get(`${level}:${group}:${rank}`)!;
       stats[team.id] = {
         id: team.id,
-        name: team.isBot ? team.name : String(input.profiles.get(team.id)?.clubName || input.profiles.get(team.id)?.displayName || team.name),
+        name: team.isBot ? team.name : getFreshSeasonOneClubName(team.id),
         rank,
         matchesPlayed: 0, wins: 0, draws: 0, losses: 0, points: 0, diff: 0,
         isBot: team.isBot,
