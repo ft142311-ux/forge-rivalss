@@ -40,7 +40,7 @@ export async function GET(request: NextRequest) {
     const [configSnap, tablesSnap, slotsSnap, matchesSnap, cupSnap, cupMatchesSnap,
       archiveSnap, archiveMatchesSnap, rolloverSnap, historySnap,
       matchEffectsSnap, matchRevenueSnap, cupMatchRevenueSnap, leagueConsequenceSnap, cupConsequenceSnap,
-      leagueSeasonRewardSnap, pyramidCupRewardSnap, rolloverLockSnap, calendarLockSnap] = await Promise.all([
+      leagueSeasonRewardSnap, pyramidCupRewardSnap, slotHistorySnap, rolloverLockSnap, calendarLockSnap] = await Promise.all([
       db.collection('system_v1').doc('season_config').get(),
       db.collection('league_tables_v2').where('season', '==', 1).where('version', '==', 140).get(),
       db.collection('league_slots_v1').where('season', '==', 1).where('leagueId', '==', 'ALPHA').get(),
@@ -58,6 +58,7 @@ export async function GET(request: NextRequest) {
       db.collection('match_consequence_receipts').where('matchId', '>=', 'cup_S1_').where('matchId', '<', 'cup_S1_\uf8ff').get(),
       db.collection('economy_transactions').where('referenceId', '==', 'S1').get(),
       db.collection('economy_transactions').where('referenceId', '==', 'cup_s1_lALPHA').get(),
+      db.collection('league_slot_history_v1').where('season', '==', 1).where('leagueId', '==', 'ALPHA').get(),
       db.collection('system_v1').doc('season_rollover_v1').get(),
       db.collection('system_v1').doc('season_calendar_build_v1').get(),
     ]);
@@ -141,6 +142,7 @@ export async function GET(request: NextRequest) {
       leagueSeasonRewardReceipts: leagueSeasonRewardSnap.docs.filter(doc => doc.data()?.type === 'LEAGUE_SEASON_REWARD').length,
       pyramidCupRewardReceipts: pyramidCupRewardSnap.docs.filter(doc =>
         ['PYRAMID_CUP_CHAMPION_REWARD', 'PYRAMID_CUP_FINALIST_REWARD'].includes(String(doc.data()?.type || ''))).length,
+      slotHistoryEvents: slotHistorySnap.size,
       unclassifiedMatches,
       liveLocks: [rolloverLockSnap, calendarLockSnap].flatMap((snap, index) => {
         if (!snap.exists || Number(snap.data()?.expiresAtMs || 0) <= Date.now()) return [];
