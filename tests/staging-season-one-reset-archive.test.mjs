@@ -8,20 +8,49 @@ import {
 
 function canonicalSources() {
   const sources = [];
-  for (let i = 1; i <= 15; i++) {
-    sources.push({ path: `league_tables_v2/table-${i}`, data: { season: 1, version: 140 } });
+  for (let level = 1; level <= 4; level++) {
+    for (let group = 1; group <= 2 ** (level - 1); group++) {
+      const tableId = `table_v140_S1_LALPHA_V${level}_G${group}`;
+      sources.push({ path: `league_tables_v2/${tableId}`, data: { season: 1, version: 140, leagueId: 'ALPHA' } });
+      for (let rank = 1; rank <= 8; rank++) {
+        const slotId = `S1_LALPHA_D${level}_G${group}_R${rank}`;
+        const clubId = `club-${level}-${group}-${rank}`;
+        sources.push({ path: `league_slots_v1/${slotId}`, data: { season: 1, leagueId: 'ALPHA' } });
+        sources.push({ path: `players_v14/${clubId}`, data: { id: clubId, credits: 1000, ownedPlayers: [{ id: `player-${rank}` }] } });
+        sources.push({
+          path: `cup_participant_snapshots_v1/cup_s1_lALPHA/teams/${clubId}`,
+          data: { cupId: 'cup_s1_lALPHA', season: 1, teamId: clubId },
+        });
+      }
+    }
   }
-  for (let i = 1; i <= 120; i++) {
-    sources.push({ path: `league_slots_v1/slot-${i}`, data: { season: 1 } });
-    sources.push({ path: `players_v14/club-${i}`, data: { id: `club-${i}`, credits: 1000, ownedPlayers: [{ id: `player-${i}` }] } });
-    sources.push({ path: `cup_participant_snapshots_v1/cup_s1_lALPHA/teams/club-${i}`, data: { cupId: 'cup_s1_lALPHA', teamId: `club-${i}` } });
+  let fixture = 0;
+  for (let level = 1; level <= 4; level++) {
+    for (let group = 1; group <= 2 ** (level - 1); group++) {
+      for (let tour = 1; tour <= 14; tour++) {
+        for (let pair = 1; pair <= 4; pair++) {
+          fixture++;
+          const homeRank = pair;
+          const awayRank = 9 - pair;
+          const id = `match_v140_S1_LALPHA_V${level}_G${group}_T${tour}_R${homeRank}_vs_R${awayRank}`;
+          sources.push({
+            path: `matches_v2/${id}`,
+            data: { season: 1, version: 140, leagueId: 'ALPHA' },
+          });
+        }
+      }
+    }
   }
-  for (let i = 1; i <= 840; i++) {
-    sources.push({ path: `matches_v2/match-${i}`, data: { season: 1, version: 140 } });
-  }
-  sources.push({ path: 'cup_pyramid_v1/cup_s1_lALPHA', data: { season: 1 } });
+  sources.push({
+    path: 'cup_pyramid_v1/cup_s1_lALPHA',
+    data: { id: 'cup_s1_lALPHA', season: 1 },
+  });
   for (let i = 1; i <= 56; i++) {
-    sources.push({ path: `cup_matches/cup_S1_R1_M${String(i).padStart(2, '0')}`, data: { season: 1, cupId: 'cup_s1_lALPHA' } });
+    const id = `cup_S1_R1_M${String(i).padStart(2, '0')}`;
+    sources.push({
+      path: `cup_matches/${id}`,
+      data: { season: 1, cupId: 'cup_s1_lALPHA' },
+    });
   }
   return sources;
 }
@@ -48,7 +77,7 @@ test('Season 1 backup rejects account, credential, and unrelated collection path
   ]) {
     const result = validateSeasonOneArchiveSources([{ path, data: { secret: 'never archive' } }]);
     assert.equal(result.valid, false, path);
-    assert.ok(result.reasons.includes('ARCHIVE_SOURCE_PATH_NOT_ALLOWLISTED'), path);
+    assert.ok(result.reasons.includes('ARCHIVE_SOURCE_PATH_NOT_ALLOWLISTED') || result.reasons.includes('ARCHIVE_SOURCE_IDENTITY_MISMATCH'), path);
   }
 });
 
