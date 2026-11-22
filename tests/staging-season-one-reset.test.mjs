@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { buildFreshSeasonOneResetPlan } from '../src/app/actions/staging-season-one-reset-plan.ts';
 import { resetFreshSeasonOnePlayerState, resetFreshSeasonOneClubProfileState, createFreshSeasonOneHumanClubProfile } from '../src/app/actions/fresh-season-one-player-reset.ts';
+import { buildFreshSeasonOneWorldDocuments } from '../src/app/actions/fresh-season-one-world-builder.ts';
 
 const root = resolve(import.meta.dirname, '..');
 const read = path => readFileSync(resolve(root, path), 'utf8');
@@ -212,6 +213,53 @@ test('fresh Season 1 reset preserves human Firebase UIDs but replaces their club
   assert.equal(plan.replace.botClubProfiles, 119);
   assert.equal(plan.replace.clubProfiles, 120);
   assert.equal(plan.expected.freeRegistrationSlots, 119);
+});
+
+test('fresh Season 1 world builder replaces all club rosters while preserving human UIDs and ranks', () => {
+  const input = createValidInput();
+  const table = input.tables.find(item => item.id === 'table_v140_S1_LALPHA_V2_G1');
+  const slot = input.slots.find(item => item.id === 'S1_LALPHA_D2_G1_R3');
+  const botId = 'BOT_ALPHA_L2_G1_R3';
+  const uid = 'existing-human-uid';
+  const oldProfile = {
+    id: uid, email: 'manager@example.invalid', displayName: 'Manager',
+    clubName: 'Old Club', numericId: 1201, credits: 42, crystals: 9,
+    ownedPlayers: [{ id: 'old-player-1', role: 'Carry' }],
+  };
+  delete table.data.stats[botId];
+  table.data.stats[uid] = {
+    id: uid, name: 'Old Club', rank: 3, isBot: false,
+    matchesPlayed: 14, wins: 10, draws: 1, losses: 3, points: 31, diff: 22,
+  };
+  slot.data.status = 'OCCUPIED';
+  slot.data.occupantId = uid;
+
+  const result = buildFreshSeasonOneWorldDocuments({
+    tables: input.tables, slots: input.slots,
+    profiles: new Map([[uid, oldProfile]]),
+    now: new Date('2026-11-22T15:00:00.000Z'),
+  });
+
+  assert.deepEqual(result.counts, {
+    tables: 15, slots: 120, profiles: 120, humanClubs: 1, botClubs: 119,
+    freeRegistrationSlots: 119,
+  });
+  const human = result.profiles.find(profile => profile.id === uid);
+  assert.ok(human);
+  assert.equal(human.data.id, uid);
+  assert.equal(human.data.credits, 1_000_000);
+  assert.equal(human.data.crystals, 50);
+  assert.equal(human.data.ownedPlayers.length, 10);
+  assert.ok(human.data.ownedPlayers.every(player => player.id !== 'old-player-1'));
+  const freshTable = result.tables.find(item => item.id === table.id);
+  assert.equal(freshTable.data.stats[uid].matchesPlayed, 0);
+  assert.equal(freshTable.data.stats[uid].wins, 0);
+  assert.equal(freshTable.data.stats[uid].points, 0);
+  assert.equal(freshTable.data.stats[uid].isBot, false);
+  const freshSlot = result.slots.find(item => item.id === slot.id);
+  assert.equal(freshSlot.data.status, 'OCCUPIED');
+  assert.equal(freshSlot.data.occupantId, uid);
+  assert.equal(freshSlot.data.occupancyGeneration, 0);
 });
 
 test('fresh Season 1 reset allows orphaned old Cup fixtures and snapshots when the Cup root is absent', () => {
