@@ -237,14 +237,16 @@ export function buildFreshSeasonOneResetPlan(input: FreshSeasonOneResetInput) {
       }
     }
   }
-  for (const snapshot of input.cupSnapshots) {
-    const data = snapshot.data || {};
-    if (!participantIds.has(snapshot.id) || data.cupId !== 'cup_s1_lALPHA' ||
-        Number(data.season) !== 1 || data.teamId !== snapshot.id ||
-        data.matchSnapshot?.id !== snapshot.id ||
-        !Array.isArray(data.matchSnapshot?.players) || data.matchSnapshot.players.length !== 5) {
-      reasons.push('PYRAMID_CUP_PARTICIPANT_SNAPSHOT_INVALID');
-      break;
+  if (cup) {
+    for (const snapshot of input.cupSnapshots) {
+      const data = snapshot.data || {};
+      if (!participantIds.has(snapshot.id) || data.cupId !== 'cup_s1_lALPHA' ||
+          Number(data.season) !== 1 || data.teamId !== snapshot.id ||
+          data.matchSnapshot?.id !== snapshot.id ||
+          !Array.isArray(data.matchSnapshot?.players) || data.matchSnapshot.players.length !== 5) {
+        reasons.push('PYRAMID_CUP_PARTICIPANT_SNAPSHOT_INVALID');
+        break;
+      }
     }
   }
 
