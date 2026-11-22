@@ -6,8 +6,8 @@ process.env.NEXT_PUBLIC_USE_FIREBASE_EMULATORS = 'true';
 process.env.GCLOUD_PROJECT = 'demo-forge-rivals-cup-test';
 
 const emulatorHost = process.env.FIRESTORE_EMULATOR_HOST;
-const EXPECTED_MATCHES = { 1: 60, 2: 30, 3: 15, 4: 7, 5: 4, 6: 2, 7: 1 };
-const EXPECTED_PAIRINGS = { 1: 60, 2: 30, 3: 15, 4: 8, 5: 4, 6: 2, 7: 1 };
+const EXPECTED_MATCHES = { 1: 56, 2: 32, 3: 16, 4: 8, 5: 4, 6: 2, 7: 1 };
+const EXPECTED_PAIRINGS = { 1: 56, 2: 32, 3: 16, 4: 8, 5: 4, 6: 2, 7: 1 };
 
 test('prepared Season 2 receives its complete Pyramid Cup before publication in an isolated Firestore Emulator project', {
   skip: !emulatorHost,
@@ -127,7 +127,8 @@ test('prepared Season 2 receives its complete Pyramid Cup before publication in 
   assert.equal(result.success, true, JSON.stringify(result));
   assert.equal(result.generated, true);
   assert.equal(result.participants, 120);
-  assert.equal(result.preliminaryMatches, 60);
+  assert.equal(result.preliminaryMatches, 56);
+  assert.equal(result.openingRoundRestCount, 8);
   assert.equal(result.byes, 0);
   assert.equal(result.scheduledAt, expectedFirstKickoff.toISOString(), 'preliminary cup round must follow league Tour 1 at 07:00 Moscow time');
 
@@ -145,17 +146,21 @@ test('prepared Season 2 receives its complete Pyramid Cup before publication in 
   assert.equal(cup.status, 'active');
   assert.equal(cup.currentRound, 1);
   assert.equal(cup.participants.length, 120);
-  assert.equal(cup.preliminaryMatches, 60);
+  assert.equal(cup.preliminaryMatches, 56);
   assert.equal(cup.byeCount, 0);
-  assert.equal(cup.rounds.r1.length, 60);
+  assert.equal(cup.formatVersion, 4);
+  assert.equal(cup.openingRoundRestCount, 8);
+  assert.equal(cup.rounds.r1.length, 56);
   assert.equal(cup.rounds.r1[0].home.matchSnapshot, undefined, 'large roster snapshots must not inflate the bracket document');
   assert.equal(cup.rounds.r1.filter(pairing => pairing.status === 'bye').length, 0);
 
   const firstRound = cup.rounds.r1.filter(pairing => pairing.home && pairing.away);
-  assert.equal(firstRound.length, 60);
+  assert.equal(firstRound.length, 56);
   for (const [pairIndex, pairing] of firstRound.entries()) {
-    assert.equal(pairing.away.seed, pairIndex + 1, 'opening-round away side must follow strongest-to-weakest seeding');
-    assert.equal(pairing.home.seed, 120 - pairIndex, 'opening-round home side must follow weakest-to-strongest seeding');
+    assert.equal(pairing.away.seed, 119 - pairIndex * 2, 'adjacent stronger team must be AWAY');
+    assert.equal(pairing.home.seed, 120 - pairIndex * 2, 'adjacent weaker team must be HOME');
+    assert.notEqual(pairing.away.level, 1);
+    assert.notEqual(pairing.home.level, 1);
     const fixtureRef = db.collection(MATCH_COLLECTIONS.cup).doc(pairing.matchId);
     fixtureRefs.push(fixtureRef);
     const fixtureSnap = await fixtureRef.get();
@@ -174,17 +179,17 @@ test('prepared Season 2 receives its complete Pyramid Cup before publication in 
     assert.equal(fixture.scheduledAt.toDate().getUTCHours(), 4);
   }
 
-  // Every participant, including the eventual round-four BYE candidate, has a frozen snapshot.
-  const byeCandidate = cup.participants[0];
-  const byeSnapshotRef = db.collection('cup_participant_snapshots_v1').doc(cupRef.id).collection('teams').doc(byeCandidate.id);
-  const byeSnapshot = await byeSnapshotRef.get();
-  assert.equal(byeSnapshot.exists, true);
-  const byeSnapshotData = byeSnapshot.data();
-  await byeSnapshotRef.delete();
+  // Every participant, including D1's eight round-two entrants, has a frozen snapshot.
+  const restedD1Team = cup.openingRoundRestTeams[0];
+  const d1SnapshotRef = db.collection('cup_participant_snapshots_v1').doc(cupRef.id).collection('teams').doc(restedD1Team.id);
+  const d1Snapshot = await d1SnapshotRef.get();
+  assert.equal(d1Snapshot.exists, true);
+  const d1SnapshotData = d1Snapshot.data();
+  await d1SnapshotRef.delete();
   const incompleteRetry = await preparePyramidCupForSeason(season);
   assert.equal(incompleteRetry.success, false);
   assert.equal(incompleteRetry.reason, 'CUP_PREPARED_PARTICIPANT_SNAPSHOT_INVALID');
-  await byeSnapshotRef.set(byeSnapshotData);
+  await d1SnapshotRef.set(d1SnapshotData);
 
   const retry = await preparePyramidCupForSeason(season);
   assert.equal(retry.success, true, JSON.stringify(retry));
@@ -239,9 +244,11 @@ test('prepared Season 2 receives its complete Pyramid Cup before publication in 
   // The participant roster is frozen at generation. Even if a replaced bot's
   // live profile is retired by registration, its published Cup fixture remains playable.
   const firstPairing = firstRound[0];
-  assert.equal(firstPairing.home.id, humanUid, 'the weakest seed should be home against the strongest seed');
-  assert.equal(firstPairing.away.seed, 1, 'the strongest team must play in the first round, not receive a first-round BYE');
+  assert.equal(firstPairing.home.id, humanUid, 'the weakest D4 team should be HOME against its adjacent opponent');
+  assert.equal(firstPairing.away.seed, 119, 'the adjacent stronger team must be AWAY');
   assert.equal(firstPairing.home.seed, 120);
+  assert.equal(cup.openingRoundRestTeams.length, 8);
+  assert.ok(cup.openingRoundRestTeams.every(team => team.level === 1));
   await db.collection('players_v14').doc(firstPairing.away.id).delete();
   const resolved = await resolveUniversalMatchDocument(firstPairing.matchId, { collectionName: MATCH_COLLECTIONS.cup });
   assert.equal(resolved.finished, true, JSON.stringify(resolved));
@@ -315,11 +322,12 @@ test('prepared Season 2 receives its complete Pyramid Cup before publication in 
     const nextPairings = nextCup.rounds[`r${round + 1}`];
     assert.equal(nextPairings.filter(value => value.home && value.away).length, EXPECTED_MATCHES[round + 1]);
     assert.equal(nextPairings.length, EXPECTED_PAIRINGS[round + 1]);
-    if (round + 1 === 4) {
-      const bye = nextPairings.find(value => value.status === 'bye');
-      assert.ok(bye, 'round four must contain the single BYE after 15 teams advance');
-      const strongestAdvancingSeed = Math.min(...pairings.map(value => value.home.seed));
-      assert.equal(bye.home.seed, strongestAdvancingSeed, 'the strongest remaining team receives the round-four BYE');
+    assert.equal(nextPairings.some(value => value.status === 'bye'), false, 'no round may contain a BYE');
+    if (round === 1) {
+      const d1Ids = new Set(cup.openingRoundRestTeams.map(team => team.id));
+      const nextRoundTeamIds = new Set(nextPairings.flatMap(value => [value.home.id, value.away.id]));
+      assert.equal(nextPairings.length, 32);
+      assert.ok([...d1Ids].every(id => nextRoundTeamIds.has(id)), 'all eight D1 teams must join round two');
     }
     for (const pairing of nextPairings.filter(value => value.home && value.away)) {
       const nextFixtureRef = db.collection(MATCH_COLLECTIONS.cup).doc(pairing.matchId);
@@ -460,7 +468,7 @@ test('a pristine emulator publishes Season 1 only after its complete Pyramid Cup
   assert.equal(generated.success, true, JSON.stringify(generated));
   assert.equal(generated.created, true);
   assert.equal(generated.participants, 120);
-  assert.equal(generated.preliminaryMatches, 60);
+  assert.equal(generated.preliminaryMatches, 56);
 
   const cupRef = db.collection('cup_pyramid_v1').doc('cup_s1_lALPHA');
   const cupSnap = await cupRef.get();
@@ -469,14 +477,18 @@ test('a pristine emulator publishes Season 1 only after its complete Pyramid Cup
   assert.equal(cup.status, 'active');
   assert.equal(cup.season, 1);
   assert.equal(cup.totalParticipants, 120);
-  assert.equal(cup.preliminaryMatches, 60);
+  assert.equal(cup.preliminaryMatches, 56);
   assert.equal(cup.byeCount, 0);
-  assert.equal(cup.rounds.r1.length, 60);
+  assert.equal(cup.formatVersion, 4);
+  assert.equal(cup.openingRoundRestCount, 8);
+  assert.equal(cup.rounds.r1.length, 56);
 
   const firstRound = cup.rounds.r1;
   for (const [index, pairing] of firstRound.entries()) {
-    assert.equal(pairing.away.seed, index + 1);
-    assert.equal(pairing.home.seed, 120 - index);
+    assert.equal(pairing.away.seed, 119 - index * 2);
+    assert.equal(pairing.home.seed, 120 - index * 2);
+    assert.notEqual(pairing.away.level, 1);
+    assert.notEqual(pairing.home.level, 1);
     assert.equal(pairing.status, 'scheduled');
     const fixture = await db.collection(MATCH_COLLECTIONS.cup).doc(pairing.matchId).get();
     assert.equal(fixture.exists, true);
