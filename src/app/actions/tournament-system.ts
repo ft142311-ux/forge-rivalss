@@ -13,6 +13,22 @@ import { MATCH_COLLECTIONS } from '@/app/lib/match-storage';
 import { isTournamentMatchLeaseExpired, TOURNAMENT_MATCH_LEASE_MS } from '@/app/lib/tournament-match-lease';
 import { isTournamentStageMatchSetComplete } from '@/app/lib/tournament-stage-utils';
 
+
+/**
+ * Every tournament/cup write transaction reads the reset marker first.
+ * Firestore's transaction conflict detection prevents a worker that began
+ * before the marker was asserted from committing after the reset starts.
+ */
+async function runWorldMutationTransaction<T>(db: any, work: (tx: any) => Promise<T>): Promise<T> {
+  return db.runTransaction(async (tx: any) => {
+    const resetConfig = await tx.get(db.collection('system_v1').doc('season_config'));
+    if (resetConfig.exists && resetConfig.data()?.stagingSeasonOneResetInProgress === true) {
+      throw new Error('STAGING_SEASON_ONE_RESET_IN_PROGRESS');
+    }
+    return work(tx);
+  });
+}
+
 const TOURNAMENTS = [
   { id: 'iron-kettle', name: 'Чугунный чайник', type: 'Тов', maxParticipants: 16, start: '10:00' },
   { id: 'bronze-cup', name: 'Бронзовая чаша', type: 'Тов', maxParticipants: 32, start: '12:00' },
@@ -216,7 +232,7 @@ export async function registerForTournamentAction(idToken: string, tournamentId:
     const manager = await readManager(db, uid);
     if (!manager) throw new Error('PLAYER_NOT_FOUND');
 
-    await db.runTransaction(async (t: any) => {
+    await runWorldMutationTransaction(db, async (t: any) => {
       const snap = await t.get(ref);
       if (!snap.exists) throw new Error('TOURNAMENT_NOT_FOUND');
       const data = snap.data() || {};
@@ -243,7 +259,7 @@ export async function unregisterFromTournamentAction(idToken: string, tournament
     const { uid } = await requireServerActor(idToken);
     const db = getAdminDb();
     const ref = db.collection('tournaments_v1').doc(tournamentId);
-    await db.runTransaction(async (t: any) => {
+    await runWorldMutationTransaction(db, async (t: any) => {
       const snap = await t.get(ref);
       if (!snap.exists) throw new Error('TOURNAMENT_NOT_FOUND');
       const data = snap.data() || {};
@@ -265,7 +281,7 @@ async function initializeTournament(db: any, tournamentId: string, now: number) 
 
   // A fresh initialization lease is exclusive. If its owner crashed, a later
   // cron cycle may reclaim it after the bounded lease expires.
-  const tournament = await db.runTransaction(async (t: any) => {
+  const tournament = await runWorldMutationTransaction(db, async (t: any) => {
     const snap = await t.get(ref);
     if (!snap.exists) return null;
     const data = snap.data() || {};
@@ -362,7 +378,7 @@ async function initializeTournament(db: any, tournamentId: string, now: number) 
 
     // All participant, group, fixture and stage writes commit atomically after
     // the initialization token is revalidated. A reclaimed worker is fenced.
-    await db.runTransaction(async (t: any) => {
+    await runWorldMutationTransaction(db, async (t: any) => {
       const fresh = await t.get(ref);
       const current = fresh.data() || {};
       if (!fresh.exists || current.status !== 'initializing' ||
@@ -390,7 +406,7 @@ async function initializeTournament(db: any, tournamentId: string, now: number) 
     return true;
   } catch (error: any) {
     // A stale worker must not reset a newer worker's initialization lease.
-    await db.runTransaction(async (t: any) => {
+    await runWorldMutationTransaction(db, async (t: any) => {
       const fresh = await t.get(ref);
       const current = fresh.data() || {};
       if (!fresh.exists || current.status !== 'initializing' ||
@@ -417,7 +433,7 @@ async function resolveTournamentMatch(db: any, tournamentId: string, matchId: st
   const tournamentRef = db.collection('tournaments_v1').doc(tournamentId);
   const matchRef = tournamentRef.collection('matches').doc(matchId);
   const processingToken = randomUUID();
-  const claim = await db.runTransaction(async (t: any) => {
+  const claim = await runWorldMutationTransaction(db, async (t: any) => {
     const snap = await t.get(matchRef);
     if (!snap.exists) return false;
     const m = snap.data() || {};
@@ -478,7 +494,7 @@ async function resolveTournamentMatch(db: any, tournamentId: string, matchId: st
     const homeScore = simulation.games.reduce((s, g) => s + g.homeScore, 0);
     const awayScore = simulation.games.reduce((s, g) => s + g.awayScore, 0);
 
-    const finalized = await db.runTransaction(async (t: any) => {
+    const finalized = await runWorldMutationTransaction(db, async (t: any) => {
       const fresh = await t.get(matchRef);
       const freshData = fresh.data() || {};
       if (!fresh.exists || freshData.status !== 'processing' || freshData.processingToken !== processingToken) return false;
@@ -579,7 +595,7 @@ async function resolveTournamentMatch(db: any, tournamentId: string, matchId: st
     const message = String((error as any)?.message || error || 'TOURNAMENT_MATCH_FAILED').slice(0, 300);
     // A worker whose lease was reclaimed must never overwrite the newer
     // worker's state or publish a stale result.
-    await db.runTransaction(async (t: any) => {
+    await runWorldMutationTransaction(db, async (t: any) => {
       const fresh = await t.get(matchRef);
       const data = fresh.data() || {};
       if (!fresh.exists || data.status !== 'processing' || data.processingToken !== processingToken) return;
@@ -625,7 +641,7 @@ function expectedStageMatchCount(maxParticipants: number, stage: string) {
 async function syncTournamentHistoryForParticipant(db: any, participantId: string, historyEntry: Record<string, any>) {
   const playerRef = db.collection('players_v14').doc(participantId);
   const archiveRef = db.collection('inactive_clubs_v1').doc(participantId);
-  return db.runTransaction(async (t: any) => {
+  return runWorldMutationTransaction(db, async (t: any) => {
     const [playerSnap, archiveSnap] = await Promise.all([
       t.get(playerRef),
       t.get(archiveRef),
@@ -697,7 +713,7 @@ async function commitTournamentStageTransition(
   fixtures: Array<Record<string, any>>,
 ) {
   const tournamentRef = db.collection('tournaments_v1').doc(tournamentId);
-  return db.runTransaction(async (t: any) => {
+  return runWorldMutationTransaction(db, async (t: any) => {
     const tournamentSnap = await t.get(tournamentRef);
     if (!tournamentSnap.exists) return false;
     const current = tournamentSnap.data() || {};
@@ -788,7 +804,7 @@ async function advanceTournament(db: any, tournament: any, now: number) {
     const finalSnap = await ref.collection('matches').where('stage', '==', 'final').limit(1).get();
     const finalMatch = finalSnap.docs[0]?.data();
     if (!finalMatch?.winnerId) return false;
-    const completedTournament = await db.runTransaction(async (t: any) => {
+    const completedTournament = await runWorldMutationTransaction(db, async (t: any) => {
       const fresh = await t.get(ref);
       if (!fresh.exists) return null;
       const current = fresh.data() || {};
