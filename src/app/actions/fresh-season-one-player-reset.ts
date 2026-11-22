@@ -1,4 +1,5 @@
 export type FreshSeasonOnePlayer = Record<string, any>;
+export type FreshSeasonOneClubProfile = Record<string, any>;
 
 const EMPTY_SEASON_STATS = {
   matches: 0,
@@ -17,40 +18,15 @@ const SEASON_ONE_LEAGUE_MATCH_PREFIX = 'match_v140_S1_LALPHA_';
 function isSeasonOneCompetitionMatchId(value: unknown) {
   const id = String(value || '');
   return id.startsWith(SEASON_ONE_LEAGUE_MATCH_PREFIX) ||
-    /^cup_S1_/.test(id) ||
+    id.startsWith('cup_S1_') ||
     /^match_v\d+_S1_/.test(id);
 }
 
 /**
- * Clears only competition-season counters and transient references for the
- * fresh Season 1. Player identity, roster membership, development, condition,
- * contracts, XP, finances, lifetime statistics and unrelated trophies remain.
+ * Clears only an individual player's competition-season counters and discipline.
+ * Development, identity, condition, injuries, contracts, XP and career totals stay.
  */
 export function resetFreshSeasonOnePlayerState<T extends FreshSeasonOnePlayer>(player: T): T {
-  const seasonAwards = player.seasonAwards && typeof player.seasonAwards === 'object'
-    ? { ...player.seasonAwards }
-    : {};
-  delete seasonAwards.S1;
-
-  const trophies = Array.isArray(player.trophies)
-    ? player.trophies.filter((trophy: any) => {
-        const isSeasonOneLeagueAward = trophy?.id === 'league-cup-season-1' &&
-          trophy?.type === 'league_champion';
-        const isSeasonOnePyramidAward = trophy?.id === 'pyramid-cup-season-1' &&
-          trophy?.type === 'pyramid_cup_champion';
-        return !isSeasonOneLeagueAward && !isSeasonOnePyramidAward;
-      })
-    : player.trophies;
-
-  const matchEconomy = player.matchEconomy && typeof player.matchEconomy === 'object'
-    ? Object.fromEntries(Object.entries(player.matchEconomy).filter(([matchId]) =>
-        !(String(matchId).startsWith(SEASON_ONE_LEAGUE_MATCH_PREFIX) || String(matchId).startsWith('cup_S1_'))))
-    : player.matchEconomy;
-
-  const lastMatchConsequences = isSeasonOneCompetitionMatchId(player.lastMatchConsequences?.matchId)
-    ? null
-    : player.lastMatchConsequences;
-
   return {
     ...player,
     seasonStats: { ...EMPTY_SEASON_STATS },
@@ -61,6 +37,46 @@ export function resetFreshSeasonOnePlayerState<T extends FreshSeasonOnePlayer>(p
     lastMatchOfficial: false,
     warningCount: 0,
     suspensionUntil: null,
+  };
+}
+
+/**
+ * Clears the club-level Season 1 awards and stale match references while
+ * applying the player-level reset to each owned player. Club identity,
+ * credentials, roster membership, finances, facilities, tactics and lineup stay.
+ */
+export function resetFreshSeasonOneClubProfileState<T extends FreshSeasonOneClubProfile>(profile: T): T {
+  const seasonAwards = profile.seasonAwards && typeof profile.seasonAwards === 'object'
+    ? { ...profile.seasonAwards }
+    : {};
+  delete seasonAwards.S1;
+
+  const trophies = Array.isArray(profile.trophies)
+    ? profile.trophies.filter((trophy: any) =>
+        !(
+          (trophy?.id === 'league-cup-season-1' && trophy?.type === 'league_champion') ||
+          (trophy?.id === 'pyramid-cup-season-1' && trophy?.type === 'pyramid_cup_champion')
+        ))
+    : profile.trophies;
+
+  const matchEconomy = profile.matchEconomy && typeof profile.matchEconomy === 'object'
+    ? Object.fromEntries(Object.entries(profile.matchEconomy).filter(([matchId]) => {
+        const id = String(matchId);
+        return !id.startsWith(SEASON_ONE_LEAGUE_MATCH_PREFIX) && !id.startsWith('cup_S1_');
+      }))
+    : profile.matchEconomy;
+
+  const lastMatchConsequences = isSeasonOneCompetitionMatchId(profile.lastMatchConsequences?.matchId)
+    ? null
+    : profile.lastMatchConsequences;
+
+  const ownedPlayers = Array.isArray(profile.ownedPlayers)
+    ? profile.ownedPlayers.map((player: FreshSeasonOnePlayer) => resetFreshSeasonOnePlayerState(player))
+    : profile.ownedPlayers;
+
+  return {
+    ...profile,
+    ownedPlayers,
     seasonAwards,
     trophies,
     matchEconomy,
