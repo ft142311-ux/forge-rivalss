@@ -140,6 +140,9 @@ test('fresh Beta Season 1 preflight is authenticated, project-fenced and read-on
   assert.match(source, /cupFixtures: cupMatchesSnap\.docs\.map/);
   assert.match(source, /season_rollover_v1/);
   assert.match(source, /season_calendar_build_v1/);
+  // S1 -> S2 rollover documents are keyed by the target season (S2).
+  assert.match(source, /league_season_rollovers_v1'\)\.doc\('S2'\)/);
+  assert.doesNotMatch(source, /league_season_rollovers_v1'\)\.doc\('S1'\)/);
   assert.match(source, /collection\('matches'\)/);
   assert.doesNotMatch(source, /\.set\(|\.create\(|\.update\(|\.delete\(|runTransaction\(/);
   assert.doesNotMatch(source, /participantIds\s*:\s*\[|profileIds\s*:\s*\[/);
