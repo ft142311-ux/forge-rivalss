@@ -39,7 +39,7 @@ export async function GET(request: NextRequest) {
     const matchPrefix = 'match_v140_S1_LALPHA_';
     const [configSnap, tablesSnap, slotsSnap, matchesSnap, cupSnap, cupMatchesSnap,
       legacyCupMatchesSnap, archiveSnap, archiveMatchesSnap, rolloverSnap, historySnap,
-      matchEffectsSnap, matchRevenueSnap, leagueConsequenceSnap, cupConsequenceSnap,
+      matchEffectsSnap, matchRevenueSnap, cupMatchRevenueSnap, leagueConsequenceSnap, cupConsequenceSnap,
       leagueSeasonRewardSnap, pyramidCupRewardSnap, rolloverLockSnap, calendarLockSnap] = await Promise.all([
       db.collection('system_v1').doc('season_config').get(),
       db.collection('league_tables_v2').where('season', '==', 1).where('version', '==', 140).get(),
@@ -110,6 +110,7 @@ export async function GET(request: NextRequest) {
       archiveMatches: archiveMatchesSnap.size,
       matchPlayerEffects: matchEffectsSnap.size,
       matchRevenueReceipts: matchRevenueSnap.docs.filter(doc => doc.data()?.type === 'MATCH_REVENUE').length,
+      cupMatchRevenueReceipts: cupMatchRevenueSnap.docs.filter(doc => doc.data()?.type === 'MATCH_REVENUE').length,
       matchConsequenceReceipts: leagueConsequenceSnap.size + cupConsequenceSnap.size,
       leagueSeasonRewardReceipts: leagueSeasonRewardSnap.size,
       pyramidCupRewardReceipts: pyramidCupRewardSnap.docs.filter(doc =>
