@@ -1,6 +1,6 @@
 'use client';
 
-/** Pyramid Cup terminal — all 120 league teams, single elimination. */
+/** Pyramid Cup terminal — 120 league teams; D1 enters in round two. */
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
@@ -15,8 +15,8 @@ import { LoadingScreen } from '@/components/game/LoadingScreen';
 import { cn } from '@/lib/utils';
 
 const ROUND_COUNT = 7;
-const EXPECTED_MATCHES: Record<number, number> = { 1: 60, 2: 30, 3: 15, 4: 7, 5: 4, 6: 2, 7: 1 };
-const EXPECTED_SLOTS: Record<number, number> = { 1: 60, 2: 30, 3: 15, 4: 8, 5: 4, 6: 2, 7: 1 };
+const EXPECTED_MATCHES: Record<number, number> = { 1: 56, 2: 32, 3: 16, 4: 8, 5: 4, 6: 2, 7: 1 };
+const EXPECTED_SLOTS: Record<number, number> = { 1: 56, 2: 32, 3: 16, 4: 8, 5: 4, 6: 2, 7: 1 };
 const CUP_ROUND_DAYS = [2, 3, 4, 5, 6, 7, 8];
 
 function formatCupKickoff(seasonStartValue: unknown, round: number, language: string) {
@@ -88,8 +88,10 @@ export default function PyramidCupPage() {
   const roundFinishedCount = matches.filter((match: any) => match?.home && match?.away && match.status === 'finished').length;
   const roundByeCount = matches.filter((match: any) => match?.status === 'bye').length;
   const roundName = activeRound === 1
-    ? (ru ? 'ПРЕДВАРИТЕЛЬНЫЙ РАУНД' : 'PRELIMINARY ROUND')
-    : activeRound === 7
+    ? (ru ? 'ПРЕДВАРИТЕЛЬНЫЙ РАУНД · D2–D4' : 'PRELIMINARY ROUND · D2–D4')
+    : activeRound === 2
+      ? (ru ? 'РАУНД 2 · ПОДКЛЮЧАЕТСЯ D1' : 'ROUND 2 · D1 JOINS')
+      : activeRound === 7
     ? (ru ? 'ФИНАЛ BO3' : 'BO3 FINAL')
     : activeRound === 6
       ? (ru ? 'ПОЛУФИНАЛ' : 'SEMIFINAL')
@@ -141,6 +143,7 @@ export default function PyramidCupPage() {
             <div className="mt-3 flex items-center gap-2 text-[9px] font-bold uppercase text-primary"><CalendarClock className="w-3.5 h-3.5 shrink-0" />{formatCupKickoff(cupData.seasonStart, activeRound, language)}</div>
           </CardContent></Card>
 
+          {activeRound === 1 && <Card className="glass-card border-primary/20 mb-4"><CardContent className="p-3 text-[9px] font-bold uppercase tracking-wide text-muted-foreground">{ru ? 'В первом раунде играют D2, D3 и D4 · 112 команд · 56 матчей. Все 8 команд D1 начнут со второго раунда.' : 'D2, D3 and D4 play the opening round · 112 teams · 56 matches. All 8 D1 teams enter in round two.'}</CardContent></Card>}
           <Button variant="outline" className="w-full mb-4 border-white/10 bg-secondary/20 text-[9px] font-black uppercase" onClick={() => setShowParticipants(value => !value)}>
             <Users className="w-4 h-4 mr-2" />{showParticipants ? (ru ? 'СКРЫТЬ УЧАСТНИКОВ' : 'HIDE PARTICIPANTS') : (ru ? `ВСЕ УЧАСТНИКИ · ${participants.length}/120` : `ALL PARTICIPANTS · ${participants.length}/120`)}
           </Button>
