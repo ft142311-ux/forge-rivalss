@@ -549,8 +549,8 @@ test('fresh Season 1 club profile reset preserves finances and identity while cl
 
 test('fresh Season 1 executor verifies a durable per-document archive before any destructive delete', () => {
   const executor = read('src/app/actions/fresh-season-one-reset-executor.ts');
-  const archiveCall = executor.indexOf('createOrVerifyDurableSeasonOneArchive(db, journal.resetId, journal.sourceConfig)');
-  const deleteCall = executor.indexOf('removeOldSeasonOneData(db)');
+  const archiveCall = executor.indexOf('createOrVerifyDurableSeasonOneArchive(db, journal.resetId, journal.sourceConfig, () => assertLease(db, token))');
+  const deleteCall = executor.indexOf('const removed = await removeOldSeasonOneData(db)');
   assert.ok(archiveCall >= 0 && deleteCall > archiveCall, 'archive must complete before the first delete');
   assert.match(executor, /sourceConfig: config/);
   assert.match(executor, /journal.sourceConfig, \(\) => assertLease\(db, token\)/);
