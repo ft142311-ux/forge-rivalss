@@ -15,8 +15,8 @@ import { LoadingScreen } from '@/components/game/LoadingScreen';
 import { cn } from '@/lib/utils';
 
 const ROUND_COUNT = 7;
-const EXPECTED_MATCHES: Record<number, number> = { 1: 56, 2: 32, 3: 16, 4: 8, 5: 4, 6: 2, 7: 1 };
-const EXPECTED_SLOTS: Record<number, number> = { 1: 64, 2: 32, 3: 16, 4: 8, 5: 4, 6: 2, 7: 1 };
+const EXPECTED_MATCHES: Record<number, number> = { 1: 60, 2: 30, 3: 15, 4: 7, 5: 4, 6: 2, 7: 1 };
+const EXPECTED_SLOTS: Record<number, number> = { 1: 60, 2: 30, 3: 15, 4: 8, 5: 4, 6: 2, 7: 1 };
 const CUP_ROUND_DAYS = [2, 3, 4, 5, 6, 7, 8];
 
 function formatCupKickoff(seasonStartValue: unknown, round: number, language: string) {
