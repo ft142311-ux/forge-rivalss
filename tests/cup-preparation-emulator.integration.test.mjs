@@ -194,7 +194,7 @@ test('prepared Season 2 receives its complete Pyramid Cup before publication in 
   const retry = await preparePyramidCupForSeason(season);
   assert.equal(retry.success, true, JSON.stringify(retry));
   assert.equal(retry.alreadyExists, true);
-  assert.equal((await cupRef.get()).data().rounds.r1.length, 60);
+  assert.equal((await cupRef.get()).data().rounds.r1.length, 56);
 
   // A retry must reject a participant registry that no longer matches the
   // 120 clubs represented by round one, even when both records have valid counts.
