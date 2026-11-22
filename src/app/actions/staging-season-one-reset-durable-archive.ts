@@ -101,7 +101,8 @@ export async function createOrVerifyDurableSeasonOneArchive(
     ...tables, ...slots, ...profiles, ...matches, ...cupMatches, ...cupSnapshots,
     ...archiveMatches, ...slotHistory, ...effectsLeague, ...effectsCup,
     ...economyLeague, ...economyCup, ...economySeason, ...economyCupRewards,
-    ...consequencesLeague, ...consequencesCup, ...exact.flat(),
+    ...consequencesLeague, ...consequencesCup, ...exact.flat().filter(source => source.path !== 'system_v1/season_config'),
+    { path: 'system_v1/season_config', data: originalConfig },
   ]) unique.set(source.path, source);
   const sources = [...unique.values()].sort((a, b) => a.path.localeCompare(b.path));
   if (!sources.some(source => source.path === 'system_v1/season_config')) {
