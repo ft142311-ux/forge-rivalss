@@ -213,7 +213,13 @@ export async function releasePlayerSlot(idToken: string) {
 
   try {
     return await db.runTransaction(async (transaction) => {
-      const playerSnap = await transaction.get(playerRef);
+      const configRef = db.collection('system_v1').doc('season_config');
+      const [playerSnap, configSnap] = await Promise.all([
+        transaction.get(playerRef), transaction.get(configRef),
+      ]);
+      if (configSnap.exists && configSnap.data()?.stagingSeasonOneResetInProgress === true) {
+        throw new Error('STAGING_SEASON_ONE_RESET_IN_PROGRESS');
+      }
       if (!playerSnap.exists) return { success: true, alreadyReleased: true };
 
       const player = playerSnap.data()!;
