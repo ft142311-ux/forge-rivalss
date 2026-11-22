@@ -136,7 +136,7 @@ test('fresh Beta Season 1 preflight is authenticated, project-fenced and read-on
   assert.match(source, /LEAGUE_SEASON_REWARD/);
   assert.match(source, /PYRAMID_CUP_CHAMPION_REWARD/);
   assert.match(source, /cup_participant_snapshots_v1/);
-  assert.match(source, /PYRAMID_CUP_OPENING_FIXTURES_INCOMPLETE/);
+  assert.match(source, /cupFixtures: cupMatchesSnap\.docs\.map/);
   assert.match(source, /season_rollover_v1/);
   assert.match(source, /season_calendar_build_v1/);
   assert.match(source, /collection\('matches'\)/);
