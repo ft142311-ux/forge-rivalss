@@ -168,6 +168,22 @@ test('fresh Season 1 reset plan validates 120 participants and complete 840-matc
   assert.equal(plan.target.nextSeasonStart, '2026-12-09T15:00:00.000Z');
 });
 
+test('fresh Season 1 preflight blocks existing archives, rollover plans, history and orphan archive matches', () => {
+  const cases = [
+    ['archives', 'EXISTING_SEASON_ONE_ARCHIVE'],
+    ['rollovers', 'EXISTING_SEASON_TWO_ROLLOVER_PLAN'],
+    ['history', 'EXISTING_SEASON_ONE_HISTORY'],
+    ['archiveMatches', 'ORPHANED_SEASON_ONE_ARCHIVE_MATCHES'],
+  ];
+  for (const [field, reason] of cases) {
+    const input = createValidInput();
+    input[field] = 1;
+    const plan = buildFreshSeasonOneResetPlan(input);
+    assert.equal(plan.ready, false, field);
+    assert.ok(plan.reasons.includes(reason), field);
+  }
+});
+
 test('fresh Season 1 preflight rejects a Cup season-start mismatch', () => {
   const input = createValidInput();
   input.cup.seasonStart = '2026-11-10T15:00:00.000Z';
