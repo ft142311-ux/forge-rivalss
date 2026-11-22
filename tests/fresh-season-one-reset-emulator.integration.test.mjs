@@ -319,8 +319,8 @@ test('fresh Season 1 reset rebuilds league and Pyramid Cup while preserving Fire
   assert.equal(restoreOwnershipChecks, 3);
   assert.equal(
     (await db.collection('matches_v2').where('season', '==', 1).get()).size,
-    490,
-    'restore must stop after the first 350-document delete batch when its lease is lost',
+    492,
+    'restore must stop after the first 350-document delete batch when its lease is lost; two unrelated fixtures remain',
   );
 
   const restoredWorld = await restoreSeasonOneFromDurableArchive(
