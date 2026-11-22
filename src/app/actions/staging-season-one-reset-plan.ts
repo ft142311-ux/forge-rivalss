@@ -4,9 +4,9 @@ export type FreshSeasonOneResetInput = {
   slots: Array<{ id: string; data: Record<string, any> }>;
   matches: Array<{ id: string; data: Record<string, any> }>;
   profileIds: Set<string>;
-  cupExists: boolean;
-  cupMatches: number;
-  cupSnapshots: number;
+  cup: Record<string, any> | null;
+  cupFixtures: Array<{ id: string; data: Record<string, any> }>;
+  cupSnapshots: Array<{ id: string; data: Record<string, any> }>;
   archives: number;
   rollovers: number;
   history: number;
@@ -49,6 +49,36 @@ export function buildFreshSeasonOneResetPlan(input: FreshSeasonOneResetInput) {
   if (!['REGULAR_SEASON', 'ACTIVE'].includes(String(config.phase || '').toUpperCase())) reasons.push('SEASON_PHASE_NOT_RESETTABLE');
   if (input.liveLocks.length) reasons.push('SEASON_WORKER_LOCKED');
   if (input.unclassifiedMatches > 0) reasons.push('UNCLASSIFIED_SEASON_MATCH_DOCUMENTS');
+
+  // A fresh Season 1 is not ready until its canonical 120-team Pyramid Cup
+  // exists with all 56 opening fixtures and all 120 frozen roster snapshots.
+  const cup = input.cup;
+  const cupParticipants = Array.isArray(cup?.participants) ? cup!.participants : [];
+  const cupRoundOne = Array.isArray(cup?.rounds?.r1) ? cup!.rounds.r1 : [];
+  const participantIds = new Set(cupParticipants.map((team: any) => String(team?.id || '')));
+  const cupSeeds = new Set(cupParticipants.map((team: any) => Number(team?.seed)));
+  const leagueParticipantIds = new Set<string>();
+  // Populated after canonical league standings have been inspected below.
+  if (!cup) reasons.push('PYRAMID_CUP_DOCUMENT_MISSING');
+  if (cup && (Number(cup.season) !== 1 || cup.status !== 'active' ||
+      cup.name !== 'Кубок Пирамиды' || Number(cup.currentRound) !== 1 ||
+      Number(cup.totalRounds) !== 7 || Number(cup.formatVersion) !== 4 ||
+      cup.format !== 'D1_REST_OPENING_ROUND' || Number(cup.totalParticipants) !== EXPECTED_PARTICIPANTS ||
+      Number(cup.totalMatches) !== 119 || Number(cup.preliminaryMatches) !== 56 ||
+      Number(cup.byeCount) !== 0 || Number(cup.openingRoundRestCount) !== 8 ||
+      cupParticipants.length !== EXPECTED_PARTICIPANTS || participantIds.size !== EXPECTED_PARTICIPANTS ||
+      cupSeeds.size !== EXPECTED_PARTICIPANTS || [...cupSeeds].some(seed => !Number.isInteger(seed) || seed < 1 || seed > 120) ||
+      cupRoundOne.length !== 56)) {
+    reasons.push('PYRAMID_CUP_BRACKET_METADATA_INVALID');
+  }
+  if (input.cupSnapshots.length !== EXPECTED_PARTICIPANTS ||
+      new Set(input.cupSnapshots.map(snapshot => snapshot.id)).size !== EXPECTED_PARTICIPANTS) {
+    reasons.push('PYRAMID_CUP_PARTICIPANT_SNAPSHOTS_INCOMPLETE');
+  }
+  if (input.cupFixtures.length !== 56 ||
+      new Set(input.cupFixtures.map(fixture => fixture.id)).size !== 56) {
+    reasons.push('PYRAMID_CUP_OPENING_FIXTURES_INCOMPLETE');
+  }
 
   const groups = new Set<string>();
   const participants = new Map<string, { level: number; group: number; rank: number; isBot: boolean }>();
@@ -95,6 +125,62 @@ export function buildFreshSeasonOneResetPlan(input: FreshSeasonOneResetInput) {
     reasons.push('LEAGUE_TABLE_COUNT_INVALID');
   }
   if (participants.size !== EXPECTED_PARTICIPANTS) reasons.push('PARTICIPANT_COUNT_INVALID');
+  for (const id of participants.keys()) leagueParticipantIds.add(id);
+  if (cup && (participantIds.size !== leagueParticipantIds.size ||
+      [...leagueParticipantIds].some(id => !participantIds.has(id)))) {
+    reasons.push('PYRAMID_CUP_PARTICIPANT_IDENTITY_MISMATCH');
+  }
+  if (cup && Array.isArray(cup.openingRoundRestTeams)) {
+    const rest = cup.openingRoundRestTeams;
+    const expectedRest = [...participants.entries()]
+      .filter(([, team]) => team.level === 1)
+      .map(([id]) => id);
+    const restIds = new Set(rest.map((team: any) => String(team?.id || '')));
+    if (rest.length !== 8 || restIds.size !== 8 ||
+        expectedRest.length !== 8 ||
+        expectedRest.some(id => !restIds.has(id)) ||
+        rest.some((team: any) => Number(team?.level) !== 1)) {
+      reasons.push('PYRAMID_CUP_OPENING_REST_TEAMS_INVALID');
+    }
+  } else if (cup) {
+    reasons.push('PYRAMID_CUP_OPENING_REST_TEAMS_INVALID');
+  }
+  if (cup && cupRoundOne.length === 56) {
+    const fixtureIds = new Set(input.cupFixtures.map(fixture => fixture.id));
+    for (let index = 0; index < cupRoundOne.length; index++) {
+      const pairing = cupRoundOne[index] || {};
+      const expectedId = `cup_S1_R1_M${String(index + 1).padStart(2, '0')}`;
+      const homeId = String(pairing.home?.id || '');
+      const awayId = String(pairing.away?.id || '');
+      if (pairing.id !== `r1_m${index + 1}` || pairing.matchId !== expectedId ||
+          pairing.status !== 'scheduled' || !homeId || !awayId || homeId === awayId ||
+          !participantIds.has(homeId) || !participantIds.has(awayId) ||
+          !fixtureIds.has(expectedId)) {
+        reasons.push('PYRAMID_CUP_OPENING_PAIRINGS_INVALID');
+        break;
+      }
+      const fixture = input.cupFixtures.find(item => item.id === expectedId)?.data || {};
+      if (fixture.cupId !== 'cup_s1_lALPHA' || Number(fixture.season) !== 1 ||
+          Number(fixture.cupRound) !== 1 || fixture.bestOf !== 1 ||
+          fixture.homeId !== homeId || fixture.awayId !== awayId ||
+          fixture.homeTeamSnapshot?.id !== homeId || fixture.awayTeamSnapshot?.id !== awayId ||
+          !Array.isArray(fixture.homeTeamSnapshot?.players) || fixture.homeTeamSnapshot.players.length !== 5 ||
+          !Array.isArray(fixture.awayTeamSnapshot?.players) || fixture.awayTeamSnapshot.players.length !== 5) {
+        reasons.push('PYRAMID_CUP_OPENING_FIXTURE_IDENTITY_INVALID');
+        break;
+      }
+    }
+  }
+  for (const snapshot of input.cupSnapshots) {
+    const data = snapshot.data || {};
+    if (!participantIds.has(snapshot.id) || data.cupId !== 'cup_s1_lALPHA' ||
+        Number(data.season) !== 1 || data.teamId !== snapshot.id ||
+        data.matchSnapshot?.id !== snapshot.id ||
+        !Array.isArray(data.matchSnapshot?.players) || data.matchSnapshot.players.length !== 5) {
+      reasons.push('PYRAMID_CUP_PARTICIPANT_SNAPSHOT_INVALID');
+      break;
+    }
+  }
 
   const slotKeys = new Set<string>();
   const occupiedSlotIds = new Set<string>();
@@ -235,9 +321,9 @@ export function buildFreshSeasonOneResetPlan(input: FreshSeasonOneResetInput) {
     },
     replace: {
       leagueMatches: input.matches.length,
-      cupExists: input.cupExists,
-      cupMatches: input.cupMatches,
-      cupParticipantSnapshots: input.cupSnapshots,
+      cupExists: Boolean(input.cup),
+      cupMatches: input.cupFixtures.length,
+      cupParticipantSnapshots: input.cupSnapshots.length,
       seasonArchives: input.archives,
       rolloverPlans: input.rollovers,
       seasonHistoryEntries: input.history,
