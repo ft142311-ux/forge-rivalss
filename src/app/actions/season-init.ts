@@ -124,7 +124,11 @@ async function provisionClubComplete(userId: string, email: string, clubName: st
       // 2. Получаем текущий сезон
       const configRef = db.collection('system_v1').doc('season_config');
       const configSnap = await transaction.get(configRef);
-      const seasonNum = configSnap.exists ? (configSnap.data()?.activeSeasonNumber || 1) : 1;
+      const seasonConfig = configSnap.exists ? configSnap.data() || {} : {};
+      if (seasonConfig.stagingSeasonOneResetInProgress === true || seasonConfig.worldReady !== true) {
+        return { success: false, error: 'SEASON_ONE_RESET_IN_PROGRESS' };
+      }
+      const seasonNum = seasonConfig.activeSeasonNumber || 1;
 
       // 3. Поиск свободного слота (атомарно)
       let placement = null;
