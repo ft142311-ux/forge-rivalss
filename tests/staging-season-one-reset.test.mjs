@@ -69,7 +69,7 @@ function createValidInput() {
     tables, slots, matches, profileIds,
     cupExists: false, cupMatches: 0, cupSnapshots: 0,
     archives: 0, rollovers: 0, history: 0,
-    archiveMatches: 0, matchPlayerEffects: 0, matchRevenueReceipts: 0,
+    archiveMatches: 0, matchPlayerEffects: 0, matchRevenueReceipts: 0, cupMatchRevenueReceipts: 0,
     matchConsequenceReceipts: 0, leagueSeasonRewardReceipts: 0, pyramidCupRewardReceipts: 0,
     liveLocks: [],
     now: new Date('2026-11-22T14:00:00.000Z'),
@@ -106,6 +106,7 @@ test('fresh Season 1 reset plan validates 120 participants and complete 840-matc
   assert.equal(plan.expected.leagueMatches, 840);
   assert.equal(plan.replace.matchPlayerEffectLedgers, 0);
   assert.equal(plan.replace.matchRevenueReceipts, 0);
+  assert.equal(plan.replace.cupMatchRevenueReceipts, 0);
   assert.equal(plan.replace.matchConsequenceReceipts, 0);
   assert.equal(plan.replace.leagueSeasonRewardReceipts, 0);
   assert.equal(plan.replace.pyramidCupRewardReceipts, 0);
@@ -189,6 +190,7 @@ test('fresh Season 1 player reset clears only season counters and stale competit
     ],
     matchEconomy: {
       match_v140_S1_LALPHA_V1_G1_T14_R1_vs_R2: { totalRevenue: 500 },
+      cup_S1_R1_M01: { totalRevenue: 250 },
       match_v140_S2_LALPHA_V1_G1_T1_R1_vs_R2: { totalRevenue: 700 },
     },
     lastMatchEconomy: { totalRevenue: 500 },
