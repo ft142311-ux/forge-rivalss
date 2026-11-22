@@ -226,7 +226,7 @@ test('fresh Season 1 reset rebuilds league and Pyramid Cup while preserving Fire
 
   // Force a mid-archive interruption after the first 350-document batch,
   // then resume the same reset archive deterministically before deletion.
-  const { createOrVerifyDurableSeasonOneArchive } = await import('../src/app/actions/staging-season-one-reset-durable-archive.ts');
+  const { createOrVerifyDurableSeasonOneArchive, restoreSeasonOneFromDurableArchive } = await import('../src/app/actions/staging-season-one-reset-durable-archive.ts');
   let ownershipChecks = 0;
   await assert.rejects(
     createOrVerifyDurableSeasonOneArchive(db, failedJournal.resetId, failedJournal.sourceConfig, async () => {
@@ -267,6 +267,26 @@ test('fresh Season 1 reset rebuilds league and Pyramid Cup while preserving Fire
   const reusedArchive = await createOrVerifyDurableSeasonOneArchive(db, result.resetId, resetJournalData.sourceConfig);
   assert.equal(reusedArchive.reusedCompletedArchive, true);
   assert.equal(reusedArchive.archiveDocuments, durableArchive.sourceCount);
+
+  await assert.rejects(
+    restoreSeasonOneFromDurableArchive(db, result.resetId, 'WRONG_CONFIRMATION'),
+    /SEASON_ONE_ARCHIVE_RESTORE_CONFIRMATION_REQUIRED/,
+  );
+  const restoredWorld = await restoreSeasonOneFromDurableArchive(
+    db, result.resetId, 'RESTORE_BETA_SEASON_ONE_ARCHIVE',
+  );
+  assert.equal(restoredWorld.success, true);
+  assert.equal(restoredWorld.restoredDocuments, durableArchive.sourceCount);
+  const restoredConfig = (await db.collection('system_v1').doc('season_config').get()).data();
+  assert.equal(restoredConfig.worldReady, true);
+  assert.equal(restoredConfig.stagingSeasonOneResetInProgress, false);
+  assert.equal((await db.collection('league_tables_v2').doc('table_v140_S1_LALPHA_V2_G1').get()).data().championId, 'STALE_CHAMPION');
+  assert.equal((await db.collection('league_slots_v1').doc('S1_LALPHA_D2_G1_R3').get()).data().occupantId, uid);
+  assert.equal((await db.collection('players_v14').doc(uid).get()).data().clubName, 'Old Club Name');
+  assert.equal((await db.collection('matches_v2').doc('old_s1_league_1').get()).exists, true);
+  assert.equal((await db.collection('matches_v2').doc('unrelated_tournament_fixture').get()).exists, true);
+  assert.equal((await db.collection('cup_pyramid_v1').doc(CUP_ID).get()).exists, true);
+  assert.equal((await db.collection('league_season_archives_v1').doc('S1').collection('matches').doc('old').get()).exists, true);
 
   const authUser = await auth.getUser(uid);
   assert.equal(authUser.email, 'reset-test@example.invalid');
