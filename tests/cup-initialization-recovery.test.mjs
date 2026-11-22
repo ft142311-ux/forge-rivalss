@@ -68,7 +68,7 @@ test('Pyramid Cup can be generated from a fully prepared future season before ac
   const generationStart = source.indexOf('export async function generatePyramidCup');
   const generationEnd = source.indexOf('export async function preparePyramidCupForSeason', generationStart);
   const generation = source.slice(generationStart, generationEnd);
-  assert.match(generation, /readActiveCupSeasonContext\(db, Date\.now\(\), targetSeasonNumber\)/);
+  assert.match(generation, /readActiveCupSeasonContext\(db, Date\.now\(\), targetSeasonNumber, options\)/);
   assert.match(generation, /const seasonStart = context\.seasonStart/);
 });
 
