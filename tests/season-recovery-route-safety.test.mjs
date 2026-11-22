@@ -54,3 +54,15 @@ test('disposable Season 1 preparation action is locally fenced before Firestore 
   assert.match(body, /projectId !== 'demo-forge-rivals'/);
   assert.match(body, /writesStarted: false/);
 });
+
+
+test('staging world verification validates all league participants and profiles, not a fixed bot count', () => {
+  const source = read('src/app/api/admin/staging-world-bootstrap/route.ts');
+  assert.match(source, /const EXPECTED_PARTICIPANTS = 120/);
+  assert.match(source, /Object\.entries\(stats as Record<string, any>\)/);
+  assert.match(source, /uniqueParticipantIds\.length !== EXPECTED_PARTICIPANTS/);
+  assert.match(source, /db\.getAll\(\.\.\.uniqueParticipantIds\.map/);
+  assert.match(source, /profile\.data\(\)\?\.id === uniqueParticipantIds\[index\]/);
+  assert.match(source, /counts\.participantProfiles === EXPECTED_PARTICIPANTS/);
+  assert.doesNotMatch(source, /counts\.bots >= EXPECTED_BOTS/);
+});
