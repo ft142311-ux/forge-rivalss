@@ -13,6 +13,9 @@ export type FreshSeasonOneResetInput = {
   archiveMatches: number;
   matchPlayerEffects: number;
   matchRevenueReceipts: number;
+  matchConsequenceReceipts: number;
+  leagueSeasonRewardReceipts: number;
+  pyramidCupRewardReceipts: number;
   now?: Date;
 };
 
@@ -235,6 +238,9 @@ export function buildFreshSeasonOneResetPlan(input: FreshSeasonOneResetInput) {
       archivedLeagueMatches: input.archiveMatches,
       matchPlayerEffectLedgers: input.matchPlayerEffects,
       matchRevenueReceipts: input.matchRevenueReceipts,
+      matchConsequenceReceipts: input.matchConsequenceReceipts,
+      leagueSeasonRewardReceipts: input.leagueSeasonRewardReceipts,
+      pyramidCupRewardReceipts: input.pyramidCupRewardReceipts,
     },
     expected: {
       groups: EXPECTED_GROUPS,
