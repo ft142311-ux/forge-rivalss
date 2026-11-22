@@ -118,7 +118,19 @@ export function buildFreshSeasonOneWorldDocuments(input: {
         isBot: team.isBot,
       };
     }
-    return { id: table.id, data: { ...data, stats, scheduleRevision: 0 } };
+    return {
+      id: table.id,
+      data: {
+        id: table.id,
+        leagueId: 'ALPHA',
+        level,
+        group,
+        season: 1,
+        stats,
+        version: 140,
+        scheduleRevision: 0,
+      },
+    };
   });
 
   const freshSlots = [...slotByCoordinate.entries()].map(([key]) => {
