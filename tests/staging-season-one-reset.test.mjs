@@ -2,9 +2,75 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { buildFreshSeasonOneResetPlan } from '../src/app/actions/staging-season-one-reset-plan.ts';
 
 const root = resolve(import.meta.dirname, '..');
 const read = path => readFileSync(resolve(root, path), 'utf8');
+
+function createValidInput() {
+  const tables = [];
+  const slots = [];
+  const matches = [];
+  const profileIds = new Set();
+
+  for (let level = 1; level <= 4; level++) {
+    for (let group = 1; group <= 2 ** (level - 1); group++) {
+      const teams = [];
+      const stats = {};
+      for (let rank = 1; rank <= 8; rank++) {
+        const id = `BOT_ALPHA_L${level}_G${group}_R${rank}`;
+        const team = { id, name: id, rank, isBot: true };
+        teams.push(team);
+        stats[id] = team;
+        profileIds.add(id);
+        slots.push({
+          id: `S1_LALPHA_D${level}_G${group}_R${rank}`,
+          data: {
+            season: 1, leagueId: 'ALPHA', division: level, group, rank,
+            status: 'FREE', occupantId: null,
+          },
+        });
+      }
+      tables.push({
+        id: `table_v140_S1_LALPHA_V${level}_G${group}`,
+        data: { season: 1, leagueId: 'ALPHA', level, group, version: 140, stats },
+      });
+
+      const pool = Array.from({ length: 8 }, (_, index) => index);
+      for (let round = 0; round < 7; round++) {
+        for (let index = 0; index < 4; index++) {
+          const first = teams[pool[index]];
+          const second = teams[pool[7 - index]];
+          const fixtures = [
+            { tour: round + 1, home: first, away: second },
+            { tour: round + 8, home: second, away: first },
+          ];
+          for (const fixture of fixtures) {
+            const id = `match_v140_S1_LALPHA_V${level}_G${group}_T${fixture.tour}_R${fixture.home.rank}_vs_R${fixture.away.rank}`;
+            matches.push({
+              id,
+              data: {
+                id, season: 1, leagueId: 'ALPHA', level, groupId: group, version: 140,
+                tour: fixture.tour, homeId: fixture.home.id, awayId: fixture.away.id,
+                homeRank: fixture.home.rank, awayRank: fixture.away.rank,
+              },
+            });
+          }
+        }
+        const last = pool.pop();
+        pool.splice(1, 0, last);
+      }
+    }
+  }
+
+  return {
+    config: { activeSeasonNumber: 1, worldReady: true, phase: 'REGULAR_SEASON' },
+    tables, slots, matches, profileIds,
+    cupExists: false, cupMatches: 0, cupSnapshots: 0,
+    archives: 0, rollovers: 0, history: 0,
+    now: new Date('2026-11-22T14:00:00.000Z'),
+  };
+}
 
 test('fresh Beta Season 1 preflight is authenticated, project-fenced and read-only', () => {
   const source = read('src/app/api/admin/staging-season-one-reset/route.ts');
@@ -20,21 +86,43 @@ test('fresh Beta Season 1 preflight is authenticated, project-fenced and read-on
   assert.doesNotMatch(source, /participantIds\s*:\s*\[|profileIds\s*:\s*\[/);
 });
 
-test('fresh Season 1 reset plan preserves every profile and rejects unsafe source worlds', () => {
-  const source = read('src/app/actions/staging-season-one-reset-plan.ts');
-  assert.match(source, /ACTIVE_SEASON_MUST_BE_1/);
-  assert.match(source, /PREPARED_NEXT_SEASON_EXISTS/);
-  assert.match(source, /PARTICIPANT_PROFILE_MISSING/);
-  assert.match(source, /OCCUPIED_SLOT_STANDINGS_MISMATCH/);
-  assert.match(source, /FREE_SLOT_STANDINGS_MISMATCH/);
-  assert.match(source, /LEAGUE_MATCH_ROUND_ROBIN_INVALID/);
-  assert.match(source, /match_v140_S1_LALPHA/);
-  assert.match(source, /worldGeneration: 'CLEAN_S1_V1'/);
-  assert.match(source, /participantProfiles: validProfiles/);
-  assert.match(source, /allPlayerProfiles: true/);
-  assert.match(source, /accountCredentials: true/);
-  assert.match(source, /nextMoscowSeasonBoundary/);
-  assert.match(source, /17 \* 86400000/);
+test('fresh Season 1 reset plan validates 120 participants and complete 840-match round robin', () => {
+  const plan = buildFreshSeasonOneResetPlan(createValidInput());
+  assert.equal(plan.ready, true, plan.reasons.join(','));
+  assert.equal(plan.preserve.participantProfiles, 120);
+  assert.equal(plan.preserve.leagueSlots, 120);
+  assert.equal(plan.expected.leagueMatches, 840);
+  assert.equal(plan.target.seasonStart, '2026-11-22T15:00:00.000Z');
+  assert.equal(plan.target.nextSeasonStart, '2026-12-09T15:00:00.000Z');
+});
+
+test('fresh Season 1 preflight rejects slot identity and match round-robin corruption', () => {
+  const slotInput = createValidInput();
+  slotInput.slots[0].data.status = 'OCCUPIED';
+  slotInput.slots[0].data.occupantId = 'unrelated-user';
+  const slotPlan = buildFreshSeasonOneResetPlan(slotInput);
+  assert.equal(slotPlan.ready, false);
+  assert.ok(slotPlan.reasons.includes('OCCUPIED_SLOT_STANDINGS_MISMATCH'));
+
+  const matchInput = createValidInput();
+  matchInput.matches[0].data.homeId = matchInput.matches[0].data.awayId;
+  const matchPlan = buildFreshSeasonOneResetPlan(matchInput);
+  assert.equal(matchPlan.ready, false);
+  assert.ok(matchPlan.reasons.includes('LEAGUE_MATCH_SCOPE_INVALID'));
+});
+
+test('fresh Season 1 reset plan rejects missing profiles and a prepared next season', () => {
+  const missingProfile = createValidInput();
+  missingProfile.profileIds.delete(missingProfile.tables[0].data.stats.BOT_ALPHA_L1_G1_R1.id);
+  const missingPlan = buildFreshSeasonOneResetPlan(missingProfile);
+  assert.equal(missingPlan.ready, false);
+  assert.ok(missingPlan.reasons.includes('PARTICIPANT_PROFILE_MISSING'));
+
+  const prepared = createValidInput();
+  prepared.config.preparedSeasonNumber = 2;
+  const preparedPlan = buildFreshSeasonOneResetPlan(prepared);
+  assert.equal(preparedPlan.ready, false);
+  assert.ok(preparedPlan.reasons.includes('PREPARED_NEXT_SEASON_EXISTS'));
 });
 
 test('legacy full-world reset is hard-blocked outside local Firebase Emulator', () => {
