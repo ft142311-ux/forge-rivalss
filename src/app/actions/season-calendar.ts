@@ -960,6 +960,7 @@ async function buildSeasonCalendar(lease: BuildLease, pristineFirstWorld = false
       rebuildError: FieldValue.delete(),
       pyramidCupRequired: pristineFirstWorld ? true : current.pyramidCupRequired === true,
       pyramidCupReady: pristineFirstWorld ? false : current.pyramidCupReady === true,
+      pyramidCupReadySeasonNumber: pristineFirstWorld ? 1 : Number(current.pyramidCupReadySeasonNumber || 0),
       updatedAt: FieldValue.serverTimestamp(),
     }, options: { merge: true } }]);
   }
@@ -1776,9 +1777,11 @@ async function verifyInitialPyramidCup(db: any, seasonStartValue: any) {
   const firstRound = Array.isArray(cup.rounds?.r1) ? cup.rounds.r1 : [];
   const ordered = [...participants].sort((a: any, b: any) => Number(a.seed) - Number(b.seed));
   if (Number(cup.season) !== 1 || cup.status !== 'active' ||
+      cup.name !== 'Кубок Пирамиды' || Number(cup.currentRound) !== 1 || Number(cup.totalRounds) !== 7 ||
       Number(cup.totalParticipants) !== 120 || participants.length !== 120 ||
       new Set(participants.map((team: any) => String(team?.id || ''))).size !== 120 ||
       new Set(participants.map((team: any) => Number(team?.seed))).size !== 120 ||
+      ordered.some((team: any, index: number) => Number(team?.seed) !== index + 1 || !team?.id) ||
       Number(cup.preliminaryMatches) !== 60 || Number(cup.byeCount) !== 0 ||
       firstRound.length !== 60 || firstRound.some((pairing: any) => pairing?.status === 'bye')) {
     return { ready: false, reason: 'INITIAL_CUP_BRACKET_INVALID' };
@@ -1791,16 +1794,19 @@ async function verifyInitialPyramidCup(db: any, seasonStartValue: any) {
   const expectedKickoff = new Date(seasonStart.getTime() + 86400000);
   expectedKickoff.setUTCHours(4, 0, 0, 0);
 
-  const fixtureSnapshots = await Promise.all(firstRound.map((pairing: any, index: number) => {
+  const invalidPairing = firstRound.some((pairing: any, index: number) => {
     const expectedId = `cup_S1_R1_M${String(index + 1).padStart(2, '0')}`;
-    if (pairing?.id !== `r1_m${index + 1}` || pairing?.matchId !== expectedId ||
-        pairing?.away?.id !== ordered[index]?.id ||
-        pairing?.home?.id !== ordered[119 - index]?.id) {
-      return Promise.resolve(null);
-    }
+    return pairing?.id !== `r1_m${index + 1}` || pairing?.matchId !== expectedId ||
+      pairing?.status !== 'scheduled' ||
+      pairing?.away?.id !== ordered[index]?.id ||
+      pairing?.home?.id !== ordered[119 - index]?.id;
+  });
+  if (invalidPairing) return { ready: false, reason: 'INITIAL_CUP_PAIRINGS_INVALID' };
+  const fixtureSnapshots = await Promise.all(firstRound.map((_: any, index: number) => {
+    const expectedId = `cup_S1_R1_M${String(index + 1).padStart(2, '0')}`;
     return db.collection(MATCH_COLLECTIONS.cup).doc(expectedId).get();
   }));
-  if (fixtureSnapshots.some((fixture: any) => !fixture?.exists)) {
+  if (fixtureSnapshots.some((fixture: any) => !fixture.exists)) {
     return { ready: false, reason: 'INITIAL_CUP_FIXTURES_INCOMPLETE' };
   }
   for (let index = 0; index < fixtureSnapshots.length; index++) {
@@ -2025,7 +2031,7 @@ export async function ensureSeasonCalendar(requestedTargetSeason?: number) {
       }, options: { merge: true } }]);
     }
     const world: any = await buildSeasonCalendar(lease, pristineFirstWorld);
-    const cupRequired = pristineFirstWorld || config.pyramidCupRequired === true;
+    const cupRequired = pristineFirstWorld || (config.pyramidCupRequired === true && Number(config.pyramidCupReadySeasonNumber) === 1);
     const cupPending = cupRequired && config.pyramidCupReady !== true;
     if (!cupPending || world?.success !== true || world?.worldReady !== true) return world;
 
@@ -2036,6 +2042,7 @@ export async function ensureSeasonCalendar(requestedTargetSeason?: number) {
       await db.collection('system_v1').doc('season_config').set({
         pyramidCupRequired: true,
         pyramidCupReady: true,
+        pyramidCupReadySeasonNumber: 1,
         pyramidCupReadyAt: FieldValue.serverTimestamp(),
         pyramidCupError: FieldValue.delete(),
         updatedAt: FieldValue.serverTimestamp(),
@@ -2048,6 +2055,7 @@ export async function ensureSeasonCalendar(requestedTargetSeason?: number) {
         phase: 'REGULAR_SEASON',
         pyramidCupRequired: true,
         pyramidCupReady: false,
+        pyramidCupReadySeasonNumber: 1,
         pyramidCupError: reason,
         updatedAt: FieldValue.serverTimestamp(),
       }, { merge: true });
