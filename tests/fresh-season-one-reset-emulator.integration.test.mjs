@@ -210,6 +210,13 @@ test('fresh Season 1 reset rebuilds league and Pyramid Cup while preserving Fire
     db.collection('economy_transactions').doc('old-season-reward').set({ referenceId: 'S1', type: 'LEAGUE_SEASON_REWARD' }),
     db.collection('economy_transactions').doc('old-cup-reward').set({ referenceId: CUP_ID, type: 'PYRAMID_CUP_CHAMPION_REWARD' }),
     db.collection('match_consequence_receipts').doc('old-consequence').set({ matchId: 'match_v140_S1_LALPHA_OLD' }),
+    // Lowercase suffixes exercise the full Unicode prefix upper-bound behavior.
+    db.collection('match_player_effects_v1').doc('old-effect-lowercase').set({ matchId: 'match_v140_S1_LALPHA_z_tail' }),
+    db.collection('match_player_effects_v1').doc('old-cup-effect-lowercase').set({ matchId: 'cup_S1_z_tail' }),
+    db.collection('economy_transactions').doc('old-league-revenue-lowercase').set({ referenceId: 'match_v140_S1_LALPHA_z_tail', type: 'MATCH_REVENUE' }),
+    db.collection('economy_transactions').doc('old-cup-revenue-lowercase').set({ referenceId: 'cup_S1_z_tail', type: 'MATCH_REVENUE' }),
+    db.collection('match_consequence_receipts').doc('old-consequence-lowercase').set({ matchId: 'match_v140_S1_LALPHA_z_tail' }),
+    db.collection('match_consequence_receipts').doc('old-cup-consequence-lowercase').set({ matchId: 'cup_S1_z_tail' }),
   ]);
 
   // A missing source profile must stop before deletion; the archive cannot be marked complete.
@@ -263,6 +270,16 @@ test('fresh Season 1 reset rebuilds league and Pyramid Cup while preserving Fire
   assert.equal(archivedDocs.size, durableArchive.sourceCount);
   assert.ok(archivedDocs.docs.some(doc => doc.data().sourcePath === 'system_v1/season_config'));
   assert.ok(archivedDocs.docs.some(doc => doc.data().sourcePath === 'league_slot_history_v1/S1_LALPHA_D2_G1_R3_G5'));
+  for (const sourcePath of [
+    'match_player_effects_v1/old-effect-lowercase',
+    'match_player_effects_v1/old-cup-effect-lowercase',
+    'economy_transactions/old-league-revenue-lowercase',
+    'economy_transactions/old-cup-revenue-lowercase',
+    'match_consequence_receipts/old-consequence-lowercase',
+    'match_consequence_receipts/old-cup-consequence-lowercase',
+  ]) {
+    assert.ok(archivedDocs.docs.some(doc => doc.data().sourcePath === sourcePath), `archive missing ${sourcePath}`);
+  }
   const resetJournalData = (await db.collection('system_v1').doc('staging_fresh_season_one_reset_v1').get()).data();
   const reusedArchive = await createOrVerifyDurableSeasonOneArchive(db, result.resetId, resetJournalData.sourceConfig);
   assert.equal(reusedArchive.reusedCompletedArchive, true);
