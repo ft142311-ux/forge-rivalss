@@ -80,7 +80,9 @@ test('pre-publication Pyramid Cup preparation verifies 120 participants, 8 D1 ro
   assert.match(preparation, /context\.prepared !== true/);
   assert.match(preparation, /participants\.length !== TOTAL_TEAMS/);
   assert.match(preparation, /firstRound\.length !== 56/);
-  assert.match(preparation, /firstRound\.length !== 56/);\n  assert.match(preparation, /openingRoundRestTeams/);\n  assert.match(preparation, /formatVersion\) !== CUP_FORMAT_VERSION/);
+  assert.match(preparation, /firstRound\.length !== 56/);
+  assert.match(preparation, /openingRoundRestTeams/);
+  assert.match(preparation, /formatVersion\) !== CUP_FORMAT_VERSION/);
   assert.match(preparation, /fixtures\.length !== 56/);
   assert.match(preparation, /CUP_PREPARED_FIXTURES_MISSING/);
   assert.match(preparation, /CUP_PREPARED_FIXTURE_IDENTITY_INVALID/);
