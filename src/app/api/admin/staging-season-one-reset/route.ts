@@ -56,7 +56,7 @@ export async function GET(request: NextRequest) {
       db.collection('economy_transactions').where('referenceId', '>=', matchPrefix).where('referenceId', '<', `${matchPrefix}\uf8ff`).get(),
       db.collection('match_consequence_receipts').where('matchId', '>=', matchPrefix).where('matchId', '<', matchPrefix + '\uf8ff').get(),
       db.collection('match_consequence_receipts').where('matchId', '>=', 'cup_S1_').where('matchId', '<', 'cup_S1_\uf8ff').get(),
-      db.collection('economy_transactions').where('type', '==', 'LEAGUE_SEASON_REWARD').where('referenceId', '==', 'S1').get(),
+      db.collection('economy_transactions').where('referenceId', '==', 'S1').get(),
       db.collection('economy_transactions').where('referenceId', '==', 'cup_s1_lALPHA').get(),
     ]);
 
