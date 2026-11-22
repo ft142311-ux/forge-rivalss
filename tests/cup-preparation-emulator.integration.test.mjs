@@ -415,18 +415,24 @@ test('a pristine emulator publishes Season 1 only after its complete Pyramid Cup
   });
 
   // The isolated emulator must be genuinely empty before the first canonical build.
-  const [existingConfig, existingTables, existingSlots, existingMatches, existingPlayers] = await Promise.all([
+  const [existingConfig, existingSystem, existingTables, existingSlots, existingMatches, existingPlayers, existingCups, existingCupMatches] = await Promise.all([
     configRef.get(),
+    db.collection('system_v1').limit(1).get(),
     db.collection('league_tables_v2').limit(1).get(),
     db.collection('league_slots_v1').limit(1).get(),
     db.collection('matches_v2').limit(1).get(),
     db.collection('players_v14').limit(1).get(),
+    db.collection('cup_pyramid_v1').limit(1).get(),
+    db.collection(MATCH_COLLECTIONS.cup).limit(1).get(),
   ]);
   assert.equal(existingConfig.exists, false);
+  assert.equal(existingSystem.empty, true);
   assert.equal(existingTables.empty, true);
   assert.equal(existingSlots.empty, true);
   assert.equal(existingMatches.empty, true);
   assert.equal(existingPlayers.empty, true);
+  assert.equal(existingCups.empty, true);
+  assert.equal(existingCupMatches.empty, true);
 
   const world = await ensureSeasonCalendar(1);
   assert.equal(world.success, true, JSON.stringify(world));
