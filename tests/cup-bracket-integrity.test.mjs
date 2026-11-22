@@ -14,7 +14,7 @@ test('Pyramid Cup validates the expected pairing count for every round before re
   assert.match(validator, /CUP_ROUND_PAIRING_IDENTITY_INVALID/);
   assert.match(validator, /CUP_ROUND_BYE_INVALID/);
   assert.match(validator, /CUP_ROUND_PARTICIPANTS_INVALID/);
-  assert.match(validator, /round === 1 && byes !== 8/);
+  assert.match(validator, /ROUND_BYE_COUNTS\\[round - 1\\]/);
 });
 
 test('corrupt or skipped Pyramid Cup rounds fail closed instead of advancing an empty bracket', () => {
