@@ -349,6 +349,9 @@ test('prepared Season 2 receives its complete Pyramid Cup before publication in 
   }
 
   const finalCup = (await cupRef.get()).data();
+  assert.equal(finalCup.totalMatches, 119);
+  assert.equal(fixtureRefs.length, 119, 'the complete no-BYE bracket must create exactly 119 fixtures');
+  assert.equal(new Set(fixtureRefs.map(ref => ref.id)).size, 119);
   assert.equal(finalCup.currentRound, 7);
   const finalPairing = finalCup.rounds.r7[0];
   const finalRef = db.collection(MATCH_COLLECTIONS.cup).doc(finalPairing.matchId);
