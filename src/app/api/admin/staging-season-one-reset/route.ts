@@ -113,7 +113,7 @@ export async function GET(request: NextRequest) {
       matchRevenueReceipts: matchRevenueSnap.docs.filter(doc => doc.data()?.type === 'MATCH_REVENUE').length,
       cupMatchRevenueReceipts: cupMatchRevenueSnap.docs.filter(doc => doc.data()?.type === 'MATCH_REVENUE').length,
       matchConsequenceReceipts: leagueConsequenceSnap.size + cupConsequenceSnap.size,
-      leagueSeasonRewardReceipts: leagueSeasonRewardSnap.size,
+      leagueSeasonRewardReceipts: leagueSeasonRewardSnap.docs.filter(doc => doc.data()?.type === 'LEAGUE_SEASON_REWARD').length,
       pyramidCupRewardReceipts: pyramidCupRewardSnap.docs.filter(doc =>
         ['PYRAMID_CUP_CHAMPION_REWARD', 'PYRAMID_CUP_FINALIST_REWARD'].includes(String(doc.data()?.type || ''))).length,
       liveLocks: [rolloverLockSnap, calendarLockSnap].flatMap((snap, index) => {
