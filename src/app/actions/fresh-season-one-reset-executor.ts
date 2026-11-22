@@ -115,8 +115,9 @@ async function saveStep(db: any, token: string, stepIndex: number, counts?: Reco
   });
 }
 
-async function deleteDocs(db: any, docs: any[]) {
+async function deleteDocs(db: any, docs: any[], assertOwnership?: () => Promise<void>) {
   for (let offset = 0; offset < docs.length; offset += 400) {
+    await assertOwnership?.();
     const batch = db.batch();
     for (const doc of docs.slice(offset, offset + 400)) batch.delete(doc.ref);
     await batch.commit();
@@ -124,9 +125,9 @@ async function deleteDocs(db: any, docs: any[]) {
   return docs.length;
 }
 
-async function deleteQuery(db: any, query: any) {
+async function deleteQuery(db: any, query: any, assertOwnership?: () => Promise<void>) {
   const snapshot = await query.get();
-  return deleteDocs(db, snapshot.docs);
+  return deleteDocs(db, snapshot.docs, assertOwnership);
 }
 
 function isLeagueFixture(data: Record<string, any>) {
@@ -136,7 +137,7 @@ function isLeagueFixture(data: Record<string, any>) {
     !data.isFriendly && !/(cup|tournament|friendly|scrim|association)/.test(type);
 }
 
-async function removeOldSeasonOneData(db: any) {
+async function removeOldSeasonOneData(db: any, assertOwnership?: () => Promise<void>) {
   const [matches, cupMatches, cupSnapshots, archiveMatches, slotHistory] = await Promise.all([
     db.collection('matches_v2').where('season', '==', 1).get(),
     db.collection('cup_matches').where('cupId', '==', CUP_ID).get(),
@@ -149,39 +150,43 @@ async function removeOldSeasonOneData(db: any) {
     return isLeagueFixture(data) || data.cupId === CUP_ID || doc.id.startsWith('cup_S1_');
   });
   let deleted = 0;
-  deleted += await deleteDocs(db, disposableMatches);
-  deleted += await deleteDocs(db, cupMatches.docs);
-  deleted += await deleteDocs(db, cupSnapshots.docs);
-  deleted += await deleteDocs(db, archiveMatches.docs);
+  deleted += await deleteDocs(db, disposableMatches, assertOwnership);
+  deleted += await deleteDocs(db, cupMatches.docs, assertOwnership);
+  deleted += await deleteDocs(db, cupSnapshots.docs, assertOwnership);
+  deleted += await deleteDocs(db, archiveMatches.docs, assertOwnership);
   deleted += await deleteQuery(db, db.collection('match_player_effects_v1')
-    .where('matchId', '>=', MATCH_PREFIX).where('matchId', '<', MATCH_PREFIX + '\uf8ff'));
+    .where('matchId', '>=', MATCH_PREFIX).where('matchId', '<', MATCH_PREFIX + '\uf8ff'), assertOwnership);
   deleted += await deleteQuery(db, db.collection('match_player_effects_v1')
-    .where('matchId', '>=', 'cup_S1_').where('matchId', '<', 'cup_S1_\uf8ff'));
+    .where('matchId', '>=', 'cup_S1_').where('matchId', '<', 'cup_S1_\uf8ff'), assertOwnership);
   deleted += await deleteQuery(db, db.collection('economy_transactions')
-    .where('referenceId', '>=', MATCH_PREFIX).where('referenceId', '<', MATCH_PREFIX + '\uf8ff'));
+    .where('referenceId', '>=', MATCH_PREFIX).where('referenceId', '<', MATCH_PREFIX + '\uf8ff'), assertOwnership);
   deleted += await deleteQuery(db, db.collection('economy_transactions')
-    .where('referenceId', '>=', 'cup_S1_').where('referenceId', '<', 'cup_S1_\uf8ff'));
+    .where('referenceId', '>=', 'cup_S1_').where('referenceId', '<', 'cup_S1_\uf8ff'), assertOwnership);
   deleted += await deleteQuery(db, db.collection('match_consequence_receipts')
-    .where('matchId', '>=', MATCH_PREFIX).where('matchId', '<', MATCH_PREFIX + '\uf8ff'));
+    .where('matchId', '>=', MATCH_PREFIX).where('matchId', '<', MATCH_PREFIX + '\uf8ff'), assertOwnership);
   deleted += await deleteQuery(db, db.collection('match_consequence_receipts')
-    .where('matchId', '>=', 'cup_S1_').where('matchId', '<', 'cup_S1_\uf8ff'));
+    .where('matchId', '>=', 'cup_S1_').where('matchId', '<', 'cup_S1_\uf8ff'), assertOwnership);
 
   const leagueRewards = await db.collection('economy_transactions').where('referenceId', '==', 'S1').get();
-  deleted += await deleteDocs(db, leagueRewards.docs.filter((doc: any) => doc.data()?.type === 'LEAGUE_SEASON_REWARD'));
+  deleted += await deleteDocs(db, leagueRewards.docs.filter((doc: any) => doc.data()?.type === 'LEAGUE_SEASON_REWARD'), assertOwnership);
   const cupRewards = await db.collection('economy_transactions').where('referenceId', '==', CUP_ID).get();
   deleted += await deleteDocs(db, cupRewards.docs.filter((doc: any) =>
-    ['PYRAMID_CUP_CHAMPION_REWARD', 'PYRAMID_CUP_FINALIST_REWARD'].includes(String(doc.data()?.type || ''))));
-  deleted += await deleteDocs(db, slotHistory.docs);
+    ['PYRAMID_CUP_CHAMPION_REWARD', 'PYRAMID_CUP_FINALIST_REWARD'].includes(String(doc.data()?.type || ''))), assertOwnership);
+  deleted += await deleteDocs(db, slotHistory.docs, assertOwnership);
 
+  await assertOwnership?.();
   await db.collection('cup_pyramid_v1').doc(CUP_ID).delete().catch((error: any) => {
     if (error?.code !== 5) throw error;
   });
+  await assertOwnership?.();
   await db.collection('league_season_archives_v1').doc('S1').delete().catch((error: any) => {
     if (error?.code !== 5) throw error;
   });
+  await assertOwnership?.();
   await db.collection('league_season_rollovers_v1').doc('S2').delete().catch((error: any) => {
     if (error?.code !== 5) throw error;
   });
+  await assertOwnership?.();
   await db.collection('league_season_history_v1').doc('S1').delete().catch((error: any) => {
     if (error?.code !== 5) throw error;
   });
@@ -340,7 +345,7 @@ export async function executeFreshSeasonOneReset(db: any, target: ResetJournal['
       if (!journal.sourceConfig) throw new Error('RESET_ORIGINAL_CONFIG_ARCHIVE_SOURCE_MISSING');
       const archive = await createOrVerifyDurableSeasonOneArchive(db, journal.resetId, journal.sourceConfig, () => assertLease(db, token));
       await assertLease(db, token);
-      const removed = await removeOldSeasonOneData(db);
+      const removed = await removeOldSeasonOneData(db, () => assertLease(db, token));
       await saveStep(db, token, 0, { ...removed, archiveDocuments: archive.archiveDocuments });
       step = 1;
     }
