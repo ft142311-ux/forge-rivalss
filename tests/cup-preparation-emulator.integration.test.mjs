@@ -128,6 +128,7 @@ test('prepared Season 2 receives its complete Pyramid Cup before publication in 
   assert.equal(result.generated, true);
   assert.equal(result.participants, 120);
   assert.equal(result.preliminaryMatches, 56);
+  assert.equal(result.totalMatches, 119);
   assert.equal(result.openingRoundRestCount, 8);
   assert.equal(result.byes, 0);
   assert.equal(result.scheduledAt, expectedFirstKickoff.toISOString(), 'preliminary cup round must follow league Tour 1 at 07:00 Moscow time');
@@ -149,6 +150,8 @@ test('prepared Season 2 receives its complete Pyramid Cup before publication in 
   assert.equal(cup.preliminaryMatches, 56);
   assert.equal(cup.byeCount, 0);
   assert.equal(cup.formatVersion, 4);
+  assert.equal(cup.format, 'D1_REST_OPENING_ROUND');
+  assert.equal(cup.totalMatches, 119);
   assert.equal(cup.openingRoundRestCount, 8);
   assert.equal(cup.rounds.r1.length, 56);
   assert.equal(cup.rounds.r1[0].home.matchSnapshot, undefined, 'large roster snapshots must not inflate the bracket document');
@@ -469,6 +472,7 @@ test('a pristine emulator publishes Season 1 only after its complete Pyramid Cup
   assert.equal(generated.created, true);
   assert.equal(generated.participants, 120);
   assert.equal(generated.preliminaryMatches, 56);
+  assert.equal(generated.totalMatches, 119);
 
   const cupRef = db.collection('cup_pyramid_v1').doc('cup_s1_lALPHA');
   const cupSnap = await cupRef.get();
