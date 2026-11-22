@@ -250,7 +250,7 @@ async function configureAndBuildCalendar(db: any, target: ResetJournal['target']
     updatedAt: FieldValue.serverTimestamp(),
   }, { merge: true });
 
-  const result: any = await ensureSeasonCalendar(1);
+  const result: any = await ensureSeasonCalendar(1, { allowDuringStagingReset: true });
   if (result?.success !== true || result?.worldReady !== true) {
     throw new Error(`FRESH_SEASON_ONE_CALENDAR_BUILD_FAILED:${String(result?.reason || result?.action || 'UNKNOWN')}`);
   }
