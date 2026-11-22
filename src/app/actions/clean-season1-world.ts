@@ -39,12 +39,31 @@ async function deleteCollectionContents(db: any, collectionName: string) {
 }
 
 /**
- * One-shot, explicitly confirmed clean-world reset for the local game database.
- * A marker prevents a retry from wiping a world that has already been created.
+ * Legacy full-world reset for disposable local Emulator databases only.
+ * It deletes players_v14 and league slots, so it must never run against Beta,
+ * Production, or any deployed Vercel environment.
  */
 export async function resetAndCreateCleanSeason1(confirmation: unknown) {
   if (confirmation !== 'RESET_FORGE_RIVALS_WORLD_S1') {
     return { success: false, action: 'CONFIRMATION_REQUIRED', worldReady: false };
+  }
+
+  const configuredProject =
+    process.env.GCLOUD_PROJECT ||
+    process.env.GCP_PROJECT ||
+    process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID ||
+    '';
+  if (
+    !process.env.FIRESTORE_EMULATOR_HOST ||
+    process.env.VERCEL === '1' ||
+    configuredProject === 'forge-rivalstest'
+  ) {
+    return {
+      success: false,
+      action: 'EMULATOR_ONLY_RESET_BLOCKED',
+      reason: 'LEGACY_FULL_RESET_MAY_DELETE_PLAYER_PROFILES_AND_IS_EMULATOR_ONLY',
+      worldReady: false,
+    };
   }
 
   const db = getAdminDb();
