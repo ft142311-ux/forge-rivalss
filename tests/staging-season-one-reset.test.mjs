@@ -219,6 +219,7 @@ test('fresh Season 1 club reset preserves latest match economy when it belongs t
     },
   };
   const reset = resetFreshSeasonOneClubProfileState(profile);
+  assert.equal(reset.lastMatchId, profile.lastMatchId);
   assert.deepEqual(reset.lastMatchEconomy, profile.lastMatchEconomy);
   assert.deepEqual(reset.matchEconomy, profile.matchEconomy);
 });
@@ -311,6 +312,7 @@ test('fresh Season 1 club profile reset preserves finances and identity while cl
       match_v140_S2_LALPHA_V1_G1_T1_R1_vs_R2: { totalRevenue: 700 },
     },
     lastMatchId: 'cup_S1_R1_M01',
+    lastMatchId: 'cup_S1_R1_M01',
     lastMatchEconomy: { totalRevenue: 500 },
     lastMatchConsequences: {
       matchId: 'cup_S1_R1_M01',
@@ -327,6 +329,7 @@ test('fresh Season 1 club profile reset preserves finances and identity while cl
   assert.deepEqual(Object.keys(reset.matchEconomy), [
     'match_v140_S2_LALPHA_V1_G1_T1_R1_vs_R2',
   ]);
+  assert.equal(reset.lastMatchId, null);
   assert.equal(reset.lastMatchEconomy, null);
   assert.equal(reset.lastMatchConsequences, null);
   assert.equal(reset.ownedPlayers[0].seasonStats.matches, 0);
