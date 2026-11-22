@@ -547,6 +547,27 @@ test('fresh Season 1 club profile reset preserves finances and identity while cl
   }
 });
 
+test('fresh Season 1 executor verifies a durable per-document archive before any destructive delete', () => {
+  const executor = read('src/app/actions/fresh-season-one-reset-executor.ts');
+  const archiveCall = executor.indexOf('createOrVerifyDurableSeasonOneArchive(db, journal.resetId, journal.sourceConfig)');
+  const deleteCall = executor.indexOf('removeOldSeasonOneData(db)');
+  assert.ok(archiveCall >= 0 && deleteCall > archiveCall, 'archive must complete before the first delete');
+  assert.match(executor, /sourceConfig: config/);
+  assert.match(executor, /RESET_ORIGINAL_CONFIG_ARCHIVE_SOURCE_MISSING/);
+
+  const archive = read('src/app/actions/staging-season-one-reset-durable-archive.ts');
+  assert.match(archive, /staging_season_one_reset_archives_v1/);
+  assert.match(archive, /status: 'WRITING'/);
+  assert.match(archive, /status: 'COMPLETE'/);
+  assert.match(archive, /createHash/);
+  assert.match(archive, /SEASON_ONE_ARCHIVE_CORE_WORLD_INCOMPLETE/);
+  assert.match(archive, /SEASON_ONE_ARCHIVE_DOCUMENT_COUNT_MISMATCH/);
+  assert.match(archive, /SEASON_ONE_ARCHIVE_READBACK_MISMATCH/);
+  assert.match(archive, /SEASON_ONE_ARCHIVE_COMPLETION_NOT_DURABLE/);
+  assert.match(archive, /league_slot_history_v1/);
+  assert.match(archive, /system_v1\\/season_config/);
+});
+
 test('fresh Season 1 executor is project-scoped, journaled, idempotent and verifies the Pyramid Cup', () => {
   const source = read('src/app/actions/fresh-season-one-reset-executor.ts');
   assert.match(source, /staging_fresh_season_one_reset_v1/);
