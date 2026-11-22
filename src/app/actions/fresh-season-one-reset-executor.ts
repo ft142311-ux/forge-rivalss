@@ -32,10 +32,25 @@ async function claim(db: any, target: ResetJournal['target']) {
   const token = randomUUID();
   return db.runTransaction(async (tx: any) => {
     const snap = await tx.get(ref);
+    const configRef = db.collection('system_v1').doc('season_config');
+    const rolloverLockRef = db.collection('system_v1').doc('season_rollover_v1');
+    const calendarLockRef = db.collection('system_v1').doc('season_calendar_build_v1');
+    const [configSnap, rolloverLockSnap, calendarLockSnap] = await Promise.all([
+      tx.get(configRef), tx.get(rolloverLockRef), tx.get(calendarLockRef),
+    ]);
     const current = snap.exists ? snap.data() as ResetJournal : null;
     if (current?.status === 'COMPLETED') return { completed: true, journal: current };
     if (current?.lease && Number(current.lease.expiresAtMs) > now) {
       return { busy: true, journal: current };
+    }
+    const config = configSnap.exists ? configSnap.data() || {} : {};
+    if (!current && (!configSnap.exists || Number(config.activeSeasonNumber) !== 1 ||
+        config.worldReady !== true || !['REGULAR_SEASON', 'ACTIVE'].includes(String(config.phase || '').toUpperCase()))) {
+      throw new Error('RESET_PREFLIGHT_STATE_CHANGED');
+    }
+    if (!current && [rolloverLockSnap, calendarLockSnap].some(lock =>
+      lock.exists && Number(lock.data()?.expiresAtMs || 0) > now)) {
+      throw new Error('RESET_SEASON_WORKER_LOCKED');
     }
     const journal: ResetJournal = current ? {
       ...current,
@@ -59,6 +74,7 @@ async function claim(db: any, target: ResetJournal['target']) {
       throw new Error('RESET_TARGET_CHANGED_DURING_RECOVERY');
     }
     tx.set(ref, journal);
+    tx.set(configRef, { worldReady: false, stagingSeasonOneResetInProgress: true, updatedAt: FieldValue.serverTimestamp() }, { merge: true });
     return { acquired: true, token, journal };
   });
 }
