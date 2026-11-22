@@ -18,7 +18,7 @@ function isSeasonOneCompetitionMatchId(value: unknown) {
   const id = String(value || '');
   return id.startsWith(SEASON_ONE_LEAGUE_MATCH_PREFIX) ||
     /^cup_S1_/.test(id) ||
-    /^match_v\\d+_S1_/.test(id);
+    /^match_v\d+_S1_/.test(id);
 }
 
 /**
