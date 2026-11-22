@@ -73,6 +73,7 @@ test('fresh Season 1 reset rebuilds league and Pyramid Cup while preserving Fire
   const tableWrites: Array<{ ref: any; data: any }> = [];
   const slotWrites: Array<{ ref: any; data: any }> = [];
   const profileWrites: Array<{ ref: any; data: any }> = [];
+  let oldHumanProfile: any = null;
   const participants: Array<{ id: string; name: string; level: number; group: number; rank: number; isBot: boolean }> = [];
   for (let level = 1; level <= 4; level++) {
     for (let group = 1; group <= 2 ** (level - 1); group++) {
@@ -108,7 +109,8 @@ test('fresh Season 1 reset rebuilds league and Pyramid Cup while preserving Fire
           profile.displayName = 'Old Club Name';
           profile.ownedPlayers = profile.ownedPlayers.map((player: any, index: number) => ({ ...player, id: `old_player_${index}` }));
         }
-        profileWrites.push({ ref: db.collection('players_v14').doc(id), data: profile });
+        if (isHuman) oldHumanProfile = profile;
+        else profileWrites.push({ ref: db.collection('players_v14').doc(id), data: profile });
       }
       const tableId = `table_v140_S1_LALPHA_V${level}_G${group}`;
       tableWrites.push({
@@ -200,15 +202,16 @@ test('fresh Season 1 reset rebuilds league and Pyramid Cup while preserving Fire
     db.collection('match_consequence_receipts').doc('old-consequence').set({ matchId: 'match_v140_S1_LALPHA_OLD' }),
   ]);
 
-  // Force a controlled calendar-lock conflict after destructive cleanup and
-  // identity replacement. The journal must resume at the calendar phase.
-  const calendarLockRef = db.collection('system_v1').doc('season_calendar_build_v1');
-  await calendarLockRef.set({ ownerId: 'emulator-test-lock', token: 'locked', expiresAtMs: Date.now() + 10 * 60 * 1000 });
-  await assert.rejects(executeFreshSeasonOneReset(db, target), /FRESH_SEASON_ONE_CALENDAR_BUILD_FAILED/);
+  // Simulate an interrupted reset after the old competition records are
+  // removed: the human profile is unavailable during the club rebuild phase.
+  await assert.rejects(executeFreshSeasonOneReset(db, target), /FRESH_SEASON_ONE_ACCOUNT_PROFILE_MISSING/);
   const failedJournal = (await db.collection('system_v1').doc('staging_fresh_season_one_reset_v1').get()).data();
   assert.equal(failedJournal.status, 'FAILED');
-  assert.equal(failedJournal.stepIndex, 2);
-  await calendarLockRef.delete();
+  assert.equal(failedJournal.stepIndex, 1);
+  const frozenConfig = (await db.collection('system_v1').doc('season_config').get()).data();
+  assert.equal(frozenConfig.worldReady, false);
+  assert.equal(frozenConfig.stagingSeasonOneResetInProgress, true);
+  await db.collection('players_v14').doc(uid).set(oldHumanProfile);
 
   const result = await executeFreshSeasonOneReset(db, target);
   assert.equal(result.success, true);
