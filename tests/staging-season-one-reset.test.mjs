@@ -210,6 +210,19 @@ test('fresh Season 1 reset plan rejects missing profiles and a prepared next sea
   assert.ok(preparedPlan.reasons.includes('PREPARED_NEXT_SEASON_EXISTS'));
 });
 
+test('fresh Season 1 club reset preserves latest match economy when it belongs to another season', () => {
+  const profile = {
+    lastMatchId: 'match_v140_S2_LALPHA_V1_G1_T1_R1_vs_R2',
+    lastMatchEconomy: { totalRevenue: 900 },
+    matchEconomy: {
+      match_v140_S2_LALPHA_V1_G1_T1_R1_vs_R2: { totalRevenue: 900 },
+    },
+  };
+  const reset = resetFreshSeasonOneClubProfileState(profile);
+  assert.deepEqual(reset.lastMatchEconomy, profile.lastMatchEconomy);
+  assert.deepEqual(reset.matchEconomy, profile.matchEconomy);
+});
+
 test('legacy full-world reset is hard-blocked outside local Firebase Emulator', () => {
   const source = read('src/app/actions/clean-season1-world.ts');
   assert.match(source, /'players_v14'/);
@@ -297,6 +310,7 @@ test('fresh Season 1 club profile reset preserves finances and identity while cl
       cup_S1_R1_M01: { totalRevenue: 250 },
       match_v140_S2_LALPHA_V1_G1_T1_R1_vs_R2: { totalRevenue: 700 },
     },
+    lastMatchId: 'cup_S1_R1_M01',
     lastMatchEconomy: { totalRevenue: 500 },
     lastMatchConsequences: {
       matchId: 'cup_S1_R1_M01',
