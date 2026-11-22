@@ -2035,7 +2035,7 @@ export async function ensureSeasonCalendar(requestedTargetSeason?: number) {
       }, options: { merge: true } }]);
     }
     const world: any = await buildSeasonCalendar(lease, pristineFirstWorld);
-    const cupRequired = pristineFirstWorld || (config.pyramidCupRequired === true && Number(config.pyramidCupReadySeasonNumber) === 1);
+    const cupRequired = pristineFirstWorld || (config.pyramidCupRequired === true && Number(config.activeSeasonNumber || 1) === 1 && Number(config.pyramidCupReadySeasonNumber) === 1);
     const cupPending = cupRequired && config.pyramidCupReady !== true;
     if (!cupPending || world?.success !== true || world?.worldReady !== true) return world;
 
