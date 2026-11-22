@@ -282,6 +282,19 @@ export async function restoreSeasonOneFromDurableArchive(
     await assertOwnership?.();
     await deleteArchiveQuery(db, query);
   }
+  const seasonRewards = await db.collection('economy_transactions').where('referenceId', '==', 'S1').get();
+  const cupRewards = await db.collection('economy_transactions').where('referenceId', '==', 'cup_s1_lALPHA').get();
+  const rewardDocs = [
+    ...seasonRewards.docs.filter((doc: any) => doc.data()?.type === 'LEAGUE_SEASON_REWARD'),
+    ...cupRewards.docs.filter((doc: any) =>
+      ['PYRAMID_CUP_CHAMPION_REWARD', 'PYRAMID_CUP_FINALIST_REWARD'].includes(String(doc.data()?.type || ''))),
+  ];
+  for (let offset = 0; offset < rewardDocs.length; offset += 350) {
+    await assertOwnership?.();
+    const batch = db.batch();
+    rewardDocs.slice(offset, offset + 350).forEach((doc: any) => batch.delete(doc.ref));
+    await batch.commit();
+  }
   for (const [collection, document] of [
     ['cup_pyramid_v1', 'cup_s1_lALPHA'],
     ['league_season_archives_v1', 'S1'],
