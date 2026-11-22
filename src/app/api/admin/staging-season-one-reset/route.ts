@@ -36,8 +36,10 @@ export async function GET(request: NextRequest) {
 
   try {
     const db = getAdminDb();
+    const matchPrefix = 'match_v140_S1_LALPHA_';
     const [configSnap, tablesSnap, slotsSnap, matchesSnap, cupSnap, cupMatchesSnap,
-      legacyCupMatchesSnap, archiveSnap, rolloverSnap, historySnap] = await Promise.all([
+      legacyCupMatchesSnap, archiveSnap, archiveMatchesSnap, rolloverSnap, historySnap,
+      matchEffectsSnap, matchRevenueSnap] = await Promise.all([
       db.collection('system_v1').doc('season_config').get(),
       db.collection('league_tables_v2').where('season', '==', 1).where('version', '==', 140).get(),
       db.collection('league_slots_v1').where('season', '==', 1).where('leagueId', '==', 'ALPHA').get(),
@@ -46,8 +48,11 @@ export async function GET(request: NextRequest) {
       db.collection('cup_matches').where('cupId', '==', 'cup_s1_lALPHA').get(),
       db.collection('matches_v2').where('cupId', '==', 'cup_s1_lALPHA').get(),
       db.collection('league_season_archives_v1').doc('S1').get(),
+      db.collection('league_season_archives_v1').doc('S1').collection('matches').get(),
       db.collection('league_season_rollovers_v1').doc('S1').get(),
       db.collection('league_season_history_v1').doc('S1').get(),
+      db.collection('match_player_effects_v1').where('matchId', '>=', matchPrefix).where('matchId', '<', `${matchPrefix}\uf8ff`).get(),
+      db.collection('economy_transactions').where('referenceId', '>=', matchPrefix).where('referenceId', '<', `${matchPrefix}\uf8ff`).get(),
     ]);
 
     const participantIds = new Set<string>();
@@ -95,6 +100,9 @@ export async function GET(request: NextRequest) {
       archives: archiveSnap.exists ? 1 : 0,
       rollovers: rolloverSnap.exists ? 1 : 0,
       history: historySnap.exists ? 1 : 0,
+      archiveMatches: archiveMatchesSnap.size,
+      matchPlayerEffects: matchEffectsSnap.size,
+      matchRevenueReceipts: matchRevenueSnap.docs.filter(doc => doc.data()?.type === 'MATCH_REVENUE').length,
     });
 
     return respond(plan.ready ? 200 : 409, {
