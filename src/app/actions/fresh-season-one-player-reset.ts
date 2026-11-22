@@ -125,7 +125,9 @@ export function createFreshSeasonOneHumanClubProfile(
 
   const clubName = String(account.clubName || account.displayName || 'New Club').trim().slice(0, 25) || 'New Club';
   const roles: Role[] = ['Carry', 'Midlaner', 'Tank', 'Jungler', 'Support', 'Carry', 'Midlaner', 'Tank', 'Jungler', 'Support'];
-  const rosterSeed = `fresh_s1_${uid}_${now.getTime()}_${Math.random().toString(36).slice(2)}`;
+  // Deterministic for the same account and reset timestamp, so a journal retry
+  // recreates the exact same player IDs instead of minting duplicate rosters.
+  const rosterSeed = `fresh_s1_${uid}_${now.getTime()}`;
   const ownedPlayers: Player[] = roles.map((role, index) =>
     generateUniquePlayer(role, index, true, `${rosterSeed}_${index}`)
   );
