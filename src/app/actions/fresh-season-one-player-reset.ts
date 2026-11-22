@@ -96,6 +96,12 @@ export function resetFreshSeasonOneClubProfileState<T extends FreshSeasonOneClub
 }
 
 
+export function getFreshSeasonOneClubName(uid: string) {
+  const suffix = String(uid || '').replace(/[^a-zA-Z0-9]/g, '').slice(0, 6).toUpperCase();
+  if (!suffix) throw new Error('FRESH_CLUB_ACCOUNT_UID_INVALID');
+  return `New Club ${suffix}`;
+}
+
 export type FreshSeasonOneClubPlacement = {
   tier: number;
   group: number;
@@ -123,7 +129,7 @@ export function createFreshSeasonOneHumanClubProfile(
     throw new Error('FRESH_CLUB_PLACEMENT_INVALID');
   }
 
-  const clubName = String(account.clubName || account.displayName || 'New Club').trim().slice(0, 25) || 'New Club';
+  const clubName = getFreshSeasonOneClubName(uid);
   const roles: Role[] = ['Carry', 'Midlaner', 'Tank', 'Jungler', 'Support', 'Carry', 'Midlaner', 'Tank', 'Jungler', 'Support'];
   // Deterministic for the same account and reset timestamp, so a journal retry
   // recreates the exact same player IDs instead of minting duplicate rosters.
