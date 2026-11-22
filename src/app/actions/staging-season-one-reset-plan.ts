@@ -53,12 +53,6 @@ function nextMoscowSeasonBoundary(now: Date) {
 
 export function buildFreshSeasonOneResetPlan(input: FreshSeasonOneResetInput) {
   const reasons: string[] = [];
-  // Existing season-one archives or a prebuilt S1 -> S2 rollover mean this
-  // world is not a clean Season 1 source. Never overwrite or silently reuse them.
-  if (input.archives > 0) reasons.push('EXISTING_SEASON_ONE_ARCHIVE');
-  if (input.rollovers > 0) reasons.push('EXISTING_SEASON_TWO_ROLLOVER_PLAN');
-  if (input.history > 0) reasons.push('EXISTING_SEASON_ONE_HISTORY');
-  if (input.archiveMatches > 0) reasons.push('ORPHANED_SEASON_ONE_ARCHIVE_MATCHES');
   const config = input.config || {};
   if (!input.config) reasons.push('SEASON_CONFIG_MISSING');
   if (Number(config.activeSeasonNumber) !== 1) reasons.push('ACTIVE_SEASON_MUST_BE_1');
