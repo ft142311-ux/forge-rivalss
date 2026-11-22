@@ -124,6 +124,8 @@ test('fresh Beta Season 1 preflight is authenticated, project-fenced and read-on
   const source = read('src/app/api/admin/staging-season-one-reset/route.ts');
   assert.match(source, /isCronAuthorized\(request\)/);
   assert.match(source, /EXPECTED_PROJECT = 'forge-rivalstest'/);
+  assert.match(source, /function isExpectedProject/);
+  assert.match(source, /getApps\(\)\[0\].*options.*projectId/);
   assert.match(source, /export async function GET/);
   assert.match(source, /export async function POST/);
   assert.match(source, /RESET_BETA_SEASON_ONE/);
