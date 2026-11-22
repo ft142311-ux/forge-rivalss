@@ -44,7 +44,7 @@ export function resetFreshSeasonOnePlayerState<T extends FreshSeasonOnePlayer>(p
 
   const matchEconomy = player.matchEconomy && typeof player.matchEconomy === 'object'
     ? Object.fromEntries(Object.entries(player.matchEconomy).filter(([matchId]) =>
-        !String(matchId).startsWith(SEASON_ONE_LEAGUE_MATCH_PREFIX)))
+        !(String(matchId).startsWith(SEASON_ONE_LEAGUE_MATCH_PREFIX) || String(matchId).startsWith('cup_S1_'))))
     : player.matchEconomy;
 
   const lastMatchConsequences = isSeasonOneCompetitionMatchId(player.lastMatchConsequences?.matchId)
