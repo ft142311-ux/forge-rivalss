@@ -188,6 +188,29 @@ test('fresh Season 1 reset preflight does not require the old Cup, Cup snapshots
   assert.equal(plan.replace.leagueMatches, 0);
 });
 
+test('fresh Season 1 reset preserves human Firebase UIDs but replaces their club profiles', () => {
+  const input = createValidInput();
+  const table = input.tables[1];
+  const slot = input.slots.find(item => item.id === 'S1_LALPHA_D2_G1_R1');
+  const botId = 'BOT_ALPHA_L2_G1_R1';
+  const userId = 'existing-auth-uid';
+  const row = { ...table.data.stats[botId], id: userId, name: 'Old Club', isBot: false };
+  delete table.data.stats[botId];
+  table.data.stats[userId] = row;
+  slot.data.status = 'OCCUPIED';
+  slot.data.occupantId = userId;
+  input.profileIds.delete(botId);
+  input.profileIds.add(userId);
+
+  const plan = buildFreshSeasonOneResetPlan(input);
+  assert.equal(plan.ready, true, plan.reasons.join(','));
+  assert.equal(plan.preserve.firebaseAuthAccounts, true);
+  assert.equal(plan.preserve.firebaseAuthUids, 1);
+  assert.equal(plan.replace.humanClubProfiles, 1);
+  assert.equal(plan.replace.botClubProfiles, 119);
+  assert.equal(plan.replace.clubProfiles, 120);
+});
+
 test('fresh Season 1 reset allows orphaned old Cup fixtures and snapshots when the Cup root is absent', () => {
   const input = createValidInput();
   input.cup = null;
