@@ -126,7 +126,7 @@ test('direct publication and activation entry points enforce the Pyramid Cup pre
     resolve(import.meta.dirname, '../src/app/actions/season-calendar.ts'),
     'utf8',
   );
-  assert.match(calendar, /import \{ preparePyramidCupForSeason \} from '\.\/cup-engine'/);
+  assert.match(calendar, /import \{[^}]*preparePyramidCupForSeason[^}]*\} from '\.\/cup-engine'/);
   const publishStart = calendar.indexOf('export async function publishPreparedSeason()');
   const activateStart = calendar.indexOf('export async function activatePublishedSeason()');
   assert.ok(publishStart >= 0 && activateStart > publishStart);
