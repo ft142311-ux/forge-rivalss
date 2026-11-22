@@ -86,6 +86,7 @@ test('fresh Beta Season 1 preflight is authenticated, project-fenced and read-on
   assert.match(source, /league_slots_v1/);
   assert.match(source, /matches_v2/);
   assert.match(source, /players_v14/);
+  assert.match(source, /ownedPlayers/);
   assert.match(source, /match_player_effects_v1/);
   assert.match(source, /economy_transactions/);
   assert.match(source, /match_consequence_receipts/);
