@@ -134,7 +134,9 @@ test('fresh Beta Season 1 preflight is authenticated, project-fenced and read-on
   assert.match(source, /economy_transactions/);
   assert.match(source, /match_consequence_receipts/);
   assert.match(source, /LEAGUE_SEASON_REWARD/);
-  assert.match(source, /PYRAMID_CUP_CHAMPION_REWARD/);\n  assert.match(source, /cup_participant_snapshots_v1/);\n  assert.match(source, /PYRAMID_CUP_OPENING_FIXTURES_INCOMPLETE/);
+  assert.match(source, /PYRAMID_CUP_CHAMPION_REWARD/);
+  assert.match(source, /cup_participant_snapshots_v1/);
+  assert.match(source, /PYRAMID_CUP_OPENING_FIXTURES_INCOMPLETE/);
   assert.match(source, /season_rollover_v1/);
   assert.match(source, /season_calendar_build_v1/);
   assert.match(source, /collection\('matches'\)/);
@@ -148,7 +150,10 @@ test('fresh Season 1 reset plan validates 120 participants and complete 840-matc
   assert.equal(plan.preserve.participantProfiles, 120);
   assert.equal(plan.preserve.leagueSlots, 120);
   assert.equal(plan.expected.leagueMatches, 840);
-  assert.equal(plan.replace.cupExists, true);\n  assert.equal(plan.replace.cupMatches, 56);\n  assert.equal(plan.replace.cupParticipantSnapshots, 120);\n  assert.equal(plan.replace.matchPlayerEffectLedgers, 0);
+  assert.equal(plan.replace.cupExists, true);
+  assert.equal(plan.replace.cupMatches, 56);
+  assert.equal(plan.replace.cupParticipantSnapshots, 120);
+  assert.equal(plan.replace.matchPlayerEffectLedgers, 0);
   assert.equal(plan.replace.matchRevenueReceipts, 0);
   assert.equal(plan.replace.cupMatchRevenueReceipts, 0);
   assert.equal(plan.replace.matchConsequenceReceipts, 0);
