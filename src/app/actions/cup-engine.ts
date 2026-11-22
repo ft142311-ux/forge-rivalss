@@ -445,8 +445,8 @@ export async function preparePyramidCupForSeason(targetSeasonNumber: number) {
       [...participantIds].some(id => !bracketTeamIds.has(id) && !restIds.has(id)) ||
       [...restIds].some(id => !participantIds.has(id)) ||
       firstRound.some((pairing: any, index: number) => {
-        const stronger = orderedEligible[orderedEligible.length - 1 - index * 2];
-        const weaker = orderedEligible[orderedEligible.length - 2 - index * 2];
+        const stronger = orderedEligible[orderedEligible.length - 2 - index * 2];
+        const weaker = orderedEligible[orderedEligible.length - 1 - index * 2];
         return pairing?.away?.id !== stronger?.id || pairing?.home?.id !== weaker?.id;
       })) {
     return { success: false, reason: 'CUP_PREPARED_BRACKET_MEMBERSHIP_INVALID', cupId: ref.id };
