@@ -569,7 +569,7 @@ test('fresh Season 1 executor verifies a durable per-document archive before any
   assert.match(archive, /assertOwnership\?\.\(\)/);
   assert.match(archive, /SEASON_ONE_ARCHIVE_COMPLETED_MANIFEST_INVALID/);
   assert.match(archive, /league_slot_history_v1/);
-  assert.match(archive, /system_v1\\/season_config/);
+  assert.ok(archive.includes('system_v1/season_config'));
 });
 
 test('fresh Season 1 executor is project-scoped, journaled, idempotent and verifies the Pyramid Cup', () => {
