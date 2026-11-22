@@ -7,7 +7,7 @@ process.env.NEXT_PUBLIC_USE_FIREBASE_EMULATORS = 'true';
 process.env.GCLOUD_PROJECT = 'demo-forge-rivals-reset-test';
 
 const emulatorHost = process.env.FIRESTORE_EMULATOR_HOST;
-const uid = 'RESET_TEST_HUMAN_UID';
+const uid = 'RESETTHUMANUID';
 const CUP_ID = 'cup_s1_lALPHA';
 
 test('fresh Season 1 reset rebuilds league and Pyramid Cup while preserving Firebase Auth and unrelated fixtures', {
