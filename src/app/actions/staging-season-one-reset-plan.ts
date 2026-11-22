@@ -219,14 +219,14 @@ export function buildFreshSeasonOneResetPlan(input: FreshSeasonOneResetInput) {
           fixture.homeTeamSnapshot?.id !== homeId || fixture.awayTeamSnapshot?.id !== awayId ||
           !Array.isArray(fixture.homeTeamSnapshot?.players) || fixture.homeTeamSnapshot.players.length !== 5 ||
           !Array.isArray(fixture.awayTeamSnapshot?.players) || fixture.awayTeamSnapshot.players.length !== 5) {
-        reasons.push('PYRAMID_CUP_OPENING_FIXTURE_IDENTITY_INVALID');      const scheduledValue = fixture.scheduledAt ?? fixture.startTime ?? fixture.scheduledStartAt;
+        reasons.push('PYRAMID_CUP_OPENING_FIXTURE_IDENTITY_INVALID');
+        break;
+      }
+      const scheduledValue = fixture.scheduledAt ?? fixture.startTime ?? fixture.scheduledStartAt;
       const scheduledDate = toValidDate(scheduledValue);
       if (expectedOpeningTime === null || !scheduledDate ||
           scheduledDate.getTime() !== expectedOpeningTime) {
         reasons.push('PYRAMID_CUP_OPENING_SCHEDULE_INVALID');
-        break;
-      }
-
         break;
       }
     }
