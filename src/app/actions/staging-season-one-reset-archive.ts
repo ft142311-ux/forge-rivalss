@@ -47,7 +47,56 @@ function isAllowedSourcePath(path: string): boolean {
   return false;
 }
 
-/** Reject paths outside the explicit Season 1 backup boundary. */
+function isSeasonOneDocumentIdentity(path: string, data: Record<string, any>): boolean {
+  const parts = path.split('/');
+  const collection = parts[0];
+  const id = parts[parts.length - 1];
+  if (collection === 'league_tables_v2') {
+    return /^table_v140_S1_LALPHA_V[1-4]_G[1-8]$/.test(id) &&
+      Number(data.season) === 1 && Number(data.version) === 140 && data.leagueId === 'ALPHA';
+  }
+  if (collection === 'league_slots_v1') {
+    return /^S1_LALPHA_D[1-4]_G[1-8]_R[1-8]$/.test(id) &&
+      Number(data.season) === 1 && data.leagueId === 'ALPHA';
+  }
+  if (collection === 'matches_v2') {
+    return /^match_v140_S1_LALPHA_V[1-4]_G[1-8]_T(?:[1-9]|1[0-4])_R[1-8]_vs_R[1-8]$/.test(id) &&
+      Number(data.season) === 1 && Number(data.version) === 140 && data.leagueId === 'ALPHA';
+  }
+  if (collection === 'players_v14') return String(data.id || '') === id;
+  if (collection === 'cup_matches') {
+    return /^cup_S1_R1_M(?:0[1-9]|[1-5][0-9])$/.test(id) &&
+      Number(data.season) === 1 && data.cupId === 'cup_s1_lALPHA';
+  }
+  if (collection === 'match_player_effects_v1' || collection === 'match_consequence_receipts') {
+    return String(data.matchId || '').startsWith('match_v140_S1_LALPHA_') ||
+      String(data.matchId || '').startsWith('cup_S1_');
+  }
+  if (collection === 'economy_transactions') {
+    const referenceId = String(data.referenceId || '');
+    const transactionId = id;
+    return referenceId === 'S1' || referenceId === 'cup_s1_lALPHA' ||
+      referenceId.startsWith('match_v140_S1_LALPHA_') || referenceId.startsWith('cup_S1_') ||
+      transactionId.startsWith('match_match_v140_S1_LALPHA_') ||
+      transactionId.startsWith('match_cup_S1_') ||
+      transactionId.startsWith('season_1_') ||
+      transactionId.startsWith('pyramid_cup_S1_');
+  }
+  if (collection === 'cup_pyramid_v1') return data.id === id && Number(data.season) === 1;
+  if (collection === 'cup_participant_snapshots_v1') {
+    return data.cupId === 'cup_s1_lALPHA' && Number(data.season) === 1 && data.teamId === id;
+  }
+  if (collection === 'league_season_archives_v1' && parts.length === 4) {
+    return Number(data.sourceSeason) === 1;
+  }
+  if (collection === 'league_season_rollovers_v1') {
+    return Number(data.sourceSeason) === 1 && Number(data.targetSeason) === 2;
+  }
+  if (collection === 'league_season_history_v1') return Number(data.season || data.sourceSeason) === 1;
+  return EXACT_DOCUMENT_PATHS.has(path);
+}
+
+/** Reject paths and document identities outside the explicit Season 1 backup boundary. */
 export function validateSeasonOneArchiveSources(sources: SeasonOneArchiveSource[]) {
   const reasons: string[] = [];
   const seen = new Set<string>();
@@ -61,6 +110,10 @@ export function validateSeasonOneArchiveSources(sources: SeasonOneArchiveSource[
     seen.add(path);
     if (!source.data || typeof source.data !== 'object' || Array.isArray(source.data)) {
       reasons.push('ARCHIVE_SOURCE_DOCUMENT_INVALID');
+      continue;
+    }
+    if (!isSeasonOneDocumentIdentity(path, source.data)) {
+      reasons.push('ARCHIVE_SOURCE_IDENTITY_MISMATCH');
     }
   }
   return { valid: reasons.length === 0, reasons: [...new Set(reasons)] };
