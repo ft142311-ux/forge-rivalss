@@ -272,6 +272,20 @@ test('fresh Season 1 reset rebuilds league and Pyramid Cup while preserving Fire
     restoreSeasonOneFromDurableArchive(db, result.resetId, 'WRONG_CONFIRMATION'),
     /SEASON_ONE_ARCHIVE_RESTORE_CONFIRMATION_REQUIRED/,
   );
+  const configArchiveDoc = archivedDocs.docs.find(doc => doc.data().sourcePath === 'system_v1/season_config');
+  assert.ok(configArchiveDoc);
+  const originalArchivedConfig = configArchiveDoc.data();
+  await configArchiveDoc.ref.set({
+    ...originalArchivedConfig,
+    data: { ...originalArchivedConfig.data, worldReady: false },
+  });
+  await assert.rejects(
+    restoreSeasonOneFromDurableArchive(db, result.resetId, 'RESTORE_BETA_SEASON_ONE_ARCHIVE'),
+    /SEASON_ONE_ARCHIVE_RESTORE_CHECKSUM_INVALID/,
+  );
+  assert.equal((await db.collection('system_v1').doc('season_config').get()).data().worldReady, true);
+  await configArchiveDoc.ref.set(originalArchivedConfig);
+
   const restoredWorld = await restoreSeasonOneFromDurableArchive(
     db, result.resetId, 'RESTORE_BETA_SEASON_ONE_ARCHIVE',
   );
