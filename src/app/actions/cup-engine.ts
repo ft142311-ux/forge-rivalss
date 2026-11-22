@@ -19,21 +19,6 @@ const ROUND_TEAM_COUNTS = [112, 64, 32, 16, 8, 4, 2];
 const ROUND_BYE_COUNTS = [0, 0, 0, 0, 0, 0, 0];
 const TOTAL_CUP_MATCHES = ROUND_PAIRING_COUNTS.reduce((sum, count) => sum + count, 0);
 
-/**
- * Every tournament/cup write transaction reads the reset marker first.
- * Firestore's transaction conflict detection prevents a worker that began
- * before the marker was asserted from committing after the reset starts.
- */
-async function runWorldMutationTransaction<T>(db: any, work: (tx: any) => Promise<T>): Promise<T> {
-  return db.runTransaction(async (tx: any) => {
-    const resetConfig = await tx.get(db.collection('system_v1').doc('season_config'));
-    if (resetConfig.exists && resetConfig.data()?.stagingSeasonOneResetInProgress === true) {
-      throw new Error('STAGING_SEASON_ONE_RESET_IN_PROGRESS');
-    }
-    return work(tx);
-  });
-}
-
 const CUP_FORMAT_VERSION = 4;
 const ROUND_DAYS = [2, 3, 4, 5, 6, 7, 8]; // preliminary round follows league Tour 1; every round is daily
 const CUP_START_HOUR_UTC = 4; // 07:00 Moscow time
@@ -255,7 +240,11 @@ async function commitCupRoundTransition(
   nextRound: number,
   nextPairings: Pairing[],
 ) {
-  return runWorldMutationTransaction(db, async (tx: any) => {
+  return db.runTransaction(async (tx: any) => {
+    const resetConfigSnap = await tx.get(db.collection('system_v1').doc('season_config'));
+    if (resetConfigSnap.exists && resetConfigSnap.data()?.stagingSeasonOneResetInProgress === true) {
+      throw new Error('STAGING_SEASON_ONE_RESET_IN_PROGRESS');
+    }
     const cupSnap = await tx.get(cupRef);
     if (!cupSnap.exists) throw new Error('CUP_NOT_FOUND_DURING_ROUND_TRANSITION');
     const current = cupSnap.data() || {};
@@ -340,7 +329,11 @@ async function commitCupRoundState(
   pairings: Pairing[],
   options: { nextRound?: number; nextPairings?: Pairing[]; completion?: Record<string, any> } = {},
 ) {
-  return runWorldMutationTransaction(db, async (tx: any) => {
+  return db.runTransaction(async (tx: any) => {
+    const resetConfigSnap = await tx.get(db.collection('system_v1').doc('season_config'));
+    if (resetConfigSnap.exists && resetConfigSnap.data()?.stagingSeasonOneResetInProgress === true) {
+      throw new Error('STAGING_SEASON_ONE_RESET_IN_PROGRESS');
+    }
     const snap = await tx.get(cupRef);
     if (!snap.exists) throw new Error('CUP_NOT_FOUND_DURING_ROUND_COMMIT');
     const current = snap.data() || {};
@@ -571,7 +564,11 @@ async function payCupPrize(db: any, season: number, team: Team | null, place: 'c
   if (amount <= 0) return 0;
   const playerRef = db.collection('players_v14').doc(team.id);
   const ledgerRef = db.collection('economy_transactions').doc(`pyramid_cup_S${season}_${place}_${team.id}`);
-  return runWorldMutationTransaction(db, async (tx: any) => {
+  return db.runTransaction(async (tx: any) => {
+    const resetConfigSnap = await tx.get(db.collection('system_v1').doc('season_config'));
+    if (resetConfigSnap.exists && resetConfigSnap.data()?.stagingSeasonOneResetInProgress === true) {
+      throw new Error('STAGING_SEASON_ONE_RESET_IN_PROGRESS');
+    }
     const [ledgerSnap, playerSnap] = await Promise.all([tx.get(ledgerRef), tx.get(playerRef)]);
     const rewardType = place === 'champion' ? 'PYRAMID_CUP_CHAMPION_REWARD' : 'PYRAMID_CUP_FINALIST_REWARD';
     const referenceId = `cup_s${season}_l${LEAGUE_ID}`;
@@ -621,7 +618,11 @@ async function finishTechnically(db: any, season: number, round: number, pairing
   const ref = db.collection(collectionName).doc(String(pairing.matchId));
   // The fallback races the Universal Match Core worker. Read and write in one
   // transaction so whichever result commits first becomes authoritative.
-  return runWorldMutationTransaction(db, async (tx: any) => {
+  return db.runTransaction(async (tx: any) => {
+    const resetConfigSnap = await tx.get(db.collection('system_v1').doc('season_config'));
+    if (resetConfigSnap.exists && resetConfigSnap.data()?.stagingSeasonOneResetInProgress === true) {
+      throw new Error('STAGING_SEASON_ONE_RESET_IN_PROGRESS');
+    }
     const snap = await tx.get(ref);
     if (!snap.exists) return false;
     const existing: any = snap.data() || {};
@@ -694,7 +695,11 @@ async function finishTechnically(db: any, season: number, round: number, pairing
  * existing results are never overwritten by a retry.
  */
 async function repairCurrentRoundFixtures(db: any, cup: { ref: any; data: any }, activeSeasonStart: Date) {
-  return runWorldMutationTransaction(db, async (tx: any) => {
+  return db.runTransaction(async (tx: any) => {
+    const resetConfigSnap = await tx.get(db.collection('system_v1').doc('season_config'));
+    if (resetConfigSnap.exists && resetConfigSnap.data()?.stagingSeasonOneResetInProgress === true) {
+      throw new Error('STAGING_SEASON_ONE_RESET_IN_PROGRESS');
+    }
     const cupSnap = await tx.get(cup.ref);
     if (!cupSnap.exists) return { repaired: 0, changed: false };
     const data = cupSnap.data() || {};
