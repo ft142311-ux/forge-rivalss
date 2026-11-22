@@ -110,9 +110,6 @@ export async function GET(request: NextRequest) {
       Array.isArray(profile.data()?.ownedPlayers) && profile.data()!.ownedPlayers.length >= 5
     ).map(profile => String(profile.id)));
 
-    const cupSnapshotDocs = await db.collection('cup_participant_snapshots_v1')
-      .doc('cup_s1_lALPHA').collection('teams').get();
-
     const cupSnapshots = await db.collection('cup_participant_snapshots_v1')
       .doc('cup_s1_lALPHA').collection('teams').get();
 
