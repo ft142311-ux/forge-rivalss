@@ -185,7 +185,24 @@ export async function POST(request: NextRequest) {
       const seasonNum = Number(config.activeSeasonNumber || 1);
       const phase = config.phase || 'UNKNOWN';
 
-      if (config.worldReady !== true) throw new Error('WORLD_INITIALIZING');
+      if (config.worldReady !== true) {
+        // Emit only non-sensitive world lifecycle metadata so a blocked Beta
+        // registration can be diagnosed from runtime logs without exposing
+        // account identifiers, club names, tokens, or Firestore document data.
+        console.warn('[REGISTRATION API] World readiness gate blocked registration', {
+          projectId: process.env.GCLOUD_PROJECT || process.env.GOOGLE_CLOUD_PROJECT || 'unknown',
+          season: seasonNum,
+          phase,
+          worldReady: config.worldReady ?? null,
+          stagingSeasonOneResetInProgress: config.stagingSeasonOneResetInProgress === true,
+          stagingFreshSeasonOneReset: config.stagingFreshSeasonOneReset === true,
+          worldGeneration: config.worldGeneration || null,
+          pyramidCupRequired: config.pyramidCupRequired === true,
+          pyramidCupReady: config.pyramidCupReady === true,
+          pyramidCupReadySeasonNumber: Number(config.pyramidCupReadySeasonNumber || 0),
+        });
+        throw new Error('WORLD_INITIALIZING');
+      }
       if (phase !== 'REGULAR_SEASON' && phase !== 'ACTIVE') {
         throw new Error('SEASON_TRANSITION_IN_PROGRESS');
       }
