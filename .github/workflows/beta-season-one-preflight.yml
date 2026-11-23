@@ -43,31 +43,36 @@ jobs:
         env:
           BASE_URL: ${{ steps.target.outputs.BASE_URL }}
           CRON_SECRET: ${{ secrets.BETA_RESET_CRON_SECRET }}
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
         run: |
           set -euo pipefail
           if [ -z "${CRON_SECRET:-}" ]; then
             echo "::error::Repository secret BETA_RESET_CRON_SECRET is not configured."
             exit 1
           fi
+          if [ -z "${VERCEL_TOKEN:-}" ]; then
+            echo "::error::Repository secret VERCEL_TOKEN is not configured. Use Vercel CLI authenticated access; do not create a protection bypass."
+            exit 1
+          fi
           response_file="$(mktemp)"
           trap 'rm -f "$response_file"' EXIT
-          status="$(curl --silent --show-error --max-time 120 \
-            --output "$response_file" --write-out '%{http_code}' \
-            --request GET \
-            --header "Authorization: Bearer ${CRON_SECRET}" \
-            "${BASE_URL}/api/admin/staging-season-one-reset")"
-          unset CRON_SECRET
-          node - "$response_file" "$status" <<'NODE'
+          npx --yes vercel@latest curl "${BASE_URL}/api/admin/staging-season-one-reset" -- \
+            --silent --show-error --max-time 120 --request GET \
+            --output "$response_file" \
+            --header "Authorization: Bearer ${CRON_SECRET}"
+          unset CRON_SECRET VERCEL_TOKEN
+          node - "$response_file" <<'NODE'
           const fs = require('node:fs');
-          const [file, status] = process.argv.slice(2);
+          const file = process.argv[2];
           let result;
           try { result = JSON.parse(fs.readFileSync(file, 'utf8')); }
-          catch { throw new Error(`Preflight returned non-JSON response (HTTP ${status})`); }
-          if (![200, 409].includes(Number(status)) ||
+          catch { throw new Error('Preflight returned non-JSON response; check Vercel CLI request output for access or route errors.'); }
+          const status = Number(result.httpStatus ?? 200);
+          if (![200, 409].includes(status) ||
               result.readOnly !== true ||
               result.project !== 'forge-rivalstest' ||
               !result.plan || typeof result.plan.ready !== 'boolean') {
-            console.error(JSON.stringify({ httpStatus: Number(status), response: result }, null, 2));
+            console.error(JSON.stringify(result, null, 2));
             process.exit(1);
           }
           console.log(JSON.stringify({
