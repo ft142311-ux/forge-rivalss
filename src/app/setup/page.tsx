@@ -222,7 +222,6 @@ export default function SetupPage() {
       const msg = e.message || "";
       if (msg === 'REGISTRATION_REQUEST_TIMEOUT') errorMsg = 'REGISTRATION_REQUEST_TIMEOUT';
       else if (msg === 'PROFILE_REQUEST_TIMEOUT') errorMsg = 'PROFILE_REQUEST_TIMEOUT';
-      else
       const details = e.details || {};
 
       // Анализ диагностических сообщений от HttpsError
