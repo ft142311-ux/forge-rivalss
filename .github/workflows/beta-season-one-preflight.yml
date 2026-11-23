@@ -1,0 +1,89 @@
+name: Beta Season 1 read-only preflight
+
+on:
+  workflow_dispatch:
+    inputs:
+      deployment_url:
+        description: "Beta Preview deployment URL (must be a forge-rivalss Vercel Preview)"
+        required: true
+        type: string
+        default: "https://forge-rivalss-55hxkp3bg-forge-rivals.vercel.app"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: beta-season-one-readonly-preflight
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    name: Authenticated read-only Beta preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Validate Preview URL
+        id: target
+        env:
+          DEPLOYMENT_URL: ${{ inputs.deployment_url }}
+        run: |
+          node <<'NODE'
+          const url = new URL(process.env.DEPLOYMENT_URL);
+          if (url.protocol !== 'https:' || url.username || url.password ||
+              !url.hostname.endsWith('-forge-rivals.vercel.app')) {
+            throw new Error('Only the Forge-Rivals Vercel Preview host is allowed');
+          }
+          url.pathname = '';
+          url.search = '';
+          url.hash = '';
+          process.stdout.write(`BASE_URL=${url.origin}\n`);
+          NODE
+      - name: Call read-only preflight (GET only)
+        env:
+          BASE_URL: ${{ steps.target.outputs.BASE_URL }}
+          CRON_SECRET: ${{ secrets.BETA_RESET_CRON_SECRET }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CRON_SECRET:-}" ]; then
+            echo "::error::Repository secret BETA_RESET_CRON_SECRET is not configured."
+            exit 1
+          fi
+          response_file="$(mktemp)"
+          trap 'rm -f "$response_file"' EXIT
+          status="$(curl --silent --show-error --max-time 120 \
+            --output "$response_file" --write-out '%{http_code}' \
+            --request GET \
+            --header "Authorization: Bearer ${CRON_SECRET}" \
+            "${BASE_URL}/api/admin/staging-season-one-reset")"
+          unset CRON_SECRET
+          node - "$response_file" "$status" <<'NODE'
+          const fs = require('node:fs');
+          const [file, status] = process.argv.slice(2);
+          let result;
+          try { result = JSON.parse(fs.readFileSync(file, 'utf8')); }
+          catch { throw new Error(`Preflight returned non-JSON response (HTTP ${status})`); }
+          if (![200, 409].includes(Number(status)) ||
+              result.readOnly !== true ||
+              result.project !== 'forge-rivalstest' ||
+              !result.plan || typeof result.plan.ready !== 'boolean') {
+            console.error(JSON.stringify({ httpStatus: Number(status), response: result }, null, 2));
+            process.exit(1);
+          }
+          console.log(JSON.stringify({
+            httpStatus: Number(status),
+            success: result.success,
+            readOnly: result.readOnly,
+            project: result.project,
+            ready: result.plan.ready,
+            reasons: result.plan.reasons,
+            target: result.plan.target,
+            preserve: result.plan.preserve,
+            replace: result.plan.replace,
+            expected: result.plan.expected
+          }, null, 2));
+          if (!result.plan.ready) {
+            console.log('Preflight completed safely, but Beta reset remains BLOCKED.');
+          } else {
+            console.log('Read-only preflight is READY. No reset was executed.');
+          }
+          NODE
