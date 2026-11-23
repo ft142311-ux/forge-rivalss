@@ -59,8 +59,10 @@ export default function SetupPage() {
     }
   }, [isInitialSyncDone, isTeamLoaded, router, user?.uid]);
 
-  // Read-only diagnostics help identify a stuck Beta world reset without
-  // asking the player to run commands or exposing any account/profile data.
+  // Heavy world diagnostics are intentionally not polled from the player setup page.
+  // The read-only endpoint remains available for controlled operator checks; calling
+  // it on every login adds multiple collection scans while registration is already active.
+
   useEffect(() => {
     if (!user || isUserLoading) return;
     let cancelled = false;
