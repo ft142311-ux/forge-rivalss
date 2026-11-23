@@ -64,7 +64,7 @@ export const FirebaseProvider: React.FC<{ children: ReactNode; firebaseApp: Fire
           // forcing here would recursively trigger this listener.
           // Each verified token event also refreshes the server-side activity
           // heartbeat, so a long-lived active tab is not mistaken for inactivity.
-          const idToken = await user.getIdToken();
+          await user.getIdToken();
           if (sequence !== authChangeSequence || auth.currentUser?.uid !== user.uid) return;
 
           // Publish the verified Firebase session immediately. Activity
