@@ -21,20 +21,26 @@ async function recordUserActivityUnlessRetiring(db, uid, nowMs = Date.now()) {
 
   const startedAt = Date.now();
   console.info('[ACTIVITY FENCE TRACE]', { stage: 'transaction_started' });
+
   try {
     const result = await db.runTransaction(async (transaction) => {
       const readStartedAt = Date.now();
       const [pending, retired, activity] = await Promise.all([
-      transaction.get(pendingRef),
-      transaction.get(retiredRef),
+        transaction.get(pendingRef),
+        transaction.get(retiredRef),
         transaction.get(activityRef),
       ]);
-      console.info('[ACTIVITY FENCE TRACE]', { stage: 'transaction_reads_completed', durationMs: Date.now() - readStartedAt, pending: pending.exists, retired: retired.exists, activity: activity.exists });
+
+      console.info('[ACTIVITY FENCE TRACE]', {
+        stage: 'transaction_reads_completed',
+        durationMs: Date.now() - readStartedAt,
+        pending: pending.exists,
+        retired: retired.exists,
+        activity: activity.exists,
+      });
 
       // CANCELLED is a recoverable cleanup state, not permission to remove the
-    // fence. The Auth account may still be disabled if the previous worker
-    // crashed between marking cancellation and re-enabling it. Only the sweep
-    // may re-enable Auth and then remove this marker.
+      // fence. Only the retirement sweep may re-enable Auth and remove it.
       if (pending.exists) {
         console.warn('[ACTIVITY FENCE TRACE]', { stage: 'blocked_retiring' });
         return { success: false, error: 'ACCOUNT_RETIRING' };
@@ -45,32 +51,46 @@ async function recordUserActivityUnlessRetiring(db, uid, nowMs = Date.now()) {
       }
 
       const lastActiveAt = activity.data()?.lastActiveAt;
-    const lastActiveMs = typeof lastActiveAt?.toMillis === 'function'
-      ? lastActiveAt.toMillis()
-      : (lastActiveAt instanceof Date
-        ? lastActiveAt.getTime()
-        : (typeof lastActiveAt === 'number' ? lastActiveAt : Date.parse(String(lastActiveAt || ''))));
+      const lastActiveMs = typeof lastActiveAt?.toMillis === 'function'
+        ? lastActiveAt.toMillis()
+        : (lastActiveAt instanceof Date
+          ? lastActiveAt.getTime()
+          : (typeof lastActiveAt === 'number'
+            ? lastActiveAt
+            : Date.parse(String(lastActiveAt || ''))));
       const refreshDue = !Number.isFinite(lastActiveMs) || nowMs - lastActiveMs >= 60_000;
 
-    // Throttle writes to at most once per minute, while still reading the
-    // retirement marker in every transaction. This preserves the race fence:
-    // an activity request and a retirement claim cannot both commit based on
-    // stale reads of the other's marker/activity document.
+      // Keep the retirement race fence transactional. The write is throttled,
+      // but the three reads remain part of the atomic safety check.
       if (refreshDue) {
         transaction.set(activityRef, {
-        uid,
-        lastActiveAt: FieldValue.serverTimestamp(),
-        updatedAt: FieldValue.serverTimestamp(),
+          uid,
+          lastActiveAt: FieldValue.serverTimestamp(),
+          updatedAt: FieldValue.serverTimestamp(),
         }, { merge: true });
       }
 
-      console.info('[ACTIVITY FENCE TRACE]', { stage: 'transaction_callback_completed', durationMs: Date.now() - startedAt, refreshDue });
+      console.info('[ACTIVITY FENCE TRACE]', {
+        stage: 'transaction_callback_completed',
+        durationMs: Date.now() - startedAt,
+        refreshDue,
+      });
       return { success: true };
     });
-    console.info('[ACTIVITY FENCE TRACE]', { stage: 'transaction_committed', durationMs: Date.now() - startedAt, success: result.success });
+
+    console.info('[ACTIVITY FENCE TRACE]', {
+      stage: 'transaction_committed',
+      durationMs: Date.now() - startedAt,
+      success: result.success,
+    });
     return result;
   } catch (error) {
-    console.error('[ACTIVITY FENCE TRACE]', { stage: 'transaction_failed', durationMs: Date.now() - startedAt, code: String(error?.code || 'UNKNOWN'), message: String(error?.message || '').slice(0, 160) });
+    console.error('[ACTIVITY FENCE TRACE]', {
+      stage: 'transaction_failed',
+      durationMs: Date.now() - startedAt,
+      code: String(error?.code || 'UNKNOWN'),
+      message: String(error?.message || '').slice(0, 160),
+    });
     throw error;
   }
 }
