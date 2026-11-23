@@ -5,7 +5,6 @@ import React, { createContext, useContext, ReactNode, useMemo, useState, useEffe
 import { FirebaseApp } from 'firebase/app';
 import { Firestore } from 'firebase/firestore';
 import { Auth, onIdTokenChanged, User, signOut } from 'firebase/auth';
-import { recordUserActivityAction } from '@/app/actions/user-activity';
 import { recordManagerPresenceAction } from '@/app/actions/manager-presence';
 
 /**
@@ -73,31 +72,9 @@ export const FirebaseProvider: React.FC<{ children: ReactNode; firebaseApp: Fire
           // behind a Firestore/server-action round trip.
           setUserAuthState({ user, isUserLoading: false, userError: null });
 
-          // Keep the server-side account lifecycle check, but run it after
-          // the client session is available. Terminal account states still
-          // revoke the session; transient failures do not block navigation.
-          void (async () => {
-            try {
-              const activity = await recordUserActivityAction(idToken);
-              if (sequence !== authChangeSequence || auth.currentUser?.uid !== user.uid) return;
-              const terminalActivityError = [
-                'ACCOUNT_DISABLED',
-                'ACCOUNT_RETIRING',
-                'ACCOUNT_RETIRED',
-                'AUTH_TOKEN_REVOKED',
-                'AUTH_TOKEN_INVALID',
-              ].includes(String(activity?.error || ''));
-              if (terminalActivityError) {
-                try { await signOut(auth); } catch { /* Auth listener settles state. */ }
-                return;
-              }
-              if (!activity?.success) {
-                console.warn('[AUTH ACTIVITY] Session activity was not acknowledged:', activity?.error || 'UNKNOWN');
-              }
-            } catch (activityError) {
-              console.warn('[AUTH ACTIVITY] Background session activity failed:', activityError);
-            }
-          })();
+          // The manager-presence heartbeat below performs the same server-side
+          // lifecycle fence. Do not issue a second transaction on every token
+          // refresh; this avoids duplicate Firestore reads during sign-in.
         } catch (error: any) {
           if (sequence !== authChangeSequence) return;
           const code = String(error?.code || '').toLowerCase();
