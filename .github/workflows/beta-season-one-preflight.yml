@@ -12,6 +12,7 @@ on:
 
 permissions:
   contents: read
+  deployments: read
 
 concurrency:
   group: beta-season-one-readonly-preflight
