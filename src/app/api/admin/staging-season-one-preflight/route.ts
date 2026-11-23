@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { getAdminDb } from '@/lib/firebase-admin';
 import {
   GET as getResetPreflight,
   POST as executeReset,
@@ -10,6 +11,7 @@ export const maxDuration = 120;
 
 const EXPECTED_PROJECT = 'forge-rivalstest';
 const EXPECTED_BRANCH = 'feature/beta-fresh-season-one';
+const RESET_JOURNAL_ID = 'staging_fresh_season_one_reset_v1';
 
 function isExpectedPreview() {
   const configuredProject =
@@ -30,6 +32,54 @@ function respond(status: number, body: Record<string, unknown>) {
     status,
     headers: { 'Cache-Control': 'no-store, max-age=0', Pragma: 'no-cache' },
   });
+}
+
+async function readResetState() {
+  const db = getAdminDb();
+  const [configSnap, journalSnap, rolloverLockSnap, calendarLockSnap] = await Promise.all([
+    db.collection('system_v1').doc('season_config').get(),
+    db.collection('system_v1').doc(RESET_JOURNAL_ID).get(),
+    db.collection('system_v1').doc('season_rollover_v1').get(),
+    db.collection('system_v1').doc('season_calendar_build_v1').get(),
+  ]);
+
+  const config = configSnap.exists ? configSnap.data() || {} : {};
+  const journal = journalSnap.exists ? journalSnap.data() || {} : null;
+  const now = Date.now();
+  const lockSummary = (snap: any) => ({
+    exists: snap.exists,
+    expiresAtMs: Number(snap.data()?.expiresAtMs || 0),
+    active: snap.exists && Number(snap.data()?.expiresAtMs || 0) > now,
+  });
+
+  return {
+    config: {
+      activeSeasonNumber: Number(config.activeSeasonNumber || 0),
+      phase: String(config.phase || ''),
+      worldReady: config.worldReady === true,
+      stagingSeasonOneResetInProgress: config.stagingSeasonOneResetInProgress === true,
+      worldGeneration: String(config.worldGeneration || ''),
+      pyramidCupReady: config.pyramidCupReady === true,
+    },
+    journal: journal ? {
+      exists: true,
+      status: String(journal.status || ''),
+      resetId: String(journal.resetId || ''),
+      stepIndex: Number(journal.stepIndex || 0),
+      startedAtMs: Number(journal.startedAtMs || 0),
+      updatedAtMs: Number(journal.updatedAtMs || 0),
+      leaseExpiresAtMs: Number(journal.lease?.expiresAtMs || 0),
+      leaseActive: Number(journal.lease?.expiresAtMs || 0) > now,
+      lastError: String(journal.lastError || ''),
+      counts: journal.counts && typeof journal.counts === 'object' ? journal.counts : {},
+      hasSourceConfig: Boolean(journal.sourceConfig),
+      target: journal.target || null,
+    } : { exists: false },
+    workerLocks: {
+      seasonRollover: lockSummary(rolloverLockSnap),
+      seasonCalendarBuild: lockSummary(calendarLockSnap),
+    },
+  };
 }
 
 /**
@@ -61,14 +111,15 @@ export async function GET(request: NextRequest) {
   });
   const preflightResponse = await getResetPreflight(internalRequest);
   const result = await preflightResponse.json();
+  const diagnostics = await readResetState();
 
-  return respond(preflightResponse.status, result);
+  return respond(preflightResponse.status, { ...result, diagnostics });
 }
 
 /**
- * Explicitly confirmed reset bridge. It always performs a fresh read-only
- * preflight immediately before invoking the existing authenticated executor.
- * No secret is accepted from or returned to the caller.
+ * Explicitly confirmed reset bridge. New resets require a fresh ready preflight.
+ * Existing journaled resets may resume only after their lease expires; the
+ * executor revalidates the journal lease and original archived source config.
  */
 export async function POST(request: NextRequest) {
   if (!isExpectedPreview()) {
@@ -111,26 +162,57 @@ export async function POST(request: NextRequest) {
     });
   }
 
-  const internalGet = new NextRequest(request.url, {
-    method: 'GET',
-    headers: { authorization: `Bearer ${cronSecret}` },
-  });
-  const preflightResponse = await getResetPreflight(internalGet);
-  const preflight = await preflightResponse.json();
+  const db = getAdminDb();
+  const journalSnap = await db.collection('system_v1').doc(RESET_JOURNAL_ID).get();
+  if (journalSnap.exists) {
+    const journal = journalSnap.data() || {};
+    const status = String(journal.status || '');
+    if (!['RUNNING', 'FAILED', 'COMPLETED'].includes(status) ||
+        !journal.target?.seasonStart || !journal.target?.nextSeasonStart ||
+        (status !== 'COMPLETED' && !journal.sourceConfig)) {
+      return respond(409, {
+        success: false,
+        readOnly: false,
+        error: 'RESET_JOURNAL_INVALID_OR_UNRECOVERABLE',
+      });
+    }
 
-  if (
-    preflightResponse.status !== 200 ||
-    preflight?.success !== true ||
-    preflight?.readOnly !== true ||
-    preflight?.project !== EXPECTED_PROJECT ||
-    preflight?.plan?.ready !== true
-  ) {
-    return respond(409, {
-      success: false,
-      readOnly: false,
-      error: 'RESET_PREFLIGHT_BLOCKED',
-      preflight: preflight?.plan || preflight?.error || 'PREFLIGHT_NOT_READY',
+    const leaseExpiresAtMs = Number(journal.lease?.expiresAtMs || 0);
+    if (status === 'RUNNING' && leaseExpiresAtMs > Date.now()) {
+      return respond(409, {
+        success: false,
+        readOnly: false,
+        error: 'RESET_ALREADY_RUNNING',
+        retryAfterMs: leaseExpiresAtMs - Date.now(),
+        journal: {
+          status,
+          stepIndex: Number(journal.stepIndex || 0),
+          leaseExpiresAtMs,
+        },
+      });
+    }
+  } else {
+    const internalGet = new NextRequest(request.url, {
+      method: 'GET',
+      headers: { authorization: `Bearer ${cronSecret}` },
     });
+    const preflightResponse = await getResetPreflight(internalGet);
+    const preflight = await preflightResponse.json();
+
+    if (
+      preflightResponse.status !== 200 ||
+      preflight?.success !== true ||
+      preflight?.readOnly !== true ||
+      preflight?.project !== EXPECTED_PROJECT ||
+      preflight?.plan?.ready !== true
+    ) {
+      return respond(409, {
+        success: false,
+        readOnly: false,
+        error: 'RESET_PREFLIGHT_BLOCKED',
+        preflight: preflight?.plan || preflight?.error || 'PREFLIGHT_NOT_READY',
+      });
+    }
   }
 
   const internalPost = new NextRequest(request.url, {
