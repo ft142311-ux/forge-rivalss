@@ -141,7 +141,7 @@ export const FirebaseProvider: React.FC<{ children: ReactNode; firebaseApp: Fire
     };
 
     void heartbeat();
-    const interval = window.setInterval(() => { void heartbeat(); }, 45_000);
+    const interval = window.setInterval(() => { void heartbeat(); }, 60_000);
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') void heartbeat();
     };
