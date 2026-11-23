@@ -5,19 +5,49 @@ import { getFirestore, type Firestore } from 'firebase-admin/firestore';
  * Firebase Admin SDK initialization.
  *
  * Local mode connects only to the Firebase Emulator Suite.
- * Hosted mode requires an explicit service-account secret unless the runtime
- * is deliberately configured to use Google Application Default Credentials.
+ * Hosted mode fails closed unless the browser and server identify the same
+ * explicit Firebase project and Admin credentials belong to that project.
  */
 
-const FIREBASE_PROJECT_ID =
-  process.env.GCLOUD_PROJECT ||
-  process.env.GCP_PROJECT ||
-  process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID ||
-  'demo-forge-rivals';
+function getFirebaseProjectId(useEmulators: boolean): string {
+  if (useEmulators) {
+    return (
+      process.env.GCLOUD_PROJECT ||
+      process.env.GCP_PROJECT ||
+      process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID ||
+      'demo-forge-rivals'
+    );
+  }
+
+  const serverProjectId =
+    process.env.GCLOUD_PROJECT || process.env.GCP_PROJECT;
+  const clientProjectId = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID;
+
+  if (!serverProjectId) {
+    throw new Error('GCLOUD_PROJECT is required for hosted Firebase Admin access');
+  }
+
+  if (!clientProjectId) {
+    throw new Error('NEXT_PUBLIC_FIREBASE_PROJECT_ID is required for hosted Firebase access');
+  }
+
+  if (serverProjectId !== clientProjectId) {
+    throw new Error('Firebase server and browser project IDs do not match');
+  }
+
+  return serverProjectId;
+}
 
 function getOrInitializeAdminApp(useEmulators: boolean): App {
+  const projectId = getFirebaseProjectId(useEmulators);
   const existing = getApps()[0];
-  if (existing) return existing;
+
+  if (existing) {
+    if (existing.options.projectId && existing.options.projectId !== projectId) {
+      throw new Error('Existing Firebase Admin app belongs to a different project');
+    }
+    return existing;
+  }
 
   if (useEmulators) {
     process.env.FIRESTORE_EMULATOR_HOST =
@@ -25,7 +55,7 @@ function getOrInitializeAdminApp(useEmulators: boolean): App {
     process.env.FIREBASE_AUTH_EMULATOR_HOST =
       process.env.FIREBASE_AUTH_EMULATOR_HOST || '127.0.0.1:9099';
 
-    return initializeApp({ projectId: FIREBASE_PROJECT_ID });
+    return initializeApp({ projectId });
   }
 
   const serviceAccountJson = process.env.FIREBASE_ADMIN_SDK;
@@ -38,22 +68,21 @@ function getOrInitializeAdminApp(useEmulators: boolean): App {
       throw new Error('FIREBASE_ADMIN_SDK must contain valid JSON');
     }
 
-    const credentialProjectId = serviceAccount.project_id;
     if (
-      typeof credentialProjectId === 'string' &&
-      credentialProjectId !== FIREBASE_PROJECT_ID
+      typeof serviceAccount.project_id !== 'string' ||
+      serviceAccount.project_id !== projectId
     ) {
-      throw new Error('Firebase Admin credential project does not match configured project');
+      throw new Error('Firebase Admin service-account project_id must match the configured Firebase project');
     }
 
     return initializeApp({
       credential: cert(serviceAccount as any),
-      projectId: FIREBASE_PROJECT_ID,
+      projectId,
     });
   }
 
   if (process.env.FIREBASE_ADMIN_USE_ADC === 'true') {
-    return initializeApp({ projectId: FIREBASE_PROJECT_ID });
+    return initializeApp({ projectId });
   }
 
   throw new Error(
