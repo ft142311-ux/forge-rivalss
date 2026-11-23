@@ -8,7 +8,7 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
 
-const EXPECTED_PROJECT = 'forge-rivalstest';
+const EXPECTED_PROJECT = 'forge-rivals-beta';
 const LEAGUE_ID = 'ALPHA';
 const SEASON = 1;
 const VERSION = 140;
@@ -26,6 +26,10 @@ const GUARDED_COLLECTIONS = [
   'league_slot_history_v1',
   'league_season_archives_v1',
   'league_season_rollovers_v1',
+  'cup_pyramid_v1',
+  'cup_matches',
+  'cup_participant_snapshots_v1',
+  'security_audit_v1',
 ];
 
 function response(status: number, body: Record<string, unknown>) {
