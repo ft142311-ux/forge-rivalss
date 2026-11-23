@@ -8,6 +8,7 @@ process.env.GCLOUD_PROJECT = 'demo-forge-rivals-reset-test';
 
 const emulatorHost = process.env.FIRESTORE_EMULATOR_HOST;
 const uid = 'RESETTHUMANUID';
+const secondUid = 'RESETTHUMANUID2';
 const CUP_ID = 'cup_s1_lALPHA';
 
 test('fresh Season 1 reset rebuilds league and Pyramid Cup while preserving Firebase Auth and unrelated fixtures', {
@@ -40,6 +41,7 @@ test('fresh Season 1 reset rebuilds league and Pyramid Cup while preserving Fire
   };
 
   await auth.createUser({ uid, email: 'reset-test@example.invalid', password: 'emulator-only-password' });
+  await auth.createUser({ uid: secondUid, email: 'reset-test-2@example.invalid', password: 'emulator-only-password' });
   t.after(async () => {
     const nestedSnapshots = await db.collection('cup_participant_snapshots_v1').doc(CUP_ID).collection('teams').get().catch(() => null);
     if (nestedSnapshots) for (let offset = 0; offset < nestedSnapshots.docs.length; offset += 400) {
@@ -61,6 +63,7 @@ test('fresh Season 1 reset rebuilds league and Pyramid Cup while preserving Fire
     if (nestedArchive) for (const doc of nestedArchive.docs) await doc.ref.delete().catch(() => undefined);
     for (const name of collections) await clearCollection(name).catch(() => undefined);
     await auth.deleteUser(uid).catch(() => undefined);
+    await auth.deleteUser(secondUid).catch(() => undefined);
     const defaultApp = getApps().find(candidate => candidate.name === '[DEFAULT]');
     if (defaultApp) await deleteApp(defaultApp).catch(() => undefined);
   });
@@ -83,15 +86,18 @@ test('fresh Season 1 reset rebuilds league and Pyramid Cup while preserving Fire
   const tableWrites = [];
   const slotWrites = [];
   const profileWrites = [];
-  let oldHumanProfile = null;
+  const oldHumanProfiles = new Map();
   const participants = [];
   for (let level = 1; level <= 4; level++) {
     for (let group = 1; group <= 2 ** (level - 1); group++) {
       const stats = {};
       for (let rank = 1; rank <= 8; rank++) {
-        const isHuman = level === 2 && group === 1 && rank === 3;
-        const id = isHuman ? uid : `BOT_ALPHA_L${level}_G${group}_R${rank}`;
-        const name = isHuman ? 'Old Club Name' : `Bot D${level} G${group} R${rank}`;
+        const isFirstHuman = level === 2 && group === 1 && rank === 3;
+        const isSecondHuman = level === 3 && group === 2 && rank === 5;
+        const isHuman = isFirstHuman || isSecondHuman;
+        const humanId = isFirstHuman ? uid : secondUid;
+        const id = isHuman ? humanId : `BOT_ALPHA_L${level}_G${group}_R${rank}`;
+        const name = isFirstHuman ? 'Old Club Name' : isSecondHuman ? 'Second Old Club' : `Bot D${level} G${group} R${rank}`;
         const team = { id, name, level, group, rank, isBot: !isHuman };
         participants.push(team);
         stats[id] = {
@@ -110,16 +116,16 @@ test('fresh Season 1 reset rebuilds league and Pyramid Cup while preserving Fire
         });
         const profile = isHuman
           ? createFreshSeasonOneHumanClubProfile({
-              id: uid, email: 'reset-test@example.invalid', displayName: 'Old Club Name',
-              clubName: 'Old Club Name', numericId: 1201,
+              id, email: isFirstHuman ? 'reset-test@example.invalid' : 'reset-test-2@example.invalid', displayName: name,
+              clubName: name, numericId: isFirstHuman ? 1201 : 1202,
             }, { tier: level, group, rank }, 1, new Date('2026-11-01T15:00:00.000Z'))
           : buildBotClub(id, name);
         if (isHuman) {
-          profile.clubName = 'Old Club Name';
-          profile.displayName = 'Old Club Name';
-          profile.ownedPlayers = profile.ownedPlayers.map((player, index) => ({ ...player, id: `old_player_${index}` }));
+          profile.clubName = name;
+          profile.displayName = name;
+          profile.ownedPlayers = profile.ownedPlayers.map((player, index) => ({ ...player, id: `${id}_old_player_${index}` }));
+          oldHumanProfiles.set(id, profile);
         }
-        if (isHuman) oldHumanProfile = profile;
         else profileWrites.push({ ref: db.collection('players_v14').doc(id), data: profile });
       }
       const tableId = `table_v140_S1_LALPHA_V${level}_G${group}`;
@@ -229,7 +235,9 @@ test('fresh Season 1 reset rebuilds league and Pyramid Cup while preserving Fire
   assert.equal(frozenConfig.stagingSeasonOneResetInProgress, true);
   assert.equal((await db.collection('matches_v2').doc('old_s1_league_1').get()).exists, true);
   assert.equal((await db.collection('staging_season_one_reset_archives_v1').doc(failedJournal.resetId).get()).exists, false);
-  await db.collection('players_v14').doc(uid).set(oldHumanProfile);
+  for (const [humanId, profile] of oldHumanProfiles) {
+    await db.collection('players_v14').doc(humanId).set(profile);
+  }
 
   // Force a mid-archive interruption after the first 350-document batch,
   // then resume the same reset archive deterministically before deletion.
@@ -259,8 +267,8 @@ test('fresh Season 1 reset rebuilds league and Pyramid Cup while preserving Fire
   assert.equal(result.verification.cupParticipants, 120);
   assert.equal(result.verification.cupMatches, 56);
   assert.equal(result.verification.cupParticipantSnapshots, 120);
-  assert.equal(result.verification.humanClubs, 1);
-  assert.equal(result.verification.botClubs, 119);
+  assert.equal(result.verification.humanClubs, 2);
+  assert.equal(result.verification.botClubs, 118);
   const durableArchiveRef = db.collection('staging_season_one_reset_archives_v1').doc(result.resetId);
   const durableArchive = (await durableArchiveRef.get()).data();
   assert.equal(durableArchive.status, 'COMPLETE');
@@ -333,7 +341,9 @@ test('fresh Season 1 reset rebuilds league and Pyramid Cup while preserving Fire
   assert.notEqual(restoredConfig.stagingSeasonOneResetInProgress, true);
   assert.equal((await db.collection('league_tables_v2').doc('table_v140_S1_LALPHA_V2_G1').get()).data().championId, 'STALE_CHAMPION');
   assert.equal((await db.collection('league_slots_v1').doc('S1_LALPHA_D2_G1_R3').get()).data().occupantId, uid);
+  assert.equal((await db.collection('league_slots_v1').doc('S1_LALPHA_D3_G2_R5').get()).data().occupantId, secondUid);
   assert.equal((await db.collection('players_v14').doc(uid).get()).data().clubName, 'Old Club Name');
+  assert.equal((await db.collection('players_v14').doc(secondUid).get()).data().clubName, 'Second Old Club');
   assert.equal((await db.collection('matches_v2').doc('old_s1_league_1').get()).exists, true);
   assert.equal((await db.collection('matches_v2').doc('unrelated_tournament_fixture').get()).exists, true);
   assert.equal((await db.collection('cup_pyramid_v1').doc(CUP_ID).get()).exists, true);
@@ -341,16 +351,27 @@ test('fresh Season 1 reset rebuilds league and Pyramid Cup while preserving Fire
 
   const authUser = await auth.getUser(uid);
   assert.equal(authUser.email, 'reset-test@example.invalid');
+  const secondAuthUser = await auth.getUser(secondUid);
+  assert.equal(secondAuthUser.email, 'reset-test-2@example.invalid');
   const humanProfile = (await db.collection('players_v14').doc(uid).get()).data();
   assert.equal(humanProfile.clubName, 'Old Club Name');
   assert.equal(humanProfile.displayName, 'Old Club Name');
   assert.equal(humanProfile.ownedPlayers.length, 10);
-  assert.ok(humanProfile.ownedPlayers.every((player) => player.id.startsWith('old_player_')));
+  assert.ok(humanProfile.ownedPlayers.every((player) => player.id.startsWith(`${uid}_old_player_`)));
+  const secondHumanProfile = (await db.collection('players_v14').doc(secondUid).get()).data();
+  assert.equal(secondHumanProfile.clubName, 'Second Old Club');
+  assert.equal(secondHumanProfile.displayName, 'Second Old Club');
+  assert.equal(secondHumanProfile.ownedPlayers.length, 10);
+  assert.ok(secondHumanProfile.ownedPlayers.every((player) => player.id.startsWith(`${secondUid}_old_player_`)));
 
   const slot = (await db.collection('league_slots_v1').doc('S1_LALPHA_D2_G1_R3').get()).data();
   assert.equal(slot.status, 'OCCUPIED');
   assert.equal(slot.occupantId, uid);
   assert.equal(slot.occupancyGeneration, 5);
+  const secondSlot = (await db.collection('league_slots_v1').doc('S1_LALPHA_D3_G2_R5').get()).data();
+  assert.equal(secondSlot.status, 'OCCUPIED');
+  assert.equal(secondSlot.occupantId, secondUid);
+  assert.equal(secondSlot.occupancyGeneration, 5);
   assert.equal((await db.collection('league_slot_history_v1').get()).size, 1);
   assert.equal((await db.collection('cup_pyramid_v1').doc(CUP_ID).get()).exists, true);
   assert.equal((await db.collection('matches_v2').doc('unrelated_tournament_fixture').get()).exists, true);
