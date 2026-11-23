@@ -140,7 +140,10 @@ export const FirebaseProvider: React.FC<{ children: ReactNode; firebaseApp: Fire
       }
     };
 
-    void heartbeat();
+    // Do not start a second Activity Fence transaction immediately after
+    // sign-in. Registration/setup may be running its own protected transaction
+    // at exactly this moment. Presence is non-critical, so the first heartbeat
+    // is deferred until the normal interval; visibility changes still refresh it.
     const interval = window.setInterval(() => { void heartbeat(); }, 60_000);
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') void heartbeat();
