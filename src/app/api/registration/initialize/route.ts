@@ -442,9 +442,7 @@ export async function POST(request: NextRequest) {
     let result;
     try {
       const initializeStartedAt = Date.now();
-      const retryStartedAt = Date.now();
       result = await initialize();
-      registrationTrace('registration_retry_committed', retryStartedAt);
       registrationTrace('registration_transaction_committed', initializeStartedAt);
     } catch (error: unknown) {
       const reason = error instanceof Error ? error.message : '';
@@ -475,7 +473,9 @@ export async function POST(request: NextRequest) {
 
       // Re-read every registration invariant inside a fresh transaction.
       // If a fixture is still due, the normal SLOT_MATCH_DUE guard remains active.
+      const retryStartedAt = Date.now();
       result = await initialize();
+      registrationTrace('registration_retry_committed', retryStartedAt);
     }
 
     registrationTrace('request_succeeded', requestStartedAt, { alreadyInitialized: result?.alreadyInitialized === true });
