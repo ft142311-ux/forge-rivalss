@@ -20,22 +20,23 @@ import Script from 'next/script';
 function GameInterface({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const { isLoaded, isDataReady } = useGameState();
-  
+
   const isAuthOrSetup = pathname?.startsWith('/auth') || pathname === '/setup';
+  const isBetaSeasonOneResumePage = pathname === '/admin/beta-season-one-resume';
 
-  // В локальном режиме нам не нужен Firebase User для старта
+  // Keep operational recovery independent from game-store/world hydration.
+  if (isBetaSeasonOneResumePage) {
+    return <main className="min-h-screen">{children}</main>;
+  }
+
   const needsWorldSync = isLoaded && !isAuthOrSetup;
-
-  // Показываем прелоадер только во время первичной инициализации стора
   const showPreloader = !isLoaded || (needsWorldSync && !isDataReady);
 
   return (
     <>
-      {/* Global Background Layer */}
-      <div 
+      <div
         className="fixed inset-0 z-[-1] pointer-events-none bg-[#0a0d14]"
         style={{
-          // Even lighter overlay (reduced alpha from 0.1/0.5 to 0.02/0.15)
           backgroundImage: `linear-gradient(to bottom, rgba(10, 13, 20, 0.02), rgba(10, 13, 20, 0.15)), url('https://i.ibb.co/GQ39Zhc9/1787834437641.png')`,
           backgroundSize: 'cover',
           backgroundPosition: 'center',
@@ -44,7 +45,7 @@ function GameInterface({ children }: { children: React.ReactNode }) {
       />
 
       {needsWorldSync && <AutoMatchManager />}
-      
+
       {showPreloader ? (
         <LoadingScreen />
       ) : (
@@ -57,7 +58,7 @@ function GameInterface({ children }: { children: React.ReactNode }) {
               <FriendlyMatchListener />
             </>
           )}
-          
+
           <Suspense fallback={<LoadingScreen />}>
             <main className={cn(!isAuthOrSetup && isDataReady ? "pt-16 pb-14" : "")}>
               {children}
