@@ -36,6 +36,37 @@ export default function SetupPage() {
     }
   }, [isInitialSyncDone, isTeamLoaded, router, user?.uid]);
 
+  // Read-only diagnostics help identify a stuck Beta world reset without
+  // asking the player to run commands or exposing any account/profile data.
+  useEffect(() => {
+    if (!user || isUserLoading) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const idToken = await user.getIdToken();
+        const response = await fetch('/api/registration/status', {
+          method: 'GET',
+          headers: { Authorization: `Bearer ${idToken}` },
+          cache: 'no-store',
+        });
+        const result = await response.json();
+        if (!cancelled && response.ok && result?.success && result?.diagnostic) {
+          console.info('[SETUP WORLD STATUS]', result.diagnostic);
+        } else if (!cancelled) {
+          console.warn('[SETUP WORLD STATUS] Diagnostic unavailable', {
+            status: response.status,
+            error: result?.error || 'UNKNOWN',
+          });
+        }
+      } catch (diagnosticError) {
+        if (!cancelled) {
+          console.warn('[SETUP WORLD STATUS] Diagnostic request failed', diagnosticError);
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [user?.uid, isUserLoading]);
+
   useEffect(() => {
     if (step !== 'SUCCESS' || isTeamLoaded) return;
     const timer = window.setTimeout(() => {
