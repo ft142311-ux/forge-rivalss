@@ -133,16 +133,16 @@ jobs:
           npx --yes vercel@latest curl "${BASE_URL}/api/admin/staging-season-one-reset" -- \
             --silent --show-error --max-time 120 --request GET \
             --output "$response_file" \
-            --write-out '\\n__HTTP_STATUS__:%{http_code}' >> "$response_file" \
+            --write-out '\n__HTTP_STATUS__:%{http_code}' >> "$response_file" \
             --header "Authorization: Bearer ${CRON_SECRET}"
           unset CRON_SECRET VERCEL_TOKEN
           node - "$response_file" <<'NODE'
           const fs = require('node:fs');
           const file = process.argv[2];
           const raw = fs.readFileSync(file, 'utf8');
-          const marker = raw.lastIndexOf('\\n__HTTP_STATUS__:');
+          const marker = raw.lastIndexOf('\n__HTTP_STATUS__:');
           if (marker < 0) throw new Error('Vercel CLI did not return an HTTP status; preflight result is unknown.');
-          const status = Number(raw.slice(marker + '\\n__HTTP_STATUS__:'.length).trim());
+          const status = Number(raw.slice(marker + '\n__HTTP_STATUS__:'.length).trim());
           let result;
           try { result = JSON.parse(raw.slice(0, marker)); }
           catch { throw new Error(`Preflight returned non-JSON response (HTTP ${status}).`); }
