@@ -68,26 +68,36 @@ export const FirebaseProvider: React.FC<{ children: ReactNode; firebaseApp: Fire
           const idToken = await user.getIdToken();
           if (sequence !== authChangeSequence || auth.currentUser?.uid !== user.uid) return;
 
-          // A persistent Firebase session can open the game without a new
-          // password login. Record each verified app entry, not just Auth's
-          // lastSignInTime, so active managers are never retired by mistake.
-          const activity = await recordUserActivityAction(idToken);
-          if (sequence !== authChangeSequence || auth.currentUser?.uid !== user.uid) return;
-          const terminalActivityError = [
-            'ACCOUNT_DISABLED',
-            'ACCOUNT_RETIRING',
-            'ACCOUNT_RETIRED',
-            'AUTH_TOKEN_REVOKED',
-            'AUTH_TOKEN_INVALID',
-          ].includes(String(activity?.error || ''));
-          if (terminalActivityError) {
-            try { await signOut(auth); } catch { /* Auth listener settles state. */ }
-            return;
-          }
-          if (!activity?.success) {
-            console.warn('[AUTH ACTIVITY] Session activity was not acknowledged:', activity?.error || 'UNKNOWN');
-          }
-          setUserAuthState({ user, isUserLoading: false, userError: activity?.success ? null : new Error('USER_ACTIVITY_NOT_RECORDED') });
+          // Publish the verified Firebase session immediately. Activity
+          // recording is auxiliary and must never hold the login/register UI
+          // behind a Firestore/server-action round trip.
+          setUserAuthState({ user, isUserLoading: false, userError: null });
+
+          // Keep the server-side account lifecycle check, but run it after
+          // the client session is available. Terminal account states still
+          // revoke the session; transient failures do not block navigation.
+          void (async () => {
+            try {
+              const activity = await recordUserActivityAction(idToken);
+              if (sequence !== authChangeSequence || auth.currentUser?.uid !== user.uid) return;
+              const terminalActivityError = [
+                'ACCOUNT_DISABLED',
+                'ACCOUNT_RETIRING',
+                'ACCOUNT_RETIRED',
+                'AUTH_TOKEN_REVOKED',
+                'AUTH_TOKEN_INVALID',
+              ].includes(String(activity?.error || ''));
+              if (terminalActivityError) {
+                try { await signOut(auth); } catch { /* Auth listener settles state. */ }
+                return;
+              }
+              if (!activity?.success) {
+                console.warn('[AUTH ACTIVITY] Session activity was not acknowledged:', activity?.error || 'UNKNOWN');
+              }
+            } catch (activityError) {
+              console.warn('[AUTH ACTIVITY] Background session activity failed:', activityError);
+            }
+          })();
         } catch (error: any) {
           if (sequence !== authChangeSequence) return;
           const code = String(error?.code || '').toLowerCase();
