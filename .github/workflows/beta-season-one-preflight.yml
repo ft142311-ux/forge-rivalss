@@ -1,13 +1,16 @@
 name: Beta Season 1 read-only preflight
 
 on:
+  push:
+    branches:
+      - feature/beta-fresh-season-one
   workflow_dispatch:
     inputs:
       deployment_url:
         description: "Beta Preview deployment URL (must be a forge-rivalss Vercel Preview)"
         required: true
         type: string
-        default: "https://forge-rivalss-l76m2yamz-forge-rivals.vercel.app"
+        default: "https://forge-rivalss-git-feature-beta-fresh-season-one-forge-rivals.vercel.app"
   deployment_status:
 
 permissions:
@@ -21,23 +24,85 @@ concurrency:
 jobs:
   preflight:
     if: >-
-      ${{ github.event_name == 'workflow_dispatch' ||
+      ${{ github.event_name == 'push' ||
+          github.event_name == 'workflow_dispatch' ||
           (github.event_name == 'deployment_status' &&
            github.event.deployment_status.state == 'success' &&
+           github.event.deployment.sha == github.sha &&
            (github.event.deployment.ref == 'feature/beta-fresh-season-one' ||
             github.event.deployment.ref == 'refs/heads/feature/beta-fresh-season-one')) }}
     name: Authenticated read-only Beta preflight
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
+      - name: Resolve exact Preview deployment
+        id: resolve
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_DEPLOYMENT_URL: ${{ github.event.deployment_status.target_url }}
+          MANUAL_DEPLOYMENT_URL: ${{ inputs.deployment_url }}
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          GITHUB_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "deployment_status" ]; then
+            printf 'deployment_url=%s\n' "$EVENT_DEPLOYMENT_URL" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            printf 'deployment_url=%s\n' "$MANUAL_DEPLOYMENT_URL" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ -z "${VERCEL_TOKEN:-}" ]; then
+            echo "::error::Repository secret VERCEL_TOKEN is not configured."
+            exit 1
+          fi
+
+          # A push can arrive before Vercel finishes its Preview build. Resolve
+          # only a deployment tagged with this exact Git commit SHA; never use
+          # the previous branch alias or a deployment from another commit.
+          for attempt in $(seq 1 24); do
+            deployments_file="$(mktemp)"
+            if npx --yes vercel@latest list forge-rivalss \
+              --meta "githubCommitSha=$GITHUB_SHA" --json --scope forge-rivals \
+              > "$deployments_file"; then
+              deployment_url="$(node - "$deployments_file" <<'NODE'
+          const fs = require('node:fs');
+          let value;
+          try { value = JSON.parse(fs.readFileSync(process.argv[2], 'utf8')); }
+          catch { process.exit(2); }
+          const deployments = Array.isArray(value) ? value : value.deployments;
+          if (!Array.isArray(deployments)) process.exit(2);
+          const match = deployments.find(item =>
+            item && item.state === 'READY' &&
+            typeof item.url === 'string' && item.url.length > 0
+          );
+          if (match) process.stdout.write(match.url);
+          NODE
+              )" || true
+              rm -f "$deployments_file"
+              if [ -n "$deployment_url" ]; then
+                printf 'deployment_url=%s\n' "$deployment_url" >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+            else
+              rm -f "$deployments_file"
+            fi
+            echo "Waiting for the Preview deployment for commit $GITHUB_SHA ($attempt/24)..."
+            sleep 15
+          done
+          echo "::error::No READY Vercel Preview was found for the exact commit SHA."
+          exit 1
+
       - name: Validate Preview URL
         id: target
         env:
-          DEPLOYMENT_URL: ${{ github.event_name == 'deployment_status' && github.event.deployment_status.target_url || inputs.deployment_url }}
+          DEPLOYMENT_URL: ${{ steps.resolve.outputs.deployment_url }}
         run: |
           node <<'NODE'
           const fs = require('node:fs');
-          const url = new URL(process.env.DEPLOYMENT_URL);
+          const raw = process.env.DEPLOYMENT_URL;
+          const url = new URL(raw.startsWith('https://') ? raw : `https://${raw}`);
           if (url.protocol !== 'https:' || url.username || url.password ||
               !/^forge-rivalss-[a-z0-9-]+-forge-rivals\.vercel\.app$/.test(url.hostname)) {
             throw new Error('Only the Forge-Rivals Vercel Preview host is allowed');
@@ -47,6 +112,7 @@ jobs:
           url.hash = '';
           fs.appendFileSync(process.env.GITHUB_OUTPUT, `BASE_URL=${url.origin}\n`);
           NODE
+
       - name: Call read-only preflight (GET only)
         env:
           BASE_URL: ${{ steps.target.outputs.BASE_URL }}
@@ -67,16 +133,16 @@ jobs:
           npx --yes vercel@latest curl "${BASE_URL}/api/admin/staging-season-one-reset" -- \
             --silent --show-error --max-time 120 --request GET \
             --output "$response_file" \
-            --write-out '\n__HTTP_STATUS__:%{http_code}' >> "$response_file" \
+            --write-out '\\n__HTTP_STATUS__:%{http_code}' >> "$response_file" \
             --header "Authorization: Bearer ${CRON_SECRET}"
           unset CRON_SECRET VERCEL_TOKEN
           node - "$response_file" <<'NODE'
           const fs = require('node:fs');
           const file = process.argv[2];
           const raw = fs.readFileSync(file, 'utf8');
-          const marker = raw.lastIndexOf('\n__HTTP_STATUS__:');
+          const marker = raw.lastIndexOf('\\n__HTTP_STATUS__:');
           if (marker < 0) throw new Error('Vercel CLI did not return an HTTP status; preflight result is unknown.');
-          const status = Number(raw.slice(marker + '\n__HTTP_STATUS__:'.length).trim());
+          const status = Number(raw.slice(marker + '\\n__HTTP_STATUS__:'.length).trim());
           let result;
           try { result = JSON.parse(raw.slice(0, marker)); }
           catch { throw new Error(`Preflight returned non-JSON response (HTTP ${status}).`); }
