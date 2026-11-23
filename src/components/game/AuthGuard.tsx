@@ -20,14 +20,8 @@ export function AuthGuard({ children }: { children: ReactNode }) {
   const isSetupPage = pathname === '/setup';
   const isBetaSeasonOneResumePage = pathname === '/admin/beta-season-one-resume';
 
-  // Operational recovery is isolated from the account/profile gate. The
-  // Preview deployment and server-side reset bridge remain the security gates.
-  if (isBetaSeasonOneResumePage) {
-    return <div className="min-h-screen">{children}</div>;
-  }
-
   useEffect(() => {
-    if (!isLoaded || isUserLoading) return;
+    if (isBetaSeasonOneResumePage || !isLoaded || isUserLoading) return;
 
     if (!user) {
       if (!isAuthPage) router.replace('/auth/login');
@@ -48,7 +42,13 @@ export function AuthGuard({ children }: { children: ReactNode }) {
       console.log('[AUTH GUARD] players_v14 loaded; redirecting to /', { uid: user.uid });
       router.replace('/');
     }
-  }, [isLoaded, isUserLoading, user, isTeamLoaded, isInitialSyncDone, router, pathname, isAuthPage, isSetupPage]);
+  }, [isLoaded, isUserLoading, user, isTeamLoaded, isInitialSyncDone, router, pathname, isAuthPage, isSetupPage, isBetaSeasonOneResumePage]);
+
+  // Operational recovery is isolated from the account/profile gate.
+  // Preview deployment and server-side project/branch/secret fences protect its API.
+  if (isBetaSeasonOneResumePage) {
+    return <div className="min-h-screen">{children}</div>;
+  }
 
   if (!isLoaded || isUserLoading || (user && !isInitialSyncDone)) {
     return <LoadingScreen />;
