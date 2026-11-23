@@ -97,7 +97,7 @@ export function resetFreshSeasonOneClubProfileState<T extends FreshSeasonOneClub
 
 
 export function getFreshSeasonOneClubName(uid: string) {
-  const suffix = String(uid || '').replace(/[^a-zA-Z0-9]/g, '').slice(0, 6).toUpperCase();
+  const suffix = String(uid || '').replace(/[^a-zA-Z0-9]/g, '').slice(-6).toUpperCase();
   if (!suffix) throw new Error('FRESH_CLUB_ACCOUNT_UID_INVALID');
   return `New Club ${suffix}`;
 }
