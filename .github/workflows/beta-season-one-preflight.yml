@@ -28,6 +28,7 @@ jobs:
           DEPLOYMENT_URL: ${{ inputs.deployment_url }}
         run: |
           node <<'NODE'
+          const fs = require('node:fs');
           const url = new URL(process.env.DEPLOYMENT_URL);
           if (url.protocol !== 'https:' || url.username || url.password ||
               !url.hostname.endsWith('-forge-rivals.vercel.app')) {
