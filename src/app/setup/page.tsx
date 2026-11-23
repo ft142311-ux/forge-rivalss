@@ -63,34 +63,7 @@ export default function SetupPage() {
   // The read-only endpoint remains available for controlled operator checks; calling
   // it on every login adds multiple collection scans while registration is already active.
 
-  useEffect(() => {
-    if (!user || isUserLoading) return;
-    let cancelled = false;
-    void (async () => {
-      try {
-        const idToken = await user.getIdToken();
-        const response = await fetch('/api/registration/status', {
-          method: 'GET',
-          headers: { Authorization: `Bearer ${idToken}` },
-          cache: 'no-store',
-        });
-        const result = await response.json();
-        if (!cancelled && response.ok && result?.success && result?.diagnostic) {
-          console.info('[SETUP WORLD STATUS]', result.diagnostic);
-        } else if (!cancelled) {
-          console.warn('[SETUP WORLD STATUS] Diagnostic unavailable', {
-            status: response.status,
-            error: result?.error || 'UNKNOWN',
-          });
-        }
-      } catch (diagnosticError) {
-        if (!cancelled) {
-          console.warn('[SETUP WORLD STATUS] Diagnostic request failed', diagnosticError);
-        }
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [user?.uid, isUserLoading]);
+  // World diagnostics are operator-only; setup must not launch broad scans.
 
   useEffect(() => {
     if (step !== 'SUCCESS' || isTeamLoaded) return;
