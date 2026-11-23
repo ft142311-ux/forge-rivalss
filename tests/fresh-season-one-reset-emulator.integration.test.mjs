@@ -110,7 +110,7 @@ test('fresh Season 1 reset rebuilds league and Pyramid Cup while preserving Fire
           data: {
             season: 1, leagueId: 'ALPHA', division: level, group, rank,
             status: isHuman ? 'OCCUPIED' : 'FREE',
-            occupantId: isHuman ? uid : null,
+            occupantId: isHuman ? humanId : null,
             occupancyGeneration: isHuman ? 5 : 0,
           },
         });
