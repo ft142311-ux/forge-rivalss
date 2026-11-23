@@ -64,8 +64,8 @@ jobs:
           for attempt in $(seq 1 24); do
             deployments_file="$(mktemp)"
             if npx --yes vercel@latest list forge-rivalss \
-              --meta "githubCommitSha=$GITHUB_SHA" --json --scope forge-rivals \
-              > "$deployments_file"; then
+              --meta "githubCommitSha=$GITHUB_SHA" --environment preview --status READY \
+              --json --scope forge-rivals > "$deployments_file"; then
               deployment_url="$(node - "$deployments_file" <<'NODE'
           const fs = require('node:fs');
           let value;
@@ -73,10 +73,15 @@ jobs:
           catch { process.exit(2); }
           const deployments = Array.isArray(value) ? value : value.deployments;
           if (!Array.isArray(deployments)) process.exit(2);
-          const match = deployments.find(item =>
-            item && item.state === 'READY' &&
-            typeof item.url === 'string' && item.url.length > 0
-          );
+          const match = deployments.find(item => {
+            if (!item || !['READY'].includes(String(item.readyState || item.state || item.status || '').toUpperCase())) {
+              return false;
+            }
+            if (item.target === 'production') return false;
+            if (item.meta?.githubCommitSha && item.meta.githubCommitSha !== process.env.GITHUB_SHA) return false;
+            if (item.meta?.githubCommitRef && item.meta.githubCommitRef !== 'feature/beta-fresh-season-one') return false;
+            return typeof item.url === 'string' && item.url.length > 0;
+          });
           if (match) process.stdout.write(match.url);
           NODE
               )" || true
