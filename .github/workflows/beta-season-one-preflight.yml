@@ -8,6 +8,7 @@ on:
         required: true
         type: string
         default: "https://forge-rivalss-l76m2yamz-forge-rivals.vercel.app"
+  deployment_status:
 
 permissions:
   contents: read
@@ -18,6 +19,12 @@ concurrency:
 
 jobs:
   preflight:
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' ||
+          (github.event_name == 'deployment_status' &&
+           github.event.deployment_status.state == 'success' &&
+           (github.event.deployment.ref == 'feature/beta-fresh-season-one' ||
+            github.event.deployment.ref == 'refs/heads/feature/beta-fresh-season-one')) }}
     name: Authenticated read-only Beta preflight
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -25,7 +32,7 @@ jobs:
       - name: Validate Preview URL
         id: target
         env:
-          DEPLOYMENT_URL: ${{ inputs.deployment_url }}
+          DEPLOYMENT_URL: ${{ github.event_name == 'deployment_status' && github.event.deployment_status.target_url || inputs.deployment_url }}
         run: |
           node <<'NODE'
           const fs = require('node:fs');
