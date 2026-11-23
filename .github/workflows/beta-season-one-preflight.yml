@@ -37,7 +37,7 @@ jobs:
           url.pathname = '';
           url.search = '';
           url.hash = '';
-          process.stdout.write(`BASE_URL=${url.origin}\n`);
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `BASE_URL=${url.origin}\n`);
           NODE
       - name: Call read-only preflight (GET only)
         env:
