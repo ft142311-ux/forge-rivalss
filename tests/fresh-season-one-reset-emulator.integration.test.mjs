@@ -269,6 +269,30 @@ test('fresh Season 1 reset rebuilds league and Pyramid Cup while preserving Fire
   assert.equal(result.verification.cupParticipantSnapshots, 120);
   assert.equal(result.verification.humanClubs, 2);
   assert.equal(result.verification.botClubs, 118);
+
+  // Both human Firebase Auth accounts and their UIDs must survive the reset,
+  // while their club identities and starter rosters are regenerated.
+  const freshHumanProfile = (await db.collection('players_v14').doc(uid).get()).data();
+  const freshSecondHumanProfile = (await db.collection('players_v14').doc(secondUid).get()).data();
+  assert.match(freshHumanProfile.clubName, /^New Club [A-Z0-9]{1,6}$/);
+  assert.match(freshSecondHumanProfile.clubName, /^New Club [A-Z0-9]{1,6}$/);
+  assert.notEqual(freshHumanProfile.clubName, freshSecondHumanProfile.clubName);
+  for (const profile of [freshHumanProfile, freshSecondHumanProfile]) {
+    assert.equal(profile.credits, 1_000_000);
+    assert.equal(profile.crystals, 50);
+    assert.equal(profile.managerLevel, 1);
+    assert.equal(profile.ownedPlayers.length, 10);
+  }
+  assert.notDeepEqual(
+    freshHumanProfile.ownedPlayers.map(player => player.id),
+    oldHumanProfiles.get(uid).ownedPlayers.map(player => player.id),
+  );
+  assert.notDeepEqual(
+    freshSecondHumanProfile.ownedPlayers.map(player => player.id),
+    oldHumanProfiles.get(secondUid).ownedPlayers.map(player => player.id),
+  );
+  assert.equal((await auth.getUser(uid)).email, 'reset-test@example.invalid');
+  assert.equal((await auth.getUser(secondUid)).email, 'reset-test-2@example.invalid');
   const durableArchiveRef = db.collection('staging_season_one_reset_archives_v1').doc(result.resetId);
   const durableArchive = (await durableArchiveRef.get()).data();
   assert.equal(durableArchive.status, 'COMPLETE');
