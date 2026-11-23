@@ -7,7 +7,7 @@ import {
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-export const maxDuration = 120;
+export const maxDuration = 300;
 
 const EXPECTED_PROJECT = 'forge-rivalstest';
 const EXPECTED_BRANCH = 'feature/beta-fresh-season-one';
