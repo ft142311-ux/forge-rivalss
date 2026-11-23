@@ -55,7 +55,12 @@ export function AuthGuard({ children }: { children: ReactNode }) {
   }
 
   if (!user && !isAuthPage) return <LoadingScreen />;
-  if (user && !isTeamLoaded && !isSetupPage) return <LoadingScreen />;
+
+  // Auth routes must remain renderable while the router hands an authenticated
+  // user without a club profile over to /setup. Showing the global preloader
+  // here hides both the auth UI and any actionable setup/error state if a
+  // navigation is delayed or interrupted.
+  if (user && !isTeamLoaded && !isSetupPage && !isAuthPage) return <LoadingScreen />;
 
   return <div className="animate-in fade-in duration-500 h-full">{children}</div>;
 }
