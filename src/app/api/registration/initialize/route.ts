@@ -6,6 +6,10 @@ import { requireServerActor } from '@/lib/server-auth';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+function registrationTrace(stage: string, startedAt: number, details: Record<string, unknown> = {}) {
+  console.info('[REGISTRATION TRACE]', { stage, durationMs: Date.now() - startedAt, ...details });
+}
+
 type RegistrationMatchPlan =
   | { ok: true; updates: Array<{ matchId: string | null; patch: Record<string, any> }> }
   | { ok: false; reason: string; updates: []; matchId?: string };
@@ -110,9 +114,13 @@ export async function POST(request: NextRequest) {
     return json(401, { success: false, error: 'AUTHENTICATION_REQUIRED' });
   }
 
+  const requestStartedAt = Date.now();
+  console.info('[REGISTRATION TRACE]', { stage: 'request_received' });
   try {
+    const authStartedAt = Date.now();
     const db = getAdminDb();
     const actor = await requireServerActor(tokenMatch[1]);
+    registrationTrace('actor_verified', authStartedAt);
     const userId = actor.uid;
     const email = actor.email || '';
 
@@ -162,9 +170,12 @@ export async function POST(request: NextRequest) {
     const auditRef = db.collection('security_audit_v1').doc();
 
     const initialize = () => db.runTransaction(async (transaction) => {
+      const transactionStartedAt = Date.now();
+      registrationTrace('transaction_started', transactionStartedAt);
       // Idempotency: a repeated request for an already-created account returns
       // its existing result and never allocates a second slot or squad.
       const playerSnapshot = await transaction.get(playerRef);
+      registrationTrace('player_read', transactionStartedAt, { exists: playerSnapshot.exists });
       if (playerSnapshot.exists) {
         const existing = playerSnapshot.data() || {};
         return {
@@ -180,6 +191,7 @@ export async function POST(request: NextRequest) {
       }
 
       const configSnapshot = await transaction.get(configRef);
+      registrationTrace('season_config_read', transactionStartedAt, { exists: configSnapshot.exists });
       if (!configSnapshot.exists) throw new Error('SEASON_CONFIG_MISSING');
       const config = configSnapshot.data() || {};
       const seasonNum = Number(config.activeSeasonNumber || 1);
@@ -210,6 +222,7 @@ export async function POST(request: NextRequest) {
       const globalStatsSnapshot = await transaction.get(statsRef);
       const slotsQuery = db.collection('league_slots_v1').where('season', '==', seasonNum);
       const slotsSnapshot = await transaction.get(slotsQuery);
+      registrationTrace('league_slots_read', transactionStartedAt, { count: slotsSnapshot.size });
       const leagueSlots = slotsSnapshot.docs.filter((document) => {
         const slot = document.data() || {};
         return slot.leagueId === LEAGUE_ID && Number(slot.season) === seasonNum;
@@ -234,6 +247,7 @@ export async function POST(request: NextRequest) {
       const tableId = `table_v140_S${seasonNum}_L${LEAGUE_ID}_V${slot.division}_G${slot.group}`;
       const tableRef = db.collection('league_tables_v2').doc(tableId);
       const tableSnapshot = await transaction.get(tableRef);
+      registrationTrace('league_table_read', transactionStartedAt, { exists: tableSnapshot.exists });
       if (!tableSnapshot.exists) throw new Error('LEAGUE_TABLE_MISSING');
 
       const tableData = tableSnapshot.data() || {};
@@ -264,6 +278,7 @@ export async function POST(request: NextRequest) {
         .where('groupId', '==', Number(slot.group))
         .where('version', '==', 140);
       const matchesSnapshot = await transaction.get(matchesQuery);
+      registrationTrace('group_matches_read', transactionStartedAt, { count: matchesSnapshot.size });
       const historySnapshot = await transaction.get(historyRef);
       const botPlayerSnapshot = await transaction.get(botPlayerRef);
       if (matchesSnapshot.size !== 56) throw new Error('WORLD_NOT_READY');
@@ -279,6 +294,7 @@ export async function POST(request: NextRequest) {
         throw new Error('LEAGUE_SCHEDULE_SLOT_CONFLICT');
       }
 
+      const planStartedAt = Date.now();
       const matchPlan = registrationCore.buildRegistrationMatchPlan(
         matchesSnapshot.docs.map((document) => ({ ...(document.data() || {}), id: document.id })),
         botId,
@@ -286,6 +302,7 @@ export async function POST(request: NextRequest) {
         clubName,
         Date.now(),
       );
+      registrationTrace('fixture_plan_built', planStartedAt, { updateCount: matchPlan.ok ? matchPlan.updates.length : 0, blocked: matchPlan.ok ? null : matchPlan.reason });
       if (!matchPlan.ok) throw new Error(matchPlan.reason);
 
       const standingTransfer = registrationCore.transferBotStandingToUser(
@@ -409,6 +426,7 @@ export async function POST(request: NextRequest) {
         createdAt: new Date(),
       });
 
+      registrationTrace('transaction_write_set_ready', transactionStartedAt, { fixtureUpdates: matchPlan.updates.length });
       return {
         success: true,
         version: REGISTRATION_VERSION,
@@ -423,7 +441,11 @@ export async function POST(request: NextRequest) {
 
     let result;
     try {
+      const initializeStartedAt = Date.now();
+      const retryStartedAt = Date.now();
       result = await initialize();
+      registrationTrace('registration_retry_committed', retryStartedAt);
+      registrationTrace('registration_transaction_committed', initializeStartedAt);
     } catch (error: unknown) {
       const reason = error instanceof Error ? error.message : '';
       if (reason !== 'SLOT_MATCH_DUE') throw error;
@@ -434,10 +456,12 @@ export async function POST(request: NextRequest) {
       // This uses the same guarded simulation/settlement path as the scheduler;
       // it does not rewrite or force-finish a match from the registration API.
       console.info('[REGISTRATION API] Due league fixture detected; running canonical catch-up');
+      const catchUpStartedAt = Date.now();
       // Load the server-only orchestrator only when a due fixture actually requires catch-up.
       // This keeps the registration boundary testable without loading the entire season engine.
       const { resolveDailyMatches } = await import('@/app/actions/autonomous-cycle');
       const catchUp = await resolveDailyMatches();
+      registrationTrace('canonical_match_catch_up_finished', catchUpStartedAt, { success: catchUp?.success === true, count: catchUp?.count || 0 });
       if (!catchUp || catchUp.success !== true) {
         console.warn('[REGISTRATION API] Canonical match catch-up did not complete', {
           code: catchUp?.code || catchUp?.reason || 'MATCH_CATCH_UP_FAILED',
@@ -454,9 +478,11 @@ export async function POST(request: NextRequest) {
       result = await initialize();
     }
 
+    registrationTrace('request_succeeded', requestStartedAt, { alreadyInitialized: result?.alreadyInitialized === true });
     return json(200, result);
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : '';
+    registrationTrace('request_failed', requestStartedAt, { code: message || 'UNKNOWN' });
     const errorCode = typeof error === 'object' && error !== null && 'code' in error
       ? String((error as { code?: unknown }).code || '').toLowerCase()
       : '';
