@@ -31,7 +31,7 @@ jobs:
           const fs = require('node:fs');
           const url = new URL(process.env.DEPLOYMENT_URL);
           if (url.protocol !== 'https:' || url.username || url.password ||
-              !url.hostname.endsWith('-forge-rivals.vercel.app')) {
+              !/^forge-rivalss-[a-z0-9-]+-forge-rivals\\.vercel\\.app$/.test(url.hostname)) {
             throw new Error('Only the Forge-Rivals Vercel Preview host is allowed');
           }
           url.pathname = '';
