@@ -5,7 +5,7 @@ import { requireServerActor } from '@/lib/server-auth';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-const EXPECTED_PROJECT = 'forge-rivalstest';
+const EXPECTED_PROJECT = 'forge-rivals-beta';
 const JOURNAL_ID = 'staging_fresh_season_one_reset_v1';
 const CUP_ID = 'cup_s1_lALPHA';
 
