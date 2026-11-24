@@ -44,6 +44,24 @@ function serializeMatchReport(value: any): any {
   return value;
 }
 
+function timestampMillis(value: any): number {
+  if (value == null) return 0;
+  if (typeof value?.toMillis === 'function') return value.toMillis();
+  if (typeof value?.toDate === 'function') return value.toDate().getTime();
+  const parsed = new Date(value).getTime();
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+/** A new club must never inherit a fixture played before its profile existed. */
+function matchBelongsToClubLifetime(match: any, profileCreatedAt: any): boolean {
+  const createdAt = timestampMillis(profileCreatedAt);
+  if (!createdAt) return true; // Preserve compatibility for legacy profiles without createdAt.
+  // Prefer scheduled kickoff over resolution time: an old fixture can be
+  // resolved after registration, but it still belongs to the previous occupant.
+  const matchAt = timestampMillis(match.startTime || match.playedAt || match.resolvedAt);
+  return matchAt > 0 && matchAt >= createdAt;
+}
+
 /** Securely loads a match report from its mode-specific collection. */
 export async function getMatchReportAction(idToken: string, matchId: string) {
   const { uid } = await requireServerActor(idToken);
@@ -93,15 +111,12 @@ export async function markMatchViewedAction(idToken: string, matchId: string) {
     }
 
     if (!snap?.exists) {
-      // A report may still exist only in the client's legacy local history.
       return { success: true, persisted: false, localOnly: true };
     }
 
     const m = snap.data() || {};
     const isParticipant = [m.homeId, m.awayId, m.homeUid, m.awayUid, m.hostId, m.challengerId]
       .some((participantId) => String(participantId || '') === uid);
-
-    // Legacy rank-based access is limited to an exact league/group/level match.
     const rankParticipant = !isParticipant
       ? await isRankBasedLeagueParticipant(db, uid, m, collectionName)
       : false;
@@ -122,7 +137,6 @@ export async function markMatchViewedAction(idToken: string, matchId: string) {
     return { success: false, error: error?.message || 'MATCH_VIEW_MARK_FAILED' };
   }
 }
-
 
 /** Authenticated, profile-scoped queue for completed league match reports. */
 export async function getMyLeagueMatchReportsAction(idToken: string) {
@@ -150,7 +164,8 @@ export async function getMyLeagueMatchReportsAction(idToken: string) {
       String(raw.awayId || raw.awayUid || '') === uid ||
       (inGroup && [Number(raw.homeRank), Number(raw.awayRank)].includes(rank));
     const finished = raw.isFinished === true || ['finished', 'completed', 'resolved'].includes(String(raw.status || '').toLowerCase());
-    if (!inGroup || !participant || !finished || raw.seen === true || raw.reportStatus === 'viewed') return [];
+    if (!inGroup || !participant || !finished || !matchBelongsToClubLifetime(raw, profile.createdAt) ||
+        raw.seen === true || raw.reportStatus === 'viewed') return [];
     return [serializeMatchReport({ ...raw, id: doc.id, type: 'league' })];
   }).sort((left: any, right: any) => new Date(right.playedAt || right.resolvedAt || right.startTime || 0).getTime() - new Date(left.playedAt || left.resolvedAt || left.startTime || 0).getTime());
   return { success: true, season, leagueId, level, groupId, rank, count: matches.length, matches };
