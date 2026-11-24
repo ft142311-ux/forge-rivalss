@@ -6,7 +6,7 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useUser } from '@/firebase';
 import { useGameState } from '@/app/lib/store';
-import { ChevronLeft, Trophy, Swords, Loader2, Medal, Lock, Crown, Users, CalendarClock, FileText } from 'lucide-react';
+import { ChevronLeft, Trophy, Swords, Loader2, Medal, Crown, Users, CalendarClock, FileText } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import Link from 'next/link';
