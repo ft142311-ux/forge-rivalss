@@ -1,6 +1,6 @@
 'use client';
 
-import { FormEvent, useCallback, useEffect, useState } from 'react';
+import { FormEvent, useCallback, useEffect, useState, type CSSProperties } from 'react';
 import { onAuthStateChanged, signInWithEmailAndPassword, signOut, User } from 'firebase/auth';
 import { getControlAuth } from '../lib/firebase-client';
 
@@ -11,7 +11,7 @@ type Overview = {
   updatedAt?: string;
 };
 
-const panel: React.CSSProperties = { background: '#111827', border: '1px solid #263449', borderRadius: 16, padding: 20 };
+const panel: CSSProperties = { background: '#111827', border: '1px solid #263449', borderRadius: 16, padding: 20 };
 const muted: React.CSSProperties = { color: '#93a4bb', fontSize: 13 };
 
 export default function ControlHome() {
