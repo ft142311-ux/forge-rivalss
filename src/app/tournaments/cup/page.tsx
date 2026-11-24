@@ -4,13 +4,12 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { useUser, useFirestore, useDoc, useMemoFirebase } from '@/firebase';
+import { useUser } from '@/firebase';
 import { useGameState } from '@/app/lib/store';
 import { ChevronLeft, Trophy, Swords, Loader2, Medal, Lock, Crown, Users, CalendarClock, FileText } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import Link from 'next/link';
-import { doc } from 'firebase/firestore';
 import { LoadingScreen } from '@/components/game/LoadingScreen';
 import { cn } from '@/lib/utils';
 
@@ -33,26 +32,48 @@ function formatCupKickoff(seasonStartValue: unknown, round: number, language: st
 export default function PyramidCupPage() {
   const { user, isUserLoading } = useUser();
   const router = useRouter();
-  const db = useFirestore();
   const { language, isLoaded, activeSeasonNumber, isDataReady } = useGameState();
   const [activeRound, setActiveRound] = useState(1);
   const [showParticipants, setShowParticipants] = useState(false);
 
-  const seasonConfigRef = useMemoFirebase(
-    () => db ? doc(db, 'system_v1', 'season_config') : null,
-    [db],
-  );
-  const { data: seasonConfig, isLoading: isSeasonConfigLoading } = useDoc(seasonConfigRef);
-  const preparedPhase = ['GENERATING_NEXT', 'PREPARING_NEXT_SEASON', 'PREPARATION', 'PUBLISHED']
-    .includes(String(seasonConfig?.phase || '').toUpperCase());
-  const preparedSeasonNumber = Number(seasonConfig?.preparedSeasonNumber || 0);
-  const cupSeasonNumber = seasonConfig?.preparedWorldReady === true &&
-    preparedPhase && preparedSeasonNumber > Number(activeSeasonNumber || 0)
-      ? preparedSeasonNumber
-      : Number(activeSeasonNumber || 1);
-  const cupDocId = `cup_s${cupSeasonNumber}_lALPHA`;
-  const cupRef = useMemoFirebase(() => db ? doc(db, 'cup_pyramid_v1', cupDocId) : null, [db, cupDocId]);
-  const { data: cupData, isLoading: isCupLoading } = useDoc(cupRef);
+  const [cupData, setCupData] = useState<any>(null);
+  const [cupSeasonNumber, setCupSeasonNumber] = useState(Math.max(1, Number(activeSeasonNumber || 1)));
+  const [isCupLoading, setIsCupLoading] = useState(true);
+  const [cupError, setCupError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!user || isUserLoading) return;
+    let cancelled = false;
+    const controller = new AbortController();
+    setIsCupLoading(true);
+    setCupError(null);
+    (async () => {
+      try {
+        const token = await user.getIdToken();
+        const response = await fetch('/api/league/cup', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({}),
+          cache: 'no-store',
+          signal: controller.signal,
+        });
+        const result = await response.json();
+        if (!response.ok || result?.success !== true) throw new Error(result?.error || 'CUP_UNAVAILABLE');
+        if (!cancelled) {
+          setCupSeasonNumber(Number(result.season || activeSeasonNumber || 1));
+          setCupData(result.exists ? result.cup : null);
+        }
+      } catch (error: any) {
+        if (!cancelled && error?.name !== 'AbortError') {
+          setCupData(null);
+          setCupError(String(error?.message || 'CUP_UNAVAILABLE'));
+        }
+      } finally {
+        if (!cancelled) setIsCupLoading(false);
+      }
+    })();
+    return () => { cancelled = true; controller.abort(); };
+  }, [user, isUserLoading, activeSeasonNumber]);
 
   useEffect(() => {
     const currentRound = Number(cupData?.currentRound);
@@ -70,16 +91,6 @@ export default function PyramidCupPage() {
   const ru = language === 'ru';
   const title = ru ? 'КУБОК ПИРАМИДЫ' : 'PYRAMID CUP';
   const subtitle = ru ? 'Все 120 участников · олимпийская система' : 'All 120 teams · single elimination';
-
-  if (!db) return (
-    <div className="max-w-md mx-auto px-4 pt-8 text-center">
-      <header className="mb-8 flex items-center gap-4 text-left">
-        <Link href="/"><Button variant="ghost" size="icon" className="rounded-full border border-white/5 bg-secondary/50"><ChevronLeft className="w-6 h-6" /></Button></Link>
-        <h1 className="text-2xl font-headline font-bold uppercase">{title}</h1>
-      </header>
-      <div className="py-20 opacity-30 flex flex-col items-center gap-6"><Lock className="w-16 h-16" /><p className="text-xs font-black uppercase tracking-widest">{ru ? 'ОФЛАЙН' : 'OFFLINE'}</p></div>
-    </div>
-  );
 
   const rounds = (cupData?.rounds || {}) as Record<string, any[]>;
   const matches = Array.isArray(rounds[`r${activeRound}`]) ? rounds[`r${activeRound}`] : [];
@@ -109,7 +120,7 @@ export default function PyramidCupPage() {
         </div>
       </header>
 
-      {isCupLoading || isSeasonConfigLoading ? <div className="py-20 text-center opacity-50"><Loader2 className="w-8 h-8 animate-spin mx-auto text-primary" /></div> : !cupData ? (
+      {isCupLoading ? <div className="py-20 text-center opacity-50"><Loader2 className="w-8 h-8 animate-spin mx-auto text-primary" /></div> : cupError ? <div role="alert" className="py-16 text-center text-xs text-destructive">{cupError}</div> : !cupData ? (
         <div className="py-20 text-center animate-in fade-in duration-700 flex flex-col items-center"><Medal className="w-12 h-12 text-orange-500 mb-4 opacity-50" /><h2 className="text-lg font-headline font-bold uppercase text-white mb-2">{ru ? 'СЕТКА ФОРМИРУЕТСЯ' : 'BRACKET PENDING'}</h2><p className="text-[10px] text-muted-foreground uppercase px-10 italic">{ru ? 'Кубок формируется при подготовке сезона и будет доступен до стартового свистка.' : 'The cup is generated during season preparation and will be available before kickoff.'}</p></div>
       ) : (
         <>
