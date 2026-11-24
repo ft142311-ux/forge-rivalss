@@ -9,7 +9,8 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 120;
 
-const EXPECTED_PROJECT = 'forge-rivalstest';
+const EXPECTED_PROJECT = 'forge-rivals-beta';
+const EXPECTED_BRANCH = 'feature/beta-fresh-season-one';
 
 function isExpectedProject() {
   const configuredProject =
@@ -18,7 +19,9 @@ function isExpectedProject() {
     process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID ||
     '';
   const initializedProject = getApps()[0]?.options?.projectId;
-  return configuredProject === EXPECTED_PROJECT &&
+  return process.env.VERCEL_ENV === 'preview' &&
+    process.env.VERCEL_GIT_COMMIT_REF === EXPECTED_BRANCH &&
+    configuredProject === EXPECTED_PROJECT &&
     (!initializedProject || initializedProject === EXPECTED_PROJECT);
 }
 
