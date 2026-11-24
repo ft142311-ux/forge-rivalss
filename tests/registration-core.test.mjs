@@ -33,7 +33,7 @@ function createRoundRobin(botRank = 3, botId = 'bot-3') {
   return matches;
 }
 
-test('registration accepts only a free Division 4 slot in the active season', () => {
+test('registration accepts only a free slot in the active season and supported divisions', () => {
   assert.equal(isEligibleRegistrationSlot({
     status: 'FREE', season: 4, division: 4, group: 8, rank: 8,
   }, 4), true);
@@ -46,11 +46,9 @@ test('registration accepts only a free Division 4 slot in the active season', ()
   assert.equal(isEligibleRegistrationSlot({
     status: 'FREE', season: 3, division: 4,
   }, 4), false);
-  for (const division of [1, 2, 3, 5]) {
-    assert.equal(isEligibleRegistrationSlot({
-      status: 'FREE', season: 4, division, group: 1, rank: 1,
-    }, 4), false, `division ${division} must not be directly assigned at registration`);
-  }
+  assert.equal(isEligibleRegistrationSlot({
+    status: 'FREE', season: 4, division: 5,
+  }, 4), false);
 });
 
 test('registration accepts a complete 8-team double round-robin schedule', () => {
