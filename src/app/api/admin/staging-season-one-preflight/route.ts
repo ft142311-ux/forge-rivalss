@@ -9,7 +9,7 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
 
-const EXPECTED_PROJECT = 'forge-rivalstest';
+const EXPECTED_PROJECT = 'forge-rivals-beta';
 const EXPECTED_BRANCH = 'feature/beta-fresh-season-one';
 const RESET_JOURNAL_ID = 'staging_fresh_season_one_reset_v1';
 
