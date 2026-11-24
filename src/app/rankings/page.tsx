@@ -129,7 +129,7 @@ export default function RankingsPage() {
             setNavLevel(Number(result.level));
             setNavGroup(Number(result.group));
           }
-          setTableData(result.exists ? { stats: result.stats } : null);
+          setTableData(result.exists ? { stats: result.stats, viewer: result.viewer || null } : null);
           setTableError(null);
           setTableLoadTimedOut(false);
         }
