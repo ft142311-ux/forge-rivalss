@@ -9,7 +9,7 @@ test('match center maps completed league fixtures to the current owner of the ex
   assert.match(source, /m\.leagueId === selectedLeagueId/);
   assert.match(source, /Number\(m\.level\) === Number\(leagueLevel\)/);
   assert.match(source, /Number\(m\.groupId\) === Number\(groupId\)/);
-  assert.match(source, /Number(m.season) === Number(effectiveSeason)/);
+  assert.match(source, /Number\(m\.season\) === Number\(effectiveSeason\)/);
   assert.match(source, /isMyLeagueFixture && Number\(m\.homeRank\) === Number\(rank\)/);
   assert.match(source, /isMyLeagueFixture && Number\(m\.awayRank\) === Number\(rank\)/);
   assert.match(source, /isMyHome && myClubName\s*\?\s*myClubName/);
