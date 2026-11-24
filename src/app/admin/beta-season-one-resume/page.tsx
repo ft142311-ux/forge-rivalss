@@ -32,6 +32,7 @@ export default function BetaSeasonOneResumePage() {
   const [adminClaim, setAdminClaim] = useState<boolean | null>(null);
   const [claimLoading, setClaimLoading] = useState(false);
   const [running, setRunning] = useState(false);
+  const [grantingAdmin, setGrantingAdmin] = useState(false);
   const [error, setError] = useState('');
   const [result, setResult] = useState<BootstrapResult | null>(null);
 
@@ -75,6 +76,39 @@ export default function BetaSeasonOneResumePage() {
   useEffect(() => {
     void refreshAdminClaim();
   }, [refreshAdminClaim]);
+
+
+  const grantAdminToCurrentAccount = async () => {
+    if (!user || user.uid !== 'nMG9UEAaoTYhZkno3107pCp6y5i2' || grantingAdmin || adminClaim === true) return;
+    setGrantingAdmin(true);
+    setError('');
+    setResult(null);
+    try {
+      const idToken = await user.getIdToken(true);
+      const response = await fetch('/api/admin/beta-admin-claim-bootstrap', {
+        method: 'POST',
+        cache: 'no-store',
+        headers: {
+          Authorization: `Bearer ${idToken}`,
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify({ confirmation: 'GRANT_BETA_ADMIN_TO_MY_ACCOUNT' }),
+      });
+      const data = (await response.json()) as BootstrapResult;
+      setResult(data);
+      if (!response.ok || data.success !== true) {
+        setError(String(data.error || `Назначение прав остановлено (HTTP ${response.status})`));
+      } else {
+        await user.getIdToken(true);
+        await refreshAdminClaim();
+      }
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Не удалось назначить право администратора');
+    } finally {
+      setGrantingAdmin(false);
+    }
+  };
 
   const startBootstrap = async () => {
     if (!user || running || adminClaim !== true) return;
@@ -152,6 +186,15 @@ export default function BetaSeasonOneResumePage() {
           </div>
         )}
         {!areServicesAvailable && <p className="mt-3 text-sm text-amber-200">Firebase Client SDK недоступен.</p>}
+        {user?.uid === 'nMG9UEAaoTYhZkno3107pCp6y5i2' && adminClaim === false && (
+          <div className="mt-4 rounded-xl border border-cyan-900 bg-slate-950/60 p-4">
+            <p className="text-sm text-slate-200">Этот аккаунт указан владельцем проекта для первоначального администрирования Beta. Сервер выдаст право только после проверки токена и совпадения UID.</p>
+            <button type="button" onClick={() => void grantAdminToCurrentAccount()} disabled={grantingAdmin || claimLoading}
+              className="mt-3 w-full rounded-lg bg-cyan-500 px-4 py-3 font-semibold text-slate-950 hover:bg-cyan-400 disabled:opacity-50">
+              {grantingAdmin ? 'Назначаю права…' : 'Назначить admin этому аккаунту'}
+            </button>
+          </div>
+        )}
         {adminClaim === false && user && (
           <p className="mt-3 rounded-lg bg-amber-950/50 p-3 text-sm text-amber-200">
             У текущего аккаунта пока нет custom claim admin=true. Для безопасного назначения права нужен UID именно этого аккаунта; он показан выше. Серверная проверка останется включённой.
