@@ -150,7 +150,7 @@ export async function getMyLeagueMatchReportsAction(idToken: string) {
       String(raw.awayId || raw.awayUid || '') === uid ||
       (inGroup && [Number(raw.homeRank), Number(raw.awayRank)].includes(rank));
     const finished = raw.isFinished === true || ['finished', 'completed', 'resolved'].includes(String(raw.status || '').toLowerCase());
-    if (!inGroup || !participant || !finished) return [];
+    if (!inGroup || !participant || !finished || raw.seen === true || raw.reportStatus === 'viewed') return [];
     return [serializeMatchReport({ ...raw, id: doc.id, type: 'league' })];
   }).sort((left: any, right: any) => new Date(right.playedAt || right.resolvedAt || right.startTime || 0).getTime() - new Date(left.playedAt || left.resolvedAt || left.startTime || 0).getTime());
   return { success: true, season, leagueId, level, groupId, rank, count: matches.length, matches };
