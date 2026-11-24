@@ -129,7 +129,7 @@ export default function RankingsPage() {
             setNavLevel(Number(result.level));
             setNavGroup(Number(result.group));
           }
-          setTableData(result.exists ? { stats: result.stats, viewer: result.viewer || null } : null);
+          setTableData(result.exists ? { stats: result.stats, viewer: result.viewer || null, level: result.level, group: result.group, leagueId: result.leagueId } : null);
           setTableError(null);
           setTableLoadTimedOut(false);
         }
@@ -397,7 +397,7 @@ export default function RankingsPage() {
                </p>
                <p className="text-[10px] text-muted-foreground">
                  {language === 'ru'
-                   ? `Профиль: дивизион ${tableData.viewer.rank ? contextLevel : contextLevel}, группа ${contextGroup}, место ${tableData.viewer.rank || '—'}. Повторная регистрация не требуется.`
+                   ? `Профиль: дивизион ${tableData.level}, группа ${tableData.group}, место ${tableData.viewer.rank || '—'}. Повторная регистрация не требуется.`
                    : `Assigned rank: ${tableData.viewer.rank || '—'}. Do not register again; the league slot needs repair.`}
                </p>
                <Button variant="outline" className="border-amber-400/30" onClick={retryTableLoad}>
