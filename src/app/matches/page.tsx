@@ -28,7 +28,7 @@ export default function MatchesPage() {
   const { 
     isLoaded, language,
     selectedLeagueId, leagueLevel, groupId,
-    clubLogo: myClubLogo, clubName: myClubName, seasonNumber, matchHistory, rank
+    clubLogo: myClubLogo, clubName: myClubName, seasonNumber, activeSeasonNumber, matchHistory, rank
   } = useGameState();
   
   const [view, setView] = useState<MatchView>('menu');
@@ -43,18 +43,51 @@ export default function MatchesPage() {
   // Do not query other managers' private players_v14 documents from the client:
   // Firestore rules intentionally restrict those documents to their owner.
 
-  // ФИЛЬТРАЦИЯ ПО ВЕРСИИ 140
-  const groupMatchesQuery = useMemoFirebase(() => {
-    if (!db || !selectedLeagueId) return null;
-    return query(collection(db, 'matches_v2'), 
-      where('leagueId', '==', selectedLeagueId),
-      where('level', '==', leagueLevel),
-      where('groupId', '==', groupId),
-      where('season', '==', seasonNumber)
-    );
-  }, [db, selectedLeagueId, leagueLevel, groupId, seasonNumber]);
+  // Official league fixtures are loaded through an authenticated public projection.
+  const [fixedMatches, setFixedMatches] = useState<any[] | null>(null);
+  const [isMatchesLoading, setIsMatchesLoading] = useState(false);
+  const [matchesError, setMatchesError] = useState<Error | null>(null);
+  const effectiveSeason = Math.max(1, Number(activeSeasonNumber || seasonNumber || 1));
 
-  const { data: fixedMatches, isLoading: isMatchesLoading, error: matchesError } = useCollection(groupMatchesQuery);
+  useEffect(() => {
+    if (!isLoaded || !user || !selectedLeagueId) {
+      setFixedMatches(null);
+      setIsMatchesLoading(false);
+      return;
+    }
+    let cancelled = false;
+    const controller = new AbortController();
+    setIsMatchesLoading(true);
+    setMatchesError(null);
+    (async () => {
+      try {
+        const token = await user.getIdToken();
+        const response = await fetch('/api/league/matches', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            leagueId: selectedLeagueId,
+            level: Number(leagueLevel),
+            group: Number(groupId),
+            season: effectiveSeason,
+          }),
+          cache: 'no-store',
+          signal: controller.signal,
+        });
+        const result = await response.json();
+        if (!response.ok || result?.success !== true) throw new Error(result?.error || 'LEAGUE_MATCHES_UNAVAILABLE');
+        if (!cancelled) setFixedMatches(Array.isArray(result.matches) ? result.matches : []);
+      } catch (error: any) {
+        if (!cancelled && error?.name !== 'AbortError') {
+          setFixedMatches([]);
+          setMatchesError(new Error(String(error?.message || 'LEAGUE_MATCHES_UNAVAILABLE')));
+        }
+      } finally {
+        if (!cancelled) setIsMatchesLoading(false);
+      }
+    })();
+    return () => { cancelled = true; controller.abort(); };
+  }, [isLoaded, user, selectedLeagueId, leagueLevel, groupId, effectiveSeason]);
 
   // Все завершённые матчи конкретного менеджера, включая товарищеские.
   // Friendly-отчёты не имеют leagueId/level/groupId, поэтому они не попадают
@@ -139,7 +172,7 @@ export default function MatchesPage() {
       m.leagueId === selectedLeagueId &&
       Number(m.level) === Number(leagueLevel) &&
       Number(m.groupId) === Number(groupId) &&
-      Number(m.season) === Number(seasonNumber)
+      Number(m.season) === Number(effectiveSeason)
     );
     const isMyHome = Boolean(user?.uid && m.homeId === user.uid) ||
       (isMyLeagueFixture && Number(m.homeRank) === Number(rank));
@@ -154,7 +187,7 @@ export default function MatchesPage() {
     const homeLogo = isMyHome ? myClubLogo || null : nameMap.logos[hRank] || null;
     const awayLogo = isMyAway ? myClubLogo || null : nameMap.logos[aRank] || null;
     return { ...m, homeName, awayName, homeLogo, awayLogo, isMyHomeClub: isMyHome, isMyAwayClub: isMyAway };
-  }, [nameMap, selectedLeagueId, leagueLevel, groupId, seasonNumber, rank, myClubName, myClubLogo, user?.uid]);
+  }, [nameMap, selectedLeagueId, leagueLevel, groupId, effectiveSeason, rank, myClubName, myClubLogo, user?.uid]);
 
   const renderMatchCard = useCallback((raw: any, idx: number) => {
     const m = resolveMatchData(raw);
