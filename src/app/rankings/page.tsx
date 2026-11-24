@@ -477,7 +477,7 @@ export default function RankingsPage() {
       )}
 
       {activeTab === 'cup' && (
-        <PyramidCupInline data={pyramidCup} loading={isPyramidCupLoading} error={pyramidCupError} round={cupRound} setRound={setCupRound} ru={language === 'ru'} />
+        <PyramidCupInline db={db} data={pyramidCup} loading={isPyramidCupLoading} error={pyramidCupError} round={cupRound} setRound={setCupRound} ru={language === 'ru'} />
       )}
 
       {activeTab === 'all_pyramids' && !navLeague && (
@@ -522,11 +522,16 @@ export default function RankingsPage() {
 }
 
 
-function PyramidCupInline({ data, loading, error, round, setRound, ru }: { data: any; loading: boolean; error?: any; round: number; setRound: (round: number) => void; ru: boolean }) {
+function PyramidCupInline({ db, data, loading, error, round, setRound, ru }: { db: any; data: any; loading: boolean; error?: any; round: number; setRound: (round: number) => void; ru: boolean }) {
   const expectedMatches: Record<number, number> = { 1: 56, 2: 32, 3: 16, 4: 8, 5: 4, 6: 2, 7: 1 };
-  const expectedSlots: Record<number, number> = { 1: 56, 2: 32, 3: 16, 4: 8, 5: 4, 6: 2, 7: 1 };
   const rounds = (data?.rounds || {}) as Record<string, any[]>;
   const matches: any[] = Array.isArray(rounds[`r${round}`]) ? rounds[`r${round}`] : [];
+  const cupFixturesQuery = useMemoFirebase(() => {
+    if (!db || !data?.id) return null;
+    return query(collection(db, 'cup_matches'), where('cupId', '==', data.id));
+  }, [db, data?.id]);
+  const { data: cupFixtures } = useCollection(cupFixturesQuery);
+  const fixtureById = useMemo(() => new Map((cupFixtures || []).map((fixture: any) => [String(fixture.id), fixture])), [cupFixtures]);
   const labels: Record<number, string> = ru
     ? { 1: 'Предварительный раунд', 2: 'Раунд 1/64', 3: 'Раунд 1/32', 4: 'Раунд 1/16', 5: 'Четвертьфинал', 6: 'Полуфинал', 7: 'ФИНАЛ BO3' }
     : { 1: 'Preliminary round', 2: 'Round of 64', 3: 'Round of 32', 4: 'Round of 16', 5: 'Quarterfinal', 6: 'Semifinal', 7: 'BO3 FINAL' };
@@ -539,10 +544,33 @@ function PyramidCupInline({ data, loading, error, round, setRound, ru }: { data:
   return <div className="space-y-3">
     <div className="grid grid-cols-7 gap-1">{Array.from({ length: 7 }, (_, i) => i + 1).map(r => <Button key={r} size="sm" variant={round === r ? 'default' : 'outline'} className={cn('h-9 min-w-0 px-0 text-[10px] font-black', round === r ? 'hero-gradient border-none' : 'border-white/5 bg-secondary/20')} onClick={() => setRound(r)}>{r}</Button>)}</div>
     <div className="flex items-center justify-between px-1"><div><p className="text-[11px] font-black uppercase tracking-widest">{labels[round]}</p><p className="text-[8px] text-muted-foreground">{round === 1 ? (ru ? '56 матчей · 8 команд проходят дальше' : '56 matches · 8 teams advance') : (ru ? `${expectedMatches[round]} матчей` : `${expectedMatches[round]} matches`)}</p></div><span className="rounded-md border border-white/10 bg-secondary/30 px-2 py-1 text-[7px] font-black uppercase text-muted-foreground">{data.status === 'completed' ? (ru ? 'ЗАВЕРШЁН' : 'COMPLETED') : (ru ? 'АКТИВЕН' : 'ACTIVE')}</span></div>
-    <div className="space-y-2">{Array.from({ length: expectedSlots[round] }, (_, i) => matches[i] || ({ id: `placeholder-${round}-${i}`, status: 'pending', home: null, away: null })).map((m: any, i: number) => {
-      const hasTeams = Boolean(m.home && m.away);
-      const bye = m.status === 'bye' || (m.home && !m.away);
-      return <Card key={m.id || i} className="glass-card border-white/5 overflow-hidden"><CardContent className="p-3">{bye ? <div className="flex items-center justify-between"><span className="truncate text-[10px] font-bold uppercase">{m.home?.name || 'TBD'}</span><span className="text-[8px] font-black text-yellow-500">BYE</span></div> : <div className="grid grid-cols-[1fr_48px_1fr] items-center gap-2"><p className="truncate text-right text-[10px] font-bold uppercase">{m.home?.name || 'TBD'}</p><span className="text-center text-xs font-black">{m.scoreA != null && m.scoreB != null ? `${m.scoreA}:${m.scoreB}` : (hasTeams ? 'VS' : '—')}</span><p className="truncate text-left text-[10px] font-bold uppercase">{m.away?.name || 'TBD'}</p></div>}{m.technicalDecision && <p className="mt-1 text-center text-[7px] uppercase text-amber-400">{ru ? 'Технический результат' : 'Technical result'}</p>}</CardContent></Card>;
+    <div className="space-y-2">{Array.from({ length: expectedMatches[round] }, (_, i) => matches[i] || ({ id: `placeholder-${round}-${i}`, status: 'pending', home: null, away: null })).map((pairing: any, i: number) => {
+      const fixture = pairing.matchId ? fixtureById.get(String(pairing.matchId)) as any : null;
+      const match = { ...pairing, ...(fixture || {}) };
+      const home = match.home || (match.homeId ? { id: match.homeId, name: match.homeName } : null);
+      const away = match.away || (match.awayId ? { id: match.awayId, name: match.awayName } : null);
+      const finished = match.status === 'finished' || match.isFinished === true;
+      const hasScore = match.scoreA != null && match.scoreB != null;
+      const startValue = match.startTime || match.scheduledAt || match.scheduledStartAt;
+      const startDate = startValue?.toDate ? startValue.toDate() : startValue ? new Date(startValue) : null;
+      const dateLabel = startDate && Number.isFinite(startDate.getTime())
+        ? startDate.toLocaleString(ru ? 'ru-RU' : 'en-GB', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+        : (ru ? 'ДАТА УТОЧНЯЕТСЯ' : 'DATE TBA');
+      const bye = match.status === 'bye' || (home && !away);
+      const roundLabel = ru ? `ТУР ${round}` : `ROUND ${round}`;
+      const TeamMark = () => <div className="w-8 h-8 rounded-full bg-secondary/50 border border-white/5 flex items-center justify-center"><Shield className="w-4 h-4 text-muted-foreground/40" /></div>;
+      return <Card key={match.id || i} className={cn("glass-card border-white/5 transition-all overflow-hidden", finished && "border-green-500/10", match.technicalDecision && "border-amber-400/20")}><CardContent className="p-3">
+        <div className="flex justify-between items-center mb-3">
+          <Badge variant="outline" className="text-[7px] font-black h-4 px-1.5 uppercase border-white/10 opacity-70">{roundLabel}{round === 7 ? ' · BO3' : ' · BO1'}</Badge>
+          <span className="text-[8px] font-mono font-bold text-muted-foreground">{dateLabel}</span>
+        </div>
+        {bye ? <div className="flex items-center justify-between"><div className="flex items-center gap-2 min-w-0"><TeamMark /><span className="truncate text-[10px] font-bold uppercase">{home?.name || 'TBD'}</span></div><span className="text-[8px] font-black text-yellow-500">BYE</span></div> : <div className="grid grid-cols-[1fr_40px_1fr] items-center gap-2">
+          <div className="flex flex-col items-center gap-1 min-w-0"><TeamMark /><p className="text-[9px] font-bold uppercase truncate w-full text-center text-white">{home?.name || 'TBD'}</p></div>
+          <div className="flex justify-center items-center">{hasScore ? <span className="text-sm font-headline font-black italic">{match.scoreA}:{match.scoreB}</span> : <Swords className="w-4 h-4 text-accent/40" />}</div>
+          <div className="flex flex-col items-center gap-1 min-w-0"><TeamMark /><p className="text-[9px] font-bold uppercase truncate w-full text-center text-white">{away?.name || 'TBD'}</p></div>
+        </div>}
+        {match.technicalDecision && <p className="mt-2 text-center text-[7px] uppercase text-amber-400">{ru ? 'Технический результат' : 'Technical result'}</p>}
+      </CardContent></Card>;
     })}</div>
     <p className="text-center text-[8px] uppercase tracking-widest text-muted-foreground">{ru ? 'Сильнейшая команда играет AWAY · BO1 до финала' : 'Stronger team plays AWAY · BO1 until the final'}</p>
   </div>;
