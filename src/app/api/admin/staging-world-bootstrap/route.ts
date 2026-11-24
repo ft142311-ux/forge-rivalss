@@ -198,6 +198,58 @@ async function verifyWorld(db: Firestore) {
     profile.exists && profile.data()?.id === uniqueParticipantIds[index] &&
     profile.data()?.isBot === true
   );
+  // Verify the persisted Pyramid Cup independently of the calendar builder.
+  // The builder's internal checks protect creation; this postflight protects the
+  // bootstrap response from reporting READY if cup documents/snapshots are absent.
+  const cupId = 'cup_s1_lALPHA';
+  const [cupSnap, cupMatchesSnap, cupSnapshotsSnap] = await Promise.all([
+    db.collection('cup_pyramid_v1').doc(cupId).get(),
+    db.collection('cup_matches').where('cupId', '==', cupId).get(),
+    db.collection('cup_participant_snapshots_v1').doc(cupId).collection('teams').get(),
+  ]);
+  const cup = cupSnap.exists ? cupSnap.data() || {} : {};
+  const cupParticipants = Array.isArray(cup.participants) ? cup.participants : [];
+  const cupFirstRound = Array.isArray(cup.rounds?.r1) ? cup.rounds.r1 : [];
+  const cupFixtureDocs = cupMatchesSnap.docs;
+  const cupFirstRoundValid =
+    cupFirstRound.length === 56 &&
+    cupFirstRound.every((pairing: any) =>
+      pairing?.home?.id && pairing?.away?.id &&
+      pairing?.status !== 'bye' && pairing?.bestOf === 1
+    );
+  const cupFixturesValid =
+    cupFixtureDocs.length === 56 &&
+    cupFixtureDocs.every((doc) => {
+      const fixture = doc.data() || {};
+      return fixture.cupId === cupId &&
+        Number(fixture.season) === SEASON &&
+        Number(fixture.cupRound) === 1 &&
+        Number(fixture.bestOf) === 1 &&
+        fixture.type === 'cup' &&
+        Boolean(fixture.homeId) && Boolean(fixture.awayId);
+    });
+  const cupReady =
+    cupSnap.exists &&
+    Number(cup.season) === SEASON &&
+    cup.name === 'Кубок Пирамиды' &&
+    cup.status === 'active' &&
+    cup.format === 'D1_REST_OPENING_ROUND' &&
+    Number(cup.totalRounds) === 7 &&
+    Number(cup.totalParticipants) === EXPECTED_PARTICIPANTS &&
+    Number(cup.totalMatches) === 119 &&
+    Number(cup.preliminaryMatches) === 56 &&
+    Number(cup.byeCount) === 0 &&
+    Number(cup.openingRoundRestCount) === 8 &&
+    Array.isArray(cup.openingRoundRestTeams) &&
+    cup.openingRoundRestTeams.length === 8 &&
+    cupParticipants.length === EXPECTED_PARTICIPANTS &&
+    new Set(cupParticipants.map((team: any) => String(team?.id || ''))).size === EXPECTED_PARTICIPANTS &&
+    cupFirstRoundValid &&
+    cupFixturesValid &&
+    cupSnapshotsSnap.size === EXPECTED_PARTICIPANTS &&
+    config.pyramidCupRequired === true &&
+    config.pyramidCupReady === true &&
+    Number(config.pyramidCupReadySeasonNumber) === SEASON;
   const counts = {
     groups: groups.size,
     tables: tablesSnap.size,
@@ -206,6 +258,11 @@ async function verifyWorld(db: Firestore) {
     participants: uniqueParticipantIds.length,
     participantProfiles: validProfiles.length,
     bots: botProfiles.length,
+    cupExists: cupSnap.exists,
+    cupParticipants: cupParticipants.length,
+    cupMatches: cupFixtureDocs.length,
+    cupFirstRoundMatches: cupFirstRound.length,
+    cupParticipantSnapshots: cupSnapshotsSnap.size,
   };
   const ready =
     configSnap.exists &&
@@ -218,7 +275,8 @@ async function verifyWorld(db: Firestore) {
     counts.matches === EXPECTED_MATCHES &&
     standingsValid &&
     counts.participants === EXPECTED_PARTICIPANTS &&
-    counts.participantProfiles === EXPECTED_PARTICIPANTS;
+    counts.participantProfiles === EXPECTED_PARTICIPANTS &&
+    cupReady;
 
   return {
     ready,
@@ -233,6 +291,13 @@ async function verifyWorld(db: Firestore) {
       matches: EXPECTED_MATCHES,
       participants: EXPECTED_PARTICIPANTS,
       participantProfiles: EXPECTED_PARTICIPANTS,
+      cupParticipants: EXPECTED_PARTICIPANTS,
+      cupMatches: 56,
+      cupParticipantSnapshots: EXPECTED_PARTICIPANTS,
+      cupTotalMatches: 119,
+      cupRounds: 7,
+      cupFinalBestOf: 3,
     },
+    cupReady,
   };
 }
