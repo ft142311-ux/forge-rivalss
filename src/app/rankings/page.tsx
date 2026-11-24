@@ -7,7 +7,7 @@ import { useGameState } from '../lib/store';
 import { 
   Trophy, ChevronLeft, ChevronRight, 
   Shield, Globe, Layers, RefreshCw,
-  ShieldAlert, ArrowUp, X, Crown, Vote, Loader2, Archive, CalendarDays
+  ShieldAlert, ArrowUp, X, Crown, Vote, Loader2, Archive, CalendarDays, Swords
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
