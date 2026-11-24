@@ -1,6 +1,6 @@
 'use strict';
 
-/** New clubs may claim any unoccupied D1-D4 slot in the active season. */
+/** New clubs enter through Division 4 only; higher divisions are earned through sporting results. */
 function isEligibleRegistrationSlot(slot, seasonNum) {
   if (!slot || typeof slot !== 'object' || Array.isArray(slot)) return false;
 
@@ -15,7 +15,7 @@ function isEligibleRegistrationSlot(slot, seasonNum) {
     !slot.occupantId &&
     Number.isInteger(season) && season > 0 &&
     Number.isInteger(slotSeason) && slotSeason === season &&
-    Number.isInteger(division) && groupsInDivision.has(division) &&
+    Number.isInteger(division) && division === 4 && groupsInDivision.has(division) &&
     Number.isInteger(group) && group >= 1 && group <= groupsInDivision.get(division) &&
     Number.isInteger(rank) && rank >= 1 && rank <= 8;
 }
