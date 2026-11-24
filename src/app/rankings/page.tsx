@@ -117,7 +117,7 @@ export default function RankingsPage() {
         const response = await fetch('/api/league/table', {
           method: 'POST',
           headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ leagueId: contextLeagueId, level: contextLevel, group: contextGroup, scope: activeTab === 'my_league' && !navLevel && !navGroup ? 'mine' : 'browse' }),
+          body: JSON.stringify({ leagueId: contextLeagueId, level: contextLevel, group: contextGroup, scope: activeTab === 'my_league' ? 'mine' : 'browse' }),
           cache: 'no-store',
           signal: controller.signal,
         });
