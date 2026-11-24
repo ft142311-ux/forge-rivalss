@@ -124,7 +124,7 @@ export default function SystemPage() {
                 {loading || !status?.success ? '—' : (status.onlinePlayers ?? 0).toLocaleString(isRu ? 'ru-RU' : 'en-US')}
               </p>
               <p className="text-[8px] text-muted-foreground mt-1">
-                {isRu ? 'Активность за 5 минут' : 'Active in the last 5 minutes'}
+                {isRu ? 'Активность за 2 минуты' : 'Active in the last 2 minutes'}
               </p>
             </CardContent>
           </Card>
