@@ -34,7 +34,7 @@ export default function RankingsPage() {
   const { toast } = useToast();
   const { user } = useUser();
   const db = useFirestore();
-  const { isLoaded, language, seasonNumber, ownedPlayers } = useGameState();
+  const { isLoaded, language, seasonNumber, ownedPlayers, selectedLeagueId: storeLeagueId, leagueLevel: storeLeagueLevel, groupId: storeGroupId } = useGameState();
   
   const [activeTab, setActiveTab] = useState<RankingTab>('menu');
   const [cupRound, setCupRound] = useState(1);
@@ -80,9 +80,9 @@ export default function RankingsPage() {
     .sort((a: any, b: any) => Number(a.tour || 0) - Number(b.tour || 0) || String(a.matchId || a.id).localeCompare(String(b.matchId || b.id)));
   const tableSeasonNumber = Math.max(1, Number((seasonConfig as any)?.activeSeasonNumber || seasonNumber || 1));
 
-  const contextLeagueId = String(navLeague || profile?.selectedLeagueId || "ALPHA");
-  const contextLevel = Number(navLevel || profile?.leagueLevel || MAX_LEVELS);
-  const contextGroup = Number(navGroup || profile?.groupId || 1);
+  const contextLeagueId = String(navLeague || storeLeagueId || profile?.selectedLeagueId || "ALPHA");
+  const contextLevel = Number(navLevel || storeLeagueLevel || profile?.leagueLevel || MAX_LEVELS);
+  const contextGroup = Number(navGroup || storeGroupId || profile?.groupId || 1);
 
   const tableId = `table_v140_S${tableSeasonNumber}_L${contextLeagueId}_V${contextLevel}_G${contextGroup}`;
   const [tableData, setTableData] = useState<any>(null);
@@ -198,7 +198,7 @@ export default function RankingsPage() {
       promotion: "PROMOTION",
       relegation: "RELEGATION",
       menu: [
-        { id: 'my_league', label: 'League Standings', desc: `Division ${profile?.leagueLevel || '...'}.${profile?.groupId || '...'}`, icon: Shield, color: 'text-primary' },
+        { id: 'my_league', label: 'League Standings', desc: `Division ${storeLeagueLevel || profile?.leagueLevel || '...'}.${storeGroupId || profile?.groupId || '...'}`, icon: Shield, color: 'text-primary' },
         { id: 'my_pyramid', label: 'League Pyramid', desc: `Explore ${profile?.selectedLeagueId || 'ALPHA'}`, icon: Layers, color: 'text-accent' },
         { id: 'cup', label: 'Pyramid Cup', desc: 'Tournament bracket', icon: Trophy, color: 'text-yellow-500' },
         { id: 'all_pyramids', label: 'Global Map', desc: 'Browse all active leagues', icon: Globe, color: 'text-blue-400' },
