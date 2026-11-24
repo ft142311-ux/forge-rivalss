@@ -117,13 +117,18 @@ export default function RankingsPage() {
         const response = await fetch('/api/league/table', {
           method: 'POST',
           headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ leagueId: contextLeagueId, level: contextLevel, group: contextGroup }),
+          body: JSON.stringify({ leagueId: contextLeagueId, level: contextLevel, group: contextGroup, scope: activeTab === 'my_league' && !navLevel && !navGroup ? 'mine' : 'browse' }),
           cache: 'no-store',
           signal: controller.signal,
         });
         const result = await response.json();
         if (!response.ok || result?.success !== true) throw new Error(result?.error || 'LEAGUE_TABLE_UNAVAILABLE');
         if (!cancelled) {
+          if (activeTab === 'my_league' && result.level && result.group) {
+            setNavLeague(String(result.leagueId || 'ALPHA'));
+            setNavLevel(Number(result.level));
+            setNavGroup(Number(result.group));
+          }
           setTableData(result.exists ? { stats: result.stats } : null);
           setTableError(null);
           setTableLoadTimedOut(false);
@@ -144,7 +149,7 @@ export default function RankingsPage() {
       controller.abort();
       window.clearTimeout(timeoutId);
     };
-  }, [isLoaded, user, tableId, tableLoadAttempt]);
+  }, [isLoaded, user, tableId, tableLoadAttempt, activeTab]);
 
   const pyramidCupRef = useMemoFirebase(() => db ? doc(db, 'cup_pyramid_v1', `cup_s${tableSeasonNumber}_lALPHA`) : null, [db, tableSeasonNumber]);
   const { data: pyramidCup, isLoading: isPyramidCupLoading } = useDoc(pyramidCupRef);
