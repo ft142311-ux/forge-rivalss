@@ -18,6 +18,7 @@ import { getMoscowTime, getGlobalSeasonInfo, isMatchLive } from './lib/time-util
 import { collection, query, where, doc } from 'firebase/firestore';
 import { getBotName, LEAGUES } from './lib/leagues-data';
 import { PlaceHolderImages } from './lib/placeholder-images';
+import { getMyLeagueMatchReportsAction } from '@/app/actions/match-report';
 
 export default function Home() {
   const { user, isUserLoading } = useUser();
@@ -30,6 +31,7 @@ export default function Home() {
 
   const [now, setNow] = useState(getMoscowTime());
   const [officialLeagueMatches, setOfficialLeagueMatches] = useState<any[] | null>(null);
+  const [serverUnreadReportsCount, setServerUnreadReportsCount] = useState(0);
 
   useEffect(() => {
     const timer = setInterval(() => setNow(getMoscowTime()), 1000);
@@ -53,6 +55,26 @@ export default function Home() {
   }, [db, user?.uid]);
 
   const { data: profile } = useDoc(userProfileRef);
+
+  useEffect(() => {
+    if (!user || !rank) {
+      setServerUnreadReportsCount(0);
+      return;
+    }
+    let cancelled = false;
+    const refreshUnreadReports = async () => {
+      try {
+        const result = await getMyLeagueMatchReportsAction(await user.getIdToken());
+        if (!cancelled) setServerUnreadReportsCount(result?.success ? Number(result.count || 0) : 0);
+      } catch (error) {
+        console.error('[HOME REPORT BADGE] count lookup failed', error);
+        if (!cancelled) setServerUnreadReportsCount(0);
+      }
+    };
+    void refreshUnreadReports();
+    return () => { cancelled = true; };
+  }, [user, rank, allSeasonMatches, matchHistory]);
+
 
   const seasonConfigRef = useMemoFirebase(() => {
     if (!db) return null;
@@ -191,7 +213,7 @@ export default function Home() {
   if (isUserLoading || !isLoaded || !isDataReady) return <LoadingScreen />;
 
   const menuItems = [
-    { id: 'reports', label: language === 'ru' ? 'ОБЗОР МАТЧА' : 'MATCH REVIEW', href: '/reports', icon: Tv, color: 'text-primary', badge: totalUnreadCount > 0 ? totalUnreadCount : null },
+    { id: 'reports', label: language === 'ru' ? 'ОБЗОР МАТЧА' : 'MATCH REVIEW', href: '/reports', icon: Tv, color: 'text-primary', badge: Math.max(totalUnreadCount, serverUnreadReportsCount) > 0 ? Math.max(totalUnreadCount, serverUnreadReportsCount) : null },
     { id: 'squad', label: language === 'ru' ? 'СОСТАВ КОМАНДЫ' : 'SQUAD', href: '/roster', icon: Users, color: 'text-blue-400' },
     { id: 'transfers', label: language === 'ru' ? 'ТРАНСФЕРЫ' : 'TRANSFERS', href: '/transfers', icon: ArrowRightLeft, color: 'text-yellow-500' },
     { id: 'training', label: language === 'ru' ? 'РАЗВИТИЕ' : 'INFRA', href: '/training', icon: Construction, color: 'text-orange-400' },
