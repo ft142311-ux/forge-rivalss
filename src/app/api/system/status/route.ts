@@ -18,7 +18,7 @@ function respond(status: number, body: Record<string, unknown>) {
 /** Minimal authenticated system overview: network health and aggregate player counts only. */
 export async function GET(request: NextRequest) {
   const authorization = request.headers.get('authorization') || '';
-  const match = authorization.match(/^Bearer\\s+(\\S+)$/i);
+  const match = authorization.match(/^Bearer\s+(\S+)$/i);
   if (!match) return respond(401, { success: false, error: 'AUTHENTICATION_REQUIRED' });
 
   try {
