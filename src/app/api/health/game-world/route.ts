@@ -59,7 +59,7 @@ export async function GET() {
       groupsReady === EXPECTED_GROUPS;
 
     return NextResponse.json({
-      status: 'OPERATIONAL',
+      status: worldReady ? 'OPERATIONAL' : 'NOT_READY',
       activeSeason,
       phase: config.phase || 'UNKNOWN',
       worldStatus: {
