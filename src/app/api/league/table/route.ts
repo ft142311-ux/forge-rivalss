@@ -23,24 +23,28 @@ export async function POST(request: NextRequest) {
   if (!match) return respond(401, { success: false, error: 'AUTHENTICATION_REQUIRED' });
 
   try {
-    await requireServerActor(match[1]);
+    const actor = await requireServerActor(match[1]);
     const body = await request.json().catch(() => ({}));
-    const leagueId = String(body?.leagueId || 'ALPHA');
-    const level = Number(body?.level);
-    const group = Number(body?.group);
+    const db = getAdminDb();
+    const ownProfileSnap = await db.collection('players_v14').doc(actor.uid).get();
+    const ownProfile = ownProfileSnap.exists ? ownProfileSnap.data() || {} : null;
+    const useOwnLeague = body?.scope === 'mine';
+    if (useOwnLeague && !ownProfile) return respond(404, { success: false, error: 'MANAGER_PROFILE_NOT_FOUND' });
+    const leagueId = String(useOwnLeague ? ownProfile?.selectedLeagueId || 'ALPHA' : body?.leagueId || 'ALPHA');
+    const level = Number(useOwnLeague ? ownProfile?.leagueLevel : body?.level);
+    const group = Number(useOwnLeague ? ownProfile?.groupId : body?.group);
     if (!/^[A-Z0-9_-]{2,20}$/.test(leagueId) ||
         !Number.isInteger(level) || level < 1 || level > MAX_LEVELS ||
         !Number.isInteger(group) || group < 1 || group > getGroupsCountInLevel(level)) {
       return respond(400, { success: false, error: 'INVALID_LEAGUE_TABLE_REQUEST' });
     }
 
-    const db = getAdminDb();
     const configSnap = await db.collection('system_v1').doc('season_config').get();
     if (!configSnap.exists) return respond(503, { success: false, error: 'SEASON_CONFIG_MISSING' });
     const season = Math.max(1, Number(configSnap.data()?.activeSeasonNumber || 1));
     const tableId = getTableId(season, leagueId, level, group);
     const tableSnap = await db.collection('league_tables_v2').doc(tableId).get();
-    if (!tableSnap.exists) return respond(200, { success: true, exists: false, season, tableId, stats: null });
+    if (!tableSnap.exists) return respond(200, { success: true, exists: false, season, tableId, leagueId, level, group, stats: null, viewer: useOwnLeague ? { rank: Number(ownProfile?.rank || 0), standingsEntryPresent: false } : undefined });
 
     const rawStats = tableSnap.data()?.stats;
     const stats: Record<string, Record<string, unknown>> = {};
@@ -56,7 +60,8 @@ export async function POST(request: NextRequest) {
         stats[key] = row;
       }
     }
-    return respond(200, { success: true, exists: true, season, tableId, stats });
+    const viewerEntry = useOwnLeague ? stats[actor.uid] || null : null;
+    return respond(200, { success: true, exists: true, season, tableId, leagueId, level, group, stats, viewer: useOwnLeague ? { rank: Number(ownProfile?.rank || 0), standingsEntryPresent: Boolean(viewerEntry), entryName: viewerEntry?.name || null, entryRank: Number(viewerEntry?.rank || 0) } : undefined });
   } catch (error: any) {
     const code = String(error?.message || 'LEAGUE_TABLE_READ_FAILED');
     const status = code === 'AUTHENTICATION_REQUIRED' || code === 'AUTH_TOKEN_INVALID' || code === 'AUTH_TOKEN_REVOKED' ? 401 :
