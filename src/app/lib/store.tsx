@@ -88,7 +88,7 @@ interface GameState {
   assignToRole: (role: LineupSlot, playerId: string | null) => void;
   updateLineup: (updates: Partial<Record<LineupSlot, string | null>>) => void;
   updateTactics: (strategy: string, lineSettings: any) => void;
-  claimReward: () => void;
+  claimReward: () => Promise<boolean>;
   setLanguage: (lang: string) => void;
   purchaseLicense: (tier: number, cost: number) => boolean;
   purchasePremium: () => boolean;
@@ -310,13 +310,19 @@ export function GameStateProvider({ children }: { children: ReactNode }) {
 
   // Р—РђР©РР©Р•РќРќР«Р• Р”Р•Р™РЎРўР’РРЇ (SERVER ACTIONS)
   
-  const claimReward = useCallback(async () => {
-    if (!user?.uid) return;
-    const res = await claimDailyRewardAction(await user.getIdToken());
-    if (res.success) {
-      toast({ title: state.language === 'ru' ? "РќР°РіСЂР°РґР° РїРѕР»СѓС‡РµРЅР°!" : "Reward Claimed!" });
-    } else {
+  const claimReward = useCallback(async (): Promise<boolean> => {
+    if (!user?.uid) return false;
+    try {
+      const res = await claimDailyRewardAction(await user.getIdToken());
+      if (res.success) {
+        toast({ title: state.language === 'ru' ? "Награда получена!" : "Reward Claimed!" });
+        return true;
+      }
       toast({ variant: "destructive", title: ('error' in res ? String(res.error) : 'REWARD_CLAIM_FAILED') });
+      return false;
+    } catch (error: any) {
+      toast({ variant: "destructive", title: String(error?.message || 'REWARD_CLAIM_FAILED') });
+      return false;
     }
   }, [user?.uid, state.language, toast]);
 
