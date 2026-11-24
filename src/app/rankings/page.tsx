@@ -389,6 +389,21 @@ export default function RankingsPage() {
                  <RefreshCw className="w-4 h-4 mr-2" />{t.retry}
                </Button>
              </div>
+           ) : activeTab === 'my_league' && tableData?.viewer?.standingsEntryPresent === false ? (
+             <div className="py-8 px-6 text-center border border-amber-400/20 bg-amber-400/5 rounded-3xl flex flex-col items-center gap-3">
+               <ShieldAlert className="w-9 h-9 text-amber-400" />
+               <p className="text-xs font-bold text-white">
+                 {language === 'ru' ? 'Клуб не найден в строке твоего места' : 'Your club is missing from its assigned standings slot'}
+               </p>
+               <p className="text-[10px] text-muted-foreground">
+                 {language === 'ru'
+                   ? `Профиль: дивизион ${tableData.viewer.rank ? contextLevel : contextLevel}, группа ${contextGroup}, место ${tableData.viewer.rank || '—'}. Повторная регистрация не требуется.`
+                   : `Assigned rank: ${tableData.viewer.rank || '—'}. Do not register again; the league slot needs repair.`}
+               </p>
+               <Button variant="outline" className="border-amber-400/30" onClick={retryTableLoad}>
+                 <RefreshCw className="w-4 h-4 mr-2" />{t.retry}
+               </Button>
+             </div>
            ) : standings.length > 0 ? (
              <div className="space-y-1">
                <div className="grid grid-cols-[28px_1fr_25px_70px_35px] gap-1 px-3 py-2 text-[8px] font-black text-muted-foreground uppercase tracking-widest border-b border-white/5">
