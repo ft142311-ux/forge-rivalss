@@ -1,9 +1,6 @@
 'use client';
 
 import { useGameState } from '@/app/lib/store';
-import { useUser } from '@/firebase';
-import { useEffect, useState } from 'react';
-import { getMyLeagueMatchReportsAction } from '@/app/actions/match-report';
 import { Gem, Mail, Home, Bell, Rocket } from 'lucide-react';
 import { usePathname } from 'next/navigation';
 import { cn, formatCurrency } from '@/lib/utils';
@@ -11,19 +8,7 @@ import Link from 'next/link';
 
 export function TopBar() {
   const pathname = usePathname();
-  const { credits, crystals, language, isPremium, clubName, displayName, clubLogo, matchHistory, allSeasonMatches } = useGameState();
-  const { user } = useUser();
-  const [serverUnreadReports, setServerUnreadReports] = useState(0);
-  useEffect(() => {
-    let cancelled = false;
-    if (!user) { setServerUnreadReports(0); return; }
-    user.getIdToken().then(getMyLeagueMatchReportsAction).then((result) => {
-      if (!cancelled) setServerUnreadReports(result?.success ? Number(result.count || 0) : 0);
-    }).catch(() => { if (!cancelled) setServerUnreadReports(0); });
-    return () => { cancelled = true; };
-  }, [user, matchHistory, allSeasonMatches]);
-  const localUnreadReports = [...(matchHistory || []), ...(allSeasonMatches || [])].filter((m: any) => m?.isFinished !== false && m?.seen !== true && m?.reportStatus !== 'viewed').length;
-  const unreadReportsCount = Math.max(serverUnreadReports, localUnreadReports);
+  const { credits, crystals, language, isPremium, clubName, displayName, clubLogo } = useGameState();
 
   const navBtnClass = "w-9 h-9 rounded-full flex items-center justify-center bg-secondary/40 border border-white/5 hover:bg-white/10 transition-all shadow-lg";
 
@@ -62,7 +47,6 @@ export function TopBar() {
           <Link href="/notifications">
             <div className={cn(navBtnClass, "relative")}>
               <Bell className="w-4 h-4 text-muted-foreground" />
-              {unreadReportsCount > 0 && <span className="absolute -top-1 -right-1 min-w-4 h-4 px-1 rounded-full bg-red-500 text-white text-[9px] font-black flex items-center justify-center">{unreadReportsCount > 99 ? '99+' : unreadReportsCount}</span>}
             </div>
           </Link>
         </div>
