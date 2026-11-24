@@ -16,7 +16,7 @@ function respond(status: number, body: Record<string, unknown>) {
 /** Authenticated read-only projection of public league standings.
  * Uses Admin SDK because the Beta project's deployed client rules currently
  * reject standings reads despite a valid active manager session. Only public
- * table fields are returned; no player profiles, roster, tactics or finances.
+ * table fields are returned; no private player or club records are exposed.
  */
 export async function POST(request: NextRequest) {
   const match = (request.headers.get('authorization') || '').match(/^Bearer ([^\s]+)$/);
