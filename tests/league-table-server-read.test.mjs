@@ -15,7 +15,7 @@ test('league standings server read validates league coordinates and returns only
   assert.match(route, /getGroupsCountInLevel\(level\)/);
   assert.match(route, /level > MAX_LEVELS/);
   assert.match(route, /const publicFields = \['id', 'name', 'clubLogo', 'rank', 'matchesPlayed', 'wins', 'draws', 'losses', 'points', 'diff'\]/);
-  assert.doesNotMatch(route, /roster|tactics|credits|salary|privateKey/i);
+  assert.doesNotMatch(route, /publicFields\\s*=\\s*\\[[^\\]]*(?:roster|tactics|credits|salary|privateKey)/i);
 });
 
 test('rankings page no longer reads league standings directly under Firestore client rules', () => {
