@@ -62,3 +62,23 @@ test('server report lookup restricts rank-based matches to the authenticated pro
   assert.match(action, /\[Number\(raw\.homeRank\), Number\(raw\.awayRank\)\]\.includes\(rank\)/);
   assert.match(action, /raw\.isFinished === true/);
 });
+
+
+test('viewed league reports are excluded from server unread count', () => {
+  const action = readFileSync(new URL('../src/app/actions/match-report.ts', import.meta.url), 'utf8');
+  assert.match(action, /raw\.seen === true \|\| raw\.reportStatus === 'viewed'/);
+});
+
+test('top bar displays a count for unread match reports', () => {
+  const topBar = readFileSync(new URL('../src/components/game/TopBar.tsx', import.meta.url), 'utf8');
+  assert.match(topBar, /getMyLeagueMatchReportsAction/);
+  assert.match(topBar, /unreadReportsCount > 0/);
+  assert.match(topBar, /serverUnreadReports/);
+});
+
+test('pyramid cup is not listed in tournament hub because it lives in rankings', () => {
+  const tournaments = readFileSync(new URL('../src/app/tournaments/page.tsx', import.meta.url), 'utf8');
+  assert.doesNotMatch(tournaments, /id: 'pyramid'/);
+  const rankings = readFileSync(new URL('../src/app/rankings/page.tsx', import.meta.url), 'utf8');
+  assert.match(rankings, /id: 'cup'.*Кубок Пирамиды/);
+});
