@@ -315,7 +315,8 @@ export function GameStateProvider({ children }: { children: ReactNode }) {
     try {
       const res = await claimDailyRewardAction(await user.getIdToken());
       if (res.success) {
-        toast({ title: state.language === 'ru' ? "Награда получена!" : "Reward Claimed!" });
+        saveToLocal({ lastRewardClaimDate: res.claimedDate || getMoscowDateString(), rewardDay: Number(res.rewardDay || state.rewardDay) });
+        toast({ title: res.alreadyClaimed ? (state.language === 'ru' ? "Награда уже получена сегодня" : "Reward already claimed today") : (state.language === 'ru' ? "Награда получена!" : "Reward Claimed!") });
         return true;
       }
       toast({ variant: "destructive", title: ('error' in res ? String(res.error) : 'REWARD_CLAIM_FAILED') });
@@ -324,7 +325,7 @@ export function GameStateProvider({ children }: { children: ReactNode }) {
       toast({ variant: "destructive", title: String(error?.message || 'REWARD_CLAIM_FAILED') });
       return false;
     }
-  }, [user?.uid, state.language, toast]);
+  }, [user?.uid, state.language, state.rewardDay, toast, saveToLocal]);
 
   const purchasePremium = useCallback(() => {
     if (!user?.uid) return false;
