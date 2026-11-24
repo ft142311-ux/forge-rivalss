@@ -186,12 +186,12 @@ export default function BetaSeasonOneResumePage() {
           </div>
         )}
         {!areServicesAvailable && <p className="mt-3 text-sm text-amber-200">Firebase Client SDK недоступен.</p>}
-        {user?.uid === 'nMG9UEAaoTYhZkno3107pCp6y5i2' && adminClaim === false && (
+        {user?.uid === 'nMG9UEAaoTYhZkno3107pCp6y5i2' && (
           <div className="mt-4 rounded-xl border border-cyan-900 bg-slate-950/60 p-4">
             <p className="text-sm text-slate-200">Этот аккаунт указан владельцем проекта для первоначального администрирования Beta. Сервер выдаст право только после проверки токена и совпадения UID.</p>
-            <button type="button" onClick={() => void grantAdminToCurrentAccount()} disabled={grantingAdmin || claimLoading}
+            <button type="button" onClick={() => void grantAdminToCurrentAccount()} disabled={grantingAdmin || claimLoading || adminClaim === true}
               className="mt-3 w-full rounded-lg bg-cyan-500 px-4 py-3 font-semibold text-slate-950 hover:bg-cyan-400 disabled:opacity-50">
-              {grantingAdmin ? 'Назначаю права…' : 'Назначить admin этому аккаунту'}
+              {grantingAdmin ? 'Назначаю права…' : adminClaim === true ? 'Администратор уже назначен' : 'Назначить admin этому аккаунту'}
             </button>
           </div>
         )}
