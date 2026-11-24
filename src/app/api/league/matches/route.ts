@@ -38,10 +38,11 @@ export async function POST(request: NextRequest) {
     }
     const activeSeason = Math.max(1, Number(configSnap.data()?.activeSeasonNumber || 1));
     if (season !== activeSeason) return respond(409, { success: false, error: 'SEASON_SCOPE_MISMATCH', activeSeason });
-    const snapshot = await db.collection('matches_v2')
-      .where('season', '==', season).where('leagueId', '==', leagueId)
-      .where('level', '==', level).where('groupId', '==', group).get();
-    const matches = snapshot.docs.map((doc: any) => {
+    const snapshot = await db.collection('matches_v2').where('season', '==', season).get();
+    const matches = snapshot.docs.filter((doc: any) => {
+      const raw = doc.data() || {};
+      return String(raw.leagueId || '') === leagueId && Number(raw.level) === level && Number(raw.groupId) === group;
+    }).map((doc: any) => {
       const raw = doc.data() || {};
       const start = raw.startTime?.toDate ? raw.startTime.toDate() :
         raw.startTime instanceof Date ? raw.startTime : new Date(raw.startTime || raw.scheduledAt || 0);
