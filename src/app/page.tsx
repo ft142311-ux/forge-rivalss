@@ -29,6 +29,7 @@ export default function Home() {
   } = useGameState();
 
   const [now, setNow] = useState(getMoscowTime());
+  const [officialLeagueMatches, setOfficialLeagueMatches] = useState<any[] | null>(null);
 
   useEffect(() => {
     const timer = setInterval(() => setNow(getMoscowTime()), 1000);
@@ -59,6 +60,38 @@ export default function Home() {
   }, [db]);
   const { data: seasonConfig } = useDoc(seasonConfigRef);
 
+  const effectiveSeason = Math.max(1, Number((seasonConfig as any)?.activeSeasonNumber || 1));
+  useEffect(() => {
+    if (!user || !selectedLeagueId || !rank || Number(leagueLevel) < 1 || Number(leagueLevel) > 4 || Number(groupId) < 1) {
+      setOfficialLeagueMatches(null);
+      return;
+    }
+    let cancelled = false;
+    const controller = new AbortController();
+    (async () => {
+      try {
+        const token = await user.getIdToken();
+        const response = await fetch('/api/league/matches', {
+          method: 'POST',
+          headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ leagueId: selectedLeagueId, level: Number(leagueLevel), group: Number(groupId), season: effectiveSeason }),
+          cache: 'no-store',
+          signal: controller.signal,
+        });
+        const result = await response.json();
+        if (!response.ok || result?.success !== true) throw new Error(result?.error || 'LEAGUE_MATCHES_UNAVAILABLE');
+        if (!cancelled) setOfficialLeagueMatches(Array.isArray(result.matches) ? result.matches : []);
+      } catch (error) {
+        if (!cancelled && !controller.signal.aborted) {
+          console.error('[HOME NEXT MATCH] official fixtures unavailable', error);
+          setOfficialLeagueMatches([]);
+        }
+      }
+    })();
+    return () => { cancelled = true; controller.abort(); };
+  }, [user, selectedLeagueId, leagueLevel, groupId, rank, effectiveSeason]);
+
+
   const nameMap = useMemo(() => {
     const names: Record<number, string> = {};
     const logos: Record<number, string> = {};
@@ -72,8 +105,9 @@ export default function Home() {
   }, [groupPlayers]);
 
   const resolvedNextMatch = useMemo(() => {
-    if (!allSeasonMatches || !rank) return null;
-    const myMatches = allSeasonMatches
+    const sourceMatches = officialLeagueMatches ?? allSeasonMatches ?? [];
+    if (!sourceMatches.length || !rank) return null;
+    const myMatches = sourceMatches
       .filter(m => (Number(m.homeRank) === rank || Number(m.awayRank) === rank) && !m.isFinished)
       .sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime());
     const nowMs = now.getTime();
@@ -85,10 +119,10 @@ export default function Home() {
     const oppRank = isHome ? Number(myNext.awayRank) : Number(myNext.homeRank);
     return {
       match: myNext,
-      opponentName: nameMap.names[oppRank] || getBotName(leagueLevel, groupId, oppRank),
+      opponentName: (isHome ? myNext.awayName : myNext.homeName) || nameMap.names[oppRank] || getBotName(leagueLevel, groupId, oppRank),
       opponentLogo: nameMap.logos[oppRank] || null
     };
-  }, [allSeasonMatches, rank, nameMap, leagueLevel, groupId]);
+  }, [officialLeagueMatches, allSeasonMatches, rank, nameMap, leagueLevel, groupId]);
 
   const toMillis = (value: any): number => {
     if (value == null) return Number.NaN;
