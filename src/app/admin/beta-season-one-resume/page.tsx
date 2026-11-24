@@ -31,7 +31,6 @@ export default function BetaSeasonOneResumePage() {
   const [worldLoading, setWorldLoading] = useState(true);
   const [adminClaim, setAdminClaim] = useState<boolean | null>(null);
   const [claimLoading, setClaimLoading] = useState(false);
-  const [confirmed, setConfirmed] = useState(false);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState('');
   const [result, setResult] = useState<BootstrapResult | null>(null);
@@ -78,7 +77,7 @@ export default function BetaSeasonOneResumePage() {
   }, [refreshAdminClaim]);
 
   const startBootstrap = async () => {
-    if (!user || !confirmed || running || adminClaim !== true) return;
+    if (!user || running || adminClaim !== true) return;
     setRunning(true);
     setError('');
     setResult(null);
@@ -99,7 +98,6 @@ export default function BetaSeasonOneResumePage() {
       if (!response.ok || data.success !== true) {
         setError(String(data.error || `Запуск остановлен (HTTP ${response.status})`));
       }
-      setConfirmed(false);
       await refreshWorld();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Не удалось выполнить защищённый запуск');
@@ -175,17 +173,15 @@ export default function BetaSeasonOneResumePage() {
           <li>Кубок Пирамиды: 120 участников, 119 матчей, без BYE; D1 пропускает первый раунд</li>
           <li>Финал Кубка — BO3, остальные раунды — BO1</li>
         </ul>
-        <label className="mt-5 flex cursor-pointer items-start gap-3 text-sm text-slate-200">
-          <input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)}
-            disabled={adminClaim !== true || running} className="mt-1 h-4 w-4 accent-cyan-400" />
-          <span>Подтверждаю создание нового мира Season 1 в Beta Firestore. Это создаст игровые данные.</span>
-        </label>
+        <p className="mt-5 rounded-lg border border-slate-700 bg-slate-950/60 p-3 text-sm text-slate-300">
+          Нажатие кнопки ниже является подтверждением создания нового мира Season 1 в Beta Firestore.
+        </p>
         <button type="button" onClick={() => void startBootstrap()}
-          disabled={!user || adminClaim !== true || !confirmed || running || worldLoading || ready}
+          disabled={!user || adminClaim !== true || running || worldLoading || ready}
           className="mt-5 w-full rounded-xl bg-cyan-500 px-4 py-3 font-semibold text-slate-950 hover:bg-cyan-400 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400">
           {running ? 'Создаю Season 1 и Кубок…' : ready ? 'Мир уже создан — повторный запуск заблокирован' : 'Создать Season 1 в Beta'}
         </button>
-        <p className="mt-3 text-xs text-slate-400">Запрос отправляется только после отдельного подтверждения кнопкой. Секреты CRON и service account остаются на сервере.</p>
+        <p className="mt-3 text-xs text-slate-400">Нажатие кнопки отправляет защищённый запрос. Серверные проверки прав и проекта остаются обязательными. Секреты CRON и service account остаются на сервере.</p>
       </section>
 
       {error && <p role="alert" className="mt-5 rounded-lg border border-red-800 bg-red-950/50 p-3 text-sm text-red-200">{error}</p>}
