@@ -122,3 +122,36 @@ export async function markMatchViewedAction(idToken: string, matchId: string) {
     return { success: false, error: error?.message || 'MATCH_VIEW_MARK_FAILED' };
   }
 }
+
+
+/** Authenticated, profile-scoped queue for completed league match reports. */
+export async function getMyLeagueMatchReportsAction(idToken: string) {
+  const { uid } = await requireServerActor(idToken);
+  const db = getAdminDb();
+  const [profileSnap, configSnap] = await Promise.all([
+    db.collection('players_v14').doc(uid).get(),
+    db.collection('system_v1').doc('season_config').get(),
+  ]);
+  if (!profileSnap.exists) return { success: false, error: 'PLAYER_NOT_FOUND', matches: [] };
+  const profile = profileSnap.data() || {};
+  const leagueId = String(profile.selectedLeagueId || 'ALPHA');
+  const level = Number(profile.leagueLevel);
+  const groupId = String(profile.groupId || '');
+  const rank = Number(profile.rank);
+  const season = Math.max(1, Number(configSnap.data()?.activeSeasonNumber || 1));
+  if (!Number.isInteger(level) || level < 1 || level > 4 || !groupId || !Number.isInteger(rank) || rank < 1 || rank > 8) {
+    return { success: false, error: 'INVALID_MANAGER_LEAGUE_PROFILE', matches: [] };
+  }
+  const snapshot = await db.collection(MATCH_COLLECTIONS.league).where('season', '==', season).get();
+  const matches = snapshot.docs.flatMap((doc: any) => {
+    const raw = doc.data() || {};
+    const inGroup = String(raw.leagueId || '') === leagueId && Number(raw.level) === level && String(raw.groupId || '') === groupId;
+    const participant = String(raw.homeId || raw.homeUid || '') === uid ||
+      String(raw.awayId || raw.awayUid || '') === uid ||
+      (inGroup && [Number(raw.homeRank), Number(raw.awayRank)].includes(rank));
+    const finished = raw.isFinished === true || ['finished', 'completed', 'resolved'].includes(String(raw.status || '').toLowerCase());
+    if (!inGroup || !participant || !finished) return [];
+    return [serializeMatchReport({ ...raw, id: doc.id, type: 'league' })];
+  }).sort((left: any, right: any) => new Date(right.playedAt || right.resolvedAt || right.startTime || 0).getTime() - new Date(left.playedAt || left.resolvedAt || left.startTime || 0).getTime());
+  return { success: true, season, leagueId, level, groupId, rank, count: matches.length, matches };
+}
