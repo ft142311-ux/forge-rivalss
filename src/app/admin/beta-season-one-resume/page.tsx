@@ -147,13 +147,14 @@ export default function BetaSeasonOneResumePage() {
         {isUserLoading || claimLoading ? <p className="mt-3 text-sm text-slate-300">Проверяю Firebase-сессию и права…</p> : (
           <div className="mt-3 space-y-2 text-sm">
             <p>Аккаунт: <span className="font-medium">{user ? 'Firebase авторизован' : 'Не авторизован'}</span></p>
+            {user && <p className="break-all">Firebase UID: <code className="select-all text-cyan-200">{user.uid}</code></p>}
             <p>Администратор Beta: <span className="font-medium">{adminClaim === true ? 'Подтверждён' : adminClaim === false ? 'Нет admin-права' : 'Не удалось проверить'}</span></p>
           </div>
         )}
         {!areServicesAvailable && <p className="mt-3 text-sm text-amber-200">Firebase Client SDK недоступен.</p>}
         {adminClaim === false && user && (
           <p className="mt-3 rounded-lg bg-amber-950/50 p-3 text-sm text-amber-200">
-            У текущего аккаунта нет custom claim admin=true. Сервер также проверяет это право; обхода проверки нет.
+            У текущего аккаунта пока нет custom claim admin=true. Для безопасного назначения права нужен UID именно этого аккаунта; он показан выше. Серверная проверка останется включённой.
           </p>
         )}
         {!user && !isUserLoading && (
