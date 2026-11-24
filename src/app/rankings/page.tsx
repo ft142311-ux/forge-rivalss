@@ -380,13 +380,6 @@ export default function RankingsPage() {
                {tableError && (
                  <p className="text-[10px] text-muted-foreground break-words">{tableError}</p>
                )}
-               {tableDiagnostic && (
-                 <p className="text-[10px] text-amber-200/80 break-words">
-                   {tableDiagnostic.success
-                     ? `Диагностика: проект ${tableDiagnostic.projectId || 'не определён'}; таблица Admin SDK ${tableDiagnostic.tableExists ? 'найдена' : 'не найдена'}; чтение по правилам ${tableDiagnostic.rulesProbe?.allowed ? 'разрешено' : `отклонено (${tableDiagnostic.rulesProbe?.status || tableDiagnostic.rulesProbe?.code || 'нет ответа'})`}; маркеры выхода/неактивности ${tableDiagnostic.accessFence?.pendingRetirement || tableDiagnostic.accessFence?.retired ? 'обнаружены' : 'отсутствуют'}.`
-                     : `Диагностика недоступна: ${tableDiagnostic.code || 'UNKNOWN'}`}
-                 </p>
-               )}
                <Button variant="outline" className="border-amber-400/30" onClick={retryTableLoad}>
                  <RefreshCw className="w-4 h-4 mr-2" />{t.retry}
                </Button>
