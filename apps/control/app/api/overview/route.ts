@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { Timestamp } from 'firebase-admin/firestore';
 import { controlDb, requireControlAdmin } from '../../../lib/firebase-admin';
 
 export const runtime = 'nodejs';
@@ -14,9 +15,10 @@ export async function GET(request: NextRequest) {
   try {
     await requireControlAdmin(match[1]);
     const db = controlDb();
-    const [configSnap, playersCount, cupSnap] = await Promise.all([
+    const [configSnap, playersCount, onlineCount, cupSnap] = await Promise.all([
       db.collection('system_v1').doc('season_config').get(),
       db.collection('players_v14').count().get(),
+      db.collection('manager_presence_v1').where('lastSeen', '>=', Timestamp.fromDate(new Date(Date.now() - 2 * 60 * 1000))).count().get(),
       db.collection('cup_pyramid_v1').doc('cup_s1_lALPHA').get(),
     ]);
     const config = configSnap.exists ? configSnap.data() || {} : {};
@@ -26,6 +28,7 @@ export async function GET(request: NextRequest) {
       network: 'online',
       project: 'forge-rivals-beta',
       playersTotal: playersCount.data().count,
+      playersOnline: onlineCount.data().count,
       season: {
         number: Number(config.activeSeasonNumber || 0),
         phase: String(config.phase || 'UNKNOWN'),
