@@ -5,7 +5,7 @@ import { isCronAuthorized } from '@/app/api/cron/cron-auth';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-const EXPECTED_PROJECT = 'forge-rivalstest';
+const EXPECTED_PROJECT = 'forge-rivals-beta';
 const CUP_ID = 'cup_s1_lALPHA';
 const CUP_COLLECTION = 'cup_pyramid_v1';
 const SNAPSHOT_COLLECTION = 'cup_participant_snapshots_v1';
