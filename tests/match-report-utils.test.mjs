@@ -82,3 +82,13 @@ test('pyramid cup is not listed in tournament hub because it lives in rankings',
   const rankings = readFileSync(new URL('../src/app/rankings/page.tsx', import.meta.url), 'utf8');
   assert.match(rankings, /id: 'cup'.*Кубок Пирамиды/);
 });
+
+
+test('unread match count is shown on Match Review menu item, not the general notifications bell', () => {
+  const home = readFileSync(new URL('../src/app/page.tsx', import.meta.url), 'utf8');
+  const topBar = readFileSync(new URL('../src/components/game/TopBar.tsx', import.meta.url), 'utf8');
+  assert.match(home, /getMyLeagueMatchReportsAction/);
+  assert.match(home, /serverUnreadReportsCount/);
+  assert.doesNotMatch(topBar, /unreadReportsCount|serverUnreadReports|getMyLeagueMatchReportsAction/);
+  assert.match(topBar, /href="\/notifications"/);
+});
