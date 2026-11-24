@@ -92,3 +92,11 @@ test('unread match count is shown on Match Review menu item, not the general not
   assert.doesNotMatch(topBar, /unreadReportsCount|serverUnreadReports|getMyLeagueMatchReportsAction/);
   assert.match(topBar, /href="\/notifications"/);
 });
+
+
+test('new clubs do not inherit league reports from before profile creation', () => {
+  const action = readFileSync(new URL('../src/app/actions/match-report.ts', import.meta.url), 'utf8');
+  assert.match(action, /matchBelongsToClubLifetime\(raw, profile\.createdAt\)/);
+  assert.match(action, /const matchAt = timestampMillis\(match\.startTime \|\| match\.playedAt \|\| match\.resolvedAt\)/);
+  assert.match(action, /return matchAt > 0 && matchAt >= createdAt/);
+});
