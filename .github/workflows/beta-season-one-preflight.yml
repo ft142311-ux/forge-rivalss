@@ -1,9 +1,6 @@
 name: Beta Season 1 read-only preflight
 
 on:
-  push:
-    branches:
-      - feature/beta-fresh-season-one
   workflow_dispatch:
     inputs:
       deployment_url:
@@ -54,7 +51,7 @@ jobs:
             exit 0
           fi
           if [ -z "${VERCEL_TOKEN:-}" ]; then
-            echo "::error::Repository secret VERCEL_TOKEN is not configured."
+            echo "::error::Repository secret VERCEL_TOKEN is not configured; automatic deployment lookup is unavailable."
             exit 1
           fi
 
@@ -135,7 +132,7 @@ jobs:
           fi
           response_file="$(mktemp)"
           trap 'rm -f "$response_file"' EXIT
-          npx --yes vercel@latest curl "${BASE_URL}/api/admin/staging-season-one-reset" -- \
+          npx --yes vercel@latest curl "${BASE_URL}/api/admin/staging-cup-diagnostics" -- \
             --silent --show-error --max-time 120 --request GET \
             --output "$response_file" \
             --write-out '\n__HTTP_STATUS__:%{http_code}' >> "$response_file" \
@@ -153,8 +150,8 @@ jobs:
           catch { throw new Error(`Preflight returned non-JSON response (HTTP ${status}).`); }
           if (![200, 409].includes(status) ||
               result.readOnly !== true ||
-              result.project !== 'forge-rivalstest' ||
-              !result.plan || typeof result.plan.ready !== 'boolean') {
+              result.projectId !== 'forge-rivals-beta' ||
+              result.success !== true) {
             console.error(JSON.stringify(result, null, 2));
             process.exit(1);
           }
@@ -162,17 +159,11 @@ jobs:
             httpStatus: Number(status),
             success: result.success,
             readOnly: result.readOnly,
-            project: result.project,
-            ready: result.plan.ready,
-            reasons: result.plan.reasons,
-            target: result.plan.target,
-            preserve: result.plan.preserve,
-            replace: result.plan.replace,
-            expected: result.plan.expected
+            projectId: result.projectId,
+            cup: result.cup,
+            participantSnapshots: result.participantSnapshots,
+            dedicatedMatches: result.dedicatedMatches,
+            legacyMatches: result.legacyMatches
           }, null, 2));
-          if (!result.plan.ready) {
-            console.log('Preflight completed safely, but Beta reset remains BLOCKED.');
-          } else {
-            console.log('Read-only preflight is READY. No reset was executed.');
-          }
+          console.log('Read-only Beta Cup diagnostics completed. No writes were executed.');
           NODE
