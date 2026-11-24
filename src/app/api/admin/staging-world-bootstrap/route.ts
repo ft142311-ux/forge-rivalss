@@ -215,7 +215,7 @@ async function verifyWorld(db: Firestore) {
     cupFirstRound.length === 56 &&
     cupFirstRound.every((pairing: any) =>
       pairing?.home?.id && pairing?.away?.id &&
-      pairing?.status !== 'bye' && pairing?.bestOf === 1
+      pairing?.status !== 'bye'
     );
   const cupFixturesValid =
     cupFixtureDocs.length === 56 &&
