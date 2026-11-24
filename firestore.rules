@@ -94,7 +94,11 @@ service cloud.firestore {
     }
 
     match /system_v1/{docId} {
-      allow read: if signedIn();
+      // The reset journal contains operational state (lease, progress, errors)
+      // and is exposed only through the authenticated, sanitized diagnostics API.
+      // Keep the existing client-readable world documents explicit; new system
+      // documents are private by default instead of inheriting collection-wide access.
+      allow read: if signedIn() && docId in ['season_config', 'global_stats'];
       allow write: if false;
     }
 
