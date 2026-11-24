@@ -11,7 +11,7 @@ function respond(status: number, body: Record<string, unknown>) {
 
 /** Authenticated read-only projection of the manager's official group calendar. */
 export async function POST(request: NextRequest) {
-  const token = (request.headers.get('authorization') || '').match(/^Bearer ([^\\s]+)$/)?.[1];
+  const token = (request.headers.get('authorization') || '').match(/^Bearer (\\S+)$/)?.[1];
   if (!token) return respond(401, { success: false, error: 'AUTHENTICATION_REQUIRED' });
   try {
     const actor = await requireServerActor(token);
