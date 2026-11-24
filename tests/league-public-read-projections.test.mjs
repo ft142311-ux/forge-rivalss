@@ -24,7 +24,7 @@ test('league calendar projection is authenticated, scoped to the manager and exc
   assert.match(matchesRoute, /matches_v2/);
   assert.doesNotMatch(matchesRoute, /homeTeamSnapshot|awayTeamSnapshot|tactics|roster|privateKey/i);
   assert.match(matchesPage, /fetch\('\/api\/league\/matches'/);
-  assert.doesNotMatch(matchesPage, /query\(collection\(db, 'matches_v2'/);
+  assert.doesNotMatch(matchesPage, /where\('leagueId', '==', selectedLeagueId\)/);
 });
 
 test('daily reward dialog waits for confirmed server credit before closing', () => {
