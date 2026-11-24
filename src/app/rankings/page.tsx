@@ -152,7 +152,7 @@ export default function RankingsPage() {
   }, [isLoaded, user, tableId, tableLoadAttempt, activeTab]);
 
   const pyramidCupRef = useMemoFirebase(() => db ? doc(db, 'cup_pyramid_v1', `cup_s${tableSeasonNumber}_lALPHA`) : null, [db, tableSeasonNumber]);
-  const { data: pyramidCup, isLoading: isPyramidCupLoading } = useDoc(pyramidCupRef);
+  const { data: pyramidCup, isLoading: isPyramidCupLoading, error: pyramidCupError } = useDoc(pyramidCupRef);
 
   const retryTableLoad = () => {
     setTableLoadTimedOut(false);
@@ -477,7 +477,7 @@ export default function RankingsPage() {
       )}
 
       {activeTab === 'cup' && (
-        <PyramidCupInline data={pyramidCup} loading={isPyramidCupLoading} round={cupRound} setRound={setCupRound} ru={language === 'ru'} />
+        <PyramidCupInline data={pyramidCup} loading={isPyramidCupLoading} error={pyramidCupError} round={cupRound} setRound={setCupRound} ru={language === 'ru'} />
       )}
 
       {activeTab === 'all_pyramids' && !navLeague && (
@@ -522,16 +522,20 @@ export default function RankingsPage() {
 }
 
 
-function PyramidCupInline({ data, loading, round, setRound, ru }: { data: any; loading: boolean; round: number; setRound: (round: number) => void; ru: boolean }) {
+function PyramidCupInline({ data, loading, error, round, setRound, ru }: { data: any; loading: boolean; error?: any; round: number; setRound: (round: number) => void; ru: boolean }) {
   const expectedMatches: Record<number, number> = { 1: 56, 2: 32, 3: 16, 4: 8, 5: 4, 6: 2, 7: 1 };
-  const expectedSlots: Record<number, number> = { 1: 64, 2: 32, 3: 16, 4: 8, 5: 4, 6: 2, 7: 1 };
+  const expectedSlots: Record<number, number> = { 1: 56, 2: 32, 3: 16, 4: 8, 5: 4, 6: 2, 7: 1 };
   const rounds = (data?.rounds || {}) as Record<string, any[]>;
   const matches: any[] = Array.isArray(rounds[`r${round}`]) ? rounds[`r${round}`] : [];
   const labels: Record<number, string> = ru
     ? { 1: 'Предварительный раунд', 2: 'Раунд 1/64', 3: 'Раунд 1/32', 4: 'Раунд 1/16', 5: 'Четвертьфинал', 6: 'Полуфинал', 7: 'ФИНАЛ BO3' }
     : { 1: 'Preliminary round', 2: 'Round of 64', 3: 'Round of 32', 4: 'Round of 16', 5: 'Quarterfinal', 6: 'Semifinal', 7: 'BO3 FINAL' };
   if (loading) return <div className="py-16 text-center text-xs text-muted-foreground">{ru ? 'Загрузка сетки…' : 'Loading bracket…'}</div>;
-  if (!data) return <Card className="glass-card border-white/5"><CardContent className="p-6 text-center"><Trophy className="mx-auto mb-3 h-8 w-8 text-yellow-500" /><p className="text-xs font-bold uppercase">{ru ? 'Кубок ещё не создан' : 'Cup not generated yet'}</p><p className="mt-2 text-[10px] text-muted-foreground">{ru ? 'Сетка появится автоматически после запуска сезона.' : 'The bracket will appear automatically after the season starts.'}</p></CardContent></Card>;
+  if (error) {
+    const errorMessage = String(error?.message || error?.code || error || 'CUP_READ_FAILED');
+    return <Card className="glass-card border-amber-400/20"><CardContent className="p-6 text-center"><ShieldAlert className="mx-auto mb-3 h-8 w-8 text-amber-400" /><p className="text-xs font-bold uppercase">{ru ? 'Не удалось загрузить Кубок Пирамиды' : 'Could not load Pyramid Cup'}</p><p className="mt-2 break-words text-[10px] text-muted-foreground">{errorMessage}</p><p className="mt-2 text-[9px] text-muted-foreground">{ru ? 'Это ошибка чтения данных, а не подтверждение отсутствия турнира.' : 'This is a data read error, not confirmation that the tournament is missing.'}</p></CardContent></Card>;
+  }
+  if (!data) return <Card className="glass-card border-white/5"><CardContent className="p-6 text-center"><Trophy className="mx-auto mb-3 h-8 w-8 text-yellow-500" /><p className="text-xs font-bold uppercase">{ru ? 'Кубок ещё не создан' : 'Cup not generated yet'}</p><p className="mt-2 text-[10px] text-muted-foreground">{ru ? 'Документ турнира отсутствует для активного сезона.' : 'The tournament document is missing for the active season.'}</p></CardContent></Card>;
   return <div className="space-y-3">
     <div className="grid grid-cols-7 gap-1">{Array.from({ length: 7 }, (_, i) => i + 1).map(r => <Button key={r} size="sm" variant={round === r ? 'default' : 'outline'} className={cn('h-9 min-w-0 px-0 text-[10px] font-black', round === r ? 'hero-gradient border-none' : 'border-white/5 bg-secondary/20')} onClick={() => setRound(r)}>{r}</Button>)}</div>
     <div className="flex items-center justify-between px-1"><div><p className="text-[11px] font-black uppercase tracking-widest">{labels[round]}</p><p className="text-[8px] text-muted-foreground">{round === 1 ? (ru ? '56 матчей · 8 команд проходят дальше' : '56 matches · 8 teams advance') : (ru ? `${expectedMatches[round]} матчей` : `${expectedMatches[round]} matches`)}</p></div><span className="rounded-md border border-white/10 bg-secondary/30 px-2 py-1 text-[7px] font-black uppercase text-muted-foreground">{data.status === 'completed' ? (ru ? 'ЗАВЕРШЁН' : 'COMPLETED') : (ru ? 'АКТИВЕН' : 'ACTIVE')}</span></div>
