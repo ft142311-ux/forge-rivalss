@@ -8,7 +8,7 @@
 import { useGameState } from '@/app/lib/store';
 import { useUser, useFirestore, useCollection, useMemoFirebase, useDoc } from '@/firebase';
 import { useRouter } from 'next/navigation';
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { LoadingScreen } from '@/components/game/LoadingScreen';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -17,6 +17,7 @@ import { ChevronLeft, Tv, ChevronRight, FileText, Shield } from 'lucide-react';
 import Link from 'next/link';
 import { cn } from '@/lib/utils';
 import { collection, query, where, doc } from 'firebase/firestore';
+import { getMyLeagueMatchReportsAction } from '@/app/actions/match-report';
 
 export default function ReportsPage() {
   const { user, isUserLoading } = useUser();
@@ -39,6 +40,26 @@ export default function ReportsPage() {
 
   const userProfileRef = useMemoFirebase(() => user?.uid && db ? doc(db, 'players_v14', user.uid) : null, [db, user?.uid]);
   const { data: profile } = useDoc(userProfileRef);
+
+  const [officialLeagueReports, setOfficialLeagueReports] = useState<any[]>([]);
+  useEffect(() => {
+    if (!user || !isLoaded || !selectedLeagueId || !rank) {
+      setOfficialLeagueReports([]);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const result = await getMyLeagueMatchReportsAction(await user.getIdToken());
+        if (!cancelled) setOfficialLeagueReports(result.success && Array.isArray(result.matches) ? result.matches : []);
+      } catch (error) {
+        console.error('[REPORTS] authenticated league report lookup failed', error);
+        if (!cancelled) setOfficialLeagueReports([]);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [user, isLoaded, selectedLeagueId, rank, leagueLevel, groupId]);
+
 
   // Очередь обзора агрегирует отдельные коллекции игровых режимов.
   // Каждый режим остаётся в собственном хранилище, без копирования в matches_v2.
@@ -101,7 +122,7 @@ export default function ReportsPage() {
       .filter((m: any) => m?.isFinished !== false && m?.seen !== true && m?.reportStatus !== 'viewed' && !isLocallyViewed(m))
       .map((m: any) => ({ ...m, source: 'history', isUnread: true }));
 
-    const personal = [...(personalHomeMatches || []), ...(personalAwayMatches || []), ...(cupHomeMatches || []), ...(cupAwayMatches || []), ...(tournamentHomeMatches || []), ...(tournamentAwayMatches || []), ...(trainingHomeMatches || []), ...(trainingAwayMatches || [])];
+    const personal = [...officialLeagueReports, ...(personalHomeMatches || []), ...(personalAwayMatches || []), ...(cupHomeMatches || []), ...(cupAwayMatches || []), ...(tournamentHomeMatches || []), ...(tournamentAwayMatches || []), ...(trainingHomeMatches || []), ...(trainingAwayMatches || [])];
 
     const league = personal
       .filter((m: any) => m?.type === 'league' && m?.isFinished === true)
@@ -139,7 +160,7 @@ export default function ReportsPage() {
       const tb = new Date(b.playedAt || b.resolvedAt || b.startTime || 0).getTime();
       return tb - ta;
     });
-  }, [user, rank, profile, matchHistory, allSeasonMatches, nameMap, leagueLevel, groupId, personalHomeMatches, personalAwayMatches, cupHomeMatches, cupAwayMatches, tournamentHomeMatches, tournamentAwayMatches, trainingHomeMatches, trainingAwayMatches, associationHostMatches, associationChallengerMatches, friendlyHostReports, friendlyAwayReports]);
+  }, [user, rank, profile, matchHistory, allSeasonMatches, nameMap, leagueLevel, groupId, officialLeagueReports, personalHomeMatches, personalAwayMatches, cupHomeMatches, cupAwayMatches, tournamentHomeMatches, tournamentAwayMatches, trainingHomeMatches, trainingAwayMatches, associationHostMatches, associationChallengerMatches, friendlyHostReports, friendlyAwayReports]);
 
   // «Обзор матча» — это вход непосредственно в просмотр.
   // Промежуточная карточка со сведениями о матче больше не показывается.
