@@ -45,3 +45,19 @@ test('getCompletedSeriesScore sums only completed maps and safely handles missin
   assert.deepEqual(getCompletedSeriesScore(games, 3), { home: 2, away: 1 });
   assert.deepEqual(getCompletedSeriesScore(null, 2), { home: 0, away: 0 });
 });
+
+
+test('reports page loads finished league reports through authenticated profile-scoped action', () => {
+  const page = readFileSync(new URL('../src/app/reports/page.tsx', import.meta.url), 'utf8');
+  assert.match(page, /getMyLeagueMatchReportsAction\(await user\.getIdToken\(\)\)/);
+  assert.match(page, /const personal = \[\.\.\.officialLeagueReports/);
+  assert.match(page, /officialLeagueReports, personalHomeMatches/);
+});
+
+test('server report lookup restricts rank-based matches to the authenticated profile league group', () => {
+  const action = readFileSync(new URL('../src/app/actions/match-report.ts', import.meta.url), 'utf8');
+  assert.match(action, /getMyLeagueMatchReportsAction/);
+  assert.match(action, /Number\(raw\.level\) === level && String\(raw\.groupId \|\| ''\) === groupId/);
+  assert.match(action, /\[Number\(raw\.homeRank\), Number\(raw\.awayRank\)\]\.includes\(rank\)/);
+  assert.match(action, /raw\.isFinished === true/);
+});
