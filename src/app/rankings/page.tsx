@@ -44,7 +44,7 @@ export default function RankingsPage() {
   const [busyVote, setBusyVote] = useState<string | null>(null);
   const [tableLoadAttempt, setTableLoadAttempt] = useState(0);
   const [tableLoadTimedOut, setTableLoadTimedOut] = useState(false);
-  const [tableDiagnostic, setTableDiagnostic] = useState<Record<string, any> | null>(null);
+  const [tableError, setTableError] = useState<string | null>(null);
   const [selectedArchiveSeason, setSelectedArchiveSeason] = useState<number | null>(null);
   const [archiveGroup, setArchiveGroup] = useState('D1-G1');
 
@@ -85,55 +85,69 @@ export default function RankingsPage() {
   const contextGroup = Number(navGroup || profile?.groupId || 1);
 
   const tableId = `table_v140_S${tableSeasonNumber}_L${contextLeagueId}_V${contextLevel}_G${contextGroup}`;
-  const tableRef = useMemoFirebase(() => {
-    if (!db || !isLoaded) return null;
-    return doc(db, 'league_tables_v2', tableId);
-  }, [db, tableId, isLoaded, tableLoadAttempt]);
+  const [tableData, setTableData] = useState<any>(null);
+  const [isTableLoading, setIsTableLoading] = useState(false);
 
-  const { data: tableData, isLoading: isTableLoading, error: tableError } = useDoc(tableRef);
-
-  // When Firestore denies the standings read, ask the server to inspect only
-  // this authenticated account's retirement markers and canonical table.
+  // Standings are served through a token-authenticated, read-only Admin SDK
+  // projection. The browser never receives access to private player records.
   useEffect(() => {
-    if (!tableError || !user) {
-      setTableDiagnostic(null);
+    if (!isLoaded || !user) {
+      setTableData(null);
+      setTableError(null);
+      setIsTableLoading(false);
       return;
     }
-
     let cancelled = false;
+    const controller = new AbortController();
+    setIsTableLoading(true);
+    setTableError(null);
+    setTableLoadTimedOut(false);
+    const timeoutId = window.setTimeout(() => {
+      controller.abort();
+      if (!cancelled) {
+        setTableLoadTimedOut(true);
+        setIsTableLoading(false);
+        setTableError('REQUEST_TIMEOUT');
+      }
+    }, 12000);
+
     (async () => {
       try {
         const token = await user.getIdToken();
-        const response = await fetch('/api/diagnostics/league-table', {
+        const response = await fetch('/api/league/table', {
           method: 'POST',
-          headers: { Authorization: `Bearer ${token}` },
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ leagueId: contextLeagueId, level: contextLevel, group: contextGroup }),
           cache: 'no-store',
+          signal: controller.signal,
         });
         const result = await response.json();
-        if (!cancelled) setTableDiagnostic(result);
-      } catch {
-        if (!cancelled) setTableDiagnostic({ success: false, code: 'DIAGNOSTIC_UNAVAILABLE' });
+        if (!response.ok || result?.success !== true) throw new Error(result?.error || 'LEAGUE_TABLE_UNAVAILABLE');
+        if (!cancelled) {
+          setTableData(result.exists ? { stats: result.stats } : null);
+          setTableError(null);
+          setTableLoadTimedOut(false);
+        }
+      } catch (error: any) {
+        if (!cancelled && error?.name !== 'AbortError') {
+          setTableData(null);
+          setTableError(String(error?.message || 'LEAGUE_TABLE_UNAVAILABLE'));
+        }
+      } finally {
+        window.clearTimeout(timeoutId);
+        if (!cancelled) setIsTableLoading(false);
       }
     })();
 
-    return () => { cancelled = true; };
-  }, [tableError, user, tableId]);
+    return () => {
+      cancelled = true;
+      controller.abort();
+      window.clearTimeout(timeoutId);
+    };
+  }, [isLoaded, user, tableId, tableLoadAttempt]);
 
   const pyramidCupRef = useMemoFirebase(() => db ? doc(db, 'cup_pyramid_v1', `cup_s${tableSeasonNumber}_lALPHA`) : null, [db, tableSeasonNumber]);
   const { data: pyramidCup, isLoading: isPyramidCupLoading } = useDoc(pyramidCupRef);
-
-  // Never leave the group screen on an endless spinner if Firestore cannot
-  // complete the initial snapshot (offline emulator, network, or permissions).
-  useEffect(() => {
-    setTableLoadTimedOut(false);
-    if (!tableRef || !isTableLoading) return;
-
-    const timeoutId = window.setTimeout(() => {
-      setTableLoadTimedOut(true);
-    }, 12000);
-
-    return () => window.clearTimeout(timeoutId);
-  }, [tableRef, isTableLoading, tableLoadAttempt]);
 
   const retryTableLoad = () => {
     setTableLoadTimedOut(false);
@@ -364,7 +378,7 @@ export default function RankingsPage() {
                <ShieldAlert className="w-10 h-10 text-amber-400" />
                <p className="text-xs font-bold text-white">{t.loadFailed}</p>
                {tableError && (
-                 <p className="text-[10px] text-muted-foreground break-words">{tableError.message}</p>
+                 <p className="text-[10px] text-muted-foreground break-words">{tableError}</p>
                )}
                {tableDiagnostic && (
                  <p className="text-[10px] text-amber-200/80 break-words">
