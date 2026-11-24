@@ -42,7 +42,7 @@ test('accepts Date, ISO string, and Firestore Timestamp-like values', () => {
 test('public presence refresh returns derived booleans only and bounds requested IDs', async () => {
   const action = readFileSync(new URL('../src/app/actions/manager-presence.ts', import.meta.url), 'utf8');
   assert.match(action, /getPublicManagerPresenceAction/);
-  assert.match(action, /requireServerActor\(idToken\)/);
+  assert.match(action, /getAuth\(\)\.verifyIdToken\(idToken, true\)/);
   assert.match(action, /managerIds\.length > 100/);
   assert.match(action, /isOnline:\s*isManagerOnline\(/);
   assert.doesNotMatch(action, /lastSeen:\s*snapshot\.data/);
