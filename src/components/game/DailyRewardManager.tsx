@@ -15,6 +15,7 @@ import { usePathname } from 'next/navigation';
 export function DailyRewardManager() {
   const { isLoaded, language, lastRewardClaimDate, rewardDay, claimReward, selectedLeagueId, isPremium, premiumUntil } = useGameState();
   const [showReward, setShowReward] = useState(false);
+  const [isClaiming, setIsClaiming] = useState(false);
   const pathname = usePathname();
   const isPremiumActive = isPremium && Boolean(premiumUntil) && new Date(premiumUntil!).getTime() > Date.now();
 
@@ -39,9 +40,15 @@ export function DailyRewardManager() {
   const nextRewardDay = getNextDailyRewardDay(rewardDay, Boolean(lastRewardClaimDate));
   const currentDayReward = getDailyRewardForDay(nextRewardDay);
 
-  const handleClaim = () => {
-    claimReward();
-    setShowReward(false);
+  const handleClaim = async () => {
+    if (isClaiming) return;
+    setIsClaiming(true);
+    try {
+      const claimed = await claimReward();
+      if (claimed) setShowReward(false);
+    } finally {
+      setIsClaiming(false);
+    }
   };
 
   const t = {
@@ -150,8 +157,9 @@ export function DailyRewardManager() {
           <Button 
             className="w-full h-12 hero-gradient font-black uppercase text-[10px] tracking-[0.2em] shadow-lg active:scale-95 transition-all" 
             onClick={handleClaim}
+            disabled={isClaiming}
           >
-            {t.claim}
+            {isClaiming ? (language === 'ru' ? 'ЗАЧИСЛЕНИЕ...' : 'CREDITING...') : t.claim}
           </Button>
         </div>
       </DialogContent>
