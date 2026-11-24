@@ -17,3 +17,9 @@ test('My League diagnostics verify that the authenticated UID owns a standings r
   assert.match(route, /stats\[actor\.uid\]/);
   assert.match(route, /standingsEntryPresent: Boolean\(viewerEntry\)/);
 });
+
+
+test('rankings menu does not render a stale league group after leaving My League', () => {
+  assert.match(page, /\(activeTab === 'my_league' \|\| \(\(activeTab === 'my_pyramid' \|\| activeTab === 'all_pyramids'\) && navGroup !== null\)\)/);
+  assert.match(page, /if \(activeTab === 'my_league' \|\| activeTab === 'cup'\) \{\s*setActiveTab\('menu'\);\s*setNavLeague\(null\); setNavLevel\(null\); setNavGroup\(null\);/);
+});
