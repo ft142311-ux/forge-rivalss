@@ -1,12 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { requireServerActor } from '@/lib/server-auth';
+import { Timestamp } from 'firebase-admin/firestore';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 const EXPECTED_PROJECT = 'forge-rivals-beta';
-const ONLINE_WINDOW_MS = 5 * 60 * 1000;
+const ONLINE_WINDOW_MS = 2 * 60 * 1000;
 
 function respond(status: number, body: Record<string, unknown>) {
   return NextResponse.json(body, {
@@ -32,11 +33,12 @@ export async function GET(request: NextRequest) {
     }
 
     const db = getAdminDb();
-    const cutoff = new Date(Date.now() - ONLINE_WINDOW_MS).toISOString();
+    const cutoff = Timestamp.fromDate(new Date(Date.now() - ONLINE_WINDOW_MS));
     const players = db.collection('players_v14');
+    const presence = db.collection('manager_presence_v1');
     const [totalSnapshot, onlineSnapshot] = await Promise.all([
       players.count().get(),
-      players.where('lastLoginDate', '>=', cutoff).count().get(),
+      presence.where('lastSeen', '>=', cutoff).count().get(),
     ]);
 
     return respond(200, {
