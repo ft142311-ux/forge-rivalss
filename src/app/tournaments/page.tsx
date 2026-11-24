@@ -60,7 +60,6 @@ export default function TournamentsPage() {
         { id: 'schedule', label: myLobby?.status === 'accepted' ? 'Friendly Match Assigned' : myLobby ? 'Cancel Match' : 'Schedule Friendly', desc: myLobby?.status === 'accepted' ? 'Match assigned — cancellation unavailable' : myLobby ? 'Abort active request' : 'Wait for an opponent', icon: myLobby?.status === 'accepted' ? Lock : myLobby ? XCircle : UserPlus, color: myLobby?.status === 'accepted' ? 'text-primary' : myLobby ? 'text-red-400' : 'text-accent' },
         { id: 'open', label: 'Open Friendlies', desc: 'Browse available challenges', icon: Search, href: '/tournaments/open-friendlies', color: 'text-primary' },
         { id: 'cw', label: 'CW Basket', desc: 'Instant random pairing', icon: ShoppingBasket, href: '/tournaments/cw-basket', color: 'text-green-400' },
-        { id: 'pyramid', label: 'Pyramid Cup', desc: 'All 120 league teams · Knockout', icon: Trophy, href: '/tournaments/cup', color: 'text-yellow-500' },
         { id: 'list', label: 'Open Tournaments', desc: 'Active competition schedule', icon: Globe, href: '/tournaments/open', color: 'text-blue-400' },
         { id: 'trial', label: 'Trial Match', desc: 'Instant combat test vs Bot', icon: Zap, color: 'text-yellow-500' },
         { id: 'history', label: 'Tournament History', desc: 'Official record of achievements', icon: History, href: '/tournaments/history', color: 'text-slate-400' }
@@ -74,7 +73,6 @@ export default function TournamentsPage() {
         { id: 'schedule', label: myLobby?.status === 'accepted' ? 'Тов. матч назначен' : myLobby ? 'Отменить тов. матч' : 'Назначить тов. матч', desc: myLobby?.status === 'accepted' ? 'Тов. матч уже назначен' : myLobby ? 'Прервать активный поиск' : 'Ожидать вызова соперника', icon: myLobby?.status === 'accepted' ? Lock : myLobby ? XCircle : UserPlus, color: myLobby?.status === 'accepted' ? 'text-primary' : myLobby ? 'text-red-400' : 'text-accent' },
         { id: 'open', label: 'Открытые тов. матчи', desc: 'Список доступных вызовов', icon: Search, href: '/tournaments/open-friendlies', color: 'text-primary' },
         { id: 'cw', label: 'КВ (Корзина)', desc: 'Мгновенный случайный подбор', icon: ShoppingBasket, href: '/tournaments/cw-basket', color: 'text-green-400' },
-        { id: 'pyramid', label: 'Кубок Пирамиды', desc: 'Все 120 команд лиги · на выбывание', icon: Trophy, href: '/tournaments/cup', color: 'text-yellow-500' },
         { id: 'list', label: 'Открытые турниры', desc: 'Список активных чемпионатов', icon: Globe, href: '/tournaments/open', color: 'text-blue-400' },
         { id: 'trial', label: 'Пробный матч', desc: 'Мгновенный тест состава против Бота', icon: Zap, color: 'text-yellow-500' },
         { id: 'history', label: 'История турниров', desc: 'Архив официальных достижений', icon: History, href: '/tournaments/history', color: 'text-slate-400' }
