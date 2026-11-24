@@ -229,7 +229,11 @@ export default function RankingsPage() {
     if (activeTab === 'season_archive_detail') { setActiveTab('season_archive'); return; }
     if (activeTab === 'season_archive') { setActiveTab('menu'); return; }
     if (activeTab === 'season_top') { setActiveTab('menu'); return; }
-    if (activeTab === 'my_league' || activeTab === 'cup') { setActiveTab('menu'); return; }
+    if (activeTab === 'my_league' || activeTab === 'cup') {
+      setActiveTab('menu');
+      setNavLeague(null); setNavLevel(null); setNavGroup(null);
+      return;
+    }
     if (activeTab === 'my_pyramid' || activeTab === 'all_pyramids') {
       if (navGroup) { setNavGroup(null); return; }
       if (navLevel) { setNavLevel(null); return; }
@@ -356,7 +360,7 @@ export default function RankingsPage() {
         <Card className="glass-card border-white/5"><CardContent className="p-5 text-center text-xs text-muted-foreground">{language === 'ru' ? 'Архив недоступен. Вернитесь к списку сезонов.' : 'Archive unavailable. Return to the season list.'}</CardContent></Card>
       )}
 
-      {(activeTab === 'my_league' || navGroup) && (
+      {(activeTab === 'my_league' || ((activeTab === 'my_pyramid' || activeTab === 'all_pyramids') && navGroup !== null)) && (
         <div className="space-y-4 animate-in fade-in duration-500">
           <>
            <div className="flex items-center justify-end px-1">
