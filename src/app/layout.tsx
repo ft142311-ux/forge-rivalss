@@ -23,9 +23,10 @@ function GameInterface({ children }: { children: React.ReactNode }) {
 
   const isAuthOrSetup = pathname?.startsWith('/auth') || pathname === '/setup';
   const isBetaSeasonOneResumePage = pathname === '/admin/beta-season-one-resume';
+  const isMatchSettlementDiagnosticsPage = pathname === '/admin/match-settlement-diagnostics';
 
   // Keep operational recovery independent from game-store/world hydration.
-  if (isBetaSeasonOneResumePage) {
+  if (isBetaSeasonOneResumePage || isMatchSettlementDiagnosticsPage) {
     return <main className="min-h-screen">{children}</main>;
   }
 
