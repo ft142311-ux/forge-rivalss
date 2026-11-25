@@ -4,7 +4,7 @@ import { FormEvent, useCallback, useEffect, useState, type CSSProperties } from 
 import { onAuthStateChanged, signInWithEmailAndPassword, signOut, User } from 'firebase/auth';
 import { getControlAuth } from '../lib/firebase-client';
 
-type Overview = {
+type CupControl = { success?: boolean; exists?: boolean; error?: string; season?: number; cupId?: string; name?: string; status?: string; currentRound?: number; totalRounds?: number; participants?: number; totalMatches?: number; actualPairings?: number; finishedMatches?: number; scheduledMatches?: number; fixtureDocuments?: number; dedicatedFixtureDocuments?: number; legacyFixtureDocuments?: number; winner?: { id: string; name: string } | null; healthy?: boolean; issues?: string[]; rounds?: Array<{ round: number; expectedMatches: number; pairingCount: number; finished: number; scheduled: number; missingFixtures: number; resultMismatches: number; matches: Array<{ id: string; index: number; matchId: string | null; status: string; home: { id: string; name: string } | null; away: { id: string; name: string } | null; scoreA: number | null; scoreB: number | null; winnerId: string | null; technicalDecision: boolean; fixtureStatus: string; startAt: string | null; storage: string | null; reportStatus: string | null }> }> };\n\ntype Overview = {
   success?: boolean; network?: string; error?: string; playersTotal?: number; registeredHumans?: number; playersOnline?: number;
   season?: { number: number; phase: string; worldReady: boolean };
   pyramidCup?: { exists: boolean; status: string; currentRound: number; totalMatches: number };
@@ -21,7 +21,7 @@ export default function ControlHome() {
   const [password, setPassword] = useState('');
   const [setupSecret, setSetupSecret] = useState('');
   const [bootstrapEnabled, setBootstrapEnabled] = useState(false);
-  const [overview, setOverview] = useState<Overview | null>(null);
+  const [overview, setOverview] = useState<Overview | null>(null);\n  const [cup, setCup] = useState<CupControl | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -118,6 +118,37 @@ export default function ControlHome() {
         <article style={panel}><div style={muted}>Сезон</div><h2>№ {overview.season?.number ?? '—'}</h2><div style={muted}>{overview.season?.phase || '—'} · {overview.season?.worldReady ? 'Мир готов' : 'Мир не готов'}</div></article>
         <article style={panel}><div style={muted}>Кубок Пирамиды</div><h2>{overview.pyramidCup?.exists ? overview.pyramidCup.status : 'Не создан'}</h2><div style={muted}>Раунд {overview.pyramidCup?.currentRound ?? 0} · матчей {overview.pyramidCup?.totalMatches ?? 0}</div></article>
       </div>}
+      {cup && <section style={{ marginTop: 24 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 14 }}>
+          <div><h2 style={{ margin: 0 }}>Кубок Пирамиды · контроль матчей</h2><p style={muted}>Сезон {cup.season ?? '—'} · {cup.cupId || 'Кубок не создан'}</p></div>
+          <strong style={{ color: cup.healthy ? '#34d399' : '#fca5a5' }}>{cup.exists ? (cup.healthy ? 'Проверка пройдена' : 'Обнаружены проблемы') : 'Не создан'}</strong>
+        </div>
+        {cup.exists ? <>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))', gap: 12, marginBottom: 16 }}>
+            <article style={panel}><div style={muted}>Участники</div><h2>{cup.participants ?? '—'}</h2></article>
+            <article style={panel}><div style={muted}>Матчи по сетке</div><h2>{cup.actualPairings ?? '—'} / {cup.totalMatches ?? '—'}</h2></article>
+            <article style={panel}><div style={muted}>Завершены</div><h2>{cup.finishedMatches ?? '—'}</h2></article>
+            <article style={panel}><div style={muted}>Ожидают</div><h2>{cup.scheduledMatches ?? '—'}</h2></article>
+            <article style={panel}><div style={muted}>Документы матчей</div><h2>{cup.fixtureDocuments ?? '—'}</h2></article>
+            <article style={panel}><div style={muted}>Текущий раунд</div><h2>{cup.currentRound ?? '—'} / {cup.totalRounds ?? 7}</h2></article>
+          </div>
+          {cup.winner && <p style={panel}>Победитель: <strong>{cup.winner.name}</strong></p>}
+          {(cup.issues || []).length > 0 && <div style={{ ...panel, borderColor: '#7f1d1d', marginBottom: 16 }}><strong style={{ color: '#fca5a5' }}>Проблемы целостности</strong><ul>{cup.issues?.slice(0, 30).map((issue, index) => <li key={index}>{issue}</li>)}</ul></div>}
+          <div style={{ display: 'grid', gap: 12 }}>
+            {(cup.rounds || []).map(round => <details key={round.round} style={panel} open={round.round === cup.currentRound}>
+              <summary style={{ cursor: 'pointer', fontWeight: 700 }}>Раунд {round.round}: {round.finished} завершено / {round.expectedMatches} · {round.scheduled} ожидают · {round.missingFixtures} без документа</summary>
+              <div style={{ display: 'grid', gap: 8, marginTop: 12 }}>
+                {round.matches.map(match => <div key={match.id} style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) auto minmax(0,1fr)', gap: 8, alignItems: 'center', padding: 9, borderTop: '1px solid #263449' }}>
+                  <div><strong>{match.home?.name || '—'}</strong><div style={muted}>{match.home?.id || ''}</div></div>
+                  <div style={{ textAlign: 'center', minWidth: 76 }}><strong>{match.scoreA ?? '—'} : {match.scoreB ?? '—'}</strong><div style={muted}>{match.status === 'finished' ? 'Завершён' : 'Ожидает'}</div></div>
+                  <div style={{ textAlign: 'right' }}><strong>{match.away?.name || '—'}</strong><div style={muted}>{match.away?.id || ''}</div></div>
+                  <div style={{ gridColumn: '1 / -1', ...muted }}>ID: {match.matchId || 'нет'} · {match.fixtureStatus} · {match.storage || 'документ отсутствует'} · отчёт: {match.reportStatus || '—'}{match.technicalDecision ? ' · техническое решение' : ''}</div>
+                </div>)}
+              </div>
+            </details>)}
+          </div>
+        </> : <div style={panel}>Для активного сезона Кубок Пирамиды пока не найден. Данные не изменялись.</div>}
+      </section>}
       {overview?.updatedAt && <p style={muted}>Обновлено: {new Date(overview.updatedAt).toLocaleString()}</p>}
     </section>}
     {notice && <p role="status" style={{ ...panel, borderColor: '#166534', color: '#86efac', marginTop: 18 }}>{notice}</p>}
