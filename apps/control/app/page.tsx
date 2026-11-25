@@ -4,7 +4,9 @@ import { FormEvent, useCallback, useEffect, useState, type CSSProperties } from 
 import { onAuthStateChanged, signInWithEmailAndPassword, signOut, User } from 'firebase/auth';
 import { getControlAuth } from '../lib/firebase-client';
 
-type CupControl = { success?: boolean; exists?: boolean; error?: string; season?: number; cupId?: string; name?: string; status?: string; currentRound?: number; totalRounds?: number; participants?: number; totalMatches?: number; actualPairings?: number; finishedMatches?: number; scheduledMatches?: number; fixtureDocuments?: number; dedicatedFixtureDocuments?: number; legacyFixtureDocuments?: number; winner?: { id: string; name: string } | null; healthy?: boolean; issues?: string[]; rounds?: Array<{ round: number; expectedMatches: number; pairingCount: number; finished: number; scheduled: number; missingFixtures: number; resultMismatches: number; matches: Array<{ id: string; index: number; matchId: string | null; status: string; home: { id: string; name: string } | null; away: { id: string; name: string } | null; scoreA: number | null; scoreB: number | null; winnerId: string | null; technicalDecision: boolean; fixtureStatus: string; startAt: string | null; storage: string | null; reportStatus: string | null }> }> };\n\ntype Overview = {
+type CupControl = { success?: boolean; exists?: boolean; error?: string; season?: number; cupId?: string; name?: string; status?: string; currentRound?: number; totalRounds?: number; participants?: number; totalMatches?: number; actualPairings?: number; finishedMatches?: number; scheduledMatches?: number; fixtureDocuments?: number; dedicatedFixtureDocuments?: number; legacyFixtureDocuments?: number; winner?: { id: string; name: string } | null; healthy?: boolean; issues?: string[]; rounds?: Array<{ round: number; expectedMatches: number; pairingCount: number; finished: number; scheduled: number; missingFixtures: number; resultMismatches: number; matches: Array<{ id: string; index: number; matchId: string | null; status: string; home: { id: string; name: string } | null; away: { id: string; name: string } | null; scoreA: number | null; scoreB: number | null; winnerId: string | null; technicalDecision: boolean; fixtureStatus: string; startAt: string | null; storage: string | null; reportStatus: string | null }> }> };
+
+type Overview = {
   success?: boolean; network?: string; error?: string; playersTotal?: number; registeredHumans?: number; playersOnline?: number;
   season?: { number: number; phase: string; worldReady: boolean };
   pyramidCup?: { exists: boolean; status: string; currentRound: number; totalMatches: number };
@@ -21,7 +23,8 @@ export default function ControlHome() {
   const [password, setPassword] = useState('');
   const [setupSecret, setSetupSecret] = useState('');
   const [bootstrapEnabled, setBootstrapEnabled] = useState(false);
-  const [overview, setOverview] = useState<Overview | null>(null);\n  const [cup, setCup] = useState<CupControl | null>(null);
+  const [overview, setOverview] = useState<Overview | null>(null);
+  const [cup, setCup] = useState<CupControl | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -46,10 +49,16 @@ export default function ControlHome() {
     setBusy(true); setError('');
     try {
       const token = await current.getIdToken(true);
-      const res = await fetch('/api/overview', { cache: 'no-store', headers: { Authorization: `Bearer ${token}` } });
-      const data = await res.json();
+      const headers = { Authorization: `Bearer ${token}` };
+      const [res, cupRes] = await Promise.all([
+        fetch('/api/overview', { cache: 'no-store', headers }),
+        fetch('/api/cup', { cache: 'no-store', headers }),
+      ]);
+      const [data, cupData] = await Promise.all([res.json(), cupRes.json()]);
       if (!res.ok) throw new Error(data.error || 'CONTROL_OVERVIEW_UNAVAILABLE');
+      if (!cupRes.ok) throw new Error(cupData.error || 'CUP_CONTROL_UNAVAILABLE');
       setOverview(data);
+      setCup(cupData);
     } catch (e) { setError((e as Error).message); setOverview(null); }
     finally { setBusy(false); }
   }, []);
