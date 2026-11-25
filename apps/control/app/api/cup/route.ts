@@ -5,6 +5,7 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 const EXPECTED_ROUNDS = [56, 32, 16, 8, 4, 2, 1];
+const EXPECTED_TOTAL_MATCHES = EXPECTED_ROUNDS.reduce((sum, count) => sum + count, 0);
 
 function json(status: number, body: Record<string, unknown>) {
   return NextResponse.json(body, {
@@ -102,7 +103,8 @@ export async function GET(request: NextRequest) {
     const scheduledMatches = rounds.reduce((sum, round) => sum + round.scheduled, 0);
     const duplicateStorageIds = dedicatedSnap.docs.filter(doc => legacySnap.docs.some(legacy => legacy.id === doc.id)).length;
     if (duplicateStorageIds) issues.push(`DUPLICATE_FIXTURE_STORAGE_IDS:${duplicateStorageIds}`);
-    if (allMatches !== Number(cup.totalMatches || 0)) issues.push('CUP_TOTAL_MATCH_COUNT_MISMATCH');
+    if (Number(cup.totalMatches || 0) !== EXPECTED_TOTAL_MATCHES) issues.push(`CUP_TOTAL_MATCH_COUNT_MISMATCH:${Number(cup.totalMatches || 0)}_EXPECTED_${EXPECTED_TOTAL_MATCHES}`);
+    if (allMatches > EXPECTED_TOTAL_MATCHES) issues.push(`CUP_ACTUAL_PAIRINGS_EXCEED_FORMAT:${allMatches}`);
     if (Number(cup.byeCount || 0) !== 0) issues.push('CUP_BYE_COUNT_NOT_ZERO');
 
     return json(200, {
@@ -117,6 +119,8 @@ export async function GET(request: NextRequest) {
       participants: Array.isArray(cup.participants) ? cup.participants.length : 0,
       totalMatches: Number(cup.totalMatches || 0),
       actualPairings: allMatches,
+      expectedTotalMatches: EXPECTED_TOTAL_MATCHES,
+      remainingPairings: Math.max(0, EXPECTED_TOTAL_MATCHES - allMatches),
       finishedMatches,
       scheduledMatches,
       fixtureDocuments: fixtures.size,
