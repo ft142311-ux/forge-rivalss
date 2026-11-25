@@ -5,25 +5,47 @@ import { controlAuth, controlDb, requireControlAdmin } from '../../../lib/fireba
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-async function countActiveAuthUsers(): Promise<number> {\n  const auth = (await import('../../../lib/firebase-admin')).controlAuth();\n  let pageToken: string | undefined;\n  let total = 0;\n  do {\n    const page = await auth.listUsers(1000, pageToken);\n    total += page.users.filter(user => !user.disabled).length;\n    pageToken = page.pageToken;\n  } while (pageToken);\n  return total;\n}\n\nfunction response(status: number, body: Record<string, unknown>) {
-  return NextResponse.json(body, { status, headers: { 'Cache-Control': 'no-store, max-age=0', Pragma: 'no-cache' } });
+async function countActiveAuthUsers(): Promise<number> {
+  const auth = controlAuth();
+  let pageToken: string | undefined;
+  let total = 0;
+
+  do {
+    const page = await auth.listUsers(1000, pageToken);
+    total += page.users.filter((user) => !user.disabled).length;
+    pageToken = page.pageToken;
+  } while (pageToken);
+
+  return total;
+}
+
+function response(status: number, body: Record<string, unknown>) {
+  return NextResponse.json(body, {
+    status,
+    headers: { 'Cache-Control': 'no-store, max-age=0', Pragma: 'no-cache' },
+  });
 }
 
 export async function GET(request: NextRequest) {
-  const match = (request.headers.get('authorization') || '').match(/^Bearer\s+(\S+)$/i);
+  const match = (request.headers.get('authorization') || '').match(/^Bearer\\s+(\\S+)$/i);
   if (!match) return response(401, { success: false, error: 'AUTHENTICATION_REQUIRED' });
+
   try {
     await requireControlAdmin(match[1]);
     const db = controlDb();
     const [configSnap, playersCount, onlineCount, cupSnap, registeredHumans] = await Promise.all([
       db.collection('system_v1').doc('season_config').get(),
       db.collection('players_v14').count().get(),
-      db.collection('manager_presence_v1').where('lastSeen', '>=', Timestamp.fromDate(new Date(Date.now() - 2 * 60 * 1000))).count().get(),
+      db.collection('manager_presence_v1')
+        .where('lastSeen', '>=', Timestamp.fromDate(new Date(Date.now() - 2 * 60 * 1000)))
+        .count().get(),
       db.collection('cup_pyramid_v1').doc('cup_s1_lALPHA').get(),
       countActiveAuthUsers(),
     ]);
+
     const config = configSnap.exists ? configSnap.data() || {} : {};
     const cup = cupSnap.exists ? cupSnap.data() || {} : {};
+
     return response(200, {
       success: true,
       network: 'online',
@@ -48,6 +70,7 @@ export async function GET(request: NextRequest) {
     const code = String((error as Error)?.message || '');
     const denied = ['AUTHENTICATION_REQUIRED', 'CONTROL_ADMIN_REQUIRED'].includes(code) ||
       code.toLowerCase().includes('id-token') || code.toLowerCase().includes('token');
+
     return response(denied ? 403 : 503, {
       success: false,
       network: 'unavailable',
