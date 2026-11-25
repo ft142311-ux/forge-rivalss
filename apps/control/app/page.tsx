@@ -19,9 +19,12 @@ export default function ControlHome() {
   const [user, setUser] = useState<User | null>(null);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [setupSecret, setSetupSecret] = useState('');
+  const [bootstrapEnabled, setBootstrapEnabled] = useState(false);
   const [overview, setOverview] = useState<Overview | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
 
   useEffect(() => {
     try {
@@ -31,10 +34,18 @@ export default function ControlHome() {
     } catch (e) { setError((e as Error).message); }
   }, []);
 
+  useEffect(() => {
+    let active = true;
+    fetch('/api/bootstrap-admin', { cache: 'no-store' })
+      .then(r => r.json()).then(data => { if (active) setBootstrapEnabled(data.enabled === true); })
+      .catch(() => { if (active) setBootstrapEnabled(false); });
+    return () => { active = false; };
+  }, []);
+
   const refresh = useCallback(async (current: User) => {
     setBusy(true); setError('');
     try {
-      const token = await current.getIdToken();
+      const token = await current.getIdToken(true);
       const res = await fetch('/api/overview', { cache: 'no-store', headers: { Authorization: `Bearer ${token}` } });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'CONTROL_OVERVIEW_UNAVAILABLE');
@@ -47,10 +58,30 @@ export default function ControlHome() {
 
   async function login(event: FormEvent) {
     event.preventDefault(); if (!auth) return;
-    setBusy(true); setError('');
+    setBusy(true); setError(''); setNotice('');
     try { await signInWithEmailAndPassword(auth, email.trim(), password); setPassword(''); }
-    catch { setError('Не удалось войти. Проверьте данные учётной записи.'); }
+    catch { setError('Не удалось войти. Проверьте email и пароль.'); }
     finally { setBusy(false); }
+  }
+
+  async function bootstrap(event: FormEvent) {
+    event.preventDefault(); if (!auth) return;
+    setBusy(true); setError(''); setNotice('');
+    try {
+      const response = await fetch('/api/bootstrap-admin', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: email.trim(), password, setupSecret }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'ADMIN_BOOTSTRAP_FAILED');
+      setBootstrapEnabled(false);
+      setSetupSecret('');
+      setNotice('Администратор создан. Выполняем вход…');
+      await signInWithEmailAndPassword(auth, email.trim(), password);
+      setPassword('');
+    } catch (e) {
+      setError((e as Error).message === 'ADMIN_BOOTSTRAP_FAILED' ? 'Не удалось создать администратора.' : (e as Error).message);
+    } finally { setBusy(false); }
   }
 
   return <main style={{ maxWidth: 1080, margin: '0 auto', padding: '44px 22px' }}>
@@ -58,12 +89,22 @@ export default function ControlHome() {
       <div><div style={{ color: '#60a5fa', fontSize: 12, letterSpacing: 3, fontWeight: 700 }}>PRIVATE OPERATIONS</div><h1 style={{ margin: '8px 0', fontSize: 30 }}>Forge-Rivals Control</h1><div style={muted}>Изолированная панель управления · Beta</div></div>
       {user && <button onClick={() => auth && void signOut(auth)} style={buttonStyle}>Выйти</button>}
     </header>
-    {!user ? <form onSubmit={login} style={{ ...panel, maxWidth: 420, display: 'grid', gap: 14 }}>
-      <h2 style={{ margin: 0 }}>Вход администратора</h2><p style={muted}>Доступ проверяется сервером по административному claim и списку разрешённых UID.</p>
-      <input aria-label="Email" type="email" autoComplete="username" required placeholder="Email" value={email} onChange={e => setEmail(e.target.value)} style={inputStyle}/>
-      <input aria-label="Пароль" type="password" autoComplete="current-password" required placeholder="Пароль" value={password} onChange={e => setPassword(e.target.value)} style={inputStyle}/>
-      <button disabled={busy || !auth} style={primaryStyle}>{busy ? 'Проверка…' : 'Войти'}</button>
-    </form> : <section>
+    {!user ? <div style={{ display: 'grid', gap: 16, maxWidth: 440 }}>
+      <form onSubmit={login} style={{ ...panel, display: 'grid', gap: 14 }}>
+        <h2 style={{ margin: 0 }}>Вход администратора</h2>
+        <input aria-label="Email" type="email" autoComplete="username" required placeholder="Email" value={email} onChange={e => setEmail(e.target.value)} style={inputStyle}/>
+        <input aria-label="Пароль" type="password" autoComplete="current-password" required placeholder="Пароль" value={password} onChange={e => setPassword(e.target.value)} style={inputStyle}/>
+        <button disabled={busy || !auth} style={primaryStyle}>{busy ? 'Проверка…' : 'Войти'}</button>
+      </form>
+      {bootstrapEnabled && <form onSubmit={bootstrap} style={{ ...panel, display: 'grid', gap: 14, borderColor: '#36547c' }}>
+        <h2 style={{ margin: 0 }}>Первичная настройка администратора</h2>
+        <p style={muted}>Одноразовая регистрация. После успешного создания повторная регистрация будет заблокирована.</p>
+        <input aria-label="Email администратора" type="email" autoComplete="email" required placeholder="Email администратора" value={email} onChange={e => setEmail(e.target.value)} style={inputStyle}/>
+        <input aria-label="Надёжный пароль" type="password" autoComplete="new-password" minLength={12} maxLength={128} required placeholder="Пароль (не менее 12 символов)" value={password} onChange={e => setPassword(e.target.value)} style={inputStyle}/>
+        <input aria-label="Одноразовый код настройки" type="password" autoComplete="off" minLength={32} required placeholder="Одноразовый код настройки" value={setupSecret} onChange={e => setSetupSecret(e.target.value)} style={inputStyle}/>
+        <button disabled={busy || !auth} style={primaryStyle}>{busy ? 'Создание…' : 'Создать администратора'}</button>
+      </form>}
+    </div> : <section>
       <div style={{ ...panel, marginBottom: 18, display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
         <div><div style={muted}>Аккаунт</div><strong>{user.email || user.uid}</strong></div>
         <div><div style={muted}>Firebase project</div><strong>forge-rivals-beta</strong></div>
@@ -78,8 +119,9 @@ export default function ControlHome() {
       </div>}
       {overview?.updatedAt && <p style={muted}>Обновлено: {new Date(overview.updatedAt).toLocaleString()}</p>}
     </section>}
+    {notice && <p role="status" style={{ ...panel, borderColor: '#166534', color: '#86efac', marginTop: 18 }}>{notice}</p>}
     {error && <p role="alert" style={{ ...panel, borderColor: '#7f1d1d', color: '#fca5a5', marginTop: 18 }}>{error}</p>}
-    <footer style={{ ...muted, marginTop: 40 }}>Панель не подключает игровые компоненты и не содержит операций изменения игрового мира.</footer>
+    <footer style={{ ...muted, marginTop: 40 }}>Отдельная панель Beta. Создание администратора доступно только один раз по секрету настройки.</footer>
   </main>;
 }
 
