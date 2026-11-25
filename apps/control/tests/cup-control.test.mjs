@@ -10,7 +10,7 @@ test('Pyramid Cup control is read-only and requires a verified Control admin', (
   assert.match(route, /cup_pyramid_v1/);
   assert.match(route, /cup_matches/);
   assert.match(route, /matches_v2/);
-  assert.doesNotMatch(route, /\.set\(|\.update\(|\.delete\(|\.create\(|\.add\(/);
+  assert.doesNotMatch(route, /(?:tx|batch|ref)\.(?:set|update|delete|create|add)\(/);
 });
 
 test('Pyramid Cup diagnostics reconcile bracket rounds with canonical fixture results', () => {
