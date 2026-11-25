@@ -23,6 +23,8 @@ test('Every overview request verifies a non-revoked token, admin claim, and UID 
 
 test('Client configuration cannot point this control app to another Firebase project', () => {
   assert.match(client, /config\.projectId !== 'forge-rivals-beta'/);
+  assert.match(client, /getApps\(\)\.some\(existing => existing\.name === APP_NAME\)/);
+  assert.match(client, /getApp\(APP_NAME\)/);
   assert.doesNotMatch(page, /firebase-admin|FIREBASE_ADMIN_SDK|CONTROL_ADMIN_UIDS/);
 });
 
