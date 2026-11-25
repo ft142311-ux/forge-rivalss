@@ -5,7 +5,7 @@ import { controlDb, requireControlAdmin } from '../../../lib/firebase-admin';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-function response(status: number, body: Record<string, unknown>) {
+async function countActiveAuthUsers(): Promise<number> {\n  const auth = (await import('../../../lib/firebase-admin')).controlAuth();\n  let pageToken: string | undefined;\n  let total = 0;\n  do {\n    const page = await auth.listUsers(1000, pageToken);\n    total += page.users.filter(user => !user.disabled).length;\n    pageToken = page.pageToken;\n  } while (pageToken);\n  return total;\n}\n\nfunction response(status: number, body: Record<string, unknown>) {
   return NextResponse.json(body, { status, headers: { 'Cache-Control': 'no-store, max-age=0', Pragma: 'no-cache' } });
 }
 
@@ -15,11 +15,12 @@ export async function GET(request: NextRequest) {
   try {
     await requireControlAdmin(match[1]);
     const db = controlDb();
-    const [configSnap, playersCount, onlineCount, cupSnap] = await Promise.all([
+    const [configSnap, playersCount, onlineCount, cupSnap, registeredHumans] = await Promise.all([
       db.collection('system_v1').doc('season_config').get(),
       db.collection('players_v14').count().get(),
       db.collection('manager_presence_v1').where('lastSeen', '>=', Timestamp.fromDate(new Date(Date.now() - 2 * 60 * 1000))).count().get(),
       db.collection('cup_pyramid_v1').doc('cup_s1_lALPHA').get(),
+      countActiveAuthUsers(),
     ]);
     const config = configSnap.exists ? configSnap.data() || {} : {};
     const cup = cupSnap.exists ? cupSnap.data() || {} : {};
@@ -28,6 +29,7 @@ export async function GET(request: NextRequest) {
       network: 'online',
       project: 'forge-rivals-beta',
       playersTotal: playersCount.data().count,
+      registeredHumans,
       playersOnline: onlineCount.data().count,
       season: {
         number: Number(config.activeSeasonNumber || 0),
