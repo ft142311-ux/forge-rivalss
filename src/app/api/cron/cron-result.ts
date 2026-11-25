@@ -19,6 +19,8 @@ const BLOCKED_ACTIONS = new Set([
 
 export function isSeasonOrchestratorSuccessful(result: any) {
   const action = String(result?.action || '');
+  // A competing scheduler tick is intentionally skipped, not a failed cycle.
+  if (action === 'ORCHESTRATOR_LOCKED' && result?.skipped === true) return true;
   return result?.success !== false
     && ALLOWED_ACTIONS.has(action)
     && !BLOCKED_ACTIONS.has(action)
