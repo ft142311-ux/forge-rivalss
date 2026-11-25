@@ -69,11 +69,11 @@ test('viewed league reports are excluded from server unread count', () => {
   assert.match(action, /raw\.seen === true \|\| raw\.reportStatus === 'viewed'/);
 });
 
-test('top bar displays a count for unread match reports', () => {
-  const topBar = readFileSync(new URL('../src/components/game/TopBar.tsx', import.meta.url), 'utf8');
-  assert.match(topBar, /getMyLeagueMatchReportsAction/);
-  assert.match(topBar, /unreadReportsCount > 0/);
-  assert.match(topBar, /serverUnreadReports/);
+test('home menu displays the unread match-report count on the Match Review item', () => {
+  const home = readFileSync(new URL('../src/app/page.tsx', import.meta.url), 'utf8');
+  assert.match(home, /getMyLeagueMatchReportsAction/);
+  assert.match(home, /serverUnreadReportsCount/);
+  assert.match(home, /id: 'reports'.*href: '\/reports'.*badge:/);
 });
 
 test('pyramid cup is not listed in tournament hub because it lives in rankings', () => {
