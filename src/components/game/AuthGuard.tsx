@@ -19,9 +19,10 @@ export function AuthGuard({ children }: { children: ReactNode }) {
   const isAuthPage = pathname?.startsWith('/auth');
   const isSetupPage = pathname === '/setup';
   const isBetaSeasonOneResumePage = pathname === '/admin/beta-season-one-resume';
+  const isMatchSettlementDiagnosticsPage = pathname === '/admin/match-settlement-diagnostics';
 
   useEffect(() => {
-    if (isBetaSeasonOneResumePage || !isLoaded || isUserLoading) return;
+    if (isBetaSeasonOneResumePage || isMatchSettlementDiagnosticsPage || !isLoaded || isUserLoading) return;
 
     if (!user) {
       if (!isAuthPage) router.replace('/auth/login');
@@ -46,7 +47,7 @@ export function AuthGuard({ children }: { children: ReactNode }) {
 
   // Operational recovery is isolated from the account/profile gate.
   // Preview deployment and server-side project/branch/secret fences protect its API.
-  if (isBetaSeasonOneResumePage) {
+  if (isBetaSeasonOneResumePage || isMatchSettlementDiagnosticsPage) {
     return <div className="min-h-screen">{children}</div>;
   }
 
