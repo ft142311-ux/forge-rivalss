@@ -12,6 +12,7 @@ import { resolveDailyMatches } from './autonomous-cycle';
 import { prepareSeasonRollover } from './season-rollover';
 import { validateRolloverPlan } from './season-rollover-plan';
 import { isCalendarReady } from './season-calendar-gate';
+import { acquireSeasonOrchestratorLock, releaseSeasonOrchestratorLock } from './season-orchestrator-lock';
 
 /**
  * @fileOverview Глобальный оркестратор сезона v169.
@@ -21,7 +22,7 @@ import { isCalendarReady } from './season-calendar-gate';
  *   2) publishPreparedSeason() отдельно публикует следующий сезон;
  *   3) регистрация никогда не генерирует таблицы/слоты/матчи.
  */
-export async function runSeasonOrchestrator() {
+async function runSeasonOrchestratorUnlocked() {
   try {
     const db = getAdminDb();
     const resetConfigSnap = await db.collection('system_v1').doc('season_config').get();
@@ -249,6 +250,31 @@ export async function runSeasonOrchestrator() {
   }
 }
 
+
+
+/**
+ * Public scheduler entry point. The Firestore lease is acquired before any
+ * calendar, match, tournament, or cup work and released only by its owner.
+ */
+export async function runSeasonOrchestrator() {
+  const db = getAdminDb();
+  const lock = await acquireSeasonOrchestratorLock(db);
+  if (!lock.acquired) {
+    return {
+      action: 'ORCHESTRATOR_LOCKED' as const,
+      success: true,
+      skipped: true,
+      retryAfter: new Date(lock.expiresAtMs).toISOString(),
+      writesStarted: false,
+    };
+  }
+
+  try {
+    return await runSeasonOrchestratorUnlocked();
+  } finally {
+    await releaseSeasonOrchestratorLock(db, lock.ownerId, lock.token);
+  }
+}
 
 /** Read the active season from the canonical config document. */
 export async function getActiveSeasonNumber(db: any = getAdminDb()): Promise<number> {
