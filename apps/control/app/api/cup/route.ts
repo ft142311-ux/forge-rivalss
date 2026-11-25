@@ -91,7 +91,9 @@ export async function GET(request: NextRequest) {
           reportStatus: fixture?.reportStatus || null,
         };
       });
-      const currentRound = Number(cup.currentRound || 1);\n      if (round <= currentRound && pairings.length !== expectedMatches) issues.push(`R${round}:PAIRING_COUNT_${pairings.length}_EXPECTED_${expectedMatches}`);\n      if (round > currentRound && pairings.length > 0) issues.push(`R${round}:FUTURE_ROUND_ALREADY_POPULATED`);
+      const currentRound = Number(cup.currentRound || 1);
+      if (round <= currentRound && pairings.length !== expectedMatches) issues.push(`R${round}:PAIRING_COUNT_${pairings.length}_EXPECTED_${expectedMatches}`);
+      if (round > currentRound && pairings.length > 0) issues.push(`R${round}:FUTURE_ROUND_ALREADY_POPULATED`);
       return { round, expectedMatches, pairingCount: pairings.length, finished, scheduled, missingFixtures, resultMismatches, matches };
     });
 
