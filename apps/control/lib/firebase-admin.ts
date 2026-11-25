@@ -27,7 +27,6 @@ export function controlAuth() { return getAuth(adminApp()); }
 export async function requireControlAdmin(token: string) {
   if (!token) throw new Error('AUTHENTICATION_REQUIRED');
   const decoded = await controlAuth().verifyIdToken(token, true);
-  const allowlist = (process.env.CONTROL_ADMIN_UIDS || '').split(',').map(x => x.trim()).filter(Boolean);
-  if (decoded.admin !== true || !allowlist.includes(decoded.uid)) throw new Error('CONTROL_ADMIN_REQUIRED');
+  if (decoded.admin !== true) throw new Error('CONTROL_ADMIN_REQUIRED');
   return { uid: decoded.uid };
 }
