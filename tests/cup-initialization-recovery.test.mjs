@@ -9,7 +9,7 @@ test('Pyramid Cup document and all preliminary fixtures are committed atomically
   const end = source.indexOf('async function loadCup', start);
   assert.ok(start >= 0 && end > start);
   const generation = source.slice(start, end);
-  const firstFixtureWrite = generation.indexOf('batch.set(');
+  const firstFixtureWrite = generation.indexOf('batch.create(db.collection(MATCH_COLLECTIONS.cup)');
   const cupCreate = generation.indexOf('batch.create(ref');
   const commit = generation.indexOf('await batch.commit()');
   assert.ok(firstFixtureWrite >= 0 && cupCreate > firstFixtureWrite);
