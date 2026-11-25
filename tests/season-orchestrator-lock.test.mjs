@@ -10,6 +10,7 @@ import {
 
 function createFakeDb() {
   const docs = new Map();
+  let transactionQueue = Promise.resolve();
   const ref = { id: SEASON_ORCHESTRATOR_LOCK_ID };
   const db = {
     collection(name) {
@@ -27,7 +28,9 @@ function createFakeDb() {
         },
         delete() { docs.delete(ref.id); },
       };
-      return callback(tx);
+      const pending = transactionQueue.then(() => callback(tx));
+      transactionQueue = pending.catch(() => undefined);
+      return pending;
     },
     read() { return docs.get(ref.id); },
   };
