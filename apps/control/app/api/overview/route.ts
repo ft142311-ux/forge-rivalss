@@ -27,7 +27,7 @@ function response(status: number, body: Record<string, unknown>) {
 }
 
 export async function GET(request: NextRequest) {
-  const match = (request.headers.get('authorization') || '').match(/^Bearer\\s+(\\S+)$/i);
+  const match = (request.headers.get('authorization') || '').match(/^Bearer\s+(\S+)$/i);
   if (!match) return response(401, { success: false, error: 'AUTHENTICATION_REQUIRED' });
 
   try {
