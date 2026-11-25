@@ -20,7 +20,7 @@ function cleanDate(value: any): string | null {
 }
 
 export async function GET(request: NextRequest) {
-  const match = (request.headers.get('authorization') || '').match(/^Bearer\\s+(\\S+)$/i);
+  const match = (request.headers.get('authorization') || '').match(/^Bearer\s+(\S+)$/i);
   if (!match) return json(401, { success: false, error: 'AUTHENTICATION_REQUIRED' });
 
   try {
