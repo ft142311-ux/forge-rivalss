@@ -42,7 +42,7 @@ test('Client config is pinned to Beta and never contains Admin SDK credentials',
 test('Initial overview remains read-only and docs require removal of bootstrap secret', () => {
   assert.match(route, /collection\('players_v14'\)\.count\(\)/);
   assert.match(route, /listUsers\(1000, pageToken\)/);
-  assert.match(route, /user => !user\.disabled/);
+  assert.match(route, /page\.users\.filter\(\(user\) => !user\.disabled\)/);
   assert.match(route, /registeredHumans,/);
   assert.match(page, /Зарегистрировано людей/);
   assert.match(page, /включая ботов/);
