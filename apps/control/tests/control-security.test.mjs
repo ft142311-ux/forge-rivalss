@@ -49,5 +49,5 @@ test('Initial overview remains read-only and docs require removal of bootstrap s
   assert.match(route, /collection\('system_v1'\)\.doc\('season_config'\)/);
   assert.doesNotMatch(route, /(?:tx|batch|ref)\.(?:set|update|delete|create|add)\(/);
   assert.doesNotMatch(page, /nuclear|reset|delete/i);
-  assert.match(docs, /remove.*BOOTSTRAP_ADMIN_SECRET/i);
+  assert.match(docs, /remove.*BOOTSTRAP_ADMIN_SECRET/is);
 });
