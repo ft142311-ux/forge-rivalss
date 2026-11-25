@@ -7,6 +7,7 @@ import {
   SEASON_ORCHESTRATOR_LOCK_ID,
   SEASON_ORCHESTRATOR_LOCK_TTL_MS,
 } from '../src/app/actions/season-orchestrator-lock.ts';
+import { isSeasonOrchestratorSuccessful, cronResultStatus } from '../src/app/api/cron/cron-result.ts';
 
 function createFakeDb() {
   const docs = new Map();
@@ -82,4 +83,10 @@ test('orchestrator acquires before work and always releases its lease', async ()
   assert.match(source, /if \(!lock\.acquired\)[\s\S]*?ORCHESTRATOR_LOCKED/);
   assert.match(source, /finally \{\s*await releaseSeasonOrchestratorLock\(db, lock\.ownerId, lock\.token\)/);
   assert.match(source, /async function runSeasonOrchestratorUnlocked\(\)/);
+});
+
+test('overlapping orchestrator tick is a successful no-op for the cron caller', () => {
+  const result = { action: 'ORCHESTRATOR_LOCKED', success: true, skipped: true, writesStarted: false };
+  assert.equal(isSeasonOrchestratorSuccessful(result), true);
+  assert.equal(cronResultStatus({ ...result, success: isSeasonOrchestratorSuccessful(result) }), 200);
 });
