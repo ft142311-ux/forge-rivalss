@@ -23,3 +23,10 @@ test('Pyramid Cup diagnostics reconcile bracket rounds with canonical fixture re
   assert.match(page, /Кубок Пирамиды · контроль матчей/);
   assert.match(page, /Проблемы целостности/);
 });
+
+test('Pyramid Cup diagnostics accept ungenerated future rounds while enforcing full format totals', () => {
+  assert.match(route, /round <= currentRound && pairings\.length !== expectedMatches/);
+  assert.match(route, /EXPECTED_TOTAL_MATCHES = EXPECTED_ROUNDS\.reduce/);
+  assert.match(route, /Number\(cup\.totalMatches \|\| 0\) !== EXPECTED_TOTAL_MATCHES/);
+  assert.match(route, /remainingPairings/);
+});
