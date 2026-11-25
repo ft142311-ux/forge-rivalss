@@ -18,7 +18,7 @@ test('match settlement diagnostics are pinned to the Beta preview project and br
 });
 
 test('diagnostics inspect both canonical league fixtures and the active Pyramid Cup round', () => {
-  assert.match(source, /collection\('matches_v2'\)\.where\('season', ==, season\)/);
+  assert.match(source, /collection\('matches_v2'\)\.where\('season', '==', season\)/);
   assert.match(source, /collection\('cup_pyramid_v1'\)/);
   assert.match(source, /collection\('cup_matches'\)/);
   assert.match(source, /collection\('matches_v2'\)\.where\('cupId'/);
