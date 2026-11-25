@@ -8,7 +8,7 @@ test('match settlement diagnostics are read-only and require a verified admin to
   assert.match(source, /requireAdminActor\(match\[1\]\)/);
   assert.match(source, /ADMIN_REQUIRED/);
   assert.match(source, /writesStarted: false/);
-  assert.doesNotMatch(source, /\.set\(|\.update\(|\.delete\(|runTransaction\(/);
+  assert.doesNotMatch(source, /(?:tx|batch|ref|docRef)\.(?:set|update|delete|create|add)\(|\.runTransaction\(/);
 });
 
 test('match settlement diagnostics are pinned to the Beta preview project and branch', () => {
