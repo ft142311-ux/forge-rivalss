@@ -5,7 +5,7 @@ import { onAuthStateChanged, signInWithEmailAndPassword, signOut, User } from 'f
 import { getControlAuth } from '../lib/firebase-client';
 
 type Overview = {
-  success?: boolean; network?: string; error?: string; playersTotal?: number; playersOnline?: number;
+  success?: boolean; network?: string; error?: string; playersTotal?: number; registeredHumans?: number; playersOnline?: number;
   season?: { number: number; phase: string; worldReady: boolean };
   pyramidCup?: { exists: boolean; status: string; currentRound: number; totalMatches: number };
   updatedAt?: string;
@@ -112,7 +112,7 @@ export default function ControlHome() {
       </div>
       {overview && <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(210px,1fr))', gap: 14 }}>
         <article style={panel}><div style={muted}>Сеть / API</div><h2 style={{ color: '#34d399' }}>Подключена</h2><div style={muted}>Beta Firestore доступен</div></article>
-        <article style={panel}><div style={muted}>Всего игроков</div><h2>{overview.playersTotal ?? '—'}</h2><div style={muted}>Агрегированный счётчик</div></article>
+        <article style={panel}><div style={muted}>Зарегистрировано людей</div><h2>{overview.registeredHumans ?? '—'}</h2><div style={muted}>Активные аккаунты Firebase Auth, без ботов</div></article>\n        <article style={panel}><div style={muted}>Игровые записи</div><h2>{overview.playersTotal ?? '—'}</h2><div style={muted}>Все документы игроков, включая ботов</div></article>
         <article style={panel}><div style={muted}>Сейчас в сети</div><h2>{overview.playersOnline ?? '—'}</h2><div style={muted}>Heartbeat за 2 минуты</div></article>
         <article style={panel}><div style={muted}>Сезон</div><h2>№ {overview.season?.number ?? '—'}</h2><div style={muted}>{overview.season?.phase || '—'} · {overview.season?.worldReady ? 'Мир готов' : 'Мир не готов'}</div></article>
         <article style={panel}><div style={muted}>Кубок Пирамиды</div><h2>{overview.pyramidCup?.exists ? overview.pyramidCup.status : 'Не создан'}</h2><div style={muted}>Раунд {overview.pyramidCup?.currentRound ?? 0} · матчей {overview.pyramidCup?.totalMatches ?? 0}</div></article>
