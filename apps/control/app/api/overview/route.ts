@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { Timestamp } from 'firebase-admin/firestore';
-import { controlDb, requireControlAdmin } from '../../../lib/firebase-admin';
+import { controlAuth, controlDb, requireControlAdmin } from '../../../lib/firebase-admin';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
