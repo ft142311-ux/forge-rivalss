@@ -386,7 +386,7 @@ export async function generatePyramidCup(
   for (const pairing of first) {
     if (!pairing.home || !pairing.away) continue;
     pairing.matchId = matchId(season, 1, pairing.index);
-    batch.set(db.collection(MATCH_COLLECTIONS.cup).doc(pairing.matchId), buildCupRoundMatchData(season, 1, pairing, scheduledAt));
+    batch.create(db.collection(MATCH_COLLECTIONS.cup).doc(pairing.matchId), buildCupRoundMatchData(season, 1, pairing, scheduledAt));
   }
   const openingRoundRestTeams = teams.filter(team => team.level === 1);
   if (openingRoundRestTeams.length !== TEAMS_PER_GROUP) throw new Error('CUP_D1_OPENING_ROUND_REST_COUNT_INVALID');
