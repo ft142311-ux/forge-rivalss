@@ -11,7 +11,10 @@ import {
   SEASON_CALENDAR_BUILD_LOCK_ID,
 } from '../src/app/actions/season-rollover-lock.ts';
 import { completeSeasonHistoryCleanup } from '../src/app/actions/season-history-cleanup.ts';
-import { resolveArchivePrunePlan } from '../src/app/actions/season-archive.ts';
+import { buildRecoveredSeasonArchiveSnapshot, resolveArchivePrunePlan } from '../src/app/actions/season-archive.ts';
+import { buildPromotionRelegationGroups } from '../src/app/actions/season-rollover-plan.ts';
+import { calculateGroupStandings } from '../src/app/actions/season-rollover-standings.ts';
+import { pruneSeasonHistoryAfterActivation } from '../src/app/actions/season-history-prune.ts';
 import { calculateGroupStandings } from '../src/app/actions/season-rollover-standings.ts';
 import { expectedRolloverGroups } from '../src/app/actions/season-rollover-plan.ts';
 
@@ -23,7 +26,7 @@ const projectId = process.env.GCLOUD_PROJECT || 'demo-forge-rivals';
 // NEVER read or written by these tests.
 function isolatedDb(firestore, collectionName) {
   return {
-    collection: () => firestore.collection(collectionName),
+    collection: name => firestore.collection(collectionName + '_' + name),
     runTransaction: fn => firestore.runTransaction(fn),
   };
 }
@@ -36,16 +39,18 @@ async function withIsolatedFirestore(t) {
   const collectionName = `seasonLifecycleIntegrationTests_${randomUUID().replaceAll('-', '')}`;
   const db = isolatedDb(firestore, collectionName);
   const refs = new Set();
-  const doc = id => {
-    const ref = db.collection('system_v1').doc(id);
-    refs.add(ref);
-    return ref;
-  };
+  const track = ref => { refs.add(ref); return ref; };
+  const doc = id => track(db.collection('system_v1').doc(id));
   t.after(async () => {
-    await Promise.all([...refs].map(ref => ref.delete().catch(() => undefined)));
+    const tracked = [...refs];
+    for (let offset = 0; offset < tracked.length; offset += 400) {
+      const batch = firestore.batch();
+      for (const ref of tracked.slice(offset, offset + 400)) batch.delete(ref);
+      await batch.commit().catch(() => undefined);
+    }
     await deleteApp(app);
   });
-  return { db, doc, firestore, collectionName };
+  return { db, doc, track, firestore, collectionName };
 }
 
 test('Firestore Emulator publication is fenced and cannot publish twice', {
@@ -594,4 +599,288 @@ test('Firestore Emulator prunes S1-S4 after S6 activation, retains verified S5, 
   } finally {
     await releaseSeasonCalendarBuildLock(db, lease.ownerId, lease.token);
   }
+});
+
+
+function expectedGroupKeys() {
+  const groups = [];
+  for (let level = 1; level <= 4; level++) {
+    for (let group = 1; group <= 2 ** (level - 1); group++) groups.push('D' + level + '-G' + group);
+  }
+  return groups;
+}
+
+function makeStartingParticipants(season) {
+  return Object.fromEntries(expectedGroupKeys().map(group => [
+    group,
+    Array.from({ length: 8 }, (_, index) => ({
+      id: 'S' + season + '-' + group + '-CLUB-' + (index + 1),
+      rank: index + 1,
+    })),
+  ]));
+}
+
+function makeCompletedArchive(sourceSeason) {
+  const matches = [];
+  const standings = {};
+  for (const groupKey of expectedGroupKeys()) {
+    const [, level, group] = /^D([1-4])-G(\d+)$/.exec(groupKey);
+    const fixtures = [];
+    for (let homeRank = 1; homeRank <= 8; homeRank++) {
+      for (let awayRank = 1; awayRank <= 8; awayRank++) {
+        if (homeRank === awayRank) continue;
+        const draw = (homeRank + awayRank) % 5 === 0;
+        const homeScore = draw ? 1 : homeRank < awayRank ? 2 : 0;
+        const awayScore = draw ? 1 : homeRank < awayRank ? 0 : 2;
+        const fixture = {
+          matchId: groupKey + '-T' + (Math.floor(fixtures.length / 4) + 1) + '-' + homeRank + '-' + awayRank,
+          version: 140,
+          sourceSeason,
+          level: Number(level),
+          group: Number(group),
+          tour: Math.floor(fixtures.length / 4) + 1,
+          homeRank,
+          awayRank,
+          homeId: groupKey + '-CLUB-' + homeRank,
+          awayId: groupKey + '-CLUB-' + awayRank,
+          homeName: groupKey + '-CLUB-' + homeRank,
+          awayName: groupKey + '-CLUB-' + awayRank,
+          score: { home: homeScore, away: awayScore },
+          status: 'finished',
+          isFinished: true,
+        };
+        fixtures.push(fixture);
+        matches.push(fixture);
+      }
+    }
+    standings[groupKey] = calculateGroupStandings({}, fixtures).map((row, index) => ({
+      ...row,
+      rank: index + 1,
+    }));
+  }
+  const placement = buildPromotionRelegationGroups(standings);
+  assert.equal(placement.ready, true);
+  const completedAt = '2026-11-05T15:00:00.000Z';
+  return {
+    archive: {
+      sourceSeason,
+      leagueId: 'ALPHA',
+      archiveVersion: 1,
+      status: 'completed',
+      completedAt,
+      finalizedAt: completedAt,
+      expectedMatches: 840,
+      finishedMatches: 840,
+      groups: 15,
+      teamCount: 120,
+      integrity: {
+        complete: true,
+        unfinishedMatches: 0,
+        invalidResults: 0,
+        canonicalMatches: 840,
+        duplicateCanonicalFixtures: 0,
+      },
+      standings,
+    },
+    matches,
+    groups: placement.groups,
+  };
+}
+
+function makeRolloverPlan(sourceSeason, targetSeason, groups, skippedSeasons = []) {
+  return {
+    sourceSeason,
+    targetSeason,
+    ready: true,
+    awards: { ready: true },
+    groups,
+    skippedSeasons,
+  };
+}
+
+function failOnceOnArchiveMatchDelete(db, firestore, physicalArchiveCollection, archiveId) {
+  let interrupted = false;
+  const wrappedDb = {
+    collection: name => db.collection(name),
+    runTransaction: (callback, options) => firestore.runTransaction(tx => callback({
+      get: (...args) => tx.get(...args),
+      set: (...args) => tx.set(...args),
+      update: (...args) => tx.update(...args),
+      delete: ref => {
+        const failedPath = physicalArchiveCollection + '/' + archiveId + '/matches/';
+        if (!interrupted && ref.path.startsWith(failedPath)) {
+          interrupted = true;
+          throw new Error('SIMULATED_SEASON_HISTORY_CLEANUP_INTERRUPTION');
+        }
+        return tx.delete(ref);
+      },
+    }), options),
+  };
+  return { db: wrappedDb, wasInterrupted: () => interrupted };
+}
+
+test('Firestore Emulator prunes S1-S4 after S6 activation, retains S5 and resumes interrupted cleanup', {
+  skip: !emulatorHost,
+}, async t => {
+  const { db, track, firestore, collectionName } = await withIsolatedFirestore(t);
+  const configRef = track(db.collection('system_v1').doc('season_config'));
+  const lockRef = track(db.collection('system_v1').doc(SEASON_CALENDAR_BUILD_LOCK_ID));
+  const skippedSeasons = [1, 2, 3, 4].map(seasonNumber => ({
+    seasonNumber,
+    reason: 'SEASON_INCOMPLETE',
+  }));
+
+  const archiveRefs = new Map();
+  const legacyMatchRefs = new Map();
+  for (const seasonNumber of [1, 2, 3, 4]) {
+    const recovered = buildRecoveredSeasonArchiveSnapshot({
+      sourceSeason: seasonNumber,
+      startingParticipants: makeStartingParticipants(seasonNumber),
+      finishedMatches: 0,
+      reason: 'SEASON_INCOMPLETE',
+      recoveredAt: '2026-11-01T00:00:00.000Z',
+    });
+    assert.equal(recovered.ready, true);
+    const archiveRef = track(db.collection('league_season_archives_v1').doc('S' + seasonNumber));
+    const matchRef = track(archiveRef.collection('matches').doc('legacy-match-' + seasonNumber));
+    archiveRefs.set(seasonNumber, archiveRef);
+    legacyMatchRefs.set(seasonNumber, matchRef);
+    await Promise.all([
+      archiveRef.set(recovered.archive),
+      matchRef.set({ season: seasonNumber, status: 'legacy_snapshot' }),
+    ]);
+  }
+
+  const completed = makeCompletedArchive(5);
+  const retainedArchiveRef = track(db.collection('league_season_archives_v1').doc('S5'));
+  await retainedArchiveRef.set(completed.archive);
+  for (let offset = 0; offset < completed.matches.length; offset += 400) {
+    const batch = firestore.batch();
+    for (const match of completed.matches.slice(offset, offset + 400)) {
+      const { matchId, ...data } = match;
+      const ref = track(retainedArchiveRef.collection('matches').doc(matchId));
+      batch.set(ref, data);
+    }
+    await batch.commit();
+  }
+
+  const planRefs = new Map();
+  for (let seasonNumber = 1; seasonNumber <= 6; seasonNumber++) {
+    const ref = track(db.collection('league_season_rollovers_v1').doc('S' + seasonNumber));
+    planRefs.set(seasonNumber, ref);
+    await ref.set(makeRolloverPlan(
+      seasonNumber - 1,
+      seasonNumber,
+      completed.groups,
+      seasonNumber === 6 ? skippedSeasons : [],
+    ));
+  }
+  const historyRefs = new Map();
+  for (const { seasonNumber } of skippedSeasons) {
+    historyRefs.set(seasonNumber, track(db.collection('league_season_history_v1').doc('S' + seasonNumber)));
+  }
+
+  const lifetimeProfile = {
+    credits: 98765,
+    seasonAwards: { S1: { season: 1, rank: 1, prize: 5000 } },
+    trophies: [{ id: 'league-cup-season-1', season: 1, type: 'league_champion' }],
+    career: { matchesPlayed: 140, wins: 91 },
+    achievements: ['first-title', 'season-one-champion'],
+  };
+  const playerRef = track(db.collection('players_v14').doc('human-club'));
+  const durableBackupRef = track(db.collection('staging_season_one_reset_archives_v1').doc('CLEAN_S1_V1'));
+  await Promise.all([
+    configRef.set({
+      activeSeasonNumber: 6,
+      worldReady: true,
+      historyCleanupPending: true,
+      historyCleanupTargetSeason: 6,
+      lastRecoverySkippedSeasons: skippedSeasons,
+    }),
+    playerRef.set(lifetimeProfile),
+    durableBackupRef.set({
+      snapshotId: 'CLEAN_S1_V1',
+      sourceSeason: 1,
+      fullSnapshotRetained: true,
+      participantCount: 120,
+    }),
+  ]);
+
+  // A malformed retained archive must stop cleanup before any deletion intent
+  // is written. Final skipped-season markers are safe to complete after S6.
+  await retainedArchiveRef.update({
+    integrity: { ...completed.archive.integrity, canonicalMatches: 839 },
+  });
+  await assert.rejects(
+    () => pruneSeasonHistoryAfterActivation(db, 6, 5),
+    /RETAINED_ARCHIVE_INVALID/,
+  );
+  for (const seasonNumber of [1, 2, 3, 4]) {
+    assert.equal((await archiveRefs.get(seasonNumber).get()).exists, true);
+    assert.equal((await archiveRefs.get(seasonNumber).get()).get('pruneStatus'), undefined);
+    assert.equal((await legacyMatchRefs.get(seasonNumber).get()).exists, true);
+    assert.equal((await historyRefs.get(seasonNumber).get()).get('status'), 'SKIPPED');
+  }
+  assert.equal((await retainedArchiveRef.get()).exists, true);
+  await retainedArchiveRef.update({ integrity: completed.archive.integrity });
+
+  // Fail during S3 child deletion after S1 and S2 were fully removed. The
+  // persisted PRUNING intents must make the next invocation safely resumable.
+  const interrupted = failOnceOnArchiveMatchDelete(
+    db,
+    firestore,
+    collectionName + '_league_season_archives_v1',
+    'S3',
+  );
+  await assert.rejects(
+    () => pruneSeasonHistoryAfterActivation(interrupted.db, 6, 5),
+    /SIMULATED_SEASON_HISTORY_CLEANUP_INTERRUPTION/,
+  );
+  assert.equal(interrupted.wasInterrupted(), true);
+  for (const seasonNumber of [1, 2]) {
+    assert.equal((await archiveRefs.get(seasonNumber).get()).exists, false);
+    assert.equal((await legacyMatchRefs.get(seasonNumber).get()).exists, false);
+  }
+  for (const seasonNumber of [3, 4]) {
+    assert.equal((await archiveRefs.get(seasonNumber).get()).get('pruneStatus'), 'PRUNING');
+    assert.equal((await legacyMatchRefs.get(seasonNumber).get()).exists, true);
+  }
+  assert.equal((await retainedArchiveRef.get()).exists, true);
+  assert.equal((await retainedArchiveRef.collection('matches').get()).size, 840);
+  assert.equal((await planRefs.get(6).get()).exists, true);
+  assert.equal((await planRefs.get(1).get()).exists, true);
+
+  const resumed = await pruneSeasonHistoryAfterActivation(db, 6, 5);
+  assert.deepEqual(resumed, {
+    deletedArchives: 2,
+    deletedArchiveMatches: 2,
+    deletedRolloverPlans: 5,
+    retainedArchiveSeason: 5,
+  });
+
+  for (const seasonNumber of [1, 2, 3, 4]) {
+    assert.equal((await archiveRefs.get(seasonNumber).get()).exists, false);
+    assert.equal((await legacyMatchRefs.get(seasonNumber).get()).exists, false);
+    assert.equal((await historyRefs.get(seasonNumber).get()).get('status'), 'SKIPPED');
+  }
+  assert.equal((await retainedArchiveRef.get()).exists, true);
+  assert.equal((await retainedArchiveRef.collection('matches').get()).size, 840);
+  for (const seasonNumber of [1, 2, 3, 4, 5]) {
+    assert.equal((await planRefs.get(seasonNumber).get()).exists, false);
+  }
+  assert.equal((await planRefs.get(6).get()).exists, true);
+
+  assert.deepEqual((await playerRef.get()).data(), lifetimeProfile);
+  assert.deepEqual((await durableBackupRef.get()).data(), {
+    snapshotId: 'CLEAN_S1_V1',
+    sourceSeason: 1,
+    fullSnapshotRetained: true,
+    participantCount: 120,
+  });
+
+  const completion = await completeSeasonHistoryCleanup(db, 6);
+  assert.deepEqual(completion, { ready: true, reason: null, shouldMarkComplete: true });
+  assert.equal((await configRef.get()).get('historyCleanupPending'), false);
+  assert.equal((await configRef.get()).get('historyCleanupTargetSeason'), 6);
+  assert.equal((await lockRef.get()).exists, false);
 });

@@ -179,7 +179,7 @@ export function buildCarryForwardGroups(
 }
 
 
-/** Validate every persisted rollover decision; retain all historical plans permanently. */
+/** Validate every persisted rollover decision before pruning obsolete plans; keep the active target plan. */
 export function resolveRolloverPlanPruneIds(
   plans: Array<{ id: string; plan: any }>,
   targetSeason: number,
