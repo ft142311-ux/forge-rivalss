@@ -14,7 +14,7 @@ test('prepared Season 2 receives its complete Pyramid Cup before publication in 
 }, async t => {
   assert.match(emulatorHost, /^(127[.]0[.]0[.]1|localhost):[0-9]+$/);
 
-  const [{ getAdminDb }, { getTableId, MAX_LEVELS, TEAMS_PER_GROUP }, { MATCH_COLLECTIONS }, { preparePyramidCupForSeason, runPyramidCupCycle }, { resolveUniversalMatchDocument }] = await Promise.all([
+  const [{ getAdminDb }, { getTableId, MAX_LEVELS, TEAMS_PER_GROUP }, { MATCH_COLLECTIONS }, { generatePyramidCup, preparePyramidCupForSeason, runPyramidCupCycle }, { resolveUniversalMatchDocument }] = await Promise.all([
     import('../src/lib/firebase-admin.ts'),
     import('../src/app/lib/leagues-data.ts'),
     import('../src/app/lib/match-storage.ts'),
@@ -114,6 +114,23 @@ test('prepared Season 2 receives its complete Pyramid Cup before publication in 
   }
   await Promise.all([tableBatch.commit(), playerBatch.commit()]);
   assert.equal(teamCount, 120);
+
+  // The initial preflight can complete before a reset claims the world. The
+  // final creation transaction must re-read the marker and publish nothing.
+  await configRef.set({ stagingSeasonOneResetInProgress: true }, { merge: true });
+  await assert.rejects(
+    () => generatePyramidCup(season),
+    /STAGING_SEASON_ONE_RESET_IN_PROGRESS/,
+  );
+  const [cupDuringReset, snapshotsDuringReset, fixturesDuringReset] = await Promise.all([
+    cupRef.get(),
+    db.collection('cup_participant_snapshots_v1').doc(cupRef.id).collection('teams').get(),
+    db.collection(MATCH_COLLECTIONS.cup).where('cupId', '==', cupRef.id).get(),
+  ]);
+  assert.equal(cupDuringReset.exists, false);
+  assert.equal(snapshotsDuringReset.size, 0);
+  assert.equal(fixturesDuringReset.size, 0);
+  await configRef.set({ stagingSeasonOneResetInProgress: false }, { merge: true });
 
   // Capture every one of the 15 official league tables. Cup progression,
   // match resolution and champion rewards must never mutate league standings.
