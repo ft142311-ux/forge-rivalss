@@ -87,56 +87,61 @@ export async function markMatchViewedAction(idToken: string, matchId: string) {
 
     const db = getAdminDb();
     let ref: any = null;
-    let snap: any = null;
     let collectionName = '';
     for (const candidate of MATCH_REPORT_COLLECTIONS) {
       const candidateRef = db.collection(candidate).doc(id);
       const candidateSnap = await candidateRef.get();
       if (candidateSnap.exists) {
         ref = candidateRef;
-        snap = candidateSnap;
         collectionName = candidate;
         break;
       }
     }
 
-    if (!snap?.exists) {
-      return { success: true, persisted: false, localOnly: true };
-    }
+    if (!ref) return { success: true, persisted: false, localOnly: true };
 
-    const m = snap.data() || {};
-    const isParticipant = [m.homeId, m.awayId, m.homeUid, m.awayUid, m.hostId, m.challengerId]
-      .some((participantId) => String(participantId || '') === uid);
-    const profileSnap = await db.collection('players_v14').doc(uid).get();
-    const profile = profileSnap.exists ? profileSnap.data() || {} : null;
-    if (!profile || !isMatchWithinClubLifetime(m, profile.createdAt)) {
-      return { success: false, error: 'MATCH_ACCESS_DENIED' };
-    }
-    const rankParticipant = !isParticipant
-      ? await isRankBasedLeagueParticipant(db, uid, m, collectionName, profile)
-      : false;
+    const profileRef = db.collection('players_v14').doc(uid);
+    const configRef = db.collection('system_v1').doc('season_config');
+    return await db.runTransaction(async (tx: any) => {
+      const [freshMatchSnap, profileSnap, configSnap] = await Promise.all([
+        tx.get(ref),
+        tx.get(profileRef),
+        tx.get(configRef),
+      ]);
 
-    if (!isParticipant && !rankParticipant) {
-      return { success: false, error: 'MATCH_ACCESS_DENIED' };
-    }
+      // The report acknowledgement and reset claim now contend on the same
+      // config document. A reset cannot archive a stale unread state while a
+      // concurrent acknowledgement silently lands after its archive snapshot.
+      if (configSnap.exists && configSnap.data()?.stagingSeasonOneResetInProgress === true) {
+        return { success: false, error: 'STAGING_SEASON_ONE_RESET_IN_PROGRESS' };
+      }
+      if (!freshMatchSnap.exists) {
+        return { success: true, persisted: false, localOnly: true };
+      }
 
-    try {
-      // update() is intentionally non-creating: a report deleted after the
-      // ownership read must not be recreated as a partial viewed-only document.
-      await ref.update({
+      const m = freshMatchSnap.data() || {};
+      const profile = profileSnap.exists ? profileSnap.data() || {} : null;
+      if (!profile || !isMatchWithinClubLifetime(m, profile.createdAt)) {
+        return { success: false, error: 'MATCH_ACCESS_DENIED' };
+      }
+      const isParticipant = [m.homeId, m.awayId, m.homeUid, m.awayUid, m.hostId, m.challengerId]
+        .some((participantId) => String(participantId || '') === uid);
+      const rankParticipant = !isParticipant
+        ? await isRankBasedLeagueParticipant(db, uid, m, collectionName, profile)
+        : false;
+      if (!isParticipant && !rankParticipant) {
+        return { success: false, error: 'MATCH_ACCESS_DENIED' };
+      }
+
+      // update is non-creating: the transaction never recreates a report that
+      // was deleted between the collection lookup and this acknowledgement.
+      tx.update(ref, {
         seen: true,
         reportStatus: 'viewed',
         viewedAt: FieldValue.serverTimestamp(),
       });
-    } catch (error: any) {
-      const code = String(error?.code ?? '').toLowerCase();
-      if (code === '5' || code === 'not-found' || code === 'not_found' || code === 'firestore/not-found') {
-        return { success: true, persisted: false, localOnly: true };
-      }
-      throw error;
-    }
-
-    return { success: true, persisted: true, collection: collectionName };
+      return { success: true, persisted: true, collection: collectionName };
+    });
   } catch (error: any) {
     console.warn('[MATCH REPORT] mark viewed failed:', error);
     return { success: false, error: error?.message || 'MATCH_VIEW_MARK_FAILED' };
