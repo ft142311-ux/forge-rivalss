@@ -272,7 +272,17 @@ export async function runSeasonOrchestrator() {
   try {
     return await runSeasonOrchestratorUnlocked();
   } finally {
-    await releaseSeasonOrchestratorLock(db, lock.ownerId, lock.token);
+    // Cleanup is best-effort: a transient Firestore failure must not replace
+    // the scheduler's actual result with a rejected request. The lease has a
+    // bounded TTL and will become reclaimable if this delete cannot complete.
+    try {
+      await releaseSeasonOrchestratorLock(db, lock.ownerId, lock.token);
+    } catch (releaseError: any) {
+      logger.error('Failed to release season orchestrator lease; it will expire by TTL', {
+        ownerId: lock.ownerId,
+        error: releaseError?.message || String(releaseError),
+      });
+    }
   }
 }
 
