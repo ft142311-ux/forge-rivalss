@@ -57,3 +57,14 @@ test('tournament unregistration is closed at the same deadline as registration',
     'the deadline must be checked before participant state is changed',
   );
 });
+
+test('daily tournament generation tolerates only a competing deterministic-ID create', () => {
+  const generatorStart = source.indexOf('async function generateDailyTournamentsInternal');
+  const generatorEnd = source.indexOf('export async function generateDailyTournaments', generatorStart);
+  assert.ok(generatorStart >= 0 && generatorEnd > generatorStart);
+  const generator = source.slice(generatorStart, generatorEnd);
+  assert.match(generator, /await ref\.create\(data\)/);
+  assert.match(generator, /code === 6 \|\| code === 'already-exists' \|\| code === 'ALREADY_EXISTS'/);
+  assert.match(generator, /if \(code === 6[^\n]+\) continue;/);
+  assert.match(generator, /if \(code === 6[^\n]+\) continue;[\s\S]*?throw error;/);
+});
