@@ -33,3 +33,29 @@ test('group match settlement validates standings rows before atomically publishi
   assert.match(resolver, /const homeRow = groupRows\.find/);
   assert.match(resolver, /const awayRow = groupRows\.find/);
 });
+
+import { isTournamentStageFixtureCompatible } from '../src/app/lib/tournament-stage-transition.ts';
+
+test('stage transition reuses only a fully compatible scheduled fixture', () => {
+  const expected = {
+    id: 'quarterfinal_1',
+    tournamentId: 'daily-cup',
+    stage: 'quarterfinal',
+    round: 1,
+    index: 1,
+    homeId: 'team-a',
+    awayId: 'team-b',
+    bestOf: 2,
+    scheduledAt: 1_800_000_000_000,
+    status: 'scheduled',
+  };
+  const existing = { ...expected, createdAt: 123 };
+
+  assert.equal(isTournamentStageFixtureCompatible(existing, expected), true);
+  assert.equal(isTournamentStageFixtureCompatible({ ...existing, status: 'completed' }, expected), false);
+  assert.equal(isTournamentStageFixtureCompatible({ ...existing, bestOf: 1 }, expected), false);
+  assert.equal(isTournamentStageFixtureCompatible({ ...existing, scheduledAt: undefined }, expected), false);
+  assert.equal(isTournamentStageFixtureCompatible({ ...existing, round: 2 }, expected), false);
+  assert.equal(isTournamentStageFixtureCompatible({ ...existing, tournamentId: 'other-cup' }, expected), false);
+  assert.equal(isTournamentStageFixtureCompatible({ ...existing, awayId: 'team-c' }, expected), false);
+});
