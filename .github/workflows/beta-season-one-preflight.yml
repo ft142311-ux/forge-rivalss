@@ -1,9 +1,6 @@
 name: Beta Season 1 read-only preflight
 
 on:
-  push:
-    branches:
-      - feature/beta-fresh-season-one
   workflow_dispatch:
     inputs:
       deployment_url:

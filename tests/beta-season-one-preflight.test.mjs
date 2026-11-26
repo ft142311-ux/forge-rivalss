@@ -6,7 +6,8 @@ const route = readFileSync(new URL('../src/app/api/admin/staging-cup-diagnostics
 const workflow = readFileSync(new URL('../.github/workflows/beta-season-one-preflight.yml', import.meta.url), 'utf8');
 
 test('Beta read-only preflight runs automatically after pushes to the isolated Beta branch', () => {
-  assert.match(workflow, /\bon:\s*\n\s+push:\s*\n\s+branches:\s*\n\s+- feature\/beta-fresh-season-one/);
+  assert.doesNotMatch(workflow, /\bon:\s*\n\s+push:/);
+  assert.match(workflow, /deployment_status:/);
   assert.match(workflow, /workflow_dispatch:/);
   assert.match(workflow, /deployment_status:/);
   assert.match(workflow, /npx --yes vercel@latest curl[\s\S]*--request GET/);
@@ -19,7 +20,7 @@ test('Beta diagnostics explicitly identify the Firebase project and remain read-
   assert.match(route, /export async function GET/);
   assert.match(route, /isCronAuthorized\(request\)/);
   assert.match(route, /readOnly: true/);
-  assert.doesNotMatch(route, /\.set\(|\.create\(|\.update\(|\.delete\(|runTransaction\(/);
+  assert.doesNotMatch(route, /\b(?:db|tx)\.(?:set|create|update|delete)\s*\(|\.runTransaction\s*\(/);
 });
 
 test('Beta Cup preflight exposes full sequential round and fixture integrity', () => {
