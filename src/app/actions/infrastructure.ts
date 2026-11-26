@@ -4,6 +4,7 @@ import { FieldValue } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { requireServerActor } from '@/lib/server-auth';
 import { getArenaExpansionQuote } from '@/app/lib/arena-expansion';
+import { assertStagingSeasonOneResetNotInProgress } from '@/app/lib/staging-season-one-write-fence';
 
 export type ConstructionSection = 'arena' | 'hq' | 'bootcamp' | 'academy' | 'medical';
 
@@ -36,6 +37,7 @@ export async function startConstructionAction(idToken: string, section: Construc
     const playerRef = db.collection('players_v14').doc(uid);
 
     await db.runTransaction(async (t) => {
+      await assertStagingSeasonOneResetNotInProgress(t, db);
       const snap = await t.get(playerRef);
       if (!snap.exists) throw new Error('PLAYER_NOT_FOUND');
       const p = snap.data() || {};
@@ -106,6 +108,7 @@ export async function startCapacityExpansionAction(idToken: string, seats: numbe
     const playerRef = db.collection('players_v14').doc(uid);
 
     await db.runTransaction(async (t) => {
+      await assertStagingSeasonOneResetNotInProgress(t, db);
       const snap = await t.get(playerRef);
       if (!snap.exists) throw new Error('PLAYER_NOT_FOUND');
       const p = snap.data() || {};
@@ -193,6 +196,7 @@ export async function accelerateConstructionAction(idToken: string, section: str
     const playerRef = db.collection('players_v14').doc(uid);
 
     await db.runTransaction(async (t) => {
+      await assertStagingSeasonOneResetNotInProgress(t, db);
       const snap = await t.get(playerRef);
       if (!snap.exists) throw new Error('PLAYER_NOT_FOUND');
       const p = snap.data() || {};
@@ -234,6 +238,7 @@ export async function finalizeConstructionsAction(idToken: string) {
     const now = Date.now();
 
     await db.runTransaction(async (t) => {
+      await assertStagingSeasonOneResetNotInProgress(t, db);
       const snap = await t.get(playerRef);
       if (!snap.exists) throw new Error('PLAYER_NOT_FOUND');
       const p = snap.data() || {};
