@@ -1700,6 +1700,9 @@ export async function ensureSeasonCalendar(
     });
     const canonicalSeasonStart = resolvedWindow.seasonStart;
     const canonicalBoundary = resolvedWindow.nextSeasonStart;
+    if (config.worldGeneration === 'CLEAN_S1_V1' && resolvedWindow.source !== 'CLEAN_S1_V1') {
+      return { success: false, worldReady: false, action: 'WORLD_BUILDING', reason: 'CLEAN_SEASON_TIMELINE_INVALID', writesStarted: false };
+    }
     if (!transitioning && resolvedWindow.source === 'CANONICAL' &&
         ((persistedStart && persistedStart.getTime() !== canonicalSeasonStart.getTime()) ||
          (persistedNext && persistedNext.getTime() !== canonicalBoundary.getTime()))) {
