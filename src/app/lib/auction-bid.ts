@@ -25,7 +25,13 @@ export async function placeSpecialMarketBidWithDb(
   const refundLedgerRef = db.collection('economy_transactions').doc();
 
   return db.runTransaction(async (tx: any) => {
-    const [lotSnap, bidderSnap] = await Promise.all([tx.get(lotRef), tx.get(bidderRef)]);
+    const resetConfigRef = db.collection('system_v1').doc('season_config');
+    const [lotSnap, bidderSnap, resetConfigSnap] = await Promise.all([
+      tx.get(lotRef), tx.get(bidderRef), tx.get(resetConfigRef),
+    ]);
+    if (resetConfigSnap.exists && resetConfigSnap.data()?.stagingSeasonOneResetInProgress === true) {
+      throw new Error('STAGING_SEASON_ONE_RESET_IN_PROGRESS');
+    }
     if (!lotSnap.exists) throw new Error('MARKET_LOT_NOT_FOUND');
     if (!bidderSnap.exists) throw new Error('PLAYER_NOT_FOUND');
 
@@ -178,7 +184,11 @@ export async function placeStandardMarketBidWithDb(
   return db.runTransaction(async (tx: any) => {
     const marketRef = db.collection('market_v7').doc(marketId);
     const bidderRef = db.collection('players_v14').doc(uid);
-    const marketSnap = await tx.get(marketRef);
+    const resetConfigRef = db.collection('system_v1').doc('season_config');
+    const [marketSnap, resetConfigSnap] = await Promise.all([tx.get(marketRef), tx.get(resetConfigRef)]);
+    if (resetConfigSnap.exists && resetConfigSnap.data()?.stagingSeasonOneResetInProgress === true) {
+      throw new Error('STAGING_SEASON_ONE_RESET_IN_PROGRESS');
+    }
     if (!marketSnap.exists) throw new Error('MARKET_LOT_NOT_FOUND');
 
     const lot: any = marketSnap.data() || {};
