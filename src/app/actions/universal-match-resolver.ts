@@ -7,6 +7,7 @@ import { SEASON_ROLLOVER_LOCK_ID, SEASON_ROLLOVER_LOCK_TTL_MS } from './season-r
 import { buildMatchTeamSnapshot } from '@/app/lib/match-simulation';
 import { runMatchEngine } from '@/app/lib/match-engine';
 import { timestampToMillis } from '@/app/lib/timestamp-utils';
+import { isMatchReportFinished } from '@/app/lib/match-report-utils';
 import { normalizeName } from '@/app/lib/normalize-name';
 import { assertMatchDocumentId } from '@/app/lib/match-id';
 import { getMatchWinnerId } from '@/app/lib/match-winner';
@@ -41,6 +42,11 @@ export async function resolveUniversalMatchDocument(
   const now = Timestamp.now();
 
   return db.runTransaction(async (t: any) => {
+    const resetConfigSnap = await t.get(db.collection('system_v1').doc('season_config'));
+    const resetConfig = resetConfigSnap.exists ? resetConfigSnap.data() || {} : {};
+    if (resetConfig.stagingSeasonOneResetInProgress === true || resetConfig.stagingFreshSeasonOneReset === true) {
+      throw new Error('STAGING_SEASON_ONE_RESET_IN_PROGRESS');
+    }
     const snap = await t.get(ref);
     if (!snap.exists) throw new Error('MATCH_NOT_FOUND');
     const match: any = snap.data() || {};
@@ -64,8 +70,7 @@ export async function resolveUniversalMatchDocument(
       }
     };
 
-    if (match.isFinished === true ||
-        ['finished', 'completed'].includes(String(match.status || '').toLowerCase())) {
+    if (isMatchReportFinished(match)) {
       renewRolloverLock();
       // Repair the notification/report flags without re-simulating an already
       // finished match. This is intentionally idempotent.
@@ -86,8 +91,7 @@ export async function resolveUniversalMatchDocument(
     // boundary inside this transaction before any league simulation or writes.
     const matchType = String(match.matchType || match.type || 'league').toLowerCase();
     if (collectionName === 'matches_v2' && matchType === 'league') {
-      const configSnap = await t.get(db.collection('system_v1').doc('season_config'));
-      const config = configSnap.exists ? configSnap.data() || {} : {};
+      const config = resetConfig;
       const info = getGlobalSeasonInfo(new Date());
       let lifecycle: ReturnType<typeof resolveSeasonLifecycleWindow>;
       try {
