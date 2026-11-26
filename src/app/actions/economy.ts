@@ -6,6 +6,7 @@ import { getAdminDb } from '@/lib/firebase-admin';
 import { getMoscowDateString } from '@/app/lib/time-utils';
 import { getDailyRewardForDay, getNextDailyRewardDay, getPremiumDailyCrystalBonus } from '@/app/lib/daily-reward';
 import { requireServerActor } from '@/lib/server-auth';
+import { assertStagingSeasonOneResetNotInProgress } from '@/app/lib/staging-season-one-write-fence';
 
 /**
  * @fileOverview Защищенный слой экономики.
@@ -34,6 +35,7 @@ export async function claimDailyRewardAction(idToken: string) {
 
   try {
     const result = await db.runTransaction(async (t) => {
+      await assertStagingSeasonOneResetNotInProgress(t, db);
       const receiptSnap = await t.get(receiptRef);
       if (receiptSnap.exists) return receiptSnap.data()?.result;
 
