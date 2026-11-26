@@ -9,6 +9,7 @@ import { calculateDailyPlayerSalary, salaryPeriodKey } from '@/game/foundation/e
 import { calculateMarketValue, calculateSalary } from '@/game/foundation/player-system';
 import { deterministicDailyEvent } from '@/game/foundation/events';
 import { clamp } from '@/game/foundation/player-system';
+import { assertStagingSeasonOneResetNotInProgress } from '@/app/lib/staging-season-one-write-fence';
 
 const CYCLE_VERSION = 1;
 const STAFF_SALARY_SHARE = 1;
@@ -44,6 +45,7 @@ function normalizePlayers(players: any[]) {
 async function processManager(db: any, ref: DocumentReference, now: Date) {
   const periodKey = moscowDateKey(now);
   return db.runTransaction(async (t: Transaction) => {
+    await assertStagingSeasonOneResetNotInProgress(t, db);
     const snap = await t.get(ref);
     if (!snap.exists) return { processed: false };
     const data = snap.data() || {};
@@ -130,6 +132,23 @@ export async function runFoundationDailyCycle(cronSecret: string) {
   assertCronSecret(cronSecret);
   const db = getAdminDb();
   const now = new Date();
+  const resetConfigSnap = await db.collection('system_v1').doc('season_config').get();
+  const resetConfig = resetConfigSnap.exists ? resetConfigSnap.data() || {} : {};
+  if (resetConfig.stagingSeasonOneResetInProgress === true || resetConfig.stagingFreshSeasonOneReset === true) {
+    return {
+      success: false,
+      error: 'STAGING_SEASON_ONE_RESET_IN_PROGRESS',
+      date: moscowDateKey(now),
+      scanned: 0,
+      pages: 0,
+      processed: 0,
+      paid: 0,
+      unpaid: 0,
+      failed: 0,
+      errors: [],
+      version: CYCLE_VERSION,
+    };
+  }
   const managers = db.collection(FOUNDATION_COLLECTIONS.managers);
   const pageSize = 200;
   let cursor: any = null;
@@ -139,6 +158,7 @@ export async function runFoundationDailyCycle(cronSecret: string) {
   let paid = 0;
   let unpaid = 0;
   const errors: Array<{ managerId: string; error: string }> = [];
+  let resetBlocked = false;
 
   // Stable document-ID pagination prevents managers after the first 500 from
   // being silently skipped. Each manager transaction remains independently
@@ -161,16 +181,22 @@ export async function runFoundationDailyCycle(cronSecret: string) {
         }
       } catch (error: any) {
         const message = String(error?.message || 'FOUNDATION_MANAGER_CYCLE_FAILED');
+        if (message === 'STAGING_SEASON_ONE_RESET_IN_PROGRESS') {
+          resetBlocked = true;
+          break;
+        }
         errors.push({ managerId: doc.id, error: message.slice(0, 240) });
         console.warn(`[FOUNDATION] cycle failed for ${doc.id}`, error);
       }
     }
+    if (resetBlocked) break;
     cursor = page.docs[page.docs.length - 1];
     if (page.size < pageSize) break;
   }
 
   return {
-    success: errors.length === 0,
+    success: errors.length === 0 && !resetBlocked,
+    error: resetBlocked ? 'STAGING_SEASON_ONE_RESET_IN_PROGRESS' : undefined,
     date: moscowDateKey(now),
     scanned,
     pages,
@@ -188,15 +214,18 @@ export async function syncFoundationForManager(idToken: string) {
   const { uid } = await requireServerActor(idToken);
   const db = getAdminDb();
   const ref = getFoundationManagerRef(db, uid);
-  const snap = await ref.get();
-  if (!snap.exists) return { success: false, error: 'PLAYER_NOT_FOUND' };
-  const data = snap.data() || {};
-  const players = normalizePlayers(Array.isArray(data.ownedPlayers) ? data.ownedPlayers : []);
-  await ref.update({
-    ownedPlayers: players,
-    foundationVersion: CYCLE_VERSION,
-    tactics: { ...DEFAULT_TACTICS, ...(data.tactics || {}) },
-    updatedAt: FieldValue.serverTimestamp(),
+  return db.runTransaction(async (t: Transaction) => {
+    await assertStagingSeasonOneResetNotInProgress(t, db);
+    const snap = await t.get(ref);
+    if (!snap.exists) return { success: false, error: 'PLAYER_NOT_FOUND' };
+    const data = snap.data() || {};
+    const players = normalizePlayers(Array.isArray(data.ownedPlayers) ? data.ownedPlayers : []);
+    t.update(ref, {
+      ownedPlayers: players,
+      foundationVersion: CYCLE_VERSION,
+      tactics: { ...DEFAULT_TACTICS, ...(data.tactics || {}) },
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+    return { success: true, migrated: true };
   });
-  return { success: true, migrated: true };
 }
