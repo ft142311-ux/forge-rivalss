@@ -47,11 +47,12 @@ test('Pyramid Cup cycle remains a server-only worker rather than an exposed Serv
   assert.doesNotMatch(cupEngineSource, /^['"]use server['"]/);
 });
 
-test('tournament unregistration is closed at the same deadline as registration', () => {
+test('tournament unregistration validates and respects the registration deadline', () => {
   const unregister = actionBody('unregisterFromTournamentAction');
-  assert.ok(unregister.includes('Date.now() >= Number(data.registrationCloseAt)'));
+  assert.ok(unregister.includes('getTournamentRegistrationWindow(data)'));
+  assert.ok(unregister.includes('Date.now() >= registrationWindow.closesAt'));
   assert.ok(
-    unregister.indexOf('registrationCloseAt') < unregister.indexOf('t.update(ref'),
+    unregister.indexOf('registrationWindow.closesAt') < unregister.indexOf('t.update(ref'),
     'the deadline must be checked before participant state is changed',
   );
 });
