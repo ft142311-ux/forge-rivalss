@@ -636,8 +636,9 @@ function makeRolloverPlan(sourceSeason, targetSeason, groups, skippedSeasons = [
   };
 }
 
-function failOnceOnArchiveMatchDelete(db, firestore, physicalArchiveCollection, archiveId) {
+function failOnceOnArchiveMatchDelete(db, firestore, physicalArchiveCollection, archiveId, failAfterDeletes = 0) {
   let interrupted = false;
+  let deletedMatches = 0;
   const wrappedDb = {
     collection: name => db.collection(name),
     runTransaction: (callback, options) => firestore.runTransaction(tx => callback({
@@ -646,9 +647,12 @@ function failOnceOnArchiveMatchDelete(db, firestore, physicalArchiveCollection, 
       update: (...args) => tx.update(...args),
       delete: ref => {
         const failedPath = physicalArchiveCollection + '/' + archiveId + '/matches/';
-        if (!interrupted && ref.path.startsWith(failedPath)) {
-          interrupted = true;
-          throw new Error('SIMULATED_SEASON_HISTORY_CLEANUP_INTERRUPTION');
+        if (ref.path.startsWith(failedPath)) {
+          if (!interrupted && deletedMatches >= failAfterDeletes) {
+            interrupted = true;
+            throw new Error('SIMULATED_SEASON_HISTORY_CLEANUP_INTERRUPTION');
+          }
+          deletedMatches++;
         }
         return tx.delete(ref);
       },
@@ -663,14 +667,13 @@ test('Firestore Emulator prunes S1-S4 after S6 activation, retains S5 and resume
   const { db, track, firestore, collectionName } = await withIsolatedFirestore(t);
   const configRef = track(db.collection('system_v1').doc('season_config'));
   const lockRef = track(db.collection('system_v1').doc(SEASON_CALENDAR_BUILD_LOCK_ID));
-  const skippedSeasons = [1, 2, 3, 4].map(seasonNumber => ({
+  const skippedSeasons = [1, 2, 3].map(seasonNumber => ({
     seasonNumber,
     reason: 'SEASON_INCOMPLETE',
   }));
 
   const archiveRefs = new Map();
-  const legacyMatchRefs = new Map();
-  for (const seasonNumber of [1, 2, 3, 4]) {
+  for (const seasonNumber of [1, 2, 3]) {
     const recovered = buildRecoveredSeasonArchiveSnapshot({
       sourceSeason: seasonNumber,
       startingParticipants: makeStartingParticipants(seasonNumber),
@@ -682,12 +685,24 @@ test('Firestore Emulator prunes S1-S4 after S6 activation, retains S5 and resume
     const archiveRef = track(db.collection('league_season_archives_v1').doc('S' + seasonNumber));
     const matchRef = track(archiveRef.collection('matches').doc('legacy-match-' + seasonNumber));
     archiveRefs.set(seasonNumber, archiveRef);
-    legacyMatchRefs.set(seasonNumber, matchRef);
     await Promise.all([
       archiveRef.set(recovered.archive),
       matchRef.set({ season: seasonNumber, status: 'legacy_snapshot' }),
     ]);
   }
+
+  // S4 is a completed archive, and the real cleanup worker must resume after
+  // a committed first batch has already removed 400 of its 840 match snapshots.
+  const completedS4 = makeCompletedArchive(4);
+  const completedS4Ref = track(db.collection('league_season_archives_v1').doc('S4'));
+  archiveRefs.set(4, completedS4Ref);
+  await completedS4Ref.set(completedS4.archive);
+  const completedS4Writes = completedS4.matches.map(match => {
+    const { matchId, ...data } = match;
+    const ref = track(completedS4Ref.collection('matches').doc(matchId));
+    return { ref, data };
+  });
+  await writeDocsInBatches(firestore, completedS4Writes);
 
   const completed = makeCompletedArchive(5);
   const retainedArchiveRef = track(db.collection('league_season_archives_v1').doc('S5'));
@@ -762,27 +777,26 @@ test('Firestore Emulator prunes S1-S4 after S6 activation, retains S5 and resume
   assert.equal((await retainedArchiveRef.get()).exists, true);
   await corruptedRetainedMatchRef.update({ score: completed.matches[0].score });
 
-  // Fail during S3 child deletion after S1 and S2 were fully removed. The
-  // persisted PRUNING intents must make the next invocation safely resumable.
+  // Fail during S4 child deletion after S1-S3 were removed and the first 400
+  // of S4's 840 completed-match snapshots were durably deleted.
   const interrupted = failOnceOnArchiveMatchDelete(
     db,
     firestore,
     collectionName + '_league_season_archives_v1',
-    'S3',
+    'S4',
+    400,
   );
   await assert.rejects(
     () => pruneSeasonHistoryAfterActivation(interrupted.db, 6, 5),
     /SIMULATED_SEASON_HISTORY_CLEANUP_INTERRUPTION/,
   );
   assert.equal(interrupted.wasInterrupted(), true);
-  for (const seasonNumber of [1, 2]) {
+  for (const seasonNumber of [1, 2, 3]) {
     assert.equal((await archiveRefs.get(seasonNumber).get()).exists, false);
-    assert.equal((await legacyMatchRefs.get(seasonNumber).get()).exists, false);
+    assert.equal((await archiveRefs.get(seasonNumber).collection('matches').get()).size, 0);
   }
-  for (const seasonNumber of [3, 4]) {
-    assert.equal((await archiveRefs.get(seasonNumber).get()).get('pruneStatus'), 'PRUNING');
-    assert.equal((await legacyMatchRefs.get(seasonNumber).get()).exists, true);
-  }
+  assert.equal((await archiveRefs.get(4).get()).get('pruneStatus'), 'PRUNING');
+  assert.equal((await archiveRefs.get(4).collection('matches').get()).size, 440);
   assert.equal((await retainedArchiveRef.get()).exists, true);
   assert.equal((await retainedArchiveRef.collection('matches').get()).size, 840);
   assert.equal((await planRefs.get(6).get()).exists, true);
@@ -790,15 +804,17 @@ test('Firestore Emulator prunes S1-S4 after S6 activation, retains S5 and resume
 
   const resumed = await pruneSeasonHistoryAfterActivation(db, 6, 5);
   assert.deepEqual(resumed, {
-    deletedArchives: 2,
-    deletedArchiveMatches: 2,
+    deletedArchives: 1,
+    deletedArchiveMatches: 443,
     deletedRolloverPlans: 5,
     retainedArchiveSeason: 5,
   });
 
   for (const seasonNumber of [1, 2, 3, 4]) {
     assert.equal((await archiveRefs.get(seasonNumber).get()).exists, false);
-    assert.equal((await legacyMatchRefs.get(seasonNumber).get()).exists, false);
+    assert.equal((await archiveRefs.get(seasonNumber).collection('matches').get()).size, 0);
+  }
+  for (const seasonNumber of [1, 2, 3]) {
     assert.equal((await historyRefs.get(seasonNumber).get()).get('status'), 'SKIPPED');
   }
   assert.equal((await retainedArchiveRef.get()).exists, true);
