@@ -130,23 +130,25 @@ jobs:
             exit 1
           fi
           response_file="$(mktemp)"
-          trap 'rm -f "$response_file"' EXIT
+          status_file="$(mktemp)"
+          summary_file="$(mktemp)"
+          trap 'rm -f "$response_file" "$status_file" "$summary_file"' EXIT
           npx --yes vercel@latest curl "${BASE_URL}/api/admin/staging-cup-diagnostics" -- \
             --silent --show-error --max-time 120 --request GET \
             --output "$response_file" \
-            --write-out '\n__HTTP_STATUS__:%{http_code}' >> "$response_file" \
+            --write-out '%{http_code}' > "$status_file" \
             --header "Authorization: Bearer ${CRON_SECRET}"
           unset CRON_SECRET VERCEL_TOKEN
-          node - "$response_file" <<'NODE'
+          node - "$response_file" "$status_file" "$summary_file" <<'NODE'
           const fs = require('node:fs');
           const file = process.argv[2];
+          const statusFile = process.argv[3];
+          const summaryFile = process.argv[4];
           const raw = fs.readFileSync(file, 'utf8');
-          const marker = raw.lastIndexOf('\n__HTTP_STATUS__:');
-          if (marker < 0) throw new Error('Vercel CLI did not return an HTTP status; preflight result is unknown.');
-          const status = Number(raw.slice(marker + '\n__HTTP_STATUS__:'.length).trim());
+          const status = Number(fs.readFileSync(statusFile, 'utf8').trim());
           let result;
-          try { result = JSON.parse(raw.slice(0, marker)); }
-          catch { throw new Error(`Preflight returned non-JSON response (HTTP ${status}).`); }
+          try { result = JSON.parse(raw); }
+          catch { throw new Error('Preflight returned non-JSON response (HTTP ' + status + ').'); }
           const failures = [];
           if (status !== 200) failures.push('HTTP_STATUS_' + status);
           if (result.readOnly !== true) failures.push('READ_ONLY_FLAG_MISSING');
@@ -193,3 +195,7 @@ jobs:
           if (failures.length) process.exit(1);
           console.log('Read-only Beta Season 1 and season-lifecycle preflight passed. No writes were executed.');
           NODE
+          {
+            echo "## Beta read-only preflight"
+            cat "$summary_file"
+          } >> "$GITHUB_STEP_SUMMARY"

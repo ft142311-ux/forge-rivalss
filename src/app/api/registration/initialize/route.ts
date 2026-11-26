@@ -19,6 +19,7 @@ type RegistrationStandingTransfer =
   | { ok: false; reason: string };
 
 type RegistrationCore = {
+  isPyramidCupReadyForRegistration: (cup: Record<string, any> | null, season: number) => boolean;
   isEligibleRegistrationSlot: (slot: Record<string, unknown>, season: number) => boolean;
   validateRegistrationSchedule: (matches: Record<string, unknown>[], rank: number, botId: string) => boolean;
   generateStartingSquad: () => Record<string, unknown>[];
@@ -224,6 +225,29 @@ export async function POST(request: NextRequest) {
       }
       if (phase !== 'REGULAR_SEASON' && phase !== 'ACTIVE') {
         throw new Error('SEASON_TRANSITION_IN_PROGRESS');
+      }
+
+      // The hosted HTTP endpoint is the active registration path. Check the
+      // actual active-season Cup root in this transaction; worldReady=true or
+      // a stale readiness flag must not open a slot when the required bracket
+      // is missing or malformed.
+      if (config.pyramidCupRequired === true) {
+        const cupRef = db.collection('cup_pyramid_v1').doc('cup_s' + seasonNum + '_l' + LEAGUE_ID);
+        const cupSnapshot = await transaction.get(cupRef);
+        const initialCupFlagPending =
+          Number(config.pyramidCupReadySeasonNumber || 0) === seasonNum &&
+          config.pyramidCupReady !== true;
+        const cupReady = cupSnapshot.exists &&
+          registrationCore.isPyramidCupReadyForRegistration(cupSnapshot.data() || null, seasonNum);
+        if (initialCupFlagPending || !cupReady) {
+          registrationTrace('pyramid_cup_readiness_blocked', transactionStartedAt, {
+            season: seasonNum,
+            cupExists: cupSnapshot.exists,
+            cupReadyFlag: config.pyramidCupReady === true,
+            cupReadySeasonNumber: Number(config.pyramidCupReadySeasonNumber || 0),
+          });
+          throw new Error('WORLD_INITIALIZING');
+        }
       }
 
       const globalStatsSnapshot = await transaction.get(statsRef);

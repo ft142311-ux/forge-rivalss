@@ -7,11 +7,121 @@ import {
   generateStartingSquad,
   transferBotStandingToUser,
   buildRegistrationMatchPlan,
+  isPyramidCupReadyForRegistration,
 } from '../functions/registration-core.js';
+
+test('registration accepts only the canonical active-season Pyramid Cup opening field', () => {
+  const cup = createRegistrationCup(3);
+  assert.equal(isPyramidCupReadyForRegistration(cup, 3), true);
+  assert.equal(isPyramidCupReadyForRegistration(cup, 4), false);
+  assert.equal(isPyramidCupReadyForRegistration(null, 3), false);
+  assert.equal(isPyramidCupReadyForRegistration({ ...cup, season: 2 }, 3), false);
+  assert.equal(isPyramidCupReadyForRegistration({ ...cup, formatVersion: 3 }, 3), false);
+});
+
+test('registration rejects duplicate, BYE, D1-opening and incomplete-rest Cup fields', () => {
+  const cup = createRegistrationCup(3);
+  const duplicateParticipant = {
+    ...cup,
+    participants: cup.participants.map((team, index) =>
+      index === 1 ? { ...team, id: cup.participants[0].id } : team
+    ),
+  };
+  assert.equal(isPyramidCupReadyForRegistration(duplicateParticipant, 3), false);
+
+  const openingBye = {
+    ...cup,
+    rounds: {
+      ...cup.rounds,
+      r1: cup.rounds.r1.map((pairing, index) =>
+        index === 0 ? { ...pairing, away: null } : pairing
+      ),
+    },
+  };
+  assert.equal(isPyramidCupReadyForRegistration(openingBye, 3), false);
+
+  const d1InOpening = {
+    ...cup,
+    rounds: {
+      ...cup.rounds,
+      r1: cup.rounds.r1.map((pairing, index) =>
+        index === 0 ? { ...pairing, home: cup.openingRoundRestTeams[0] } : pairing
+      ),
+    },
+  };
+  assert.equal(isPyramidCupReadyForRegistration(d1InOpening, 3), false);
+
+  const wrongRestTeams = { ...cup, openingRoundRestTeams: cup.openingRoundRestTeams.slice(1) };
+  assert.equal(isPyramidCupReadyForRegistration(wrongRestTeams, 3), false);
+});
+
+test('registration accepts a completed Pyramid Cup only with a recorded champion', () => {
+  const cup = createRegistrationCup(3);
+  const completed = {
+    ...cup,
+    status: 'completed',
+    currentRound: 7,
+    winnerId: cup.participants[0].id,
+  };
+  assert.equal(isPyramidCupReadyForRegistration(completed, 3), true);
+  assert.equal(isPyramidCupReadyForRegistration({ ...completed, winnerId: null }, 3), false);
+});
 
 test('new clubs start with the canonical 3,000-seat arena capacity', () => {
   assert.equal(DEFAULT_ARENA_CAPACITY, 3000);
 });
+
+function createRegistrationCup(season = 3) {
+  const participants = [];
+  for (let level = 1; level <= 4; level += 1) {
+    for (let group = 1; group <= Math.pow(2, level - 1); group += 1) {
+      for (let rank = 1; rank <= 8; rank += 1) {
+        const seed = participants.length + 1;
+        participants.push({
+          id: 'cup-team-d' + level + '-g' + group + '-r' + rank,
+          name: 'D' + level + ' G' + group + ' R' + rank,
+          level,
+          group,
+          rank,
+          seed,
+        });
+      }
+    }
+  }
+  const eligible = participants.filter(team => team.level !== 1);
+  const openingRound = Array.from({ length: 56 }, (_, index) => {
+    const stronger = eligible[eligible.length - 2 - index * 2];
+    const weaker = eligible[eligible.length - 1 - index * 2];
+    const pairingIndex = index + 1;
+    return {
+      id: 'r1_m' + pairingIndex,
+      index: pairingIndex,
+      matchId: 'cup_S' + season + '_R1_M' + String(pairingIndex).padStart(2, '0'),
+      status: 'scheduled',
+      home: weaker,
+      away: stronger,
+    };
+  });
+  return {
+    id: 'cup_s' + season + '_lALPHA',
+    season,
+    leagueId: 'ALPHA',
+    name: 'Кубок Пирамиды',
+    status: 'active',
+    currentRound: 1,
+    formatVersion: 4,
+    format: 'D1_REST_OPENING_ROUND',
+    totalRounds: 7,
+    totalParticipants: 120,
+    totalMatches: 119,
+    preliminaryMatches: 56,
+    openingRoundRestCount: 8,
+    openingRoundRestTeams: participants.filter(team => team.level === 1),
+    byeCount: 0,
+    participants,
+    rounds: { r1: openingRound, r2: [], r3: [], r4: [], r5: [], r6: [], r7: [] },
+  };
+}
 
 function createRoundRobin(botRank = 3, botId = 'bot-3') {
   const ids = Array.from({ length: 8 }, (_, index) =>

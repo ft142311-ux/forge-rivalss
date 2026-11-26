@@ -61,6 +61,103 @@ function generateStartingSquad() {
   });
 }
 
+/**
+ * Verify the immutable opening field before allowing a new manager to claim
+ * a league slot. The season scheduler performs deeper fixture/snapshot checks;
+ * this guard blocks missing, stale, or malformed active-season Cup roots.
+ */
+function isPyramidCupReadyForRegistration(cup, season) {
+  const expectedSeason = Number(season);
+  if (!cup || !Number.isSafeInteger(expectedSeason) || expectedSeason < 1) return false;
+  if (Number(cup.season) !== expectedSeason ||
+      String(cup.leagueId || '') !== 'ALPHA' ||
+      !['active', 'completed'].includes(String(cup.status || '').toLowerCase()) ||
+      Number(cup.formatVersion) !== 4 ||
+      cup.format !== 'D1_REST_OPENING_ROUND' ||
+      Number(cup.totalParticipants) !== 120 ||
+      Number(cup.totalMatches) !== 119 ||
+      Number(cup.preliminaryMatches) !== 56 ||
+      Number(cup.totalRounds) !== 7 ||
+      Number(cup.openingRoundRestCount) !== 8 ||
+      Number(cup.byeCount) !== 0) return false;
+
+  const currentRound = Number(cup.currentRound);
+  if (!Number.isInteger(currentRound) || currentRound < 1 || currentRound > 7) return false;
+  if (cup.status === 'completed' && (currentRound !== 7 || !String(cup.winnerId || ''))) return false;
+
+  const participants = Array.isArray(cup.participants) ? cup.participants : [];
+  if (participants.length !== 120) return false;
+  const participantById = new Map();
+  const participantSeeds = new Set();
+  const levelCounts = { 1: 0, 2: 0, 3: 0, 4: 0 };
+
+  for (const team of participants) {
+    const id = String(team && team.id || '');
+    const level = Number(team && team.level);
+    const group = Number(team && team.group);
+    const rank = Number(team && team.rank);
+    const seed = Number(team && team.seed);
+    if (!id || participantById.has(id) ||
+        !Number.isInteger(level) || level < 1 || level > 4 ||
+        !Number.isInteger(group) || group < 1 || group > Math.pow(2, level - 1) ||
+        !Number.isInteger(rank) || rank < 1 || rank > 8 ||
+        !Number.isInteger(seed) || seed < 1 || seed > 120 ||
+        participantSeeds.has(seed)) return false;
+    participantById.set(id, { level, group, rank, seed });
+    participantSeeds.add(seed);
+    levelCounts[level] += 1;
+  }
+
+  if (participantSeeds.size !== 120 ||
+      levelCounts[1] !== 8 || levelCounts[2] !== 16 ||
+      levelCounts[3] !== 32 || levelCounts[4] !== 64) return false;
+
+  const restTeams = Array.isArray(cup.openingRoundRestTeams) ? cup.openingRoundRestTeams : [];
+  if (restTeams.length !== 8) return false;
+  const d1Ids = new Set(
+    participants.filter(team => Number(team.level) === 1).map(team => String(team.id))
+  );
+  const restIds = new Set();
+  for (const team of restTeams) {
+    const id = String(team && team.id || '');
+    if (!id || restIds.has(id) || Number(team.level) !== 1 || !d1Ids.has(id)) return false;
+    restIds.add(id);
+  }
+  if (restIds.size !== 8 || [...d1Ids].some(id => !restIds.has(id))) return false;
+
+  const rounds = cup.rounds && typeof cup.rounds === 'object' ? cup.rounds : {};
+  const openingRound = Array.isArray(rounds.r1) ? rounds.r1 : [];
+  if (openingRound.length !== 56) return false;
+  const openingIds = new Set();
+
+  for (let index = 0; index < openingRound.length; index += 1) {
+    const pairing = openingRound[index];
+    if (!pairing || typeof pairing !== 'object') return false;
+    const expectedIndex = index + 1;
+    const expectedMatchId = 'cup_S' + expectedSeason + '_R1_M' + String(expectedIndex).padStart(2, '0');
+    const homeId = String(pairing.home && pairing.home.id || '');
+    const awayId = String(pairing.away && pairing.away.id || '');
+    const home = participantById.get(homeId);
+    const away = participantById.get(awayId);
+    if (Number(pairing.index) !== expectedIndex ||
+        pairing.id !== 'r1_m' + expectedIndex ||
+        pairing.matchId !== expectedMatchId ||
+        !['scheduled', 'finished'].includes(String(pairing.status || '').toLowerCase()) ||
+        !homeId || !awayId || homeId === awayId ||
+        !home || !away ||
+        home.level === 1 || away.level === 1 ||
+        openingIds.has(homeId) || openingIds.has(awayId)) return false;
+    if (String(pairing.status).toLowerCase() === 'finished' &&
+        ![homeId, awayId].includes(String(pairing.winnerId || ''))) return false;
+    openingIds.add(homeId);
+    openingIds.add(awayId);
+  }
+
+  return openingIds.size === 112 &&
+    [...participantById.keys()].every(id => openingIds.has(id) || restIds.has(id)) &&
+    [...openingIds].every(id => !restIds.has(id));
+}
+
 function isCompletedMatch(match) {
   const status = String(match && match.status || '').toLowerCase();
   return Boolean(match && match.isFinished === true) ||
@@ -221,6 +318,7 @@ function buildRegistrationMatchPlan(matches, botId, userId, clubName, nowMs = Da
 module.exports = {
   DEFAULT_ARENA_CAPACITY,
   isEligibleRegistrationSlot,
+  isPyramidCupReadyForRegistration,
   validateRegistrationSchedule,
   generateStartingSquad,
   isCompletedMatch,

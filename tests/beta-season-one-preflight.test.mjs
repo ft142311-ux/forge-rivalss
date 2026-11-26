@@ -12,6 +12,10 @@ test('Beta read-only preflight runs after a Preview deployment and is manually d
   assert.match(workflow, /workflow_dispatch:/);
   assert.match(workflow, /npx --yes vercel@latest curl[\s\S]*--request GET/);
   assert.doesNotMatch(workflow, /--request POST|RESET_BETA_SEASON_ONE/);
+  assert.match(workflow, /status_file="\$\(mktemp\)"/);
+  assert.match(workflow, /summary_file="\$\(mktemp\)"/);
+  assert.match(workflow, /const summaryFile = process\.argv\[4\]/);
+  assert.match(workflow, /cat "\$summary_file"/);
 });
 
 test('Beta diagnostics explicitly identify the Firebase project and remain read-only', () => {
