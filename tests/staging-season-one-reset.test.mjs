@@ -396,7 +396,7 @@ test('calendar bypasses the old fixture gate only for an explicitly marked Beta 
   assert.match(source, /config\.worldReady !== true/);
   assert.match(source, /lockedPreflight = pristineFirstWorld \|\| stagingFreshSeasonOneReset/);
   assert.doesNotMatch(source, /directRecoveryBuild/);
-  assert.match(source, /stagingFreshSeasonOneReset: config\\.stagingFreshSeasonOneReset === true/);
+  assert.match(source, /stagingFreshSeasonOneReset: config\.stagingFreshSeasonOneReset === true/);
 });
 
 test('legacy full-world reset is hard-blocked outside local Firebase Emulator', () => {
