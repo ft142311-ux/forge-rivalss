@@ -152,7 +152,7 @@ test('recovered archive rejects invalid counters, timestamps, metadata, extra gr
 
 
 
-test('archive pruning retains the newest completed archive and only prunes fully verified older archives', async () => {
+test('archive cleanup validates all completed archives and never deletes historical seasons', async () => {
   const { resolveArchivePrunePlan } = await import('../src/app/actions/season-archive.ts');
   const first = makeSeasonArchive(1);
   first.archive.status = 'completed';
@@ -165,7 +165,7 @@ test('archive pruning retains the newest completed archive and only prunes fully
     { id: 'S2', archive: second.archive, matches: second.matches },
   ], 4, 2);
   assert.equal(result.ready, true);
-  assert.deepEqual(result.pruneIds, ['S1']);
+  assert.deepEqual(result.pruneIds, []);
   assert.equal(result.retainedArchiveSeason, 2);
 });
 
@@ -217,7 +217,7 @@ test('recovered archive cannot be pruned from a pending activation marker', asyn
     { id: 'S2', archive: recovered, matches: [], historyStatus: 'SKIPPED' },
   ], 4, null);
   assert.equal(finalized.ready, true);
-  assert.deepEqual(finalized.pruneIds, ['S2']);
+  assert.deepEqual(finalized.pruneIds, []);
 });
 
 test('recovered archive cleanup does not resume a legacy prune intent with a pending skip marker', async () => {
@@ -243,7 +243,7 @@ test('recovered archive cleanup does not resume a legacy prune intent with a pen
     { id: 'S2', archive: recovered, matches: [], historyStatus: 'SKIPPED' },
   ], 4, null);
   assert.equal(finalized.ready, true);
-  assert.deepEqual(finalized.pruneIds, ['S2']);
+  assert.deepEqual(finalized.pruneIds, []);
 });
 
 test('archive pruning resumes interrupted subcollection deletion only with a matching intent marker', async () => {
@@ -263,7 +263,7 @@ test('archive pruning resumes interrupted subcollection deletion only with a mat
     { id: 'S2', archive: second.archive, matches: second.matches },
   ], 4, 2);
   assert.equal(result.ready, true);
-  assert.deepEqual(result.pruneIds, ['S1']);
+  assert.deepEqual(result.pruneIds, []);
 });
 
 
