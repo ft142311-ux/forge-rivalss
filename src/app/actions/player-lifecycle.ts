@@ -48,7 +48,7 @@ export async function syncPlayerLifecycleAction(idToken: string) {
       const rawFatigue = Number(player.fatigue);
       const currentFatigue = (Number.isFinite(rawFatigue) && rawFatigue >= 0) ? Math.max(0, Math.min(100, rawFatigue)) : 100;
       const nextFatigue = Math.min(100, currentFatigue + recovery);
-      if (needsMigration || !player.birthDate || player.ageDisplay !== age.display || Math.abs(Number(player.age ?? -1) - age.numeric) >= 0.001 || nextFatigue !== currentFatigue) changed = true;
+      if (needsMigration || birthDate !== player.birthDate || !player.birthDate || player.ageDisplay !== age.display || Math.abs(Number(player.age ?? -1) - age.numeric) >= 0.001 || nextFatigue !== currentFatigue) changed = true;
       if (nextFatigue !== currentFatigue) recovered = true;
       return {
         ...player,
