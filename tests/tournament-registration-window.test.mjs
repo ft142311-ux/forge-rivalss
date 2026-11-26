@@ -101,3 +101,24 @@ test('registered tournament IDs are trimmed, unique, and reject malformed entrie
   assert.deepEqual(normalizeTournamentRegisteredIds(null), []);
   assert.deepEqual(normalizeTournamentRegisteredIds('manager-a'), []);
 });
+
+test('server unregistration normalizes participant IDs before removing the manager', () => {
+  const source = readFileSync(new URL('../src/app/actions/tournament-system.ts', import.meta.url), 'utf8');
+  const start = source.indexOf('export async function unregisterFromTournamentAction');
+  const end = source.indexOf('async function initializeTournament', start);
+  const action = source.slice(start, end);
+  assert.ok(action.includes('normalizeTournamentRegisteredIds(data.registeredIds)'));
+});
+
+test('tournament initialization rejects invalid capacities and over-capacity rosters without truncation', () => {
+  const source = readFileSync(new URL('../src/app/actions/tournament-system.ts', import.meta.url), 'utf8');
+  const start = source.indexOf('async function initializeTournament');
+  const end = source.indexOf('async function participantSnapshot', start);
+  assert.ok(start >= 0 && end > start);
+  const initialization = source.slice(start, end);
+  assert.ok(initialization.includes('getTournamentRegistrationCapacity(tournament.maxParticipants)'));
+  assert.ok(initialization.includes('if (!maxParticipants) throw new Error(\'INVALID_TOURNAMENT_CAPACITY\')'));
+  assert.ok(initialization.includes('normalizeTournamentRegisteredIds(tournament.registeredIds)'));
+  assert.ok(initialization.includes('if (registeredIds.length > maxParticipants)'));
+  assert.doesNotMatch(initialization, /registeredIds\s*=.*\.slice\(0,\s*maxParticipants\)/);
+});
