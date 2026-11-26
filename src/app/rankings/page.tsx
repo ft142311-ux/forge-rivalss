@@ -219,7 +219,7 @@ export default function RankingsPage() {
         { id: 'my_pyramid', label: 'League Pyramid', desc: `Explore ${profile?.selectedLeagueId || 'ALPHA'}`, icon: Layers, color: 'text-accent' },
         { id: 'cup', label: 'Pyramid Cup', desc: 'Tournament bracket', icon: Trophy, color: 'text-yellow-500' },
         { id: 'all_pyramids', label: 'Global Map', desc: 'Browse all active leagues', icon: Globe, color: 'text-blue-400' },
-        { id: 'season_archive', label: language === 'ru' ? 'Архив сезонов' : 'Season Archive', desc: (language === 'ru' ? 'Предыдущий сезон: ' : 'Previous season: ') + visibleArchives.length, icon: Archive, color: 'text-amber-400' },
+        { id: 'season_archive', label: language === 'ru' ? 'Архив сезонов' : 'Season Archive', desc: (language === 'ru' ? 'Предыдущий сезон: ' : 'Previous season: ') + (visibleArchives[0]?.sourceSeason || '—'), icon: Archive, color: 'text-amber-400' },
       ]
     },
     ru: {
@@ -237,7 +237,7 @@ export default function RankingsPage() {
         { id: 'my_pyramid', label: 'Пирамида Лиги', desc: `Изучить лигу ${profile?.selectedLeagueId || 'ALPHA'}`, icon: Layers, color: 'text-accent' },
         { id: 'cup', label: 'Кубок Пирамиды', desc: 'Сетка турнира', icon: Trophy, color: 'text-yellow-500' },
         { id: 'all_pyramids', label: 'Карта мира', desc: 'Все активные лиги мира', icon: Globe, color: 'text-blue-400' },
-        { id: 'season_archive', label: language === 'ru' ? 'Архив сезонов' : 'Season Archive', desc: (language === 'ru' ? 'Предыдущий сезон: ' : '') + visibleArchives.length, icon: Archive, color: 'text-amber-400' },
+        { id: 'season_archive', label: language === 'ru' ? 'Архив сезонов' : 'Season Archive', desc: (language === 'ru' ? 'Предыдущий сезон: ' : 'Previous season: ') + (visibleArchives[0]?.sourceSeason || '—'), icon: Archive, color: 'text-amber-400' },
       ]
     }
   }[language === 'ru' ? 'ru' : 'en'];
