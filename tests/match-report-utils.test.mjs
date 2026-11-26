@@ -52,7 +52,7 @@ test('getCompletedSeriesScore sums only completed maps and safely handles missin
 
 test('reports page loads finished league reports through authenticated profile-scoped action', () => {
   const page = readFileSync(new URL('../src/app/reports/page.tsx', import.meta.url), 'utf8');
-  assert.match(page, /getMyUnreadMatchReportsCountAction\(await user\.getIdToken\(\)\)/);
+  assert.match(page, /getMyLeagueMatchReportsAction\(await user\.getIdToken\(\)\)/);
   assert.match(page, /const personal = \[\.\.\.officialLeagueReports/);
   assert.match(page, /officialLeagueReports, personalHomeMatches/);
 });
