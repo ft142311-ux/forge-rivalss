@@ -85,9 +85,10 @@ export function resolveCanonicalSeasonDateWindow(input: {
 }
 
 /**
- * A deliberately marked clean emulator world may have a generated S1 start.
- * Accept its persisted S1->S2 boundary only when the canonical 17-day first
- * season span is intact; production/legacy worlds keep the fixed historical date.
+ * A deliberately marked clean emulator world may start Season 1 on a generated
+ * date. Preserve that timeline for every later season: S1 uses its validated
+ * 17-day span, and S2 onward uses the regular 15-day cadence. Production and
+ * legacy worlds continue to use their canonical historical dates.
  */
 export function isValidCleanSeasonOneBoundary(
   worldGeneration: unknown,
