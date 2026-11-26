@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import {
   getCompletedSeriesScore,
   isMatchWithinClubLifetime,
+  createFreshSeasonOneHumanClubProfile,
   normalizeMatchTimeline,
   parseMatchSeriesScore,
   resolveMatchSimulation,
@@ -109,6 +110,24 @@ test('club lifetime cutoff rejects recycled-slot fixtures scheduled before regis
   }, profileCreatedAt), true);
   assert.equal(isMatchWithinClubLifetime({ startTime: 'invalid' }, profileCreatedAt), false);
   assert.equal(isMatchWithinClubLifetime({ startTime: '2026-11-01T10:00:00.000Z' }, null), true);
+});
+
+test('fresh Season 1 club profiles establish a lifetime cutoff for recycled-slot reports', () => {
+  const createdAt = new Date('2026-11-20T15:00:00.000Z');
+  const profile = createFreshSeasonOneHumanClubProfile(
+    { id: 'human-club-uid', email: 'manager@example.invalid' },
+    { tier: 2, group: 1, rank: 3 },
+    1,
+    createdAt,
+  );
+  assert.equal(profile.createdAt, createdAt.toISOString());
+  assert.equal(isMatchWithinClubLifetime({
+    startTime: '2026-11-19T15:00:00.000Z',
+    resolvedAt: '2026-11-21T15:00:00.000Z',
+  }, profile.createdAt), false);
+  assert.equal(isMatchWithinClubLifetime({
+    startTime: '2026-11-20T15:00:00.000Z',
+  }, profile.createdAt), true);
 });
 
 test('server report reads and acknowledgements enforce the current club lifetime', () => {
