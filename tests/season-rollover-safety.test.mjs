@@ -308,14 +308,14 @@ test('each protected calendar write renews the lease atomically', async () => {
 test('legacy carry-forward recovery planner has no runtime callers', async () => {
   const fs = await import('node:fs/promises');
   const source = await fs.readFile(new URL('../src/app/actions/season-calendar.ts', import.meta.url), 'utf8');
-  assert.match(source, /async function prepareRecoveryCarryForwardPlan\\(/,
+  assert.match(source, /async function prepareRecoveryCarryForwardPlan\(/,
     'legacy planner remains isolated for reference and must not be exported');
-  assert.equal((source.match(/prepareRecoveryCarryForwardPlan\\(db/g) || []).length, 0,
+  assert.equal((source.match(/prepareRecoveryCarryForwardPlan\(db/g) || []).length, 0,
     'ordinary calendar flow must never invoke multi-season carry-forward recovery');
   const builder = source.slice(source.indexOf('async function buildSeasonCalendar'));
-  assert.match(builder, /resolveNextSeasonTarget\\(/,
+  assert.match(builder, /resolveNextSeasonTarget\(/,
     'normal season generation must clamp to the immediate successor');
-  assert.doesNotMatch(builder, /publishRecoveryRolloverDecision\\(/,
+  assert.doesNotMatch(builder, /publishRecoveryRolloverDecision\(/,
     'normal season generation must not publish skipped-season markers');
 });
 
