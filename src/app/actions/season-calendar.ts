@@ -1887,7 +1887,9 @@ export async function ensureSeasonCalendar(
         pyramidCupRequired: true,
         pyramidCupReady: true,
         pyramidCupReadySeasonNumber: 1,
-        stagingFreshSeasonOneReset: false,
+        // Keep the dedicated reset fence asserted until the reset executor's
+        // final verification transaction clears both markers atomically.
+        stagingFreshSeasonOneReset: config.stagingFreshSeasonOneReset === true,
         pyramidCupReadyAt: FieldValue.serverTimestamp(),
         pyramidCupError: FieldValue.delete(),
         updatedAt: FieldValue.serverTimestamp(),
