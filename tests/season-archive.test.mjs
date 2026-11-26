@@ -152,7 +152,7 @@ test('recovered archive rejects invalid counters, timestamps, metadata, extra gr
 
 
 
-test('archive cleanup validates all completed archives and never deletes historical seasons', async () => {
+test('archive cleanup retains only the newest completed archive', async () => {
   const { resolveArchivePrunePlan } = await import('../src/app/actions/season-archive.ts');
   const first = makeSeasonArchive(1);
   first.archive.status = 'completed';
@@ -165,7 +165,7 @@ test('archive cleanup validates all completed archives and never deletes histori
     { id: 'S2', archive: second.archive, matches: second.matches },
   ], 4, 2);
   assert.equal(result.ready, true);
-  assert.deepEqual(result.pruneIds, []);
+  assert.deepEqual(result.pruneIds, ['S1']);
   assert.equal(result.retainedArchiveSeason, 2);
 });
 
@@ -217,7 +217,7 @@ test('recovered archive cannot be pruned from a pending activation marker', asyn
     { id: 'S2', archive: recovered, matches: [], historyStatus: 'SKIPPED' },
   ], 4, null);
   assert.equal(finalized.ready, true);
-  assert.deepEqual(finalized.pruneIds, []);
+  assert.deepEqual(finalized.pruneIds, ['S2']);
 });
 
 test('recovered archive cleanup does not resume a legacy prune intent with a pending skip marker', async () => {
@@ -246,7 +246,7 @@ test('recovered archive cleanup does not resume a legacy prune intent with a pen
   assert.deepEqual(finalized.pruneIds, []);
 });
 
-test('legacy archive prune markers never resume deletion and verified history remains retained', async () => {
+test('matching legacy prune intent safely resumes deletion of an older archive', async () => {
   const { resolveArchivePrunePlan } = await import('../src/app/actions/season-archive.ts');
   const first = makeSeasonArchive(1);
   first.archive.status = 'completed';
@@ -263,12 +263,12 @@ test('legacy archive prune markers never resume deletion and verified history re
     { id: 'S2', archive: second.archive, matches: second.matches },
   ], 4, 2);
   assert.equal(result.ready, true);
-  assert.deepEqual(result.pruneIds, []);
+  assert.deepEqual(result.pruneIds, ['S1']);
 });
 
 
 
-test('legacy prune metadata cannot delete otherwise valid season history', async () => {
+test('legacy prune metadata with mismatched intent fails closed', async () => {
   const { resolveArchivePrunePlan } = await import('../src/app/actions/season-archive.ts');
   const first = makeSeasonArchive(1);
   first.archive.status = 'completed';
@@ -291,7 +291,8 @@ test('legacy prune metadata cannot delete otherwise valid season history', async
       { id: 'S1', archive, matches: first.matches },
       { id: 'S2', archive: second.archive, matches: second.matches },
     ], 4, 2);
-    assert.equal(result.ready, true);
+    assert.equal(result.ready, false);
+    assert.equal(result.reason, 'ARCHIVE_PRUNE_MARKER_CONFLICT');
     assert.deepEqual(result.pruneIds, []);
   }
 });
@@ -309,7 +310,8 @@ test('a legacy prune marker cannot delete the newest retained completed archive'
   const result = resolveArchivePrunePlan([
     { id: 'S2', archive: retained.archive, matches: retained.matches },
   ], 4, 2);
-  assert.equal(result.ready, true);
+  assert.equal(result.ready, false);
+  assert.equal(result.reason, 'RETAINED_ARCHIVE_MARKED_FOR_PRUNING');
   assert.deepEqual(result.pruneIds, []);
 });
 
