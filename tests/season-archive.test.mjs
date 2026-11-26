@@ -108,6 +108,19 @@ test('archive list hides preparing, incomplete, and malformed future seasons and
   assert.notEqual(listed[0].marker, 'duplicate');
 });
 
+test('archive UI shows only the immediately preceding completed season', () => {
+  const archives = [1, 2, 3].map(season => {
+    const archive = makeSeasonArchive(season).archive;
+    archive.status = 'completed';
+    archive.completedAt = new Date().toISOString();
+    return archive;
+  });
+
+  assert.deepEqual(getVisibleSeasonArchives(archives).map(item => item.sourceSeason), [3]);
+  assert.deepEqual(getCompletedSeasonArchives(archives).map(item => item.sourceSeason), [3, 2, 1],
+    'internal validation can still inspect every archive before rolling cleanup');
+});
+
 test('recovered archive is visible but never treated as a completed season or final standings', () => {
   const startingParticipants = Object.fromEntries(expectedRolloverGroups().map(group => [group,
     Array.from({ length: 8 }, (_, i) => ({ id: `${group}-S2-${i + 1}`, rank: i + 1, name: `${group} team ${i + 1}` }))]));
