@@ -16,6 +16,7 @@ test('player economy mutations are transactionally fenced during fresh Season 1 
     ['../src/app/actions/season-rollover.ts', 1],
     ['../src/app/actions/infrastructure.ts', 4],
     ['../src/app/actions/friendly-matchmaking.ts', 6],
+    ['../src/app/actions/associations.ts', 8],
   ];
 
   for (const [path, expectedTransactions] of cases) {
