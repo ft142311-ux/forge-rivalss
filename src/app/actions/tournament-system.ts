@@ -12,6 +12,7 @@ import { runMatchEngine } from '@/app/lib/match-engine';
 import { MATCH_COLLECTIONS } from '@/app/lib/match-storage';
 import { isTournamentMatchLeaseExpired, TOURNAMENT_MATCH_LEASE_MS } from '@/app/lib/tournament-match-lease';
 import { isTournamentStageMatchSetComplete } from '@/app/lib/tournament-stage-utils';
+import { getTournamentRegistrationWindow } from '@/app/lib/tournament-registration-window';
 
 
 const TOURNAMENTS = [
@@ -235,13 +236,12 @@ export async function registerForTournamentAction(idToken: string, tournamentId:
       if (!snap.exists) throw new Error('TOURNAMENT_NOT_FOUND');
       const data = snap.data() || {};
       const now = Date.now();
-      const opensAt = Number(data.registrationOpenAt);
-      const closesAt = Number(data.registrationCloseAt);
+      const registrationWindow = getTournamentRegistrationWindow(data);
       const ids: string[] = Array.isArray(data.registeredIds) ? data.registeredIds : [];
       if (data.status !== 'registration') throw new Error('REGISTRATION_CLOSED');
-      if (!Number.isFinite(opensAt) || !Number.isFinite(closesAt)) throw new Error('REGISTRATION_WINDOW_INVALID');
-      if (now < opensAt) throw new Error('REGISTRATION_NOT_OPEN');
-      if (now >= closesAt) throw new Error('REGISTRATION_CLOSED');
+      if (!registrationWindow) throw new Error('REGISTRATION_WINDOW_INVALID');
+      if (now < registrationWindow.opensAt) throw new Error('REGISTRATION_NOT_OPEN');
+      if (now >= registrationWindow.closesAt) throw new Error('REGISTRATION_CLOSED');
       if (ids.includes(uid)) throw new Error('ALREADY_REGISTERED');
       if (ids.length >= Number(data.maxParticipants)) throw new Error('TOURNAMENT_FULL');
       t.update(ref, {
@@ -270,9 +270,10 @@ export async function unregisterFromTournamentAction(idToken: string, tournament
       const snap = await t.get(ref);
       if (!snap.exists) throw new Error('TOURNAMENT_NOT_FOUND');
       const data = snap.data() || {};
-      if (data.status !== 'registration' || Date.now() >= Number(data.registrationCloseAt)) {
-        throw new Error('REGISTRATION_CLOSED');
-      }
+      if (data.status !== 'registration') throw new Error('REGISTRATION_CLOSED');
+      const registrationWindow = getTournamentRegistrationWindow(data);
+      if (!registrationWindow) throw new Error('REGISTRATION_WINDOW_INVALID');
+      if (Date.now() >= registrationWindow.closesAt) throw new Error('REGISTRATION_CLOSED');
       const ids: string[] = Array.isArray(data.registeredIds) ? data.registeredIds : [];
       if (!ids.includes(uid)) throw new Error('NOT_REGISTERED');
       const next = ids.filter(id => id !== uid);
