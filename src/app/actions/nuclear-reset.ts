@@ -12,8 +12,13 @@ const BATCHES_PER_CALL = 3;
 export async function totalNuclearResetV131() {
   // Destructive world maintenance is supported only against the local emulator.
   // Never allow an authenticated admin action to wipe a deployed Firestore project.
-  if (process.env.NEXT_PUBLIC_USE_FIREBASE_EMULATORS !== 'true') {
-    return { success: false, error: 'LOCAL_EMULATOR_REQUIRED', deletedCount: 0 };
+  const configuredProject =
+    process.env.GCLOUD_PROJECT ||
+    process.env.GCP_PROJECT ||
+    process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID ||
+    '';
+  if (process.env.NEXT_PUBLIC_USE_FIREBASE_EMULATORS !== 'true' || configuredProject !== 'demo-forge-rivals') {
+    return { success: false, error: 'LOCAL_DISPOSABLE_PROJECT_REQUIRED', deletedCount: 0 };
   }
 
   const emulatorHost = process.env.FIRESTORE_EMULATOR_HOST || '127.0.0.1:8080';
