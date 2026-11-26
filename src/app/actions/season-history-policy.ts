@@ -20,9 +20,8 @@ export type SeasonCatchUpPolicy = {
  *   silently skipped just because its archive is missing or corrupt.
  * - A genuinely incomplete season may be recorded as skipped without inventing
  *   scores, standings, awards, or promotion/relegation.
- * - Every verified completed or recovered season archive is retained permanently.
- *   Catch-up may select the newest trusted archive as a placement baseline, but
- *   must never delete older season history or match snapshots.
+ * - Only the newest verified completed season archive is retained. Older
+ *   verified archives are deleted only after the next season activates.
  * - Unknown state and integrity conflicts fail closed.
  *
  * This helper is pure. Callers must inspect persisted match data and archive
@@ -67,9 +66,9 @@ export function resolveSeasonCatchUpPolicy(
   const retainedArchiveSeason = completedSeasons.length
     ? completedSeasons[completedSeasons.length - 1]
     : null;
-  // Historical season archives are part of the persistent game record. The
-  // newest archive is only a placement baseline; older archives are not garbage.
-  const archivesToPruneAfterActivation: number[] = [];
+  const archivesToPruneAfterActivation = retainedArchiveSeason === null
+    ? []
+    : completedSeasons.filter(season => season !== retainedArchiveSeason);
 
   return {
     ready: blocked.length === 0,
