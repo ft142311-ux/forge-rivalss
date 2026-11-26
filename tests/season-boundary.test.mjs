@@ -307,3 +307,46 @@ test('season date planning has no artificial 1000-season ceiling', async () => {
   assert.equal(resolveNextSeasonTarget(1, plan.expectedSeasonNumber), 2,
     'a large date-derived catch-up projection must still prepare only Season 2');
 });
+
+
+test('a delayed scheduler advances the CLEAN_S1_V1 timeline one season at a time through S4', () => {
+  const timeline = [
+    ['2026-11-09T15:00:00.000Z', '2026-11-26T15:00:00.000Z', 17],
+    ['2026-11-26T15:00:00.000Z', '2026-12-11T15:00:00.000Z', 15],
+    ['2026-12-11T15:00:00.000Z', '2026-12-26T15:00:00.000Z', 15],
+    ['2026-12-26T15:00:00.000Z', '2027-01-10T15:00:00.000Z', 15],
+  ];
+  const now = new Date('2027-01-20T15:00:00.000Z');
+  let season = 1;
+  let start = new Date(timeline[0][0]);
+  let boundary = new Date(timeline[0][1]);
+
+  for (let index = 0; index < 3; index++) {
+    const cadence = timeline[index + 1][2];
+    const result = advanceAtMostOneSeasonBoundary(season, start, boundary, now, cadence);
+    assert.equal(result.advanced, true);
+    assert.equal(result.seasonNumber, season + 1,
+      'one invocation must never jump over an intermediate season');
+    assert.equal(result.seasonStart.toISOString(), timeline[index + 1][0]);
+    assert.equal(result.nextBoundary.toISOString(), timeline[index + 1][1]);
+    season = result.seasonNumber;
+    start = result.seasonStart;
+    boundary = result.nextBoundary;
+  }
+
+  assert.equal(season, 4);
+  assert.equal(start.toISOString(), '2026-12-26T15:00:00.000Z');
+  assert.equal(boundary.toISOString(), '2027-01-10T15:00:00.000Z');
+});
+
+test('every active season target is clamped to its immediate successor, regardless of stale projections', () => {
+  for (const activeSeason of [1, 2, 3, 4, 15, 100, 1001]) {
+    for (const staleTarget of [0, activeSeason, activeSeason + 2, activeSeason + 50, 1002]) {
+      assert.equal(
+        resolveNextSeasonTarget(activeSeason, staleTarget),
+        activeSeason + 1,
+        `S${activeSeason} must prepare only S${activeSeason + 1} (requested S${staleTarget})`,
+      );
+    }
+  }
+});
