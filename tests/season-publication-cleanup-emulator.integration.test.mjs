@@ -556,7 +556,7 @@ test('Firestore Emulator prunes S1-S4 after S6 activation, retains verified S5, 
         id: `S${season}`,
         archive: archiveSnap.data(),
         matches: matchesSnap ? matchesSnap.docs.map(snapshot => ({ ...snapshot.data(), matchId: snapshot.id })) : [],
-        historyStatus: season <= 4 ? 'SKIPPED' : '',
+        historyStatus: season <= 3 ? 'SKIPPED' : '',
       });
     }
     const resumedPlan = resolveArchivePrunePlan(resumedArchives, 6, 5);
