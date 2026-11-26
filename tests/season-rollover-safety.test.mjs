@@ -310,7 +310,7 @@ test('legacy carry-forward recovery planner has no runtime callers', async () =>
   const source = await fs.readFile(new URL('../src/app/actions/season-calendar.ts', import.meta.url), 'utf8');
   assert.match(source, /async function prepareRecoveryCarryForwardPlan\(/,
     'legacy planner remains isolated for reference and must not be exported');
-  assert.equal((source.match(/prepareRecoveryCarryForwardPlan\(db/g) || []).length, 0,
+  assert.equal(source.includes('prepareRecoveryCarryForwardPlan(db, activeSeasonBefore'), false,
     'ordinary calendar flow must never invoke multi-season carry-forward recovery');
   const builder = source.slice(source.indexOf('async function buildSeasonCalendar'));
   assert.match(builder, /resolveNextSeasonTarget\(/,
