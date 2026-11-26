@@ -182,3 +182,28 @@ test('view acknowledgement updates an existing report without recreating a delet
   assert.match(action, /persisted: false, localOnly: true/);
   assert.doesNotMatch(action, /await ref\.set\(\{\s*seen: true/);
 });
+
+test('all Beta game mutation paths honor either fresh Season 1 reset marker', () => {
+  const guardedPaths = [
+    '../src/app/actions/cup-engine.ts',
+    '../src/app/actions/tournament-system.ts',
+    '../src/app/actions/match-report.ts',
+    '../src/app/actions/season-cycle.ts',
+    '../src/app/actions/universal-match-resolver.ts',
+    '../src/app/api/registration/initialize/route.ts',
+    '../src/app/lib/auction-expiry-sweep.ts',
+  ];
+  for (const relativePath of guardedPaths) {
+    const source = readFileSync(new URL(relativePath, import.meta.url), 'utf8');
+    assert.match(source, /stagingSeasonOneResetInProgress === true/, relativePath);
+    assert.match(source, /stagingFreshSeasonOneReset === true/, relativePath);
+  }
+});
+
+test('Universal Match Core and Pyramid Cup share the terminal match-report predicate', () => {
+  const universal = readFileSync(new URL('../src/app/actions/universal-match-resolver.ts', import.meta.url), 'utf8');
+  const cup = readFileSync(new URL('../src/app/actions/cup-engine.ts', import.meta.url), 'utf8');
+  assert.match(universal, /isMatchReportFinished\(match\)/);
+  assert.match(cup, /isMatchReportFinished\(match\)/);
+  assert.equal(isMatchReportFinished({ isFinished: false, status: 'resolved' }), true);
+});
