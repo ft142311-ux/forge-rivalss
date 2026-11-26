@@ -4,11 +4,11 @@ import { readFileSync } from 'node:fs';
 import {
   getCompletedSeriesScore,
   isMatchWithinClubLifetime,
-  createFreshSeasonOneHumanClubProfile,
   normalizeMatchTimeline,
   parseMatchSeriesScore,
   resolveMatchSimulation,
 } from '../src/app/lib/match-report-utils.ts';
+import { createFreshSeasonOneHumanClubProfile } from '../src/app/actions/fresh-season-one-player-reset.ts';
 
 test('resolveMatchSimulation preserves stored simulation and legacy fallback shape', () => {
   const simulation = { games: [{ homeScore: 1 }], seriesScore: '1-0' };
