@@ -165,6 +165,7 @@ jobs:
           if (integrity.noByes !== true || integrity.openingRoundParticipants !== 112) failures.push('SEASON_ONE_CUP_OPENING_ROUND_INVALID');
           const season = result.season || {};
           if (season.worldReady !== true) failures.push('ACTIVE_SEASON_WORLD_NOT_READY');
+          if (season.seasonTimelineValid !== true) failures.push('SEASON_TIMELINE_INVALID');
           if (season.league?.tables !== 15 || season.league?.slots !== 120 || season.league?.fixtures !== 840) failures.push('ACTIVE_SEASON_LEAGUE_COUNTS_INVALID');
           if (season.league?.structureReady !== true) failures.push('ACTIVE_SEASON_LEAGUE_STRUCTURE_INVALID');
           if (season.resetInProgress === true) failures.push('SEASON_RESET_IN_PROGRESS');

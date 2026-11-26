@@ -392,7 +392,7 @@ async function readSeasonDiagnostics(db: any, config: Record<string, any>) {
       pyramidCupReady: preparedCupReady,
       pyramidCupSnapshots: preparedCupSnapshots.size,
       pyramidCupMatches: preparedCupMatches.size,
-      pyramidCupFixtureIntegrity,
+      preparedCupFixtureIntegrity,
       seasonStart: preparedSeasonStart?.toISOString() || null,
       nextSeasonStart: preparedNextSeasonStart?.toISOString() || null,
     },
