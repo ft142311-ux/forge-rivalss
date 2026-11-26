@@ -3,7 +3,7 @@ import 'server-only';
 import { FieldValue } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { getGlobalSeasonInfo } from '@/app/lib/time-utils';
-import { resolveSeasonLifecycleWindow } from './season-boundary';
+import { resolveNextSeasonTarget, resolveSeasonLifecycleWindow } from './season-boundary';
 import { logger } from '@/app/lib/logger';
 import { activatePublishedSeason, ensureSeasonCalendar, publishPreparedSeason } from './season-calendar';
 import { runTournamentCycle } from './tournament-system';
@@ -306,15 +306,20 @@ export async function buildNextSeasonWorld() {
   if (!snap.exists) return { success: false, action: 'WORLD_NOT_READY', reason: 'SEASON_CONFIG_MISSING' };
   const config = snap.data() || {};
   const sourceSeason = Number(config.activeSeasonNumber || 1);
+  const phase = String(config.phase || '').toUpperCase();
+  const nextSeasonPreparationPhases = ['FINALIZING', 'GENERATING_NEXT', 'WORLD_BUILDING', 'PREPARING_NEXT_SEASON', 'PREPARATION', 'PUBLISHED'];
+  const transitionRequested = nextSeasonPreparationPhases.includes(phase);
   const configuredTargets = [config.nextSeasonNumber, config.preparationTargetSeason]
     .map((value: any) => Number(value))
-    .filter((value: number) => Number.isSafeInteger(value) && value > sourceSeason && value <= sourceSeason + 1);
-  const targetSeason = configuredTargets.length ? Math.max(...configuredTargets) : sourceSeason;
+    .filter((value: number) => Number.isSafeInteger(value) && value > sourceSeason);
+  // Ignore any stale target beyond the immediate successor. During a transition
+  // phase, the build-only entry point must still prepare exactly sourceSeason + 1.
+  const targetSeason = configuredTargets.length || transitionRequested
+    ? resolveNextSeasonTarget(sourceSeason, configuredTargets.length ? Math.max(...configuredTargets) : sourceSeason + 1)
+    : sourceSeason;
   if (!Number.isSafeInteger(targetSeason) || targetSeason < sourceSeason || targetSeason > sourceSeason + 1) {
     return { success: false, action: 'WORLD_NOT_READY', sourceSeason, targetSeason, reason: 'INVALID_TARGET_SEASON' };
   }
-  const phase = String(config.phase || '').toUpperCase();
-  const nextSeasonPreparationPhases = ['FINALIZING', 'GENERATING_NEXT', 'WORLD_BUILDING', 'PREPARING_NEXT_SEASON', 'PREPARATION', 'PUBLISHED'];
   if (targetSeason === sourceSeason + 1 && !nextSeasonPreparationPhases.includes(phase)) {
     return {
       success: false,
@@ -334,7 +339,8 @@ export async function buildNextSeasonWorld() {
   if (targetSeason === sourceSeason + 1) {
     const planSnap = await db.collection('league_season_rollovers_v1').doc(`S${targetSeason}`).get();
     const savedPlan = planSnap.exists ? planSnap.data() || {} : null;
-    if (validateRolloverPlan(savedPlan, sourceSeason, targetSeason).valid) {
+    if (savedPlan?.mode !== 'recovery_carry_forward' &&
+        validateRolloverPlan(savedPlan, sourceSeason, targetSeason).valid) {
       rollover = { ready: true, alreadyPrepared: true, sourceSeason, targetSeason };
     } else {
       rollover = await prepareSeasonRollover(db, sourceSeason, targetSeason);
