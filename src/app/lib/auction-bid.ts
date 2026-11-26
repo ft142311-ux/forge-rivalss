@@ -101,9 +101,9 @@ export async function placeSpecialMarketBidWithDb(
     if (!isExpectedLot) throw new Error('INVALID_MARKET_LOT_TYPE');
     if (String(lot.sellerId || '') === uid) throw new Error('SELLER_CANNOT_BID');
 
-    const rawExpiry = lot.expiresAt;
-    const expiryMs = rawExpiry?.toMillis?.() ?? (typeof rawExpiry === 'number' ? rawExpiry : Date.parse(String(rawExpiry || '')));
-    if (!Number.isFinite(expiryMs) || expiryMs <= now) throw new Error('MARKET_LOT_EXPIRED');
+    const expiryMs = resolveMarketBidExpiryMs(lot.expiresAt);
+    if (expiryMs === null) throw new Error('MARKET_EXPIRY_INVALID');
+    if (expiryMs <= now) throw new Error('MARKET_LOT_EXPIRED');
     const youthSellerListing = marketKind === 'youth'
       ? await assertYouthMarketSellerListing(tx, db, lot, marketId, expiryMs)
       : null;
