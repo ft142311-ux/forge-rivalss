@@ -19,6 +19,7 @@ type RegistrationStandingTransfer =
   | { ok: false; reason: string };
 
 type RegistrationCore = {
+  DEFAULT_ARENA_CAPACITY: number;
   isPyramidCupReadyForRegistration: (cup: Record<string, any> | null, season: number) => boolean;
   isEligibleRegistrationSlot: (slot: Record<string, unknown>, season: number) => boolean;
   validateRegistrationSchedule: (matches: Record<string, unknown>[], rank: number, botId: string) => boolean;
@@ -437,7 +438,7 @@ export async function POST(request: NextRequest) {
         },
         staff: { coach: null },
         strategy: 'Balanced Play',
-        arena: { capacity: 3000 },
+        arena: { capacity: registrationCore.DEFAULT_ARENA_CAPACITY },
         hq: {},
         bootcamp: {},
         academy: {},
