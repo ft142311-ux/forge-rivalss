@@ -8,6 +8,7 @@ import { resolveUniversalMatchDocument } from '@/app/actions/universal-match-res
 import { buildMatchTeamSnapshot, type MatchTeamSnapshot } from '@/app/lib/match-simulation';
 import { MATCH_COLLECTIONS } from '@/app/lib/match-storage';
 import { resolveSeasonLifecycleWindow } from './season-boundary';
+import { isMatchReportFinished } from '@/app/lib/match-report-utils';
 
 const LEAGUE_ID = 'ALPHA';
 const CUP_COLLECTION = 'cup_pyramid_v1';
@@ -256,7 +257,7 @@ function isCupRoundFixtureCompatible(existing: any, expected: any) {
     const actual = cupFixtureTimestampMillis(existing?.[field]);
     if (!Number.isFinite(actual) || actual !== expectedStart) return false;
   }
-  return ['scheduled', 'processing', 'finished', 'completed'].includes(String(existing?.status || '').toLowerCase());
+  return ['scheduled', 'processing', 'finished', 'completed', 'resolved'].includes(String(existing?.status || '').toLowerCase());
 }
 
 async function commitCupRoundTransition(
@@ -271,7 +272,8 @@ async function commitCupRoundTransition(
 ) {
   return db.runTransaction(async (tx: any) => {
     const resetConfigSnap = await tx.get(db.collection('system_v1').doc('season_config'));
-    if (resetConfigSnap.exists && resetConfigSnap.data()?.stagingSeasonOneResetInProgress === true) {
+    const resetState = resetConfigSnap.exists ? resetConfigSnap.data() || {} : {};
+    if (resetState.stagingSeasonOneResetInProgress === true || resetState.stagingFreshSeasonOneReset === true) {
       throw new Error('STAGING_SEASON_ONE_RESET_IN_PROGRESS');
     }
     const cupSnap = await tx.get(cupRef);
@@ -359,7 +361,8 @@ async function commitCupRoundState(
 ) {
   return db.runTransaction(async (tx: any) => {
     const resetConfigSnap = await tx.get(db.collection('system_v1').doc('season_config'));
-    if (resetConfigSnap.exists && resetConfigSnap.data()?.stagingSeasonOneResetInProgress === true) {
+    const resetState = resetConfigSnap.exists ? resetConfigSnap.data() || {} : {};
+    if (resetState.stagingSeasonOneResetInProgress === true || resetState.stagingFreshSeasonOneReset === true) {
       throw new Error('STAGING_SEASON_ONE_RESET_IN_PROGRESS');
     }
     const snap = await tx.get(cupRef);
@@ -410,7 +413,9 @@ export async function commitPyramidCupCreation(
       config.pyramidCupRequired === true &&
       config.pyramidCupReady === false &&
       Number(config.pyramidCupReadySeasonNumber) === 1;
-    if (config.stagingSeasonOneResetInProgress === true && !stagingResetBootstrapAllowed) {
+    const resetInProgress = config.stagingSeasonOneResetInProgress === true ||
+      config.stagingFreshSeasonOneReset === true;
+    if (resetInProgress && !stagingResetBootstrapAllowed) {
       return { status: 'RESET_IN_PROGRESS' };
     }
     if (cupSnap.exists) return { status: 'ALREADY_EXISTS' };
@@ -672,7 +677,8 @@ async function payCupPrize(db: any, season: number, team: Team | null, place: 'c
   const ledgerRef = db.collection('economy_transactions').doc(`pyramid_cup_S${season}_${place}_${team.id}`);
   return db.runTransaction(async (tx: any) => {
     const resetConfigSnap = await tx.get(db.collection('system_v1').doc('season_config'));
-    if (resetConfigSnap.exists && resetConfigSnap.data()?.stagingSeasonOneResetInProgress === true) {
+    const resetState = resetConfigSnap.exists ? resetConfigSnap.data() || {} : {};
+    if (resetState.stagingSeasonOneResetInProgress === true || resetState.stagingFreshSeasonOneReset === true) {
       throw new Error('STAGING_SEASON_ONE_RESET_IN_PROGRESS');
     }
     const [ledgerSnap, playerSnap] = await Promise.all([tx.get(ledgerRef), tx.get(playerRef)]);
@@ -726,14 +732,14 @@ async function finishTechnically(db: any, season: number, round: number, pairing
   // transaction so whichever result commits first becomes authoritative.
   return db.runTransaction(async (tx: any) => {
     const resetConfigSnap = await tx.get(db.collection('system_v1').doc('season_config'));
-    if (resetConfigSnap.exists && resetConfigSnap.data()?.stagingSeasonOneResetInProgress === true) {
+    const resetState = resetConfigSnap.exists ? resetConfigSnap.data() || {} : {};
+    if (resetState.stagingSeasonOneResetInProgress === true || resetState.stagingFreshSeasonOneReset === true) {
       throw new Error('STAGING_SEASON_ONE_RESET_IN_PROGRESS');
     }
     const snap = await tx.get(ref);
     if (!snap.exists) return false;
     const existing: any = snap.data() || {};
-    const terminal = existing.isFinished === true ||
-      ['finished', 'completed'].includes(String(existing.status || '').toLowerCase());
+    const terminal = isMatchReportFinished(existing);
     if (terminal && existing.winnerId) {
       // Repair report/processing metadata without touching the authoritative result.
       tx.set(ref, {
@@ -803,7 +809,8 @@ async function finishTechnically(db: any, season: number, round: number, pairing
 async function repairCurrentRoundFixtures(db: any, cup: { ref: any; data: any }, activeSeasonStart: Date) {
   return db.runTransaction(async (tx: any) => {
     const resetConfigSnap = await tx.get(db.collection('system_v1').doc('season_config'));
-    if (resetConfigSnap.exists && resetConfigSnap.data()?.stagingSeasonOneResetInProgress === true) {
+    const resetState = resetConfigSnap.exists ? resetConfigSnap.data() || {} : {};
+    if (resetState.stagingSeasonOneResetInProgress === true || resetState.stagingFreshSeasonOneReset === true) {
       throw new Error('STAGING_SEASON_ONE_RESET_IN_PROGRESS');
     }
     const cupSnap = await tx.get(cup.ref);
@@ -919,7 +926,8 @@ function assertValidCupRoundPairings(pairings: Pairing[], round: number) {
 export async function runPyramidCupCycle() {
   const db = getAdminDb();
   const resetConfig = await db.collection('system_v1').doc('season_config').get();
-  if (resetConfig.exists && resetConfig.data()?.stagingSeasonOneResetInProgress === true) {
+  const resetState = resetConfig.exists ? resetConfig.data() || {} : {};
+  if (resetState.stagingSeasonOneResetInProgress === true || resetState.stagingFreshSeasonOneReset === true) {
     return { generated: false, resolved: 0, advanced: 0, skipped: true, reason: 'STAGING_SEASON_ONE_RESET_IN_PROGRESS' };
   }
   const context = await readActiveCupSeasonContext(db);
@@ -975,18 +983,18 @@ export async function runPyramidCupCycle() {
     let match: any = matchSnap.data() || {};
     const startMs = match.startTime?.toMillis?.() ?? Date.parse(String(match.startTime || match.scheduledAt || ''));
     if (Number.isFinite(startMs) && startMs > now) continue;
-    if (match.isFinished !== true) {
+    if (!isMatchReportFinished(match)) {
       try { await resolveUniversalMatchDocument(String(pairing.matchId), { requireDue: true, collectionName: dedicatedSnap.exists ? 'cup_matches' : 'matches_v2' }); resolved++; }
       catch (error) { console.error('[PYRAMID CUP] Match Core resolution failed', pairing.matchId, error); }
     }
     const fresh = await matchRef.get();
     match = fresh.data() || {};
-    if ((match.isFinished !== true || !match.winnerId) && now >= nextRoundDeadline) {
+    if ((!isMatchReportFinished(match) || !match.winnerId) && now >= nextRoundDeadline) {
       await finishTechnically(db, season, round, pairing, dedicatedSnap.exists ? 'cup_matches' : 'matches_v2');
       const technical = await matchRef.get();
       match = technical.data() || {};
     }
-    if (match.isFinished === true && match.winnerId) {
+    if (isMatchReportFinished(match) && match.winnerId) {
       pairing.status = 'finished'; pairing.winnerId = String(match.winnerId);
       pairing.scoreA = Number(match.scoreA ?? match.homeScore ?? 0); pairing.scoreB = Number(match.scoreB ?? match.awayScore ?? 0);
       pairing.technicalDecision = Boolean(match.technicalDecision);
