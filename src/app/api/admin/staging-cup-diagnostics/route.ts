@@ -54,6 +54,252 @@ function safeReasonCodes(reasons: unknown) {
     : [];
 }
 
+/**
+ * Inspect the Cup belonging to the currently active season. Season 1 has a
+ * dedicated launch gate below; once S2 is active this check keeps each later
+ * season's Cup under the same no-BYE, fixture and frozen-roster invariants.
+ */
+async function readActiveSeasonCupIntegrity(db: any, season: number) {
+  const cupId = 'cup_s' + season + '_l' + LEAGUE_ID;
+  const [
+    cupSnap,
+    snapshotsSnap,
+    dedicatedMatchesSnap,
+    legacyMatchesSnap,
+  ] = await Promise.all([
+    db.collection(CUP_COLLECTION).doc(cupId).get(),
+    db.collection(SNAPSHOT_COLLECTION).doc(cupId).collection('teams').get(),
+    db.collection('cup_matches').where('cupId', '==', cupId).get(),
+    db.collection('matches_v2').where('cupId', '==', cupId).get(),
+  ]);
+
+  const cup = cupSnap.exists ? cupSnap.data() || {} : null;
+  const rounds = cup && cup.rounds && typeof cup.rounds === 'object' ? cup.rounds : {};
+  const participants = Array.isArray(cup?.participants) ? cup.participants : [];
+  const participantIds = new Set<string>();
+  const participantById: Record<string, any> = {};
+  const levelCounts = { 1: 0, 2: 0, 3: 0, 4: 0 };
+  let participantShapeValid = participants.length === EXPECTED_CUP_PARTICIPANTS;
+
+  for (const team of participants) {
+    const id = String(team?.id || '');
+    const level = Number(team?.level);
+    const group = Number(team?.group);
+    const rank = Number(team?.rank);
+    const seed = Number(team?.seed);
+    if (!id || Object.prototype.hasOwnProperty.call(participantById, id) ||
+        !Number.isInteger(level) || level < 1 || level > 4 ||
+        !Number.isInteger(group) || group < 1 || group > Math.pow(2, level - 1) ||
+        !Number.isInteger(rank) || rank < 1 || rank > 8 ||
+        !Number.isInteger(seed) || seed < 1 || seed > EXPECTED_CUP_PARTICIPANTS) {
+      participantShapeValid = false;
+      continue;
+    }
+    participantIds.add(id);
+    participantById[id] = { level, group, rank, seed };
+    levelCounts[level as 1 | 2 | 3 | 4] += 1;
+  }
+
+  const levelDistributionValid = levelCounts[1] === 8 &&
+    levelCounts[2] === 16 &&
+    levelCounts[3] === 32 &&
+    levelCounts[4] === 64;
+
+  const restTeams = Array.isArray(cup?.openingRoundRestTeams) ? cup.openingRoundRestTeams : [];
+  const restIds = new Set<string>();
+  let restFieldValid = restTeams.length === 8;
+  for (const team of restTeams) {
+    const id = String(team?.id || '');
+    if (!id || restIds.has(id) || Number(team?.level) !== 1 ||
+        !participantIds.has(id) || participantById[id]?.level !== 1) {
+      restFieldValid = false;
+      continue;
+    }
+    restIds.add(id);
+  }
+  if (restIds.size !== 8 ||
+      [...participantIds].filter(id => participantById[id]?.level === 1).some(id => !restIds.has(id))) {
+    restFieldValid = false;
+  }
+
+  const snapshotIds = new Set<string>();
+  let snapshotsValid = snapshotsSnap.size === EXPECTED_CUP_PARTICIPANTS;
+  for (const doc of snapshotsSnap.docs || []) {
+    const id = String(doc.id);
+    const data = doc.data() || {};
+    const playerSnapshots = data.matchSnapshot?.players;
+    snapshotIds.add(id);
+    if (!participantIds.has(id) ||
+        String(data.teamId || id) !== id ||
+        Number(data.season) !== season ||
+        !Array.isArray(playerSnapshots) ||
+        playerSnapshots.length !== 5) {
+      snapshotsValid = false;
+    }
+  }
+  if (snapshotIds.size !== EXPECTED_CUP_PARTICIPANTS ||
+      [...participantIds].some(id => !snapshotIds.has(id))) {
+    snapshotsValid = false;
+  }
+
+  const fixtureById: Record<string, any> = {};
+  const allFixtureDocs = [...(dedicatedMatchesSnap.docs || []), ...(legacyMatchesSnap.docs || [])];
+  for (const doc of allFixtureDocs) {
+    if (!Object.prototype.hasOwnProperty.call(fixtureById, doc.id)) {
+      fixtureById[doc.id] = doc.data() || {};
+    }
+  }
+  const fixtureCount = Object.keys(fixtureById).length;
+  const currentRound = Number(cup?.currentRound || 0);
+  const expectedPairings = [56, 32, 16, 8, 4, 2, 1];
+  const expectedParticipants = [112, 64, 32, 16, 8, 4, 2];
+  let roundsValid = Number.isInteger(currentRound) && currentRound >= 1 && currentRound <= 7;
+  let finishedMatches = 0;
+  let activeFixtures = 0;
+  let expectedFixtureDocuments = 0;
+  const roundSummaries = [];
+
+  for (let round = 1; round <= 7; round += 1) {
+    const pairings = Array.isArray(rounds['r' + round]) ? rounds['r' + round] : [];
+    const participantsInRound = new Set<string>();
+    const roundFixtureIds = new Set<string>();
+    let roundFinished = 0;
+    let roundFixtureIntegrity = true;
+
+    if (round <= currentRound) {
+      expectedFixtureDocuments += expectedPairings[round - 1];
+      if (pairings.length !== expectedPairings[round - 1]) roundFixtureIntegrity = false;
+    } else if (pairings.length !== 0) {
+      roundFixtureIntegrity = false;
+    }
+
+    for (let index = 0; index < pairings.length; index += 1) {
+      const pairing = pairings[index];
+      const pairingIndex = index + 1;
+      const homeId = String(pairing?.home?.id || '');
+      const awayId = String(pairing?.away?.id || '');
+      const matchId = 'cup_S' + season + '_R' + round + '_M' + String(pairingIndex).padStart(2, '0');
+      const fixture = fixtureById[matchId];
+      const expectedBestOf = round === 7 ? 3 : 1;
+      const isFinished = String(pairing?.status || '').toLowerCase() === 'finished';
+
+      if (pairing?.id !== 'r' + round + '_m' + pairingIndex ||
+          Number(pairing?.index) !== pairingIndex ||
+          pairing?.matchId !== matchId ||
+          !homeId || !awayId || homeId === awayId ||
+          !participantIds.has(homeId) || !participantIds.has(awayId) ||
+          participantsInRound.has(homeId) || participantsInRound.has(awayId) ||
+          !['scheduled', 'finished'].includes(String(pairing?.status || '').toLowerCase())) {
+        roundFixtureIntegrity = false;
+      }
+
+      if (homeId) participantsInRound.add(homeId);
+      if (awayId) participantsInRound.add(awayId);
+      if (isFinished) {
+        roundFinished++;
+        finishedMatches++;
+      } else if (round <= currentRound) {
+        activeFixtures++;
+      }
+
+      if (round <= currentRound) {
+        roundFixtureIds.add(matchId);
+        const fixtureFinished = isTerminalMatch(fixture || {});
+        if (!fixture ||
+            String(fixture.id || matchId) !== matchId ||
+            String(fixture.cupId || '') !== cupId ||
+            Number(fixture.season) !== season ||
+            Number(fixture.cupRound) !== round ||
+            Number(fixture.bestOf) !== expectedBestOf ||
+            String(fixture.homeId || '') !== homeId ||
+            String(fixture.awayId || '') !== awayId ||
+            !Array.isArray(fixture.homeTeamSnapshot?.players) ||
+            fixture.homeTeamSnapshot.players.length !== 5 ||
+            !Array.isArray(fixture.awayTeamSnapshot?.players) ||
+            fixture.awayTeamSnapshot.players.length !== 5 ||
+            (isFinished && (!fixtureFinished ||
+              ![homeId, awayId].includes(String(fixture.winnerId || ''))))) {
+          roundFixtureIntegrity = false;
+        }
+      }
+    }
+
+    if (round <= currentRound &&
+        (participantsInRound.size !== expectedParticipants[round - 1] ||
+         roundFixtureIds.size !== expectedPairings[round - 1])) {
+      roundFixtureIntegrity = false;
+    }
+    if (round < currentRound && roundFinished !== expectedPairings[round - 1]) {
+      roundFixtureIntegrity = false;
+    }
+
+    roundsValid = roundsValid && roundFixtureIntegrity;
+    roundSummaries.push({
+      round,
+      fixtures: pairings.length,
+      expectedFixtures: expectedPairings[round - 1],
+      participants: participantsInRound.size,
+      expectedParticipants: expectedParticipants[round - 1],
+      finished: roundFinished,
+      fixtureIntegrity: roundFixtureIntegrity,
+    });
+  }
+
+  const completed = String(cup?.status || '').toLowerCase() === 'completed';
+  const active = String(cup?.status || '').toLowerCase() === 'active';
+  const expectedCompletedFixtures = expectedPairings.reduce((sum, count) => sum + count, 0);
+  const lifecycleValid = Boolean(cup &&
+    (active || completed) &&
+    (!completed || (currentRound === 7 &&
+      finishedMatches === expectedCompletedFixtures &&
+      Boolean(cup.winnerId) &&
+      participantIds.has(String(cup.winnerId)))) &&
+    (active || completed));
+  const fixtureCountValid = fixtureCount === expectedFixtureDocuments;
+  const ready = Boolean(
+    cup &&
+    Number(cup.season) === season &&
+    String(cup.leagueId || '') === LEAGUE_ID &&
+    Number(cup.formatVersion) === 4 &&
+    cup.format === 'D1_REST_OPENING_ROUND' &&
+    Number(cup.totalParticipants) === EXPECTED_CUP_PARTICIPANTS &&
+    participants.length === EXPECTED_CUP_PARTICIPANTS &&
+    Number(cup.totalMatches) === EXPECTED_CUP_MATCHES &&
+    Number(cup.preliminaryMatches) === 56 &&
+    Number(cup.totalRounds) === 7 &&
+    Number(cup.openingRoundRestCount) === 8 &&
+    Number(cup.byeCount) === 0 &&
+    participantShapeValid &&
+    participantIds.size === EXPECTED_CUP_PARTICIPANTS &&
+    levelDistributionValid &&
+    restFieldValid &&
+    snapshotsValid &&
+    lifecycleValid &&
+    roundsValid &&
+    fixtureCountValid
+  );
+
+  return {
+    required: true,
+    season,
+    cupId,
+    exists: Boolean(cupSnap.exists),
+    status: cup?.status || null,
+    currentRound: currentRound || null,
+    participants: participants.length,
+    participantDistribution: levelCounts,
+    snapshots: snapshotsSnap.size,
+    snapshotsValid,
+    fixtures: fixtureCount,
+    expectedFixtureDocuments,
+    finishedMatches,
+    activeFixtures,
+    rounds: roundSummaries,
+    lifecycleValid,
+    ready,
+  };
+}
+
 async function readSeasonDiagnostics(db: any, config: Record<string, any>) {
   const activeSeason = Number(config.activeSeasonNumber || 0);
   if (!Number.isSafeInteger(activeSeason) || activeSeason < 1) {
@@ -77,6 +323,9 @@ async function readSeasonDiagnostics(db: any, config: Record<string, any>) {
       isValidCleanSeasonOneBoundary(config.worldGeneration, activeSeason, config.seasonStart, config.nextSeasonStart)) &&
     (activeSeason === 1 || nextSeasonStart.getTime() - seasonStart.getTime() === 15 * 24 * 60 * 60 * 1000)
   );
+  const activeCupIntegrity = activeSeason > 1
+    ? await readActiveSeasonCupIntegrity(db, activeSeason)
+    : { required: false, season: activeSeason, ready: true, reason: 'VALIDATED_BY_SEASON_ONE_GATE' };
   const hasPreparedSuccessor = preparedSeasonNumber === activeSeason + 1 &&
     config.preparedWorldReady === true;
   const preparedCupId = 'cup_s' + preparedSeasonNumber + '_lALPHA';
@@ -317,7 +566,7 @@ async function readSeasonDiagnostics(db: any, config: Record<string, any>) {
     preparedCupFixtureIntegrity
   );
 
-  const transitionPrerequisitesReady = seasonTimelineValid && unresolvedMatches === 0 &&
+  const transitionPrerequisitesReady = seasonTimelineValid && activeCupIntegrity.ready === true && unresolvedMatches === 0 &&
     archive.ready === true &&
     rolloverPlanReady &&
     preparedStructureReady &&
@@ -346,6 +595,7 @@ async function readSeasonDiagnostics(db: any, config: Record<string, any>) {
     transitionRequested,
     transitionStatus,
     transitionPrerequisitesReady,
+    activeCup: activeCupIntegrity,
     league: {
       tables: tablesSnap.size,
       slots: slotsSnap.size,

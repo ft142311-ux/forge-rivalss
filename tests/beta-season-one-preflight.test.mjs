@@ -49,6 +49,10 @@ test('Beta preflight diagnoses current league, rollover, archive retention and p
   assert.match(route, /activeSeason === 1\s*\? archiveSeasons\.length === 0/);
   assert.match(route, /preparedSeason:/);
   assert.match(route, /transitionPrerequisitesReady/);
+  assert.match(route, /readActiveSeasonCupIntegrity\(db, activeSeason\)/);
+  assert.match(route, /activeCupIntegrity\.ready === true/);
+  assert.match(route, /activeCup: activeCupIntegrity/);
+  assert.match(workflow, /ACTIVE_SEASON_PYRAMID_CUP_INVALID/);
   assert.match(route, /seasonTimelineValid/);
   assert.match(route, /retainedArchiveIntegrity/);
   assert.match(route, /preparedCupFixtureIntegrity/);

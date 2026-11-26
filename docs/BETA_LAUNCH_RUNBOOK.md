@@ -89,7 +89,7 @@ The preflight verifies:
 - Exactly 15 league tables, 120 slots, and 840 league fixtures.
 - Unfinished results and rollover-plan validity.
 - Archive integrity and previous-season-only retention.
-- Pyramid Cup participants, opening field, D1 entry, snapshots, round structure, BYE count, and actual fixture documents.
+- The S1 Pyramid Cup completion and each later active-season Cup's participants, D1 entry, no-BYE field, snapshots, round structure, actual fixture documents, and BO3 final.
 - Prepared next-season league world and its 56 opening Cup fixtures.
 - History-cleanup and reset fences.
 
