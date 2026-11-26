@@ -7,7 +7,8 @@
 export async function assertStagingSeasonOneResetNotInProgress(tx: any, db: any) {
   const configRef = db.collection('system_v1').doc('season_config');
   const configSnap = await tx.get(configRef);
-  if (configSnap.exists && configSnap.data()?.stagingSeasonOneResetInProgress === true) {
+  const config = configSnap.exists ? configSnap.data() || {} : {};
+  if (config.stagingSeasonOneResetInProgress === true || config.stagingFreshSeasonOneReset === true) {
     throw new Error('STAGING_SEASON_ONE_RESET_IN_PROGRESS');
   }
 }
