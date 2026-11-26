@@ -473,7 +473,11 @@ test('Firestore Emulator standard transfer-market bids reserve, refund and settl
     runTransferMarketExpirySweepWithDb(db),
     runTransferMarketExpirySweepWithDb(db),
   ]);
-  assert.ok(settlementRuns.every(result => result.success));
+  // A concurrent worker may legitimately observe the active sweep lease and
+  // return a retryable busy no-op. Only the winning worker must settle the lot.
+  assert.ok(settlementRuns.every(result => result.success || result.busy === true), JSON.stringify(settlementRuns));
+  assert.ok(settlementRuns.every(result => !result.busy ||
+    result.errors?.some(error => error.error === 'MARKET_EXPIRY_SWEEP_BUSY')), JSON.stringify(settlementRuns));
   assert.equal(settlementRuns.reduce((sum, result) => sum + result.sold, 0), 1);
   assert.equal(settlementRuns.reduce((sum, result) => sum + result.settled, 0), 1);
   assert.equal((await lotRef.get()).exists, false);
