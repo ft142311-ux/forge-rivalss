@@ -159,7 +159,7 @@ export function deriveSeasonDatePlan(
   let seasonNumber = activeSeasonNumber;
   let start = startMs;
   let boundary = nextMs;
-  for (let count = 0; count < 1000; count++) {
+  while (true) {
     const status: SeasonWindow['status'] = nowMs < start
       ? 'scheduled'
       : nowMs < boundary
@@ -181,11 +181,11 @@ export function deriveSeasonDatePlan(
         completedSeasons: seasons.filter(item => item.status === 'completed').map(item => item.seasonNumber),
       };
     }
+    if (!Number.isSafeInteger(seasonNumber + 1)) throw new Error('SEASON_NUMBER_EXHAUSTED');
     seasonNumber++;
     start = boundary;
     boundary += cadenceMs;
   }
-  throw new Error('SEASON_DATE_PLAN_LIMIT_EXCEEDED');
 }
 
 /** Read-only gate for seasons that have elapsed while the active marker lagged. */
