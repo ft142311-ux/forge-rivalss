@@ -643,7 +643,7 @@ test('fresh Season 1 executor is project-scoped, journaled, idempotent and verif
   assert.match(marketSettlement, /resetConfigSnap\.data\(\)\?\.stagingFreshSeasonOneReset === true/);
   const matchEconomy = read('src/app/actions/match-economy.ts');
   assert.match(matchEconomy, /configSnap\.data\(\)\?\.stagingSeasonOneResetInProgress === true/);
-  assert.match(matchEconomy, /configSnap\.data\(\)\.stagingFreshSeasonOneReset === true/);
+  assert.match(matchEconomy, /configSnap\.data\(\)\?\.stagingFreshSeasonOneReset === true/);
   const rolloverLocks = read('src/app/actions/season-rollover-lock.ts');
   assert.ok(rolloverLocks.includes('config.stagingSeasonOneResetInProgress === true ||\n      config.stagingFreshSeasonOneReset === true'));
   assert.ok(rolloverLocks.includes('options.allowDuringStagingReset !== true'));
