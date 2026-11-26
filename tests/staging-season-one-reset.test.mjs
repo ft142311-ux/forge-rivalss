@@ -394,7 +394,7 @@ test('calendar bypasses the old fixture gate only for an explicitly marked Beta 
   assert.match(source, /sourceSeason === 1/);
   assert.match(source, /targetSeason === 1/);
   assert.match(source, /config\.worldReady !== true/);
-  assert.match(source, /lockedPreflight = pristineFirstWorld \\|\\| stagingFreshSeasonOneReset/);
+  assert.match(source, /lockedPreflight = pristineFirstWorld \|\| stagingFreshSeasonOneReset/);
   assert.doesNotMatch(source, /directRecoveryBuild/);
   assert.match(source, /stagingFreshSeasonOneReset: false/);
 });
