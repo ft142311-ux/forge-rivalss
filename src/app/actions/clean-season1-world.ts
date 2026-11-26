@@ -53,10 +53,12 @@ export async function resetAndCreateCleanSeason1(confirmation: unknown) {
     process.env.GCP_PROJECT ||
     process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID ||
     '';
+  const emulatorHost = process.env.FIRESTORE_EMULATOR_HOST || '';
   if (
-    !process.env.FIRESTORE_EMULATOR_HOST ||
-    process.env.VERCEL === '1' ||
-    configuredProject === 'forge-rivalstest'
+    process.env.NEXT_PUBLIC_USE_FIREBASE_EMULATORS !== 'true' ||
+    !/^(127\.0\.0\.1|localhost):\d+$/.test(emulatorHost) ||
+    configuredProject !== 'demo-forge-rivals' ||
+    process.env.VERCEL === '1'
   ) {
     return {
       success: false,
