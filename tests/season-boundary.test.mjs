@@ -247,6 +247,53 @@ test('CLEAN_S1_V1 uses the canonical Nov 9 to Nov 26 window and activates Season
 });
 
 
+test('CLEAN_S1_V1 preserves its persisted calendar for Season 2 and every later season', async () => {
+  const { resolveCanonicalSeasonDateWindow, deriveSeasonDatePlan } = await import('../src/app/actions/season-boundary.ts');
+  const canonicalStart = new Date('2026-10-08T15:00:00.000Z');
+  const canonicalNext = new Date('2026-10-23T15:00:00.000Z');
+
+  const seasonTwo = resolveCanonicalSeasonDateWindow({
+    worldGeneration: 'CLEAN_S1_V1',
+    activeSeasonNumber: 2,
+    persistedSeasonStart: new Date('2026-11-26T15:00:00.000Z'),
+    persistedNextSeasonStart: new Date('2026-12-11T15:00:00.000Z'),
+    canonicalSeasonStart: canonicalStart,
+    canonicalNextSeasonStart: canonicalNext,
+  });
+  assert.equal(seasonTwo.source, 'CLEAN_S1_V1');
+  assert.equal(seasonTwo.seasonStart.toISOString(), '2026-11-26T15:00:00.000Z');
+  assert.equal(seasonTwo.nextSeasonStart.toISOString(), '2026-12-11T15:00:00.000Z');
+
+  const seasonThree = resolveCanonicalSeasonDateWindow({
+    worldGeneration: 'CLEAN_S1_V1',
+    activeSeasonNumber: 3,
+    persistedSeasonStart: new Date('2026-12-11T15:00:00.000Z'),
+    persistedNextSeasonStart: new Date('2026-12-26T15:00:00.000Z'),
+    canonicalSeasonStart: canonicalStart,
+    canonicalNextSeasonStart: canonicalNext,
+  });
+  assert.equal(seasonThree.source, 'CLEAN_S1_V1');
+  const plan = deriveSeasonDatePlan(
+    3, seasonThree.seasonStart, seasonThree.nextSeasonStart,
+    new Date('2026-12-26T15:00:00.000Z'), 15,
+  );
+  assert.equal(plan.expectedSeasonNumber, 4);
+  assert.equal(plan.expectedSeasonStart.toISOString(), '2026-12-26T15:00:00.000Z');
+});
+
+test('CLEAN_S1_V1 rejects malformed later-season windows instead of silently accepting them', async () => {
+  const { resolveCanonicalSeasonDateWindow } = await import('../src/app/actions/season-boundary.ts');
+  const result = resolveCanonicalSeasonDateWindow({
+    worldGeneration: 'CLEAN_S1_V1',
+    activeSeasonNumber: 2,
+    persistedSeasonStart: new Date('2026-11-26T15:00:00.000Z'),
+    persistedNextSeasonStart: new Date('2026-12-10T15:00:00.000Z'),
+    canonicalSeasonStart: new Date('2026-10-08T15:00:00.000Z'),
+    canonicalNextSeasonStart: new Date('2026-10-23T15:00:00.000Z'),
+  });
+  assert.equal(result.source, 'CANONICAL');
+});
+
 test('season date planning has no artificial 1000-season ceiling', async () => {
   const { deriveSeasonDatePlan } = await import('../src/app/actions/season-boundary.ts');
   const start = new Date('2026-01-01T00:00:00.000Z');
