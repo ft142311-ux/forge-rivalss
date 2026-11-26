@@ -1,6 +1,6 @@
 'use strict';
 
-const DEFAULT_ARENA_CAPACITY = 3000;
+const DEFAULT_ARENA_CAPACITY = 5000;
 
 const { isEligibleRegistrationSlot } = require('./league-integrity');
 
@@ -68,8 +68,8 @@ function generateStartingSquad() {
  */
 function isPyramidCupReadyForRegistration(cup, season) {
   const expectedSeason = Number(season);
-  const status = String(cup.status || '').toLowerCase();
   if (!cup || !Number.isSafeInteger(expectedSeason) || expectedSeason < 1) return false;
+  const status = String(cup.status || '').toLowerCase();
   if (Number(cup.season) !== expectedSeason ||
       String(cup.leagueId || '') !== 'ALPHA' ||
       !['active', 'completed'].includes(status) ||
@@ -123,7 +123,10 @@ function isPyramidCupReadyForRegistration(cup, season) {
   const restIds = new Set();
   for (const team of restTeams) {
     const id = String(team && team.id || '');
-    if (!id || restIds.has(id) || Number(team.level) !== 1 || !d1Ids.has(id)) return false;
+    const canonical = participantById.get(id);
+    if (!id || restIds.has(id) || !canonical || canonical.level !== 1 || !d1Ids.has(id) ||
+        Number(team.level) !== canonical.level || Number(team.group) !== canonical.group ||
+        Number(team.rank) !== canonical.rank) return false;
     restIds.add(id);
   }
   if (restIds.size !== 8 || [...d1Ids].some(id => !restIds.has(id))) return false;
@@ -149,6 +152,9 @@ function isPyramidCupReadyForRegistration(cup, season) {
         !homeId || !awayId || homeId === awayId ||
         !home || !away ||
         home.level === 1 || away.level === 1 ||
+        Number(pairing.home.level) !== home.level || Number(pairing.home.group) !== home.group ||
+        Number(pairing.home.rank) !== home.rank || Number(pairing.away.level) !== away.level ||
+        Number(pairing.away.group) !== away.group || Number(pairing.away.rank) !== away.rank ||
         openingIds.has(homeId) || openingIds.has(awayId)) return false;
     if (String(pairing.status).toLowerCase() === 'finished' &&
         ![homeId, awayId].includes(String(pairing.winnerId || ''))) return false;
@@ -165,7 +171,8 @@ function isCompletedMatch(match) {
   const status = String(match && match.status || '').toLowerCase();
   return Boolean(match && match.isFinished === true) ||
     status === 'finished' ||
-    status === 'completed';
+    status === 'completed' ||
+    status === 'resolved';
 }
 
 function timestampToMillis(value) {
