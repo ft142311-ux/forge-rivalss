@@ -231,10 +231,11 @@ export function getCompletedSeasonArchives(archives: any[]): any[] {
 
 
 /**
- * Validate every historical archive before cleanup. Season archives are
- * permanent records: the newest verified archive may be used as a placement
- * baseline, but this function never schedules an archive or its match snapshots
- * for deletion.
+ * Validate every existing season archive before rolling-window cleanup.
+ * The newest verified completed archive is retained as the sole runtime season
+ * archive; older verified archives and their match snapshots may be pruned only
+ * after the next season has activated. Lifetime club/player history is stored
+ * outside this archive collection and is not part of this deletion plan.
  */
 export function resolveArchivePrunePlan(
   archives: Array<{ id: string; archive: any; matches: any[]; historyStatus?: string | null }>,
