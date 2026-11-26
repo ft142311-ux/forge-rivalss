@@ -72,10 +72,12 @@ export function resolveCanonicalSeasonDateWindow(input: {
 }) {
   const start = input.persistedSeasonStart;
   const next = input.persistedNextSeasonStart;
+  const expectedCleanWindowDays = input.activeSeasonNumber === 1 ? 17 : 15;
   const localWindowValid = input.worldGeneration === 'CLEAN_S1_V1' &&
-    input.activeSeasonNumber === 1 && start instanceof Date && next instanceof Date &&
+    Number.isSafeInteger(input.activeSeasonNumber) && input.activeSeasonNumber >= 1 &&
+    start instanceof Date && next instanceof Date &&
     Number.isFinite(start.getTime()) && Number.isFinite(next.getTime()) &&
-    next.getTime() - start.getTime() === 17 * 24 * 60 * 60 * 1000;
+    next.getTime() - start.getTime() === expectedCleanWindowDays * 24 * 60 * 60 * 1000;
 
   return localWindowValid
     ? { seasonStart: new Date(start!.getTime()), nextSeasonStart: new Date(next!.getTime()), source: 'CLEAN_S1_V1' as const }
