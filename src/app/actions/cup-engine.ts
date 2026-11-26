@@ -688,7 +688,9 @@ async function payCupPrize(db: any, season: number, team: Team | null, place: 'c
         receipt.referenceId === referenceId &&
         Number(receipt.division) === Number(team.level);
       if (!receiptMatchesReward) throw new Error('CUP_PRIZE_RECEIPT_CONFLICT');
-      return 0;
+      // Replays report the original award amount so a concurrent finalizer cannot
+      // persist a zero-value prize summary after the ledger has already paid it.
+      return amount;
     }
     if (!playerSnap.exists) return 0;
     const player = playerSnap.data() || {};
