@@ -68,6 +68,13 @@ test('server unregistration validates the shared window and closes at its deadli
   assert.ok(action.includes("if (Date.now() >= registrationWindow.closesAt) throw new Error('REGISTRATION_CLOSED')"));
 });
 
+test('open tournament catalog uses the validated registration window for visibility and badge state', () => {
+  const source = readFileSync(new URL('../src/app/tournaments/open/page.tsx', import.meta.url), 'utf8');
+  assert.ok(source.includes('getTournamentRegistrationWindow, isTournamentRegistrationOpen'));
+  assert.ok(source.includes('window !== null && now < window.closesAt'));
+  assert.ok(source.includes('const registrationOpen=isTournamentRegistrationOpen(t)'));
+});
+
 test('tournament detail page uses the same registration window helper', () => {
   const source = readFileSync(new URL('../src/app/tournaments/[id]/page.tsx', import.meta.url), 'utf8');
   assert.ok(source.includes("import { isTournamentRegistrationOpen } from '@/app/lib/tournament-registration-window'"));
