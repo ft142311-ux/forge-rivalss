@@ -24,6 +24,7 @@ test('registration HTTP API enforces its boundary and safely initializes a club'
   const auth = getAuth(app);
   const db = getFirestore(app);
   const { POST } = await import('../src/app/api/registration/initialize/route.ts');
+  const { repairRegisteredClubStateAction } = await import('../src/app/actions/repair-registered-club-state.ts');
 
   await t.test('rejects unsupported content types before authentication', async () => {
     const response = await POST(new Request('http://localhost/api/registration/initialize', {
@@ -265,6 +266,26 @@ test('registration HTTP API enforces its boundary and safely initializes a club'
       body: JSON.stringify({ clubName: 'Forge Test Club' }),
     }));
 
+    // The reset executor temporarily sets worldReady=true before clearing its
+    // marker. New registration must remain blocked throughout that window.
+    const preResetConfig = (await configRef.get()).data() || {};
+    await configRef.set({
+      ...preResetConfig,
+      stagingSeasonOneResetInProgress: true,
+      stagingFreshSeasonOneReset: true,
+    }, { merge: true });
+    const resetBlockedResponse = await request();
+    const resetBlockedBody = await resetBlockedResponse.json();
+    assert.equal(resetBlockedResponse.status, 503);
+    assert.equal(resetBlockedBody.error, 'WORLD_INITIALIZING');
+    assert.equal((await playerRef.get()).exists, false);
+    assert.equal((await db.collection('league_slots_v1').doc(targetSlotId).get()).get('status'), 'FREE');
+    await configRef.set({
+      ...preResetConfig,
+      stagingSeasonOneResetInProgress: false,
+      stagingFreshSeasonOneReset: false,
+    }, { merge: true });
+
     // A standings row alone is not enough to replace a bot. The backing
     // player document must exist and be a valid five-player bot profile.
     const validBotProfile = (await botPlayerRef.get()).data();
@@ -303,6 +324,47 @@ test('registration HTTP API enforces its boundary and safely initializes a club'
     assert.equal(responseBody.tier, division);
     assert.equal(responseBody.group, group);
     assert.equal(responseBody.rank, 8);
+
+    // Existing-account idempotency and club repair must also respect the reset
+    // fence. This simulates the reset executor's final verification window.
+    const configBeforeRepairFence = (await configRef.get()).data() || {};
+    const profileBeforeRepairFence = (await playerRef.get()).data() || {};
+    const tableBeforeRepairFence = (await tableRef.get()).data() || {};
+    const sampleMatchRef = matchRefs[0];
+    const matchBeforeRepairFence = (await sampleMatchRef.get()).data() || {};
+    await configRef.set({
+      ...configBeforeRepairFence,
+      stagingSeasonOneResetInProgress: true,
+      stagingFreshSeasonOneReset: true,
+    }, { merge: true });
+
+    const existingRegistrationBlocked = await request();
+    const existingRegistrationBody = await existingRegistrationBlocked.json();
+    assert.equal(existingRegistrationBlocked.status, 503);
+    assert.equal(existingRegistrationBody.error, 'WORLD_INITIALIZING');
+
+    const repairResult = await repairRegisteredClubStateAction(idToken);
+    assert.deepEqual(repairResult, {
+      success: false,
+      repaired: false,
+      reason: 'WORLD_INITIALIZING',
+    });
+    const profileAfterRepairFence = (await playerRef.get()).data() || {};
+    assert.deepEqual(profileAfterRepairFence.matchHistory || [], profileBeforeRepairFence.matchHistory || []);
+    assert.deepEqual(profileAfterRepairFence.lastMatchResult || null, profileBeforeRepairFence.lastMatchResult || null);
+    assert.deepEqual((await tableRef.get()).get('stats'), tableBeforeRepairFence.stats);
+    const matchAfterRepairFence = (await sampleMatchRef.get()).data() || {};
+    const matchIdentityFields = ['homeId', 'awayId', 'homeName', 'awayName', 'scoreA', 'scoreB', 'status', 'isFinished'];
+    assert.deepEqual(
+      Object.fromEntries(matchIdentityFields.map(field => [field, matchAfterRepairFence[field] ?? null])),
+      Object.fromEntries(matchIdentityFields.map(field => [field, matchBeforeRepairFence[field] ?? null])),
+    );
+
+    await configRef.set({
+      ...configBeforeRepairFence,
+      stagingSeasonOneResetInProgress: false,
+      stagingFreshSeasonOneReset: false,
+    }, { merge: true });
 
     const [player, botPlayer, table, slotQuery, matches, stats, audit] = await Promise.all([
       playerRef.get(),

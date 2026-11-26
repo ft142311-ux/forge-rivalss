@@ -172,6 +172,16 @@ export async function POST(request: NextRequest) {
     const initialize = () => db.runTransaction(async (transaction) => {
       const transactionStartedAt = Date.now();
       registrationTrace('transaction_started', transactionStartedAt);
+      // Read the reset journal marker before the idempotent player shortcut. During
+      // the final verification window the world may be ready while reset is still
+      // in progress; registration must remain fenced until the marker is cleared.
+      const configSnapshot = await transaction.get(configRef);
+      registrationTrace('season_config_read', transactionStartedAt, { exists: configSnapshot.exists });
+      const config = configSnapshot.exists ? configSnapshot.data() || {} : {};
+      if (config.stagingSeasonOneResetInProgress === true || config.stagingFreshSeasonOneReset === true) {
+        throw new Error('WORLD_INITIALIZING');
+      }
+
       // Idempotency: a repeated request for an already-created account returns
       // its existing result and never allocates a second slot or squad.
       const playerSnapshot = await transaction.get(playerRef);
@@ -190,10 +200,7 @@ export async function POST(request: NextRequest) {
         };
       }
 
-      const configSnapshot = await transaction.get(configRef);
-      registrationTrace('season_config_read', transactionStartedAt, { exists: configSnapshot.exists });
       if (!configSnapshot.exists) throw new Error('SEASON_CONFIG_MISSING');
-      const config = configSnapshot.data() || {};
       const seasonNum = Number(config.activeSeasonNumber || 1);
       const phase = config.phase || 'UNKNOWN';
 
