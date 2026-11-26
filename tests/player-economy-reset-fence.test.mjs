@@ -33,5 +33,6 @@ test('shared player mutation fence reads season_config in the same transaction a
   const source = read('../src/app/lib/staging-season-one-write-fence.ts');
   assert.match(source, /tx\.get\(configRef\)/);
   assert.match(source, /stagingSeasonOneResetInProgress === true/);
+  assert.match(source, /stagingFreshSeasonOneReset === true/);
   assert.match(source, /throw new Error\('STAGING_SEASON_ONE_RESET_IN_PROGRESS'\)/);
 });
