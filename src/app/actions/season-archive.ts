@@ -231,9 +231,10 @@ export function getCompletedSeasonArchives(archives: any[]): any[] {
 
 
 /**
- * Validate the complete archive-retention set before deleting anything.
- * A PRUNING marker is written only after this function has approved the set;
- * it makes interrupted subcollection deletion safely resumable.
+ * Validate every historical archive before cleanup. Season archives are
+ * permanent records: the newest verified archive may be used as a placement
+ * baseline, but this function never schedules an archive or its match snapshots
+ * for deletion.
  */
 export function resolveArchivePrunePlan(
   archives: Array<{ id: string; archive: any; matches: any[]; historyStatus?: string | null }>,
@@ -316,7 +317,9 @@ export function resolveArchivePrunePlan(
   if (latestCompleted !== retainedArchiveSeason) {
     return { ready: false as const, reason: 'LATEST_COMPLETED_ARCHIVE_RETENTION_CONFLICT', latestCompleted, retainedArchiveSeason, pruneIds: [] as string[] };
   }
-  return { ready: true as const, reason: null, pruneIds, retainedArchiveSeason };
+  // Do not delete old seasons. Archive and match history is part of the
+  // persistent world and must remain available regardless of season count.
+  return { ready: true as const, reason: null, pruneIds: [] as string[], retainedArchiveSeason };
 }
 
 
