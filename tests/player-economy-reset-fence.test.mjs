@@ -36,3 +36,19 @@ test('shared player mutation fence reads season_config in the same transaction a
   assert.match(source, /stagingFreshSeasonOneReset === true/);
   assert.match(source, /throw new Error\('STAGING_SEASON_ONE_RESET_IN_PROGRESS'\)/);
 });
+
+test('auction and match settlement writes honor both reset markers', () => {
+  const cases = [
+    ['../src/app/lib/auction-bid.ts', 2],
+    ['../src/app/lib/auction-expiry-sweep.ts', 3],
+    ['../src/app/actions/pro-market.ts', 2],
+    ['../src/app/actions/match-economy.ts', 1],
+  ];
+
+  for (const [path, expectedGuards] of cases) {
+    const source = read(path);
+    const guards = (source.match(/stagingFreshSeasonOneReset === true/g) || []).length;
+    assert.equal(guards, expectedGuards, path + ' must honor every Beta reset guard');
+    assert.match(source, /stagingSeasonOneResetInProgress === true/);
+  }
+});
