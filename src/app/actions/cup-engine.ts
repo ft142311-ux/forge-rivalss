@@ -230,6 +230,35 @@ function buildCupRoundMatchData(season: number, round: number, pairing: Pairing,
   };
 }
 
+function cupFixtureTimestampMillis(value: any): number {
+  if (value && typeof value.toMillis === 'function') return Number(value.toMillis());
+  if (value instanceof Date) return value.getTime();
+  if (typeof value === 'number') return value;
+  if (typeof value === 'string' && value.trim()) return Date.parse(value);
+  return Number.NaN;
+}
+
+/** Existing deterministic fixtures are reusable only when their immutable match contract is exact. */
+function isCupRoundFixtureCompatible(existing: any, expected: any) {
+  const stringFields = ['id', 'type', 'cupId', 'homeId', 'awayId'];
+  for (const field of stringFields) {
+    if (String(existing?.[field] ?? '') !== String(expected?.[field] ?? '')) return false;
+  }
+  const numericFields = ['season', 'cupRound', 'bestOf'];
+  for (const field of numericFields) {
+    const actual = Number(existing?.[field]);
+    const wanted = Number(expected?.[field]);
+    if (!Number.isFinite(actual) || !Number.isFinite(wanted) || actual !== wanted) return false;
+  }
+  const expectedStart = cupFixtureTimestampMillis(expected?.scheduledAt);
+  if (!Number.isFinite(expectedStart)) return false;
+  for (const field of ['scheduledAt', 'startTime', 'scheduledStartAt']) {
+    const actual = cupFixtureTimestampMillis(existing?.[field]);
+    if (!Number.isFinite(actual) || actual !== expectedStart) return false;
+  }
+  return ['scheduled', 'processing', 'finished', 'completed'].includes(String(existing?.status || '').toLowerCase());
+}
+
 async function commitCupRoundTransition(
   db: any,
   cupRef: any,
@@ -279,8 +308,10 @@ async function commitCupRoundTransition(
           throw new Error('CUP_STAGE_FIXTURE_ID_CONFLICT');
         }
         pairing.matchId = expectedId;
+        const expectedFixture = buildCupRoundMatchData(season, nextRound, pairing, scheduledAt);
         return {
           pairing,
+          expectedFixture,
           dedicatedRef: db.collection(MATCH_COLLECTIONS.cup).doc(expectedId),
           legacyRef: db.collection('matches_v2').doc(expectedId),
         };
@@ -299,15 +330,12 @@ async function commitCupRoundTransition(
         ? snapshots[index].dedicated.data() || {}
         : snapshots[index].legacy.exists ? snapshots[index].legacy.data() || {} : null;
       if (existing) {
-        if ((existing.cupId && existing.cupId !== cupId(season)) ||
-            (Number.isFinite(Number(existing.cupRound)) && Number(existing.cupRound) !== nextRound) ||
-            existing.homeId !== entry.pairing.home!.id ||
-            existing.awayId !== entry.pairing.away!.id) {
+        if (!isCupRoundFixtureCompatible(existing, entry.expectedFixture)) {
           throw new Error('CUP_STAGE_FIXTURE_CONFLICT');
         }
         return;
       }
-      tx.create(entry.dedicatedRef, buildCupRoundMatchData(season, nextRound, entry.pairing, scheduledAt));
+      tx.create(entry.dedicatedRef, entry.expectedFixture);
     });
 
     const rounds: Record<string, any[]> = { ...(current.rounds || {}) };

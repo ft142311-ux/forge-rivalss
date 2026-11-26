@@ -41,3 +41,20 @@ test('cup waiting, advancing and final branches use the fenced state commit', ()
   assert.doesNotMatch(cycle, /createRoundMatches\(/);
   assert.doesNotMatch(cycle, /cup\.ref\.update\(\{ rounds/);
 });
+
+test('existing next-round cup fixtures must match the complete immutable match contract', () => {
+  const helperStart = source.indexOf('function cupFixtureTimestampMillis');
+  const helperEnd = source.indexOf('async function commitCupRoundTransition', helperStart);
+  assert.ok(helperStart >= 0 && helperEnd > helperStart);
+  const compatibility = source.slice(helperStart, helperEnd);
+  assert.match(compatibility, /\['id', 'type', 'cupId', 'homeId', 'awayId'\]/);
+  assert.match(compatibility, /\['season', 'cupRound', 'bestOf'\]/);
+  assert.match(compatibility, /\['scheduledAt', 'startTime', 'scheduledStartAt'\]/);
+  assert.match(compatibility, /return \['scheduled', 'processing', 'finished', 'completed'\]/);
+  const transitionStart = source.indexOf('async function commitCupRoundTransition');
+  const transitionEnd = source.indexOf('async function commitCupRoundState', transitionStart);
+  const transition = source.slice(transitionStart, transitionEnd);
+  assert.match(transition, /expectedFixture: buildCupRoundMatchData|const expectedFixture = buildCupRoundMatchData/);
+  assert.match(transition, /isCupRoundFixtureCompatible\(existing, entry\.expectedFixture\)/);
+  assert.match(transition, /CUP_STAGE_FIXTURE_CONFLICT/);
+});
