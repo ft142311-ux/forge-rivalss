@@ -32,3 +32,15 @@ test('tournament match workers reclaim stale processing leases with a fencing to
   assert.match(source, /TOURNAMENT_MATCH_RETRY_EXHAUSTED/);
   assert.match(source, /attempts >= 3/);
 });
+
+test('third failed tournament attempt is marked retry-exhausted instead of blocking the stage forever', () => {
+  const source = read('src/app/actions/tournament-system.ts');
+  const start = source.indexOf('async function resolveTournamentMatch');
+  const end = source.indexOf('async function stageMatchesDone', start);
+  const resolver = source.slice(start, end);
+  const exhausted = resolver.indexOf("if (attempts >= 3)");
+  const marker = resolver.indexOf("lastError: 'TOURNAMENT_MATCH_RETRY_EXHAUSTED'", exhausted);
+  assert.ok(exhausted >= 0 && marker > exhausted);
+  assert.match(resolver.slice(exhausted, marker), /status !== 'processing' \|\| staleProcessing/);
+  assert.match(resolver.slice(exhausted, marker), /return false/);
+});
