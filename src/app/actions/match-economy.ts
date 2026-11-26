@@ -95,7 +95,8 @@ export async function recordMatchEconomy(
     const [playerSnap, txSnap, configSnap] = await Promise.all([
       t.get(playerRef), t.get(txRef), t.get(configRef),
     ]);
-    if (configSnap.exists && configSnap.data()?.stagingSeasonOneResetInProgress === true) {
+    if (configSnap.exists && (configSnap.data()?.stagingSeasonOneResetInProgress === true ||
+        configSnap.data()?.stagingFreshSeasonOneReset === true)) {
       throw new Error('STAGING_SEASON_ONE_RESET_IN_PROGRESS');
     }
     if (!playerSnap.exists) throw new Error('PLAYER_NOT_FOUND');
