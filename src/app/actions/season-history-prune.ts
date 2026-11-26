@@ -5,6 +5,11 @@ import { resolveActivatedSkippedHistoryMarker, resolveActivatedSkippedSeasons, r
 import { isRolloverPlanPublicationReady } from './season-awards-policy';
 import { resolveArchivePrunePlan } from './season-archive';
 
+/**
+ * Enforce the rolling one-archive policy only after a season has activated.
+ * Verify the retained archive before deleting anything; delete nested match
+ * documents explicitly because Firestore does not cascade subcollections.
+ */
 export async function pruneSeasonHistoryAfterActivation(
   db: any,
   targetSeason: number,

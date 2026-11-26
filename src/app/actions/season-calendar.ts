@@ -1191,11 +1191,6 @@ async function buildSeasonCalendar(lease: BuildLease, pristineFirstWorld = false
 
 
 
-/**
- * Enforce the rolling one-archive policy only after a season has activated.
- * Verify the retained archive before deleting anything; delete nested match
- * documents explicitly because Firestore does not cascade subcollections.
- */
 /** Read-only canonical gate shared by build and the final publication step. */
 async function inspectCanonicalSeason(db: any, seasonNumber: number) {
   const [allFinalMatches, allFinalSlots, allFinalTables] = await Promise.all([

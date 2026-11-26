@@ -15,7 +15,7 @@ import { buildRecoveredSeasonArchiveSnapshot, resolveArchivePrunePlan } from '..
 import { buildPromotionRelegationGroups } from '../src/app/actions/season-rollover-plan.ts';
 import { calculateGroupStandings } from '../src/app/actions/season-rollover-standings.ts';
 import { pruneSeasonHistoryAfterActivation } from '../src/app/actions/season-history-prune.ts';
-import { calculateGroupStandings } from '../src/app/actions/season-rollover-standings.ts';
+
 import { expectedRolloverGroups } from '../src/app/actions/season-rollover-plan.ts';
 
 const emulatorHost = process.env.FIRESTORE_EMULATOR_HOST;
