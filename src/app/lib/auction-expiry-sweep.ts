@@ -195,7 +195,8 @@ export async function runTransferMarketExpirySweepWithDb(
   const now = options.now || (() => Date.now());
   const startedAt = now();
   const initialConfig = await db.collection('system_v1').doc('season_config').get();
-  if (initialConfig.exists && initialConfig.data()?.stagingSeasonOneResetInProgress === true) {
+  if (initialConfig.exists && (initialConfig.data()?.stagingSeasonOneResetInProgress === true ||
+      initialConfig.data()?.stagingFreshSeasonOneReset === true)) {
     return { success: true, skipped: true, reason: 'STAGING_SEASON_ONE_RESET_IN_PROGRESS', scanned: 0, settled: 0 };
   }
   const maxRuntimeMs = Number.isSafeInteger(options.maxRuntimeMs) && options.maxRuntimeMs! > 0
@@ -230,7 +231,8 @@ export async function runTransferMarketExpirySweepWithDb(
   const configRef = db.collection('system_v1').doc('season_config');
   const lease = await db.runTransaction(async (tx: any) => {
     const [snapshot, configSnap] = await Promise.all([tx.get(stateRef), tx.get(configRef)]);
-    if (configSnap.exists && configSnap.data()?.stagingSeasonOneResetInProgress === true) {
+    if (configSnap.exists && (configSnap.data()?.stagingSeasonOneResetInProgress === true ||
+        configSnap.data()?.stagingFreshSeasonOneReset === true)) {
       return { acquired: false, cursorId: null, resetInProgress: true };
     }
     const state = snapshot.exists ? snapshot.data() || {} : {};
@@ -246,6 +248,13 @@ export async function runTransferMarketExpirySweepWithDb(
     }, { merge: true });
     return { acquired: true, cursorId: savedCursor };
   });
+
+  if (!lease.acquired && lease.resetInProgress) {
+    return {
+      success: true, complete: false, continuation: false, busy: false,
+      skipped: true, reason: 'STAGING_SEASON_ONE_RESET_IN_PROGRESS', scanned: 0, settled: 0,
+    };
+  }
 
   if (!lease.acquired) {
     return {

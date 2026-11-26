@@ -15,7 +15,7 @@ async function withIsolatedFirestore(t) {
   const app = initializeApp({ projectId }, `auction-expiry-test-${randomUUID()}`);
   const firestore = getFirestore(app);
   const prefix = `auctionExpiryTest_${randomUUID().replaceAll('-', '')}_`;
-  const names = ['market_v7', 'players_v14', 'economy_transactions', 'transfer_history', 'notifications_v7', 'system_v1'];
+  const names = ['market_v7', 'players_v14', 'economy_transactions', 'transfer_history', 'notifications_v7', 'system_v1', 'system_jobs_v1'];
   const db = {
     collection: name => firestore.collection(prefix + name),
     runTransaction: callback => firestore.runTransaction(callback),
@@ -89,6 +89,58 @@ test('Firestore Emulator blocks standard and special bids while a fresh Season 1
   assert.equal((await db.collection('economy_transactions').get()).size, 0);
   assert.equal((await db.collection('notifications_v7').get()).size, 0);
 });
+
+test('Firestore Emulator skips expiry sweeps when either fresh Season 1 reset marker is already active', {
+  skip: !emulatorHost,
+}, async t => {
+  const { db } = await withIsolatedFirestore(t);
+  const lotRef = db.collection('market_v7').doc('reset-blocked-expiry');
+  const configRef = db.collection('system_v1').doc('season_config');
+  await lotRef.set(expiredLot({ sellerId: '', highestBidderId: null }));
+
+  for (const marker of ['stagingSeasonOneResetInProgress', 'stagingFreshSeasonOneReset']) {
+    await configRef.set({ [marker]: true }, { merge: true });
+    const result = await runTransferMarketExpirySweepWithDb(db);
+    assert.equal(result.success, true);
+    assert.equal(result.skipped, true);
+    assert.equal(result.reason, 'STAGING_SEASON_ONE_RESET_IN_PROGRESS');
+    assert.equal(result.scanned, 0);
+    assert.equal((await lotRef.get()).exists, true);
+    assert.equal((await db.collection('system_jobs_v1').doc('market_expiry_sweep').get()).exists, false);
+    await configRef.set({ [marker]: false }, { merge: true });
+  }
+});
+
+test('Firestore Emulator rechecks the fresh reset marker when it appears after sweep preflight', {
+  skip: !emulatorHost,
+}, async t => {
+  const { db } = await withIsolatedFirestore(t);
+  const lotRef = db.collection('market_v7').doc('reset-race-expiry');
+  const configRef = db.collection('system_v1').doc('season_config');
+  const firestore = db.collection('system_v1').firestore;
+  await lotRef.set(expiredLot({ sellerId: '', highestBidderId: null }));
+  await configRef.set({ stagingFreshSeasonOneReset: false });
+
+  const racedDb = {
+    collection: name => db.collection(name),
+    runTransaction: async callback => {
+      // The initial config read has completed. Assert the reset marker before
+      // the sweep tries to claim its transactionally fenced lease.
+      await configRef.set({ stagingFreshSeasonOneReset: true }, { merge: true });
+      return firestore.runTransaction(callback);
+    },
+  };
+
+  const result = await runTransferMarketExpirySweepWithDb(racedDb);
+  assert.equal(result.success, true);
+  assert.equal(result.skipped, true);
+  assert.equal(result.reason, 'STAGING_SEASON_ONE_RESET_IN_PROGRESS');
+  assert.equal((await lotRef.get()).exists, true);
+  assert.equal((await db.collection('system_jobs_v1').doc('market_expiry_sweep').get()).exists, false);
+  assert.equal((await db.collection('economy_transactions').get()).size, 0);
+  assert.equal((await db.collection('transfer_history').get()).size, 0);
+});
+
 
 
 test('Firestore Emulator refunds the outbid manager and charges only the incremental amount for a same-bidder raise', {
