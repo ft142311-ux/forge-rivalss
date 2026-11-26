@@ -391,6 +391,7 @@ export async function commitPyramidCupCreation(
   snapshotWrites: Array<{ ref: any; data: any }>,
   fixtureWrites: Array<{ ref: any; data: any }>,
   cupData: any,
+  options: { allowStagingResetBootstrap?: boolean } = {},
 ) {
   return db.runTransaction(async (tx: any) => {
     const [configSnap, cupSnap] = await Promise.all([
@@ -398,7 +399,18 @@ export async function commitPyramidCupCreation(
       tx.get(cupRef),
     ]);
     if (!configSnap.exists) return { status: 'SEASON_CONFIG_MISSING' };
-    if (configSnap.data()?.stagingSeasonOneResetInProgress === true) {
+    const config = configSnap.data() || {};
+    const stagingResetBootstrapAllowed =
+      options.allowStagingResetBootstrap === true &&
+      config.stagingSeasonOneResetInProgress === true &&
+      config.stagingFreshSeasonOneReset === true &&
+      Number(config.activeSeasonNumber) === 1 &&
+      String(config.phase || '').toUpperCase() === 'REGULAR_SEASON' &&
+      config.worldReady === true &&
+      config.pyramidCupRequired === true &&
+      config.pyramidCupReady === false &&
+      Number(config.pyramidCupReadySeasonNumber) === 1;
+    if (config.stagingSeasonOneResetInProgress === true && !stagingResetBootstrapAllowed) {
       return { status: 'RESET_IN_PROGRESS' };
     }
     if (cupSnap.exists) return { status: 'ALREADY_EXISTS' };
@@ -470,6 +482,7 @@ export async function generatePyramidCup(
       snapshotWrites,
       fixtureWrites,
       cupData,
+      { allowStagingResetBootstrap: options.allowInitialBootstrap === true },
     );
     if (committed.status === 'RESET_IN_PROGRESS') {
       throw new Error('STAGING_SEASON_ONE_RESET_IN_PROGRESS');
