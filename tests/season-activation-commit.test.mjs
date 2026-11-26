@@ -82,6 +82,19 @@ function expected(overrides = {}) {
   };
 }
 
+
+test('season activation is blocked while the fresh Season 1 reset marker is active', async () => {
+  const config = { ...preparedConfig(), stagingSeasonOneResetInProgress: true };
+  const db = activationDb({ config });
+
+  const result = await commitSeasonActivation(db, configRef, planRef, expected());
+
+  assert.deepEqual(result, { success: false, reason: 'STAGING_SEASON_ONE_RESET_IN_PROGRESS' });
+  assert.equal(db.read('season_config').activeSeasonNumber, 1);
+  assert.equal(db.read('season_config').stagingSeasonOneResetInProgress, true);
+  assert.equal(db.updateCount(), 0);
+});
+
 test('activation commits active season and cleanup marker atomically', async () => {
   const db = activationDb();
   const result = await commitSeasonActivation(db, configRef, planRef, expected());
