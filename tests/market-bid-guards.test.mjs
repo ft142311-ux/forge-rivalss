@@ -79,3 +79,14 @@ test('standard market bid action fails closed before writing when expiry or pric
   assert.ok(action.includes("SPECIAL_AUCTION_OUTBID_REFUND"));
   assert.ok(action.includes("const nextExpiry = expiresAt - now < 10 * 60 * 1000"));
 });
+
+
+test('standard transfer bids verify that the seller still owns the uniquely listed player', () => {
+  const helper = readFileSync(new URL('../src/app/lib/auction-bid.ts', import.meta.url), 'utf8');
+  assert.match(helper, /async function assertStandardMarketSellerListing/);
+  assert.match(helper, /const sellerSnap = await tx\.get\(sellerRef\)/);
+  assert.match(helper, /matches\.length !== 1/);
+  assert.match(helper, /lockId !== marketId/);
+  assert.match(helper, /MARKET_LOT_STALE/);
+  assert.match(helper, /await assertStandardMarketSellerListing\(tx, db, lot, marketId, now\)/);
+});

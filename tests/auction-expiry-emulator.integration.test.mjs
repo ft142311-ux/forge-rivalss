@@ -523,7 +523,7 @@ test('Firestore Emulator standard transfer-market bids reserve, refund and settl
   const now = Date.now();
   await db.collection('players_v14').doc('standard-seller').set({
     credits: 100,
-    ownedPlayers: [{ id: 'standard-player', name: 'Standard Player', onTransferUntil: 'reserved', transferMarketId: 'standard-flow' }],
+    ownedPlayers: [{ id: 'standard-player', name: 'Standard Player', onTransferUntil: new Date(now + 60 * 60 * 1000).toISOString(), transferMarketId: 'standard-flow' }],
   });
   await db.collection('players_v14').doc('standard-bidder-1').set({ credits: 1000, displayName: 'First', ownedPlayers: [] });
   await db.collection('players_v14').doc('standard-bidder-2').set({ credits: 1000, displayName: 'Second', ownedPlayers: [] });
@@ -597,7 +597,10 @@ test('Firestore Emulator standard transfer-market concurrent bids serialize with
 }, async t => {
   const { db } = await withIsolatedFirestore(t);
   const now = Date.now();
-  await db.collection('players_v14').doc('standard-race-seller').set({ credits: 0 });
+  await db.collection('players_v14').doc('standard-race-seller').set({
+    credits: 0,
+    ownedPlayers: [{ id: 'standard-race-player', name: 'Race Player', onTransferUntil: new Date(now + 60 * 60 * 1000).toISOString(), transferMarketId: 'standard-race' }],
+  });
   await db.collection('players_v14').doc('standard-race-bidder').set({ credits: 1000, displayName: 'Race Bidder' });
   const lotRef = db.collection('market_v7').doc('standard-race');
   await lotRef.set({
@@ -639,7 +642,10 @@ test('Firestore Emulator standard transfer-market insufficient funds leave no pa
 }, async t => {
   const { db } = await withIsolatedFirestore(t);
   const now = Date.now();
-  await db.collection('players_v14').doc('standard-poor-seller').set({ credits: 0 });
+  await db.collection('players_v14').doc('standard-poor-seller').set({
+    credits: 0,
+    ownedPlayers: [{ id: 'standard-poor-player', name: 'Poor Bidder Player', onTransferUntil: new Date(now + 60 * 60 * 1000).toISOString(), transferMarketId: 'standard-poor-lot' }],
+  });
   await db.collection('players_v14').doc('standard-poor-bidder').set({ credits: 250 });
   const lotRef = db.collection('market_v7').doc('standard-poor-lot');
   await lotRef.set({
@@ -859,7 +865,7 @@ test('Firestore Emulator rejects malformed fractional auction balances without p
   await db.collection('players_v14').doc('fractional-bidder').set({ credits: 1000.5, ownedPlayers: [] });
   await db.collection('players_v14').doc('fractional-seller').set({
     credits: 20,
-    ownedPlayers: [{ id: 'fractional-player', name: 'Fractional Player', onTransferUntil: 'reserved', transferMarketId: 'fractional-lot' }],
+    ownedPlayers: [{ id: 'fractional-player', name: 'Fractional Player', onTransferUntil: new Date(now + 60 * 60 * 1000).toISOString(), transferMarketId: 'fractional-bid' }],
   });
   const bidLot = db.collection('market_v7').doc('fractional-bid');
   await bidLot.set({
@@ -1105,4 +1111,46 @@ test('Firestore Emulator keeps a player reserved by a newer listing when an olde
   const refunds = await db.collection('economy_transactions').where('referenceId', '==', 'older-expired-lot').get();
   assert.equal(refunds.size, 1);
   assert.equal(refunds.docs[0].get('type'), 'SPECIAL_AUCTION_SETTLEMENT_REFUND');
+});
+
+
+test('Firestore Emulator rejects bids against a stale lot after the seller relists the player', {
+  skip: !emulatorHost,
+}, async t => {
+  const { db } = await withIsolatedFirestore(t);
+  const now = Date.now();
+  const lockUntil = new Date(now + 60 * 60 * 1000).toISOString();
+  await db.collection('players_v14').doc('relisted-seller').set({
+    credits: 0,
+    ownedPlayers: [{
+      id: 'relisted-player',
+      name: 'Relisted Player',
+      onTransferUntil: lockUntil,
+      transferMarketId: 'newer-active-listing',
+    }],
+  });
+  await db.collection('players_v14').doc('stale-bidder').set({ credits: 1000, ownedPlayers: [] });
+  const staleLot = db.collection('market_v7').doc('older-listing');
+  await staleLot.set({
+    sellerId: 'relisted-seller',
+    marketType: 'player',
+    currency: 'credits',
+    currentBid: 200,
+    startingPrice: 200,
+    highestBidderId: null,
+    bidders: [],
+    expiresAt: lockUntil,
+    heroData: { id: 'relisted-player', name: 'Relisted Player' },
+    isPro: false,
+    isYouth: false,
+  });
+
+  await assert.rejects(
+    placeStandardMarketBidWithDb(db, 'stale-bidder', 'older-listing', 300),
+    /MARKET_LOT_STALE/,
+  );
+  assert.equal((await db.collection('players_v14').doc('stale-bidder').get()).get('credits'), 1000);
+  assert.equal((await staleLot.get()).get('highestBidderId'), null);
+  assert.equal((await staleLot.get()).get('currentBid'), 200);
+  assert.equal((await db.collection('economy_transactions').get()).size, 0);
 });

@@ -12,6 +12,7 @@ import { requireServerActor } from '@/lib/server-auth';
 import { assertStagingSeasonOneResetNotInProgress } from '@/app/lib/staging-season-one-write-fence';
 
 function readFinancialBalance(value: unknown) {
+  if (typeof value === 'string' && value.trim().length === 0) throw new Error('INVALID_BALANCE');
   const balance = value === undefined || value === null
     ? 0
     : (typeof value === 'number' || typeof value === 'string') ? Number(value) : NaN;
@@ -29,6 +30,9 @@ export async function processFinancialOperation(idToken: string, data: unknown) 
   if (!validation.success) return { success: false, error: 'INVALID_INPUT' };
 
   const { idempotencyKey, amount, type, description } = validation.data;
+  // This server action is callable by an authenticated client. Currency credits
+  // must come from authoritative domain actions, never a generic client amount.
+  if (amount >= 0) return { success: false, error: 'FINANCIAL_DEBIT_REQUIRED' };
   const db = getAdminDb();
 
   try {

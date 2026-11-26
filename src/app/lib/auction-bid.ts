@@ -6,6 +6,32 @@ function money(value: unknown) {
   return normalizeAuctionBalance(value);
 }
 
+async function assertStandardMarketSellerListing(tx: any, db: any, lot: any, marketId: string, now: number) {
+  const sellerId = String(lot.sellerId || '');
+  const playerId = String(lot.heroData?.id || lot.playerId || '');
+  if (!sellerId || sellerId === 'system') throw new Error('MARKET_SELLER_UNAVAILABLE');
+  if (!playerId) throw new Error('MARKET_PLAYER_UNAVAILABLE');
+
+  const sellerRef = db.collection('players_v14').doc(sellerId);
+  const sellerSnap = await tx.get(sellerRef);
+  if (!sellerSnap.exists) throw new Error('MARKET_SELLER_UNAVAILABLE');
+  const seller = sellerSnap.data() || {};
+  if (seller.ownedPlayers !== undefined && seller.ownedPlayers !== null && !Array.isArray(seller.ownedPlayers)) {
+    throw new Error('MARKET_SELLER_ROSTER_INVALID');
+  }
+  const players: any[] = Array.isArray(seller.ownedPlayers) ? seller.ownedPlayers : [];
+  const matches = players.filter(player => String(player?.id || '') === playerId);
+  if (matches.length !== 1) throw new Error('MARKET_PLAYER_NOT_LISTED');
+
+  const player = matches[0];
+  const lockId = String(player.transferMarketId || '').trim();
+  if (lockId && lockId !== marketId) throw new Error('MARKET_LOT_STALE');
+  if (player.onTransferUntil !== undefined && player.onTransferUntil !== null && player.onTransferUntil !== '') {
+    const lockUntil = resolveMarketBidExpiryMs(player.onTransferUntil);
+    if (lockUntil === null || lockUntil <= now) throw new Error('MARKET_LOT_STALE');
+  }
+}
+
 export async function placeSpecialMarketBidWithDb(
   db: any,
   uid: string,
@@ -205,6 +231,7 @@ export async function placeStandardMarketBidWithDb(
     if (expiresAt === null) throw new Error('MARKET_EXPIRY_INVALID');
     const now = Date.now();
     if (expiresAt <= now) throw new Error('MARKET_LOT_EXPIRED');
+    await assertStandardMarketSellerListing(tx, db, lot, marketId, now);
 
     const currentBid = resolveMarketBidPrice(lot.currentBid, lot.startingPrice);
     if (currentBid === null) throw new Error('MARKET_PRICE_INVALID');

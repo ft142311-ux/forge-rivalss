@@ -6,6 +6,7 @@ import { getFoundationManagerRef } from './foundation-manager-ref';
 import { requireServerActor } from '@/lib/server-auth';
 import { generateStaffMember } from '@/app/lib/moba-data';
 import { FOUNDATION_COLLECTIONS } from '@/game/foundation/config';
+import { assertStagingSeasonOneResetNotInProgress } from '@/app/lib/staging-season-one-write-fence';
 
 const STAFF_ROLES = ['recruiter', 'coach', 'analyst', 'scout', 'doctor', 'financier'] as const;
 type StaffRole = typeof STAFF_ROLES[number];
@@ -78,40 +79,41 @@ export async function getFoundationStaffCandidatesAction(idToken: string, roleVa
     const role = cleanRole(roleValue);
     const db = getAdminDb();
     const managerRef = getFoundationManagerRef(db, uid);
-    const managerSnap = await managerRef.get();
-    if (!managerSnap.exists) throw new Error('PLAYER_NOT_FOUND');
-    const data = managerSnap.data() || {};
-    const staff = (data.staff || {}) as Record<string, any>;
-
-    if (role !== 'recruiter' && !staff.recruiter) throw new Error('RECRUITER_REQUIRED');
-    if (staff[role]) throw new Error('STAFF_ROLE_OCCUPIED');
-
-    const building = BUILDING_REQUIREMENTS[role];
-    if (building && !buildingAvailable(data, building)) throw new Error('REQUIRED_BUILDING_MISSING');
-    if (staffCount(staff) >= staffCapacity(data.hq)) throw new Error('HR_CAPACITY_REACHED');
-
     const today = dayKey();
     const candidateRef = db.collection(FOUNDATION_COLLECTIONS.staff).doc(`candidate_${uid}_${today}_${role}`);
-    const candidateSnap = await candidateRef.get();
+    // Generate outside the transaction so retries keep the persisted daily
+    // candidate as the single source of truth.
+    const generatedCandidate = { ...generateStaffMember(role === 'recruiter' ? 'coach' : role), role };
 
-    if (candidateSnap.exists) {
-      return { success: true, role, roleLabel: ROLE_LABELS[role], candidate: candidateSnap.data()?.candidate || null, generatedToday: true };
-    }
+    return await db.runTransaction(async t => {
+      await assertStagingSeasonOneResetNotInProgress(t, db);
+      const [managerSnap, candidateSnap] = await Promise.all([t.get(managerRef), t.get(candidateRef)]);
+      if (!managerSnap.exists) throw new Error('PLAYER_NOT_FOUND');
+      const data = managerSnap.data() || {};
+      const staff = (data.staff || {}) as Record<string, any>;
 
-    // One candidate per role/place per Moscow day. The candidate is persisted,
-    // so refreshing the screen does not generate a different person.
-    const candidate = { ...generateStaffMember(role === 'recruiter' ? 'coach' : role), role };
-    await candidateRef.set({
-      kind: 'candidate',
-      userId: uid,
-      role,
-      day: today,
-      candidate,
-      status: 'available',
-      createdAt: FieldValue.serverTimestamp(),
+      if (role !== 'recruiter' && !staff.recruiter) throw new Error('RECRUITER_REQUIRED');
+      if (staff[role]) throw new Error('STAFF_ROLE_OCCUPIED');
+
+      const building = BUILDING_REQUIREMENTS[role];
+      if (building && !buildingAvailable(data, building)) throw new Error('REQUIRED_BUILDING_MISSING');
+      if (staffCount(staff) >= staffCapacity(data.hq)) throw new Error('HR_CAPACITY_REACHED');
+
+      if (candidateSnap.exists) {
+        return { success: true, role, roleLabel: ROLE_LABELS[role], candidate: candidateSnap.data()?.candidate || null, generatedToday: true };
+      }
+
+      t.create(candidateRef, {
+        kind: 'candidate',
+        userId: uid,
+        role,
+        day: today,
+        candidate: generatedCandidate,
+        status: 'available',
+        createdAt: FieldValue.serverTimestamp(),
+      });
+      return { success: true, role, roleLabel: ROLE_LABELS[role], candidate: generatedCandidate, generatedToday: true };
     });
-
-    return { success: true, role, roleLabel: ROLE_LABELS[role], candidate, generatedToday: true };
   } catch (e) {
     return { success: false, error: errorOf(e) };
   }
@@ -126,6 +128,7 @@ export async function hireFoundationStaffAction(idToken: string, roleValue: stri
     const candidateRef = db.collection(FOUNDATION_COLLECTIONS.staff).doc(`candidate_${uid}_${dayKey()}_${role}`);
 
     return await db.runTransaction(async t => {
+      await assertStagingSeasonOneResetNotInProgress(t, db);
       const [managerSnap, candidateSnap] = await Promise.all([t.get(managerRef), t.get(candidateRef)]);
       if (!managerSnap.exists) throw new Error('PLAYER_NOT_FOUND');
       if (!candidateSnap.exists) throw new Error('CANDIDATE_NOT_FOUND');
