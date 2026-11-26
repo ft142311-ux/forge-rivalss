@@ -57,7 +57,7 @@ async function readActiveCupSeasonContext(
   if (season !== activeSeason) {
     const preparedSeason = Number(config.preparedSeasonNumber);
     const preparedPhase = ['GENERATING_NEXT', 'PREPARING_NEXT_SEASON', 'PREPARATION', 'PUBLISHED'].includes(phase);
-    if (season !== preparedSeason || config.worldReady !== true ||
+    if (season !== preparedSeason || preparedSeason !== activeSeason + 1 || config.worldReady !== true ||
         config.preparedWorldReady !== true || !preparedPhase) {
       return { ready: false as const, reason: 'PREPARED_SEASON_NOT_READY', season, activeSeason, preparedSeason, phase };
     }
