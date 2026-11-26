@@ -21,6 +21,18 @@ test('standard market expiry rejects missing, malformed, non-finite and throwing
   }
 });
 
+test('special and standard auction bids share strict expiry timestamp normalization', () => {
+  const source = readFileSync(new URL('../src/app/lib/auction-bid.ts', import.meta.url), 'utf8');
+  const specialStart = source.indexOf('export async function placeSpecialMarketBidWithDb');
+  const standardStart = source.indexOf('export async function placeStandardMarketBidWithDb');
+  assert.ok(specialStart >= 0 && standardStart > specialStart);
+  const specialAction = source.slice(specialStart, standardStart);
+  const standardAction = source.slice(standardStart);
+  assert.match(specialAction, /resolveMarketBidExpiryMs\(lot\.expiresAt\)/);
+  assert.match(standardAction, /resolveMarketBidExpiryMs\(lot\.expiresAt\)/);
+  assert.match(specialAction, /MARKET_EXPIRY_INVALID/);
+});
+
 test('standard market price accepts only non-negative safe integer values', () => {
   assert.equal(resolveMarketBidPrice(500, 100), 500);
   assert.equal(resolveMarketBidPrice(undefined, 100), 100);
