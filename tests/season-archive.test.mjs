@@ -161,7 +161,7 @@ test('archive cleanup retains only the newest completed archive', async () => {
   second.archive.status = 'completed';
   second.archive.completedAt = '2026-10-23T15:00:00.000Z';
   const result = resolveArchivePrunePlan([
-    { id: 'S1', archive: first.archive, matches: first.matches },
+    { id: 'S1', archive: first.archive, matches: [] },
     { id: 'S2', archive: second.archive, matches: second.matches },
   ], 4, 2);
   assert.equal(result.ready, true);
@@ -384,7 +384,8 @@ test('rolling archive pruning resumes after partial deletion across five complet
     item.archive.pruneRetainedArchiveSeason = 5;
     item.archive.prunePolicyVersion = 1;
   }
-  const afterInterruption = archives.filter(item => !['S1', 'S2'].includes(item.id));
+  const afterInterruption = archives.filter(item => !['S1', 'S2'].includes(item.id))
+    .map(item => item.id === 'S5' ? item : { ...item, matches: [] });
   const resumed = resolveArchivePrunePlan(afterInterruption, 6, 5);
   assert.equal(resumed.ready, true);
   assert.deepEqual(resumed.pruneIds, ['S3', 'S4']);
