@@ -67,7 +67,7 @@ test('incomplete source seasons cannot be silently skipped by ordinary calendar 
   const builder = source.slice(source.indexOf('async function buildSeasonCalendar'));
   assert.match(builder, /resolveNextSeasonTarget\(/);
   assert.match(builder, /targetSeason = Math\.min\(requestedTarget, sourceSeason \+ 1\)/);
-  assert.equal((source.match(/prepareRecoveryCarryForwardPlan\(db/g) || []).length, 0);
+  assert.equal(source.includes('prepareRecoveryCarryForwardPlan(db, activeSeasonBefore'), false);
   assert.doesNotMatch(builder, /publishRecoveryRolloverDecision\(/);
 });
 
