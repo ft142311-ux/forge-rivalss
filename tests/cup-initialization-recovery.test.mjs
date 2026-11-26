@@ -23,11 +23,11 @@ test('concurrent Cup initialization treats only a winning root-document conflict
   const end = source.indexOf('export async function preparePyramidCupForSeason', start);
   assert.ok(start >= 0 && end > start);
   const generation = source.slice(start, end);
-  assert.match(generation, /String\\(error\\?\\.code \\?\\? ''\\)\\.toLowerCase\\(\\)\\.replace\\(\\/_\\/g, '-'\\)/);
-  assert.match(generation, /code !== '6' && code !== 'already-exists'/);
-  assert.match(generation, /competingCup = await ref\\.get\\(\\)/);
-  assert.match(generation, /if \\(!competingCup\\.exists\\) throw error/);
-  assert.match(generation, /return \\{ success: true, alreadyExists: true, cupId: id \\}/);
+  assert.ok(generation.includes("const code = String(error?.code ?? '').toLowerCase().replace(/_/g, '-')"));
+  assert.ok(generation.includes("if (code !== '6' && code !== 'already-exists') throw error;"));
+  assert.ok(generation.includes('competingCup = await ref.get()'));
+  assert.ok(generation.includes('if (!competingCup.exists) throw error;'));
+  assert.ok(generation.includes('return { success: true, alreadyExists: true, cupId: id }'));
 });
 
 test('interrupted cup initialization recreates only missing fixtures and preserves legacy matches', () => {
