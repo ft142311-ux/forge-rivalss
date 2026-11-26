@@ -202,9 +202,7 @@ export function resolveRolloverPlanPruneIds(
   if (!targetFound) {
     return { ready: false as const, reason: 'ACTIVE_ROLLOVER_PLAN_MISSING_FROM_PRUNE_SET', pruneIds: [] as string[] };
   }
-  // Rollover plans are the durable record of each season's placement decision.
-  // Keep them all; only validate that each document is correctly identified.
-  return { ready: true as const, reason: null, pruneIds: [] as string[] };
+  return { ready: true as const, reason: null, pruneIds };
 }
 
 
