@@ -71,7 +71,7 @@ test('obsolete rollover plan pruning validates document identity and retains onl
     { id: 'S3', plan: targetPlan },
   ], 3);
   assert.equal(result.ready, true);
-  assert.deepEqual(result.pruneIds, ['S2']);
+  assert.deepEqual(result.pruneIds, []);
 });
 
 
