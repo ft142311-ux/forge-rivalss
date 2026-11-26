@@ -151,7 +151,12 @@ export async function getMyLeagueMatchReportsAction(idToken: string) {
   if (!Number.isInteger(level) || level < 1 || level > 4 || !groupId || !Number.isInteger(rank) || rank < 1 || rank > 8) {
     return { success: false, error: 'INVALID_MANAGER_LEAGUE_PROFILE', matches: [] };
   }
-  const snapshot = await db.collection(MATCH_COLLECTIONS.league).where('season', '==', season).get();
+  const snapshot = await db.collection(MATCH_COLLECTIONS.league)
+    .where('season', '==', season)
+    .where('leagueId', '==', leagueId)
+    .where('level', '==', level)
+    .where('groupId', '==', groupId)
+    .get();
   const matches = snapshot.docs.flatMap((doc: any) => {
     const raw = doc.data() || {};
     const inGroup = String(raw.leagueId || '') === leagueId && Number(raw.level) === level && String(raw.groupId || '') === groupId;
@@ -208,7 +213,12 @@ export async function getMyUnreadMatchReportsCountAction(idToken: string) {
     { collectionName: MATCH_COLLECTIONS.trial, field: 'awayId' },
   ];
   const [activeLeagueMatches, ...participantSnapshots] = await Promise.all([
-    db.collection(MATCH_COLLECTIONS.league).where('season', '==', season).get(),
+    db.collection(MATCH_COLLECTIONS.league)
+      .where('season', '==', season)
+      .where('leagueId', '==', league.leagueId)
+      .where('level', '==', league.level)
+      .where('groupId', '==', league.groupId)
+      .get(),
     ...querySpecs.map(spec =>
       db.collection(spec.collectionName).where(spec.field, '==', uid).get()
     ),

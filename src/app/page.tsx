@@ -74,7 +74,7 @@ export default function Home() {
     };
     void refreshUnreadReports();
     return () => { cancelled = true; };
-  }, [user, rank, allSeasonMatches, matchHistory]);
+  }, [user, rank, selectedLeagueId, leagueLevel, groupId, allSeasonMatches, matchHistory]);
 
 
   const seasonConfigRef = useMemoFirebase(() => {

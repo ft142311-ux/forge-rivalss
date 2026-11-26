@@ -52,14 +52,14 @@ test('getCompletedSeriesScore sums only completed maps and safely handles missin
 
 test('reports page loads finished league reports through authenticated profile-scoped action', () => {
   const page = readFileSync(new URL('../src/app/reports/page.tsx', import.meta.url), 'utf8');
-  assert.match(page, /getMyLeagueMatchReportsAction\(await user\.getIdToken\(\)\)/);
+  assert.match(page, /getMyUnreadMatchReportsCountAction\(await user\.getIdToken\(\)\)/);
   assert.match(page, /const personal = \[\.\.\.officialLeagueReports/);
   assert.match(page, /officialLeagueReports, personalHomeMatches/);
 });
 
 test('server report lookup restricts rank-based matches to the authenticated profile league group', () => {
   const action = readFileSync(new URL('../src/app/actions/match-report.ts', import.meta.url), 'utf8');
-  assert.match(action, /getMyLeagueMatchReportsAction/);
+  assert.match(action, /getMyUnreadMatchReportsCountAction/);
   assert.match(action, /Number\(raw\.level\) === level && String\(raw\.groupId \|\| ''\) === groupId/);
   assert.match(action, /\[Number\(raw\.homeRank\), Number\(raw\.awayRank\)\]\.includes\(rank\)/);
   assert.match(action, /raw\.isFinished === true/);
@@ -73,7 +73,7 @@ test('viewed league reports are excluded from server unread count', () => {
 
 test('home menu displays the unread match-report count on the Match Review item', () => {
   const home = readFileSync(new URL('../src/app/page.tsx', import.meta.url), 'utf8');
-  assert.match(home, /getMyLeagueMatchReportsAction/);
+  assert.match(home, /getMyUnreadMatchReportsCountAction/);
   assert.match(home, /serverUnreadReportsCount/);
   assert.match(home, /id: 'reports'.*href: '\/reports'.*badge:/);
 });
@@ -89,9 +89,9 @@ test('pyramid cup is not listed in tournament hub because it lives in rankings',
 test('unread match count is shown on Match Review menu item, not the general notifications bell', () => {
   const home = readFileSync(new URL('../src/app/page.tsx', import.meta.url), 'utf8');
   const topBar = readFileSync(new URL('../src/components/game/TopBar.tsx', import.meta.url), 'utf8');
-  assert.match(home, /getMyLeagueMatchReportsAction/);
+  assert.match(home, /getMyUnreadMatchReportsCountAction/);
   assert.match(home, /serverUnreadReportsCount/);
-  assert.doesNotMatch(topBar, /unreadReportsCount|serverUnreadReports|getMyLeagueMatchReportsAction/);
+  assert.doesNotMatch(topBar, /unreadReportsCount|serverUnreadReports|getMyUnreadMatchReportsCountAction/);
   assert.match(topBar, /href="\/notifications"/);
 });
 
