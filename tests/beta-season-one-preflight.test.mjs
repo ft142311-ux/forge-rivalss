@@ -5,11 +5,11 @@ import { readFileSync } from 'node:fs';
 const route = readFileSync(new URL('../src/app/api/admin/staging-cup-diagnostics/route.ts', import.meta.url), 'utf8');
 const workflow = readFileSync(new URL('../.github/workflows/beta-season-one-preflight.yml', import.meta.url), 'utf8');
 
-test('Beta read-only preflight runs automatically after pushes to the isolated Beta branch', () => {
+test('Beta read-only preflight runs after a Preview deployment and is manually dispatchable on the Beta branch', () => {
   assert.doesNotMatch(workflow, /\bon:\s*\n\s+push:/);
   assert.match(workflow, /deployment_status:/);
+  assert.match(workflow, /github\.ref == 'refs\/heads\/feature\/beta-fresh-season-one'/);
   assert.match(workflow, /workflow_dispatch:/);
-  assert.match(workflow, /deployment_status:/);
   assert.match(workflow, /npx --yes vercel@latest curl[\s\S]*--request GET/);
   assert.doesNotMatch(workflow, /--request POST|RESET_BETA_SEASON_ONE/);
 });

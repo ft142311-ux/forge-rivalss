@@ -347,9 +347,11 @@ export async function GET(request: NextRequest) {
     const cup = cupSnap.exists ? cupSnap.data() || {} : null;
     const rounds = cup && cup.rounds && typeof cup.rounds === 'object' ? cup.rounds : {};
     const allFixtureDocs = [...dedicatedMatches.docs, ...legacyMatches.docs];
-    const fixtureById = new Map<string, any>();
+    const fixtureById: Record<string, any> = Object.create(null);
     for (const doc of allFixtureDocs) {
-      if (!fixtureById.has(doc.id)) fixtureById.set(doc.id, doc.data() || {});
+      if (!Object.prototype.hasOwnProperty.call(fixtureById, doc.id)) {
+        fixtureById[doc.id] = doc.data() || {};
+      }
     }
 
     const expectedPairings = [56, 32, 16, 8, 4, 2, 1];
@@ -371,7 +373,7 @@ export async function GET(request: NextRequest) {
         if (pairing?.status === 'finished') finished++;
         if (roundNumber <= currentRound) {
           const matchId = String(pairing?.matchId || '');
-          const fixture = fixtureById.get(matchId);
+          const fixture = fixtureById[matchId];
           const expectedBestOf = roundNumber === 7 ? 3 : 1;
           if (fixture) fixtureDocuments++;
           if (!fixture ||

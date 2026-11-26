@@ -21,8 +21,7 @@ concurrency:
 jobs:
   preflight:
     if: >-
-      ${{ github.event_name == 'push' ||
-          github.event_name == 'workflow_dispatch' ||
+      ${{  (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/feature/beta-fresh-season-one') ||
           (github.event_name == 'deployment_status' &&
            github.event.deployment_status.state == 'success' &&
            github.event.deployment.sha == github.sha &&
@@ -183,7 +182,6 @@ jobs:
             phase: result.phase,
             cup: result.cup,
             cupIntegrity: result.cupIntegrity,
-            season: result.season,
             season: result.season,
             failures
           };
