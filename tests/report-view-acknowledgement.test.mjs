@@ -40,6 +40,18 @@ test('report loading and viewed acknowledgement recognize every participant iden
   assert.match(markViewed, /\.some\(\(participantId\) => String\(participantId \|\| ''\) === uid\)/);
 });
 
+test('view acknowledgement rechecks the reset marker and report in one transaction', () => {
+  const start = matchReportAction.indexOf('export async function markMatchViewedAction');
+  const end = matchReportAction.indexOf('/** Authenticated, profile-scoped queue', start);
+  const action = matchReportAction.slice(start, end);
+  assert.match(action, /db\\.runTransaction\\(async \\(tx: any\\) =>/);
+  assert.match(action, /tx\\.get\\(configRef\\)/);
+  assert.match(action, /stagingSeasonOneResetInProgress/);
+  assert.match(action, /tx\\.get\\(ref\\)/);
+  assert.match(action, /tx\\.update\\(ref/);
+  assert.doesNotMatch(action, /await ref\\.update\\(/);
+});
+
 test('legacy rank-based report access requires exact league, group and division coordinates', () => {
   assert.match(matchReportAction, /async function isRankBasedLeagueParticipant/);
   assert.match(matchReportAction, /collectionName !== MATCH_COLLECTIONS\.league/);
