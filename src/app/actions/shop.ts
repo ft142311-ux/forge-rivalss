@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { requireServerActor } from '@/lib/server-auth';
+import { assertStagingSeasonOneResetNotInProgress } from '@/app/lib/staging-season-one-write-fence';
 import { generateUniquePlayer, Player, Role } from '@/app/lib/moba-data';
 
 const ROLES: Role[] = ['Carry', 'Midlaner', 'Tank', 'Jungler', 'Support'];
@@ -46,6 +47,7 @@ export async function purchaseLicenseAction(idToken: string, requestedTier: numb
 
     const db = getAdminDb();
     return await db.runTransaction(async (t) => {
+      await assertStagingSeasonOneResetNotInProgress(t, db);
       const ref = db.collection('players_v14').doc(uid);
       const snap = await t.get(ref);
       if (!snap.exists) throw new Error('PLAYER_NOT_FOUND');
