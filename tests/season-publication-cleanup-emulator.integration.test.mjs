@@ -410,34 +410,43 @@ test('Firestore Emulator prunes S1-S4 after S6 activation, retains verified S5, 
   for (let season = 1; season <= 4; season++) {
     const archiveRef = archiveCollection.doc(`S${season}`);
     const historyRef = historyCollection.doc(`S${season}`);
-    const matchRef = archiveRef.collection('matches').doc(`legacy-S${season}`);
     archiveRefs.set(season, archiveRef);
     historyRefs.set(season, historyRef);
-    matchRefs.set(season, [matchRef]);
-    seedWrites.push({
-      ref: archiveRef,
-      data: {
-        sourceSeason: season,
-        leagueId: 'ALPHA',
-        archiveVersion: 1,
-        status: 'recovered',
-        recoveredAt: '2026-11-01T00:00:00.000Z',
-        expectedMatches: 840,
-        finishedMatches: 0,
-        unresolvedMatches: 840,
-        groups: 15,
-        teamCount: 120,
-        standings: {},
-        startingParticipants,
-        recovery: { status: 'incomplete', finalStandingsAvailable: false, reason: 'SEASON_INCOMPLETE' },
-      },
-    }, {
-      ref: historyRef,
-      data: { status: 'SKIPPED', seasonNumber: season, targetSeason: 6 },
-    }, {
-      ref: matchRef,
-      data: { matchId: `legacy-S${season}`, sourceSeason: season, score: { home: 2, away: 1 } },
-    });
+    if (season === 4) {
+      // S4 is a genuine completed archive with 840 persisted match snapshots.
+      const completed = makeCompletedArchiveFixture(4);
+      const refs = completed.matches.map(match => archiveRef.collection('matches').doc(match.matchId));
+      matchRefs.set(season, refs);
+      seedWrites.push({ ref: archiveRef, data: completed.archive });
+      seedWrites.push(...completed.matches.map((match, index) => ({ ref: refs[index], data: match })));
+    } else {
+      const matchRef = archiveRef.collection('matches').doc(`legacy-S${season}`);
+      matchRefs.set(season, [matchRef]);
+      seedWrites.push({
+        ref: archiveRef,
+        data: {
+          sourceSeason: season,
+          leagueId: 'ALPHA',
+          archiveVersion: 1,
+          status: 'recovered',
+          recoveredAt: '2026-11-01T00:00:00.000Z',
+          expectedMatches: 840,
+          finishedMatches: 0,
+          unresolvedMatches: 840,
+          groups: 15,
+          teamCount: 120,
+          standings: {},
+          startingParticipants,
+          recovery: { status: 'incomplete', finalStandingsAvailable: false, reason: 'SEASON_INCOMPLETE' },
+        },
+      }, {
+        ref: historyRef,
+        data: { status: 'SKIPPED', seasonNumber: season, targetSeason: 6 },
+      }, {
+        ref: matchRef,
+        data: { matchId: `legacy-S${season}`, sourceSeason: season, score: { home: 2, away: 1 } },
+      });
+    }
   }
 
   const retainedRef = archiveCollection.doc('S5');
@@ -496,7 +505,7 @@ test('Firestore Emulator prunes S1-S4 after S6 activation, retains verified S5, 
       id: `S${season}`,
       archive: archiveSnap.data(),
       matches: matchesSnap.docs.map(snapshot => ({ ...snapshot.data(), matchId: snapshot.id })),
-      historyStatus: season <= 4 ? 'SKIPPED' : '',
+      historyStatus: season <= 3 ? 'SKIPPED' : '',
     });
   }
   const initialPlan = resolveArchivePrunePlan(initialArchives, 6, 5);
@@ -519,15 +528,18 @@ test('Firestore Emulator prunes S1-S4 after S6 activation, retains verified S5, 
       }]);
     }
 
-    // Simulate a worker crash after fully deleting S1 and S2 but before S3/S4.
+    // Simulate a crash after deleting S1/S2 and 400 of S4's 840 match snapshots.
     for (const season of [1, 2]) {
       await commitSeasonHistoryCleanupWrites(db, lease.ownerId, lease.token, 6, [], matchRefs.get(season));
       await commitSeasonHistoryCleanupWrites(db, lease.ownerId, lease.token, 6, [], [archiveRefs.get(season)]);
     }
     assert.equal((await archiveRefs.get(1).get()).exists, false);
     assert.equal((await archiveRefs.get(2).get()).exists, false);
+    await commitSeasonHistoryCleanupWrites(db, lease.ownerId, lease.token, 6, [], matchRefs.get(4).slice(0, 400));
+    assert.equal((await archiveRefs.get(4).get()).exists, true);
+    assert.equal((await archiveRefs.get(4).collection('matches').get()).size, 440);
 
-    // The retry must trust only matching PRUNING intents and SKIPPED markers.
+    // The retry must trust matching PRUNING intents, even after match deletion.
     const resumedArchives = [];
     for (const season of [3, 4, 5]) {
       const archiveRef = archiveRefs.get(season);
@@ -567,6 +579,8 @@ test('Firestore Emulator prunes S1-S4 after S6 activation, retains verified S5, 
     assert.equal(postflightMatches.size, 840);
     for (const season of [1, 2, 3, 4]) {
       assert.equal((await archiveRefs.get(season).get()).exists, false, `S${season} archive should be pruned`);
+    }
+    for (const season of [1, 2, 3]) {
       assert.equal((await historyRefs.get(season).get()).get('status'), 'SKIPPED');
     }
     assert.equal((await retainedRef.get()).exists, true);
