@@ -63,7 +63,7 @@ test('server report lookup restricts rank-based matches to the authenticated pro
   assert.match(action, /getMyUnreadMatchReportsCountAction/);
   assert.match(action, /Number\(raw\.level\) === level && String\(raw\.groupId \|\| ''\) === groupId/);
   assert.match(action, /\[Number\(raw\.homeRank\), Number\(raw\.awayRank\)\]\.includes\(rank\)/);
-  assert.match(action, /raw\.isFinished === true/);
+  assert.match(action, /isMatchReportFinished\(raw\)/);
 });
 
 
