@@ -50,16 +50,15 @@ test('diagnostic validates the target rollover plan even when the prior season i
   assert.match(source, /olderValidArchiveSeasons/);
 });
 
-test('calendar recovery archives completed seasons, skips incomplete seasons and prunes only after activation', () => {
+test('ordinary calendar blocks incomplete rollover sources and only cleans history after activation', () => {
   const source = readFileSync(resolve(root, 'src/app/actions/season-calendar.ts'), 'utf8');
-  const cleanup = readFileSync(resolve(root, 'src/app/actions/season-history-prune.ts'), 'utf8');
-  assert.match(source, /prepareRecoveryCarryForwardPlan/);
-  assert.match(source, /prepareSeasonRollover\(db, season, season \+ 1\)/);
-  assert.match(source, /SKIPPED_PENDING_ACTIVATION/);
-  assert.match(source, /pruneSeasonHistoryAfterActivation/);
-  assert.match(cleanup, /ARCHIVE_PRUNE_PREFLIGHT_FAILED/);
-  assert.match(cleanup, /SEASON_HISTORY_CLEANUP_TARGET_NOT_ACTIVE/);
-  assert.doesNotMatch(source, /runMatchEngine|resolveUniversalMatchDocument/);
+  const builder = source.slice(source.indexOf('async function buildSeasonCalendar'));
+  const activation = source.slice(source.indexOf('export async function activatePublishedSeason'));
+  assert.match(builder, /prepareSeasonRollover\\(db, activeSeasonBefore, seasonNumber\\)/);
+  assert.match(builder, /waitingForSeasonResults:\\s*true/);
+  assert.match(builder, /resolveNextSeasonTarget\\(/);
+  assert.equal(source.includes('prepareRecoveryCarryForwardPlan(db, activeSeasonBefore'), false);
+  assert.match(activation, /pruneSeasonHistoryAfterActivation\\(/);
 });
 
 test('incomplete source seasons cannot be silently skipped by ordinary calendar generation', () => {
@@ -88,13 +87,12 @@ test('calendar derives only the immediate next season from the persisted source 
   assert.equal((source.match(/prepareRecoveryCarryForwardPlan\(db/g) || []).length, 0);
 });
 
-test('invalid older archives block recovery and are never treated as harmless cleanup candidates', () => {
-  const calendar = readFileSync(resolve(root, 'src/app/actions/season-calendar.ts'), 'utf8');
-  const diagnostic = readFileSync(routePath, 'utf8');
-  assert.match(calendar, /if \(invalidPreviousArchiveSeasons\.length > 0\)/);
-  assert.match(diagnostic, /if \(invalidOlderArchives\.length > 0\)/);
+test('ordinary calendar cannot call legacy multi-season recovery for malformed older archives', () => {
+  const source = readFileSync(resolve(root, 'src/app/actions/season-calendar.ts'), 'utf8');
+  const builder = source.slice(source.indexOf('async function buildSeasonCalendar'));
+  assert.equal(source.includes('prepareRecoveryCarryForwardPlan(db, activeSeasonBefore'), false);
+  assert.doesNotMatch(builder, /recoveredIncompleteArchive|deriveRecoverySeasonWindow/);
 });
-
 
 test('history cleanup requires the target season to be the active ready world', () => {
   const source = readFileSync(resolve(root, 'src/app/actions/season-history-prune.ts'), 'utf8');
@@ -103,23 +101,20 @@ test('history cleanup requires the target season to be the active ready world', 
 });
 
 
-test('incomplete and preparing seasons persist truthful participant snapshots instead of fabricating final standings', () => {
-  const source = readFileSync(resolve(root, 'src/app/actions/season-calendar.ts'), 'utf8');
+test('ordinary archive visibility never treats recovered incomplete snapshots as final standings', () => {
   const archive = readFileSync(resolve(root, 'src/app/actions/season-archive.ts'), 'utf8');
-  assert.match(source, /persistRecoveredArchive/);
-  assert.match(source, /PREPARING_SEASON_ARCHIVE_RECOVERY_FAILED/);
-  assert.match(source, /liveState\.status === 'incomplete' \|\| liveState\.status === 'no_canonical_results'/);
-  assert.match(source, /buildRecoveredSeasonArchiveSnapshot/);
-  assert.match(archive, /finalStandingsAvailable: false/);
-  assert.match(archive, /unresolvedMatches: MATCHES_PER_SEASON - finishedMatches/);
-});
-
-
-test('recovery plan promotion metadata follows the actual selected placement baseline', () => {
   const source = readFileSync(resolve(root, 'src/app/actions/season-calendar.ts'), 'utf8');
-  assert.match(source, /promotionRule: placementBaseline === 'completed_archive'/);
+  assert.match(archive, /finalStandingsAvailable: false/);
+  assert.match(archive, /isRecoveredSeasonArchive/);
+  assert.equal(source.includes('prepareRecoveryCarryForwardPlan(db, activeSeasonBefore'), false);
 });
 
+test('normal season rollover derives promotion and relegation only from validated standings', () => {
+  const rollover = readFileSync(resolve(root, 'src/app/actions/season-rollover.ts'), 'utf8');
+  assert.match(rollover, /buildPromotionRelegationGroups/);
+  assert.match(rollover, /validateRolloverPlan/);
+  assert.match(rollover, /SEASON_RESULTS_INCOMPLETE|ROLLOVER_SOURCE/);
+});
 
 test('clean canonical world diagnostic keeps Season 1 active until its persisted Nov 26 boundary', () => {
   const seasonStart = new Date('2026-11-09T15:00:00.000Z');
