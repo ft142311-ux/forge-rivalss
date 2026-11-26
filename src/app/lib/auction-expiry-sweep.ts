@@ -63,6 +63,12 @@ async function settleCandidate(candidate: any, db: any) {
         const sellerMatches = sellerPlayers.filter((player: any) => String(player?.id) === playerId).length;
         if (sellerMatches > 1) throw new Error('AUCTION_SELLER_PLAYER_DUPLICATE');
         const sellerIndex = sellerPlayers.findIndex((player: any) => String(player?.id) === playerId);
+        const sellerPlayerLockId = sellerIndex >= 0
+          ? String(sellerPlayers[sellerIndex]?.transferMarketId || '').trim()
+          : '';
+        // A stale lot must not sell or unlock a player already reserved by a
+        // newer listing. Missing lock IDs remain compatible with legacy lots.
+        const sellerPlayerLockMatchesLot = !sellerPlayerLockId || sellerPlayerLockId === candidate.id;
         const systemPlayer: any = isSystemSeller && lot.heroData?.id === playerId ? lot.heroData : null;
         const buyerPlayers: any[] = Array.isArray(rawBuyerPlayers) ? [...rawBuyerPlayers] : [];
         const buyerBalance = normalizeAuctionBalance(buyer[currency]);
@@ -77,7 +83,7 @@ async function settleCandidate(candidate: any, db: any) {
         const escrowedAmount = escrow.amount;
         const hasRecordedEscrow = escrow.hasRecordedEscrow;
         const hasValidEscrow = escrow.hasValidEscrow;
-        const sellerExists = isSystemSeller ? Boolean(systemPlayer) : Boolean(sellerSnap?.exists && sellerMatches === 1);
+        const sellerExists = isSystemSeller ? Boolean(systemPlayer) : Boolean(sellerSnap?.exists && sellerMatches === 1 && sellerPlayerLockMatchesLot);
         const validSale = Boolean(
           sellerExists && buyerSnap?.exists && buyerRef && bidderId !== sellerId && price > 0 &&
           (hasValidEscrow || buyerBalance >= price) &&
@@ -140,7 +146,7 @@ async function settleCandidate(candidate: any, db: any) {
         // A malformed/legacy lot can name the seller as its own bidder. In that
         // case the buyer and seller references are the same document, so combine
         // the refund and unlock into one update rather than leaving the escrow stuck.
-        const shouldUnlockSellerPlayer = Boolean(sellerRef && sellerSnap?.exists && sellerIndex >= 0);
+        const shouldUnlockSellerPlayer = Boolean(sellerRef && sellerSnap?.exists && sellerIndex >= 0 && sellerPlayerLockMatchesLot);
         if (hasRecordedEscrow && buyerRef && buyerSnap?.exists) {
           const refundedBalance = buyerBalance + escrowedAmount;
           if (!Number.isSafeInteger(refundedBalance)) throw new Error('AUCTION_BALANCE_INVALID');

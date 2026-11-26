@@ -966,3 +966,51 @@ test('Firestore Emulator prevents overlapping market expiry sweeps with an activ
   assert.ok(result.errors.some(error => error.error === 'MARKET_EXPIRY_SWEEP_BUSY'));
   assert.equal((await lotRef.get()).exists, true);
 });
+
+
+test('Firestore Emulator keeps a player reserved by a newer listing when an older expired lot settles', {
+  skip: !emulatorHost,
+}, async t => {
+  const { db } = await withIsolatedFirestore(t);
+  const sellerRef = db.collection('players_v14').doc('seller-1');
+  const buyerRef = db.collection('players_v14').doc('buyer-1');
+  const newerExpiry = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+  await sellerRef.set({
+    credits: 25,
+    ownedPlayers: [{
+      id: 'hero-1',
+      name: 'Relisted Hero',
+      onTransferUntil: newerExpiry,
+      transferMarketId: 'newer-active-lot',
+    }],
+  });
+  await buyerRef.set({ credits: 0, ownedPlayers: [] });
+  const staleLotRef = db.collection('market_v7').doc('older-expired-lot');
+  await staleLotRef.set(expiredLot({
+    sellerId: 'seller-1',
+    highestBidderId: 'buyer-1',
+    currentBid: 1000,
+    startingPrice: 500,
+    escrowCurrency: 'credits',
+    escrowedAmount: 1000,
+    heroData: { id: 'hero-1', name: 'Relisted Hero' },
+  }));
+
+  const result = await runTransferMarketExpirySweepWithDb(db);
+  assert.equal(result.success, true);
+  assert.equal(result.sold, 0);
+  assert.equal(result.expiredWithoutSale, 1);
+  assert.equal((await staleLotRef.get()).exists, false);
+
+  const seller = await sellerRef.get();
+  const sellerPlayers = seller.get('ownedPlayers');
+  assert.equal(seller.get('credits'), 25, 'the stale lot must not credit the seller');
+  assert.equal(sellerPlayers.length, 1);
+  assert.equal(sellerPlayers[0].transferMarketId, 'newer-active-lot');
+  assert.equal(sellerPlayers[0].onTransferUntil, newerExpiry);
+  assert.equal((await buyerRef.get()).get('credits'), 1000, 'the stale lot escrow is refunded exactly once');
+  assert.equal((await db.collection('transfer_history').get()).size, 0);
+  const refunds = await db.collection('economy_transactions').where('referenceId', '==', 'older-expired-lot').get();
+  assert.equal(refunds.size, 1);
+  assert.equal(refunds.docs[0].get('type'), 'SPECIAL_AUCTION_SETTLEMENT_REFUND');
+});
