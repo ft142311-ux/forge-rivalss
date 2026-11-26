@@ -384,6 +384,35 @@ async function commitCupRoundState(
   });
 }
 
+export async function commitPyramidCupCreation(
+  db: any,
+  configRef: any,
+  cupRef: any,
+  snapshotWrites: Array<{ ref: any; data: any }>,
+  fixtureWrites: Array<{ ref: any; data: any }>,
+  cupData: any,
+) {
+  return db.runTransaction(async (tx: any) => {
+    const [configSnap, cupSnap] = await Promise.all([
+      tx.get(configRef),
+      tx.get(cupRef),
+    ]);
+    if (!configSnap.exists) return { status: 'SEASON_CONFIG_MISSING' };
+    if (configSnap.data()?.stagingSeasonOneResetInProgress === true) {
+      return { status: 'RESET_IN_PROGRESS' };
+    }
+    if (cupSnap.exists) return { status: 'ALREADY_EXISTS' };
+
+    // One transaction commits all 120 participant snapshots, 56 opening
+    // fixtures and the Cup root (177 writes total). Reading the reset config
+    // here makes this write set conflict with a concurrent reset-marker claim.
+    for (const snapshot of snapshotWrites) tx.create(snapshot.ref, snapshot.data);
+    for (const fixture of fixtureWrites) tx.create(fixture.ref, fixture.data);
+    tx.create(cupRef, cupData);
+    return { status: 'CREATED' };
+  });
+}
+
 export async function generatePyramidCup(
   targetSeasonNumber?: number,
   options: { allowInitialBootstrap?: boolean } = {},
@@ -399,30 +428,30 @@ export async function generatePyramidCup(
   const teams = await loadAllLeagueTeams(db, season);
   const seasonStart = context.seasonStart;
   const first = createPreliminary(teams);
-  const batch = db.batch();
-  const scheduledAt = Timestamp.fromDate(roundDate(seasonStart, ROUND_DAYS[0]));
-  for (const team of teams) {
-    if (!team.matchSnapshot) throw new Error('CUP_PARTICIPANT_SNAPSHOT_MISSING');
-    batch.create(participantSnapshotRef(db, season, team.id), {
+  const snapshotWrites = teams.map(team => ({
+    ref: participantSnapshotRef(db, season, team.id),
+    data: {
       cupId: id,
       season,
       teamId: team.id,
       matchSnapshot: team.matchSnapshot,
       createdAt: FieldValue.serverTimestamp(),
-    });
-  }
-  for (const pairing of first) {
-    if (!pairing.home || !pairing.away) continue;
+    },
+  }));
+  const fixtureWrites = first.flatMap(pairing => {
+    if (!pairing.home || !pairing.away) return [];
     pairing.matchId = matchId(season, 1, pairing.index);
-    batch.create(db.collection(MATCH_COLLECTIONS.cup).doc(pairing.matchId), buildCupRoundMatchData(season, 1, pairing, scheduledAt));
-  }
+    return [{
+      ref: db.collection(MATCH_COLLECTIONS.cup).doc(pairing.matchId),
+      data: buildCupRoundMatchData(season, 1, pairing, scheduledAt),
+    }];
+  });
   const openingRoundRestTeams = teams.filter(team => team.level === 1);
   if (openingRoundRestTeams.length !== TEAMS_PER_GROUP) throw new Error('CUP_D1_OPENING_ROUND_REST_COUNT_INVALID');
   const rounds: Record<string, any[]> = { [roundKey(1)]: first.map(publicPairing) };
   for (let round = 2; round <= ROUND_COUNT; round++) rounds[roundKey(round)] = [];
-  // The cup record and all 56 opening-round fixtures commit together. D1's
-  // eight teams are explicitly recorded as round-two entrants, not BYEs.
-  batch.create(ref, {
+  // D1's eight teams are explicitly recorded as round-two entrants, not BYEs.
+  const cupData = {
     id, season, leagueId: LEAGUE_ID, name: 'Кубок Пирамиды', status: 'active', currentRound: 1,
     formatVersion: CUP_FORMAT_VERSION, format: 'D1_REST_OPENING_ROUND',
     totalRounds: ROUND_COUNT, totalParticipants: TOTAL_TEAMS, totalMatches: TOTAL_CUP_MATCHES, preliminaryMatches: 56,
@@ -430,16 +459,34 @@ export async function generatePyramidCup(
     openingRoundRestTeams: openingRoundRestTeams.map(publicTeam),
     byeCount: 0, participants: teams.map(publicTeam), rounds, winnerId: null, winnerName: null,
     seasonStart: seasonStart.toISOString(), createdAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp(), version: 4,
-  });
+  };
+
   try {
-    await batch.commit();
+    const committed = await commitPyramidCupCreation(
+      db,
+      db.collection('system_v1').doc('season_config'),
+      ref,
+      snapshotWrites,
+      fixtureWrites,
+      cupData,
+    );
+    if (committed.status === 'RESET_IN_PROGRESS') {
+      throw new Error('STAGING_SEASON_ONE_RESET_IN_PROGRESS');
+    }
+    if (committed.status === 'SEASON_CONFIG_MISSING') {
+      throw new Error('SEASON_CONFIG_MISSING');
+    }
+    if (committed.status === 'ALREADY_EXISTS') {
+      return { success: true, alreadyExists: true, cupId: id };
+    }
   } catch (error: any) {
+    if (error?.message === 'STAGING_SEASON_ONE_RESET_IN_PROGRESS' ||
+        error?.message === 'SEASON_CONFIG_MISSING') throw error;
     const code = String(error?.code ?? '').toLowerCase().replace(/_/g, '-');
     if (code !== '6' && code !== 'already-exists') throw error;
 
-    // Concurrent schedulers can both observe a missing Cup and build the same
-    // atomic batch. Treat ALREADY_EXISTS as idempotent only when the winning
-    // batch also created the Cup root; orphaned fixtures/snapshots stay fatal.
+    // A concurrent transaction may have committed the root first. A child
+    // collision without that root remains an orphaned-data integrity failure.
     let competingCup: any;
     try {
       competingCup = await ref.get();
