@@ -11,8 +11,10 @@ function respond(status: number, body: Record<string, unknown>) {
 
 /** Authenticated public projection of the Pyramid Cup. Frozen roster snapshots are never returned. */
 export async function POST(request: NextRequest) {
-  const token = (request.headers.get('authorization') || '').match(/^Bearer ([^\\s]+)$/)?.[1];
-  if (!token) return respond(401, { success: false, error: 'AUTHENTICATION_REQUIRED' });
+  const authorization = request.headers.get('authorization') || '';
+  const tokenMatch = authorization.match(/^Bearer\s+(\S+)$/i);
+  if (!tokenMatch) return respond(401, { success: false, error: 'AUTHENTICATION_REQUIRED' });
+  const token = tokenMatch[1];
   try {
     await requireServerActor(token);
     const db = getAdminDb();
