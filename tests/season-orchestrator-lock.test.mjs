@@ -81,7 +81,8 @@ test('orchestrator acquires before work and always releases its lease', async ()
   const source = (await import('node:fs')).readFileSync(new URL('../src/app/actions/season-cycle.ts', import.meta.url), 'utf8');
   assert.match(source, /const lock = await acquireSeasonOrchestratorLock\(db\)/);
   assert.match(source, /if \(!lock\.acquired\)[\s\S]*?ORCHESTRATOR_LOCKED/);
-  assert.match(source, /finally \{\s*await releaseSeasonOrchestratorLock\(db, lock\.ownerId, lock\.token\)/);
+  assert.match(source, /finally \{\s*\/\/ Cleanup is best-effort[\s\S]*?try \{\s*await releaseSeasonOrchestratorLock\(db, lock\.ownerId, lock\.token\);\s*\} catch \(releaseError: any\)/);
+  assert.match(source, /Failed to release season orchestrator lease; it will expire by TTL/);
   assert.match(source, /async function runSeasonOrchestratorUnlocked\(\)/);
 });
 
