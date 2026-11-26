@@ -18,7 +18,7 @@ import { getMoscowTime, getGlobalSeasonInfo, isMatchLive } from './lib/time-util
 import { collection, query, where, doc } from 'firebase/firestore';
 import { getBotName, LEAGUES } from './lib/leagues-data';
 import { PlaceHolderImages } from './lib/placeholder-images';
-import { getMyLeagueMatchReportsAction } from '@/app/actions/match-report';
+import { getMyUnreadMatchReportsCountAction } from '@/app/actions/match-report';
 import { isMatchWithinClubLifetime } from '@/app/lib/match-report-utils';
 
 export default function Home() {
@@ -65,7 +65,7 @@ export default function Home() {
     let cancelled = false;
     const refreshUnreadReports = async () => {
       try {
-        const result = await getMyLeagueMatchReportsAction(await user.getIdToken());
+        const result = await getMyUnreadMatchReportsCountAction(await user.getIdToken());
         if (!cancelled) setServerUnreadReportsCount(result?.success ? Number(result.count || 0) : 0);
       } catch (error) {
         console.error('[HOME REPORT BADGE] count lookup failed', error);

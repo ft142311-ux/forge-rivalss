@@ -5,6 +5,7 @@ import { requireServerActor } from '@/lib/server-auth';
 import { FieldValue } from 'firebase-admin/firestore';
 import { MATCH_COLLECTIONS, MATCH_REPORT_COLLECTIONS } from '@/app/lib/match-storage';
 import { isMatchWithinClubLifetime } from '@/app/lib/match-report-utils';
+import { countUnreadMatchReportRecords } from '@/app/lib/unread-match-report-count';
 
 /**
  * Legacy league fixtures may identify participants by their league rank rather
@@ -163,4 +164,76 @@ export async function getMyLeagueMatchReportsAction(idToken: string) {
     return [serializeMatchReport({ ...raw, id: doc.id, type: 'league' })];
   }).sort((left: any, right: any) => new Date(right.playedAt || right.resolvedAt || right.startTime || 0).getTime() - new Date(left.playedAt || left.resolvedAt || left.startTime || 0).getTime());
   return { success: true, season, leagueId, level, groupId, rank, count: matches.length, matches };
+}
+
+
+/** Authenticated unread-report badge count across every match mode. */
+export async function getMyUnreadMatchReportsCountAction(idToken: string) {
+  const { uid } = await requireServerActor(idToken);
+  const db = getAdminDb();
+  const [profileSnap, configSnap] = await Promise.all([
+    db.collection('players_v14').doc(uid).get(),
+    db.collection('system_v1').doc('season_config').get(),
+  ]);
+  if (!profileSnap.exists) return { success: false, error: 'PLAYER_NOT_FOUND', count: 0 };
+  const profile = profileSnap.data() || {};
+  const league = {
+    leagueId: String(profile.selectedLeagueId || 'ALPHA'),
+    level: Number(profile.leagueLevel),
+    groupId: String(profile.groupId || ''),
+    rank: Number(profile.rank),
+  };
+  if (!Number.isInteger(league.level) || league.level < 1 || league.level > 4 ||
+      !league.groupId || !Number.isInteger(league.rank) || league.rank < 1 || league.rank > 8) {
+    return { success: false, error: 'INVALID_MANAGER_LEAGUE_PROFILE', count: 0 };
+  }
+
+  const season = Math.max(1, Number(configSnap.data()?.activeSeasonNumber || 1));
+  const querySpecs: Array<{ collectionName: string; field: string }> = [
+    { collectionName: MATCH_COLLECTIONS.league, field: 'homeId' },
+    { collectionName: MATCH_COLLECTIONS.league, field: 'awayId' },
+    { collectionName: MATCH_COLLECTIONS.league, field: 'homeUid' },
+    { collectionName: MATCH_COLLECTIONS.league, field: 'awayUid' },
+    { collectionName: MATCH_COLLECTIONS.cup, field: 'homeId' },
+    { collectionName: MATCH_COLLECTIONS.cup, field: 'awayId' },
+    { collectionName: MATCH_COLLECTIONS.friendly, field: 'hostId' },
+    { collectionName: MATCH_COLLECTIONS.friendly, field: 'challengerId' },
+    { collectionName: MATCH_COLLECTIONS.friendly, field: 'homeId' },
+    { collectionName: MATCH_COLLECTIONS.friendly, field: 'awayId' },
+    { collectionName: MATCH_COLLECTIONS.association, field: 'hostId' },
+    { collectionName: MATCH_COLLECTIONS.association, field: 'challengerId' },
+    { collectionName: MATCH_COLLECTIONS.tournament, field: 'homeId' },
+    { collectionName: MATCH_COLLECTIONS.tournament, field: 'awayId' },
+    { collectionName: MATCH_COLLECTIONS.trial, field: 'homeId' },
+    { collectionName: MATCH_COLLECTIONS.trial, field: 'awayId' },
+  ];
+  const [activeLeagueMatches, ...participantSnapshots] = await Promise.all([
+    db.collection(MATCH_COLLECTIONS.league).where('season', '==', season).get(),
+    ...querySpecs.map(spec =>
+      db.collection(spec.collectionName).where(spec.field, '==', uid).get()
+    ),
+  ]);
+
+  const records = new Map<string, { id: string; collectionName: string; match: any }>();
+  const addSnapshot = (collectionName: string, snapshot: any) => {
+    for (const doc of snapshot.docs || []) {
+      records.set(`${collectionName}/${doc.id}`, {
+        id: doc.id,
+        collectionName,
+        match: doc.data() || {},
+      });
+    }
+  };
+  addSnapshot(MATCH_COLLECTIONS.league, activeLeagueMatches);
+  participantSnapshots.forEach((snapshot, index) =>
+    addSnapshot(querySpecs[index].collectionName, snapshot)
+  );
+
+  const count = countUnreadMatchReportRecords(
+    [...records.values()],
+    uid,
+    profile.createdAt,
+    league,
+  );
+  return { success: true, season, count };
 }
