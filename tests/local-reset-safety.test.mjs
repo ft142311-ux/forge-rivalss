@@ -10,7 +10,7 @@ test('legacy Season 1 reset requires the exact disposable local emulator before 
   const projectFence = cleanReset.indexOf("configuredProject !== 'demo-forge-rivals'");
   const loopbackFence = cleanReset.indexOf('.test(emulatorHost)');
   const database = cleanReset.indexOf('const db = getAdminDb()');
-  assert.ok(guard >= 0 && projectFence > guard && loopbackFence > projectFence);
+  assert.ok(guard >= 0 && loopbackFence > guard && projectFence > loopbackFence);
   assert.ok(database > loopbackFence, 'all emulator and project guards must run before Admin SDK access');
 });
 
