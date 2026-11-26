@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { advanceAtMostOneSeasonBoundary, resolveSeasonActivationWindow, resolveSeasonLifecycleWindow } from '../src/app/actions/season-boundary.ts';
+import { advanceAtMostOneSeasonBoundary, resolveNextSeasonTarget, resolveSeasonActivationWindow, resolveSeasonLifecycleWindow } from '../src/app/actions/season-boundary.ts';
 
 test('a delayed scheduler advances only one season boundary per invocation', () => {
   const result = advanceAtMostOneSeasonBoundary(
@@ -257,4 +257,6 @@ test('season date planning has no artificial 1000-season ceiling', async () => {
   assert.equal(plan.completedSeasons.length, 1001);
   assert.equal(plan.completedSeasons[0], 1);
   assert.equal(plan.completedSeasons.at(-1), 1001);
+  assert.equal(resolveNextSeasonTarget(1, plan.expectedSeasonNumber), 2,
+    'a large date-derived catch-up projection must still prepare only Season 2');
 });
