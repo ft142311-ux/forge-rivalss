@@ -385,16 +385,29 @@ export async function executeFreshSeasonOneReset(db: any, target: ResetJournal['
     }
     await db.runTransaction(async (tx: any) => {
       const snap = await tx.get(journalRef);
+      const configRef = db.collection('system_v1').doc('season_config');
+      const [configSnap] = await Promise.all([tx.get(configRef)]);
       const current = snap.exists ? snap.data() as ResetJournal : null;
+      const config = configSnap.exists ? configSnap.data() || {} : {};
       if (!current || current.status !== 'RUNNING' || current.lease?.token !== token ||
           Number(current.lease.expiresAtMs) <= Date.now() || current.stepIndex !== 4) {
         throw new Error('FRESH_SEASON_ONE_RESET_FINALIZE_CONFLICT');
+      }
+      // Revalidate the verified world inside the same transaction that releases
+      // the registration fence. A concurrent lifecycle writer must not be able
+      // to invalidate readiness between postflight and marker removal.
+      if (!configSnap.exists || Number(config.activeSeasonNumber) !== 1 ||
+          config.worldReady !== true || config.pyramidCupReady !== true ||
+          Number(config.pyramidCupReadySeasonNumber) !== 1 ||
+          config.stagingSeasonOneResetInProgress !== true ||
+          config.stagingFreshSeasonOneReset !== true) {
+        throw new Error('FRESH_SEASON_ONE_RESET_FINALIZE_WORLD_CHANGED');
       }
       tx.set(journalRef, {
         status: 'COMPLETED', lease: null, updatedAtMs: Date.now(),
         completedAt: FieldValue.serverTimestamp(),
       }, { merge: true });
-      tx.set(db.collection('system_v1').doc('season_config'), {
+      tx.set(configRef, {
         stagingSeasonOneResetInProgress: false,
         stagingFreshSeasonOneReset: false,
         pyramidCupRequired: true,
