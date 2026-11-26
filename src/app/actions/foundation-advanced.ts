@@ -18,7 +18,7 @@ function moscowDayKey(date = new Date()) {
 
 function normalizeSeasonId(value: unknown) {
   const seasonId = String(value ?? '').trim();
-  if (!/^(?:current|S?[1-9]\\d*)$/.test(seasonId)) throw new Error('INVALID_SEASON_ID');
+  if (!/^(?:current|S?[1-9]\d*)$/.test(seasonId)) throw new Error('INVALID_SEASON_ID');
   return seasonId;
 }
 

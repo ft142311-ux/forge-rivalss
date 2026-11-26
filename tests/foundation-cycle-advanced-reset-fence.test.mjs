@@ -68,4 +68,5 @@ test('Golden Player award publication is admin-only, global, immutable and reset
   assert.match(block, /assertStagingSeasonOneResetNotInProgress/);
   assert.doesNotMatch(block, /ref\.set\(/);
   assert.match(block, /alreadyResolved/);
+  assert.match(advanced, /S\?\[1-9\]\\d\*/);
 });
