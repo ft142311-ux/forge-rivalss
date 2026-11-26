@@ -11,6 +11,7 @@ import { preparePyramidCupForSeason, runPyramidCupCycle } from './cup-engine';
 import { resolveDailyMatches } from './autonomous-cycle';
 import { prepareSeasonRollover } from './season-rollover';
 import { validateRolloverPlan } from './season-rollover-plan';
+import { isRolloverPlanPublicationReady } from './season-awards-policy';
 import { isCalendarReady } from './season-calendar-gate';
 import { acquireSeasonOrchestratorLock, releaseSeasonOrchestratorLock } from './season-orchestrator-lock';
 
@@ -340,7 +341,8 @@ export async function buildNextSeasonWorld() {
     const planSnap = await db.collection('league_season_rollovers_v1').doc(`S${targetSeason}`).get();
     const savedPlan = planSnap.exists ? planSnap.data() || {} : null;
     if (savedPlan?.mode !== 'recovery_carry_forward' &&
-        validateRolloverPlan(savedPlan, sourceSeason, targetSeason).valid) {
+        validateRolloverPlan(savedPlan, sourceSeason, targetSeason).valid &&
+        isRolloverPlanPublicationReady(savedPlan)) {
       rollover = { ready: true, alreadyPrepared: true, sourceSeason, targetSeason };
     } else {
       rollover = await prepareSeasonRollover(db, sourceSeason, targetSeason);
