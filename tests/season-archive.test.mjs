@@ -259,7 +259,7 @@ test('matching legacy prune intent safely resumes deletion of an older archive',
   second.archive.status = 'completed';
   second.archive.completedAt = '2026-10-23T15:00:00.000Z';
   const result = resolveArchivePrunePlan([
-    { id: 'S1', archive: first.archive, matches: first.matches },
+    { id: 'S1', archive: first.archive, matches: [] },
     { id: 'S2', archive: second.archive, matches: second.matches },
   ], 4, 2);
   assert.equal(result.ready, true);
