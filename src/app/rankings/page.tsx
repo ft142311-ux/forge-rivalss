@@ -69,6 +69,23 @@ export default function RankingsPage() {
   const { data: archiveDocuments, isLoading: isArchiveListLoading, error: archiveListError } = useCollection(archivesRef);
   const visibleArchives = useMemo(() => getVisibleSeasonArchives(archiveDocuments || []), [archiveDocuments]);
   const selectedArchive = visibleArchives.find((archive: any) => Number(archive.sourceSeason) === selectedArchiveSeason) || null;
+
+  // The rolling archive can change while this screen is open after a season
+  // activation. Keep the detail view attached to the one currently retained
+  // archive instead of leaving an empty detail screen for a pruned season.
+  useEffect(() => {
+    if (activeTab !== 'season_archive_detail') return;
+    const latestVisibleSeason = Number(visibleArchives[0]?.sourceSeason || 0);
+    if (!latestVisibleSeason) {
+      setSelectedArchiveSeason(null);
+      setActiveTab('season_archive');
+      return;
+    }
+    if (selectedArchiveSeason !== latestVisibleSeason) {
+      setSelectedArchiveSeason(latestVisibleSeason);
+      setArchiveGroup('D1-G1');
+    }
+  }, [activeTab, visibleArchives, selectedArchiveSeason]);
   const archiveMatchesRef = useMemoFirebase(() => {
     if (!db || !selectedArchiveSeason || !selectedArchive) return null;
     return collection(db, 'league_season_archives_v1', 'S' + selectedArchiveSeason, 'matches');
@@ -202,7 +219,7 @@ export default function RankingsPage() {
         { id: 'my_pyramid', label: 'League Pyramid', desc: `Explore ${profile?.selectedLeagueId || 'ALPHA'}`, icon: Layers, color: 'text-accent' },
         { id: 'cup', label: 'Pyramid Cup', desc: 'Tournament bracket', icon: Trophy, color: 'text-yellow-500' },
         { id: 'all_pyramids', label: 'Global Map', desc: 'Browse all active leagues', icon: Globe, color: 'text-blue-400' },
-        { id: 'season_archive', label: language === 'ru' ? 'Архив сезонов' : 'Season Archive', desc: (language === 'ru' ? 'Завершённых сезонов: ' : '') + visibleArchives.length, icon: Archive, color: 'text-amber-400' },
+        { id: 'season_archive', label: language === 'ru' ? 'Архив сезонов' : 'Season Archive', desc: (language === 'ru' ? 'Предыдущий сезон: ' : 'Previous season: ') + visibleArchives.length, icon: Archive, color: 'text-amber-400' },
       ]
     },
     ru: {
