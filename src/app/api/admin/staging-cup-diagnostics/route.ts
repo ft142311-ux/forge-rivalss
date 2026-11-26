@@ -228,7 +228,7 @@ async function readSeasonDiagnostics(db: any, config: Record<string, any>) {
   const expectedRetainedArchive = activeSeason > 1 ? activeSeason - 1 : null;
   const sourceArchivePresent = archiveSeasons.length === 1 && archiveSeasons[0] === activeSeason;
   const retainedArchiveMatchesPolicy = activeSeason === 1
-    ? archiveSeasons.length === 0 || (sourceArchivePresent && archive.ready === true)
+    ? archiveSeasons.length === 0
     : archiveSeasons.length === 1 &&
       archiveSeasons[0] === expectedRetainedArchive &&
       retainedArchiveIntegrity.valid === true;
@@ -488,7 +488,21 @@ export async function GET(request: NextRequest) {
               Number(fixture.bestOf) !== expectedBestOf) {
             fixtureIntegrity = false;
           }
-          if (pairing?.status === 'finished' && !isTerminalMatch(fixture || {})) {
+          const expectedPairingId = 'r' + roundNumber + '_m' + String(pairing?.index || 0);
+          const expectedMatchId = 'cup_S1_R' + roundNumber + '_M' + String(pairing?.index || 0).padStart(2, '0');
+          if (pairing?.id !== expectedPairingId ||
+              pairing?.matchId !== expectedMatchId ||
+              Number(fixture?.season) !== 1 ||
+              Number(fixture?.cupRound) !== roundNumber ||
+              !Array.isArray(fixture?.homeTeamSnapshot?.players) ||
+              fixture.homeTeamSnapshot.players.length !== 5 ||
+              !Array.isArray(fixture?.awayTeamSnapshot?.players) ||
+              fixture.awayTeamSnapshot.players.length !== 5) {
+            fixtureIntegrity = false;
+          }
+          if (pairing?.status === 'finished' &&
+              (!isTerminalMatch(fixture || {}) ||
+               ![pairing?.home?.id, pairing?.away?.id].includes(String(fixture?.winnerId || '')))) {
             fixtureIntegrity = false;
           }
         }
@@ -511,6 +525,37 @@ export async function GET(request: NextRequest) {
     });
 
     const participants = Array.isArray(cup?.participants) ? cup!.participants.length : 0;
+    const cupParticipantIds = new Set<string>(
+      (Array.isArray(cup?.participants) ? cup!.participants : [])
+        .map((team: any) => String(team?.id || ''))
+        .filter(Boolean)
+    );
+    const cupOpeningPairings = Array.isArray(rounds.r1) ? rounds.r1 : [];
+    const cupOpeningIds = new Set<string>();
+    for (const pairing of cupOpeningPairings) {
+      if (pairing?.home?.id) cupOpeningIds.add(String(pairing.home.id));
+      if (pairing?.away?.id) cupOpeningIds.add(String(pairing.away.id));
+    }
+    const cupRestTeams = Array.isArray(cup?.openingRoundRestTeams) ? cup!.openingRoundRestTeams : [];
+    const cupRestIds = new Set<string>(cupRestTeams.map((team: any) => String(team?.id || '')).filter(Boolean));
+    const cupOpeningFieldValid = cupParticipantIds.size === EXPECTED_CUP_PARTICIPANTS &&
+      cupOpeningIds.size === 112 &&
+      cupRestIds.size === 8 &&
+      cupRestTeams.every((team: any) =>
+        Number(team?.level) === 1 &&
+        cupParticipantIds.has(String(team?.id || '')) &&
+        !cupOpeningIds.has(String(team?.id || ''))
+      ) &&
+      [...cupParticipantIds].every(id => cupOpeningIds.has(id) || cupRestIds.has(id)) &&
+      [...cupOpeningIds].every(id => cupParticipantIds.has(id));
+    const cupSnapshotIds = new Set<string>((snapshotDocs.docs || []).map((doc: any) => String(doc.id)));
+    const cupSnapshotsValid = snapshotDocs.size === EXPECTED_CUP_PARTICIPANTS &&
+      cupSnapshotIds.size === EXPECTED_CUP_PARTICIPANTS &&
+      [...cupParticipantIds].every(id => cupSnapshotIds.has(id)) &&
+      (snapshotDocs.docs || []).every((doc: any) =>
+        Array.isArray(doc.data()?.matchSnapshot?.players) &&
+        doc.data().matchSnapshot.players.length === 5
+      );
     const roundOne = roundSummary[0];
     const noByes = roundSummary.every(round => round.byes === 0);
     const completedRoundShape = roundSummary.every((round, index) =>
@@ -530,10 +575,8 @@ export async function GET(request: NextRequest) {
       Number(cup.preliminaryMatches) === 56 &&
       Array.isArray(cup.openingRoundRestTeams) &&
       cup.openingRoundRestTeams.length === 8 &&
-      cup.openingRoundRestTeams.every((team: any) => Number(team?.level) === 1) &&
-      new Set(cup.openingRoundRestTeams.map((team: any) => String(team?.id || ''))).size === 8 &&
-      new Set((cup.participants || []).map((team: any) => String(team?.id || ''))).size === 120 &&
-      snapshotDocs.size === EXPECTED_CUP_PARTICIPANTS &&
+      cupOpeningFieldValid &&
+      cupSnapshotsValid &&
       roundOne.complete &&
       completedRoundShape &&
       noByes &&
@@ -575,7 +618,9 @@ export async function GET(request: NextRequest) {
         mustBeCompleted: cupMustBeCompleted,
         noByes,
         openingRoundParticipants: roundOne?.participants || 0,
+        openingFieldValid: cupOpeningFieldValid,
         participantSnapshots: snapshotDocs.size,
+        snapshotsValid: cupSnapshotsValid,
         completedRounds: roundSummary.filter(round => round.complete && round.finished === round.expectedFixtures).length,
       },
       season: seasonDiagnostics,

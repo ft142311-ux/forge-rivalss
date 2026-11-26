@@ -163,6 +163,8 @@ jobs:
           if (cup.openingRoundRestTeams !== 8) failures.push('SEASON_ONE_CUP_D1_ENTRY_INVALID');
           if (integrity.participantSnapshots !== 120 || result.participantSnapshots !== 120) failures.push('SEASON_ONE_CUP_SNAPSHOT_COUNT_INVALID');
           if (integrity.noByes !== true || integrity.openingRoundParticipants !== 112) failures.push('SEASON_ONE_CUP_OPENING_ROUND_INVALID');
+          if (integrity.openingFieldValid !== true) failures.push('SEASON_ONE_CUP_PARTICIPANT_FIELD_INVALID');
+          if (integrity.snapshotsValid !== true) failures.push('SEASON_ONE_CUP_PARTICIPANT_SNAPSHOTS_INVALID');
           const season = result.season || {};
           if (season.worldReady !== true) failures.push('ACTIVE_SEASON_WORLD_NOT_READY');
           if (season.seasonTimelineValid !== true) failures.push('SEASON_TIMELINE_INVALID');

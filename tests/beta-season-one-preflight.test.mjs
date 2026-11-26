@@ -29,6 +29,9 @@ test('Beta Cup preflight exposes full sequential round and fixture integrity', (
   assert.match(route, /bestOf/);
   assert.match(route, /roundSummary\.every/);
   assert.match(route, /cupMustBeCompleted = activeSeason > 1/);
+  assert.match(route, /cupOpeningFieldValid/);
+  assert.match(route, /cupSnapshotsValid/);
+  assert.match(route, /expectedMatchId = 'cup_S1_R'/);
   assert.match(workflow, /SEASON_ONE_CUP_INTEGRITY_FAILED/);
   assert.match(workflow, /SEASON_ONE_CUP_PARTICIPANT_COUNT_INVALID/);
   assert.match(workflow, /SEASON_ONE_CUP_OPENING_ROUND_INVALID/);
@@ -39,6 +42,7 @@ test('Beta preflight diagnoses current league, rollover, archive retention and p
   assert.match(route, /validateRolloverPlan\(plan, activeSeason, activeSeason \+ 1\)/);
   assert.match(route, /validateSeasonArchiveRolloverPlan/);
   assert.match(route, /retainedArchiveMatchesPolicy/);
+  assert.match(route, /activeSeason === 1\s*\? archiveSeasons\.length === 0/);
   assert.match(route, /preparedSeason:/);
   assert.match(route, /transitionPrerequisitesReady/);
   assert.match(route, /seasonTimelineValid/);
