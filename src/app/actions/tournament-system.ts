@@ -185,8 +185,17 @@ async function generateDailyTournamentsInternal() {
       updatedAt: FieldValue.serverTimestamp(),
       version: 1,
     };
-    await ref.create(data);
-    created.push(id);
+    try {
+      await ref.create(data);
+      created.push(id);
+    } catch (error: any) {
+      // The season orchestrator and the dedicated tournament cron may run
+      // concurrently. A competing worker can create this deterministic daily
+      // ID after our existence check; treat only that exact conflict as success.
+      const code = error?.code;
+      if (code === 6 || code === 'already-exists' || code === 'ALREADY_EXISTS') continue;
+      throw error;
+    }
   }
 
   return { date, created };
