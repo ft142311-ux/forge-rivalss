@@ -12,6 +12,7 @@ test('Pyramid Cup matches remain part of the global Match Overview report pipeli
   assert.match(reportAction, /MATCH_REPORT_COLLECTIONS/);
   assert.match(reportPage, /collection\(db, 'cup_matches'\)/);
   assert.match(reportPage, /m\?\.type === 'cup' && m\?\.source === 'pyramid-cup'/);
-  assert.match(reportPage, /const currentClubPersonal = personal\.filter\(\(m: any\) => isMatchWithinClubLifetime\(m, profile\.createdAt\)\)/);\n  assert.match(reportPage, /const cup = currentClubPersonal/);
+  assert.match(reportPage, /const currentClubPersonal = personal\.filter\(\(m: any\) => isMatchWithinClubLifetime\(m, profile\.createdAt\)\)/);
+  assert.match(reportPage, /const cup = currentClubPersonal/);
   assert.match(reportPage, /\.\.\.cup/);
 });
