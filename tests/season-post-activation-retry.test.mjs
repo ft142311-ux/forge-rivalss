@@ -66,13 +66,13 @@ function makePlan(season) {
   };
 }
 
-test('history cleanup retains all verified rollover plans', () => {
+test('history cleanup retains only the currently activated rollover plan', () => {
   const result = resolveRolloverPlanPruneIds([
     { id: 'S1', plan: makePlan(1) },
     { id: 'S2', plan: makePlan(2) },
   ], 2);
   assert.equal(result.ready, true);
-  assert.deepEqual(result.pruneIds, []);
+  assert.deepEqual(result.pruneIds, ['S1']);
 });
 
 test('history cleanup refuses to prune anything when the active plan is invalid', () => {
