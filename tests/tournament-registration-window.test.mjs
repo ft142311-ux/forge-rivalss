@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
-import { getTournamentRegistrationWindow, isTournamentRegistrationOpen } from '../src/app/lib/tournament-registration-window.ts';
+import { getTournamentRegistrationCapacity, getTournamentRegistrationWindow, isTournamentRegistrationOpen, normalizeTournamentRegisteredIds } from '../src/app/lib/tournament-registration-window.ts';
 
 const window = {
   status: 'registration',
@@ -52,6 +52,10 @@ test('server registration enforces both opening and closing boundaries inside it
   assert.ok(start >= 0 && end > start);
   const action = source.slice(start, end);
   assert.ok(action.includes('getTournamentRegistrationWindow(data)'));
+  assert.ok(action.includes('getTournamentRegistrationCapacity(data.maxParticipants)'));
+  assert.ok(action.includes('normalizeTournamentRegisteredIds(data.registeredIds)'));
+  assert.ok(action.includes("if (!capacity) throw new Error('INVALID_TOURNAMENT_CAPACITY')"));
+  assert.ok(action.includes('if (ids.length >= capacity) throw new Error(\'TOURNAMENT_FULL\')'));
   assert.ok(action.includes("if (!registrationWindow) throw new Error('REGISTRATION_WINDOW_INVALID')"));
   assert.ok(action.includes("if (now < registrationWindow.opensAt) throw new Error('REGISTRATION_NOT_OPEN')"));
   assert.ok(action.includes("if (now >= registrationWindow.closesAt) throw new Error('REGISTRATION_CLOSED')"));
@@ -79,4 +83,21 @@ test('tournament detail page uses the same registration window helper', () => {
   const source = readFileSync(new URL('../src/app/tournaments/[id]/page.tsx', import.meta.url), 'utf8');
   assert.ok(source.includes("import { isTournamentRegistrationOpen } from '@/app/lib/tournament-registration-window'"));
   assert.ok(source.includes('const registrationOpen=isTournamentRegistrationOpen(tournament)'));
+});
+
+test('tournament registration capacity accepts only supported numeric capacities', () => {
+  assert.equal(getTournamentRegistrationCapacity(16), 16);
+  assert.equal(getTournamentRegistrationCapacity(32), 32);
+  for (const invalid of [undefined, null, '', '16', 0, 15, 17, 31, 33, 16.5, NaN, Infinity, true]) {
+    assert.equal(getTournamentRegistrationCapacity(invalid), null);
+  }
+});
+
+test('registered tournament IDs are trimmed, unique, and reject malformed entries', () => {
+  assert.deepEqual(
+    normalizeTournamentRegisteredIds([' manager-a ', 'manager-a', '', '  ', null, 7, 'manager-b']),
+    ['manager-a', 'manager-b'],
+  );
+  assert.deepEqual(normalizeTournamentRegisteredIds(null), []);
+  assert.deepEqual(normalizeTournamentRegisteredIds('manager-a'), []);
 });
