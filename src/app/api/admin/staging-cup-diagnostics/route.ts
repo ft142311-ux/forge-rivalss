@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { isCronAuthorized } from '@/app/api/cron/cron-auth';
+import { isValidCleanSeasonOneBoundary } from '@/app/actions/season-boundary';
 import { diagnoseSeasonRolloverPreflight } from '@/app/actions/season-rollover';
 import { validateRolloverPlan } from '@/app/actions/season-rollover-plan';
 import { isRolloverPlanPublicationReady } from '@/app/actions/season-awards-policy';
@@ -8,6 +9,7 @@ import { validateSeasonArchiveRolloverPlan, validateSeasonArchiveSnapshot } from
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+export const maxDuration = 300;
 
 const EXPECTED_PROJECT = 'forge-rivals-beta';
 const LEAGUE_ID = 'ALPHA';
@@ -65,6 +67,16 @@ async function readSeasonDiagnostics(db: any, config: Record<string, any>) {
   }
 
   const preparedSeasonNumber = Number(config.preparedSeasonNumber || 0);
+  const seasonStart = toDate(config.seasonStart);
+  const nextSeasonStart = toDate(config.nextSeasonStart);
+  const seasonTimelineValid = Boolean(
+    seasonStart &&
+    nextSeasonStart &&
+    nextSeasonStart.getTime() > seasonStart.getTime() &&
+    (activeSeason !== 1 || config.worldGeneration !== 'CLEAN_S1_V1' ||
+      isValidCleanSeasonOneBoundary(config.worldGeneration, activeSeason, config.seasonStart, config.nextSeasonStart)) &&
+    (activeSeason === 1 || nextSeasonStart.getTime() - seasonStart.getTime() === 15 * 24 * 60 * 60 * 1000)
+  );
   const hasPreparedSuccessor = preparedSeasonNumber === activeSeason + 1 &&
     config.preparedWorldReady === true;
   const preparedCupId = 'cup_s' + preparedSeasonNumber + '_lALPHA';
@@ -167,6 +179,46 @@ async function readSeasonDiagnostics(db: any, config: Record<string, any>) {
     };
   }
 
+  let retainedArchiveIntegrity: any = { required: activeSeason > 1, valid: activeSeason === 1 };
+  if (activeSeason > 1) {
+    const [retainedArchiveSnap, retainedArchivePlanSnap] = await Promise.all([
+      db.collection('league_season_archives_v1').doc('S' + (activeSeason - 1)).get(),
+      db.collection('league_season_rollovers_v1').doc('S' + activeSeason).get(),
+    ]);
+    if (retainedArchiveSnap.exists && retainedArchivePlanSnap.exists) {
+      const retainedMatchesSnap = await retainedArchiveSnap.ref.collection('matches').get();
+      const retainedArchiveData = retainedArchiveSnap.data() || {};
+      const retainedPlan = retainedArchivePlanSnap.data() || {};
+      const retainedMatches = retainedMatchesSnap.docs.map((doc: any) => ({
+        ...doc.data(),
+        matchId: doc.id,
+      }));
+      const retainedSnapshotValidation = validateSeasonArchiveSnapshot(retainedArchiveData, retainedMatches);
+      const retainedPlanValidation = validateSeasonArchiveRolloverPlan(retainedArchiveData, retainedPlan);
+      retainedArchiveIntegrity = {
+        required: true,
+        exists: true,
+        sourceSeason: Number(retainedArchiveData.sourceSeason || 0),
+        matches: retainedMatchesSnap.size,
+        snapshotValid: retainedSnapshotValidation.valid,
+        rolloverPlanValid: retainedPlanValidation.valid,
+        valid: retainedSnapshotValidation.valid && retainedPlanValidation.valid &&
+          validateRolloverPlan(retainedPlan, activeSeason - 1, activeSeason).valid &&
+          retainedPlan.mode !== 'recovery_carry_forward' &&
+          isRolloverPlanPublicationReady(retainedPlan),
+        reasonCodes: safeReasonCodes(retainedSnapshotValidation.reasons),
+        rolloverReason: retainedPlanValidation.valid ? null : String(retainedPlanValidation.reason || 'RETAINED_ARCHIVE_ROLLOVER_INVALID'),
+      };
+    } else {
+      retainedArchiveIntegrity = {
+        required: true,
+        exists: retainedArchiveSnap.exists,
+        valid: false,
+        reason: retainedArchiveSnap.exists ? 'RETAINED_ARCHIVE_ROLLOVER_MISSING' : 'RETAINED_ARCHIVE_MISSING',
+      };
+    }
+  }
+
   const archiveSeasons = allArchivesSnap.docs
     .map((doc: any) => Number((doc.data() || {}).sourceSeason || doc.id.replace(/^S/, '')))
     .filter((season: number) => Number.isSafeInteger(season) && season > 0)
@@ -177,9 +229,10 @@ async function readSeasonDiagnostics(db: any, config: Record<string, any>) {
   const sourceArchivePresent = archiveSeasons.length === 1 && archiveSeasons[0] === activeSeason;
   const retainedArchiveMatchesPolicy = activeSeason === 1
     ? archiveSeasons.length === 0 || (sourceArchivePresent && archive.ready === true)
-    : archiveSeasons.length === 1 && archiveSeasons[0] === expectedRetainedArchive;
+    : archiveSeasons.length === 1 &&
+      archiveSeasons[0] === expectedRetainedArchive &&
+      retainedArchiveIntegrity.valid === true;
 
-  const nextSeasonStart = toDate(config.nextSeasonStart);
   const nextSeasonDue = Boolean(nextSeasonStart && Date.now() >= nextSeasonStart.getTime());
   const preparedSeasonStart = toDate(config.preparedSeasonStart);
   const preparedNextSeasonStart = toDate(config.preparedNextSeasonStart);
@@ -193,6 +246,60 @@ async function readSeasonDiagnostics(db: any, config: Record<string, any>) {
     ? preparedCup.rounds.r1
     : [];
   const preparedCupParticipantCount = Array.isArray(preparedCup?.participants) ? preparedCup.participants.length : 0;
+  const preparedCupFixtureById: Record<string, any> = {};
+  for (const doc of preparedCupMatches.docs || []) {
+    if (!Object.prototype.hasOwnProperty.call(preparedCupFixtureById, doc.id)) {
+      preparedCupFixtureById[doc.id] = doc.data() || {};
+    }
+  }
+  const preparedCupParticipantIds = new Set<string>(
+    (Array.isArray(preparedCup?.participants) ? preparedCup.participants : [])
+      .map((team: any) => String(team?.id || ''))
+      .filter(Boolean)
+  );
+  const preparedCupOpeningIds = new Set<string>();
+  const preparedCupRestTeams = Array.isArray(preparedCup?.openingRoundRestTeams)
+    ? preparedCup.openingRoundRestTeams
+    : [];
+  const preparedCupRestIds = new Set<string>(preparedCupRestTeams.map((team: any) => String(team?.id || '')).filter(Boolean));
+  const preparedCupPairingsValid = preparedCupRounds.length === 56 && preparedCupRounds.every((pairing: any) => {
+    const homeId = String(pairing?.home?.id || '');
+    const awayId = String(pairing?.away?.id || '');
+    const pairingIndex = Number(pairing?.index || 0);
+    const expectedMatchId = 'cup_S' + preparedSeasonNumber + '_R1_M' + String(pairingIndex).padStart(2, '0');
+    const fixture = preparedCupFixtureById[String(pairing?.matchId || '')];
+    if (!homeId || !awayId || homeId === awayId ||
+        pairing?.matchId !== expectedMatchId ||
+        Number(pairing?.home?.level) === 1 ||
+        Number(pairing?.away?.level) === 1 ||
+        !preparedCupParticipantIds.has(homeId) ||
+        !preparedCupParticipantIds.has(awayId) ||
+        !fixture ||
+        String(fixture.cupId || '') !== preparedCupId ||
+        Number(fixture.cupRound) !== 1 ||
+        Number(fixture.bestOf) !== 1 ||
+        String(fixture.homeId || '') !== homeId ||
+        String(fixture.awayId || '') !== awayId) {
+      return false;
+    }
+    preparedCupOpeningIds.add(homeId);
+    preparedCupOpeningIds.add(awayId);
+    return true;
+  });
+  const preparedCupOpeningFieldValid = preparedCupOpeningIds.size === 112 &&
+    preparedCupRestIds.size === 8 &&
+    preparedCupRestTeams.every((team: any) =>
+      Number(team?.level) === 1 &&
+      preparedCupParticipantIds.has(String(team?.id || '')) &&
+      !preparedCupOpeningIds.has(String(team?.id || ''))
+    ) &&
+    preparedCupParticipantIds.size === 120 &&
+    [...preparedCupParticipantIds].every(id =>
+      preparedCupOpeningIds.has(id) || preparedCupRestIds.has(id)
+    );
+  const preparedCupFixtureIntegrity = preparedCupMatches.size === 56 &&
+    preparedCupPairingsValid &&
+    preparedCupOpeningFieldValid;
   const preparedCupReady = Boolean(
     hasPreparedSuccessor &&
     preparedCup &&
@@ -207,17 +314,10 @@ async function readSeasonDiagnostics(db: any, config: Record<string, any>) {
     Array.isArray(preparedCup.openingRoundRestTeams) &&
     preparedCup.openingRoundRestTeams.length === 8 &&
     preparedCupSnapshots.size === 120 &&
-    preparedCupMatches.size === 56 &&
-    preparedCupRounds.length === 56 &&
-    preparedCupRounds.every((pairing: any) =>
-      pairing?.home?.id && pairing?.away?.id &&
-      pairing?.home?.level !== 1 && pairing?.away?.level !== 1 &&
-      pairing?.matchId
-    ) &&
-    preparedCup.openingRoundRestTeams.every((team: any) => Number(team?.level) === 1)
+    preparedCupFixtureIntegrity
   );
 
-  const transitionPrerequisitesReady = unresolvedMatches === 0 &&
+  const transitionPrerequisitesReady = seasonTimelineValid && unresolvedMatches === 0 &&
     archive.ready === true &&
     rolloverPlanReady &&
     preparedStructureReady &&
@@ -227,11 +327,13 @@ async function readSeasonDiagnostics(db: any, config: Record<string, any>) {
     retainedArchiveMatchesPolicy;
   const transitionStatus = activeSeason > 1
     ? (config.historyCleanupPending === true ? 'ACTIVATED_CLEANUP_PENDING' : 'SUCCESSOR_ACTIVE')
-    : (!nextSeasonDue && !transitionRequested
-      ? 'SEASON_ACTIVE'
+    : (!seasonTimelineValid
+      ? 'SEASON_TIMELINE_INVALID'
+      : (!nextSeasonDue && !transitionRequested
+        ? 'SEASON_ACTIVE'
       : transitionPrerequisitesReady
         ? (preparedSeasonStart && Date.now() >= preparedSeasonStart.getTime() ? 'ACTIVATION_DUE' : 'S2_PUBLISHED_WAITING_ACTIVATION')
-        : 'TRANSITION_BLOCKED_OR_INCOMPLETE');
+        : 'TRANSITION_BLOCKED_OR_INCOMPLETE'));
 
   return {
     activeSeason,
@@ -240,6 +342,7 @@ async function readSeasonDiagnostics(db: any, config: Record<string, any>) {
     seasonStart: toDate(config.seasonStart)?.toISOString() || null,
     nextSeasonStart: nextSeasonStart?.toISOString() || null,
     nextSeasonDue,
+    seasonTimelineValid,
     transitionRequested,
     transitionStatus,
     transitionPrerequisitesReady,
@@ -264,6 +367,7 @@ async function readSeasonDiagnostics(db: any, config: Record<string, any>) {
       retainedSeason: archiveSeasons.length === 1 ? archiveSeasons[0] : null,
       expectedSeason: expectedRetainedArchive,
       sourceArchivePresent,
+      retainedArchiveIntegrity,
       matchesPolicy: retainedArchiveMatchesPolicy,
     },
     nextRollover: {
@@ -288,6 +392,7 @@ async function readSeasonDiagnostics(db: any, config: Record<string, any>) {
       pyramidCupReady: preparedCupReady,
       pyramidCupSnapshots: preparedCupSnapshots.size,
       pyramidCupMatches: preparedCupMatches.size,
+      pyramidCupFixtureIntegrity,
       seasonStart: preparedSeasonStart?.toISOString() || null,
       nextSeasonStart: preparedNextSeasonStart?.toISOString() || null,
     },
@@ -347,7 +452,7 @@ export async function GET(request: NextRequest) {
     const cup = cupSnap.exists ? cupSnap.data() || {} : null;
     const rounds = cup && cup.rounds && typeof cup.rounds === 'object' ? cup.rounds : {};
     const allFixtureDocs = [...dedicatedMatches.docs, ...legacyMatches.docs];
-    const fixtureById: Record<string, any> = Object.create(null);
+    const fixtureById: Record<string, any> = {};
     for (const doc of allFixtureDocs) {
       if (!Object.prototype.hasOwnProperty.call(fixtureById, doc.id)) {
         fixtureById[doc.id] = doc.data() || {};
