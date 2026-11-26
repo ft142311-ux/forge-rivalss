@@ -28,7 +28,7 @@ async function runSeasonOrchestratorUnlocked() {
     const db = getAdminDb();
     const resetConfigSnap = await db.collection('system_v1').doc('season_config').get();
     const resetConfig = resetConfigSnap.exists ? resetConfigSnap.data() || {} : {};
-    if (resetConfig.stagingSeasonOneResetInProgress === true) {
+    if (resetConfig.stagingSeasonOneResetInProgress === true || resetConfig.stagingFreshSeasonOneReset === true) {
       return {
         action: 'WORLD_BUILDING' as const,
         worldReady: false,
