@@ -1,0 +1,223 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null
+        && !exists(/databases/$(database)/documents/inactive_club_retirements_v1/$(request.auth.uid))
+        && !exists(/databases/$(database)/documents/inactive_clubs_v1/$(request.auth.uid));
+    }
+
+    function isSystem() {
+      return signedIn() && request.auth.token.admin == true;
+    }
+
+    function isParticipant(data) {
+      return signedIn() && (data.fromId == request.auth.uid || data.toId == request.auth.uid);
+    }
+
+    // Presence timestamps are written/read only by trusted server actions.
+    // Public clients receive only a derived online boolean from the manager directory.
+    match /manager_presence_v1/{userId} {
+      allow read, write: if false;
+    }
+
+    // Server-authoritative game state.
+    match /players_v14/{userId} {
+      allow read: if signedIn() && request.auth.uid == userId;
+      allow write: if false;
+    }
+
+    match /matches_v2/{matchId} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+
+    // Mode-specific match/report collections. Every write is server-side.
+    match /cup_matches/{matchId} {
+      // Cup fixtures are public competition records. An authenticated manager
+      // may read them even if their club is inactive or retired.
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+
+    match /tournament_matches_v1/{matchId} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+
+    match /training_matches_v1/{matchId} {
+      allow read: if signedIn()
+        && (resource.data.homeId == request.auth.uid || resource.data.awayId == request.auth.uid);
+      allow write: if false;
+    }
+
+    match /association_matches_v1/{matchId} {
+      allow read: if signedIn()
+        && (resource.data.homeId == request.auth.uid || resource.data.awayId == request.auth.uid
+          || resource.data.hostId == request.auth.uid || resource.data.challengerId == request.auth.uid);
+      allow write: if false;
+    }
+
+    match /league_tables_v2/{tableId} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+
+    match /league_slots_v1/{slotId} {
+      allow read: if false;
+      allow write: if false;
+    }
+
+    match /league_season_archives_v1/{archiveId} {
+      allow read: if signedIn();
+      allow write: if false;
+
+      match /matches/{matchId} {
+        allow read: if signedIn();
+        allow write: if false;
+      }
+    }
+
+    // Pyramid Cup bracket is public read-only game state. All mutations are server-side.
+    match /cup_pyramid_v1/{cupId} {
+      // The bracket is global read-only tournament data, not private club data.
+      // Keep it visible to authenticated users independently of club activity.
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+
+    // Public market data is read-only from the client.
+    match /market_v7/{agentId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    match /system_v1/{docId} {
+      // The reset journal contains operational state (lease, progress, errors)
+      // and is exposed only through the authenticated, sanitized diagnostics API.
+      // Keep the existing client-readable world documents explicit; new system
+      // documents are private by default instead of inheriting collection-wide access.
+      allow read: if signedIn() && docId in ['season_config', 'global_stats'];
+      allow write: if false;
+    }
+
+    // Friendly matchmaking: lobby state is server-authoritative.
+    // Clients may read lobby state, but all writes go through Server Actions/Admin SDK.
+    match /friendly_lobbies_v3/{lobbyId} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+
+    // CW Basket queue is server-managed. A manager can only observe their own entry.
+    match /cw_basket_v2/{userId} {
+      allow read: if signedIn() && request.auth.uid == userId;
+      allow write: if false;
+    }
+
+    // Friendly match state is visible only to its two participants.
+    match /friendly_matches_v1/{matchId} {
+      allow read: if signedIn()
+        && (resource.data.hostId == request.auth.uid || resource.data.challengerId == request.auth.uid);
+      allow write: if false;
+    }
+
+    // Global chat messages are created by a server action so identity,
+    // club branding, premium status and timestamps always come from trusted data.
+    match /global_chat_v2/{msgId} {
+      allow read: if signedIn();
+      allow create, update, delete: if false;
+    }
+
+    // Friend requests: only sender/recipient may see or mutate a request.
+    // Identity fields are immutable after creation; recipient can accept/reject,
+    // sender can delete/cancel.
+    match /friend_requests_v4/{reqId} {
+      allow read: if isParticipant(resource.data);
+
+      allow create: if signedIn()
+        && request.resource.data.fromId == request.auth.uid
+        && request.resource.data.toId is string
+        && request.resource.data.toId != request.auth.uid
+        && request.resource.data.status == 'pending'
+        && request.resource.data.createdAt is string
+        && request.resource.data.updatedAt is string
+        && request.resource.data.keys().hasOnly([
+          'fromId', 'fromName', 'toId', 'toName', 'status', 'createdAt', 'updatedAt'
+        ]);
+
+      // Only the recipient may accept. The sender cannot accept their own request.
+      allow update: if signedIn()
+        && request.auth.uid == resource.data.toId
+        && request.resource.data.fromId == resource.data.fromId
+        && request.resource.data.toId == resource.data.toId
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt'])
+        && request.resource.data.status == 'accepted'
+        && request.resource.data.updatedAt is string;
+
+      allow delete: if isParticipant(resource.data);
+    }
+
+    // Private messages: only the two participants can read/update their own
+    // conversation. Message identity and participants cannot be rewritten.
+    match /private_messages_v3/{msgId} {
+      allow read: if signedIn()
+        && request.auth.uid in resource.data.participants;
+
+      allow create: if signedIn()
+        && request.resource.data.senderId == request.auth.uid
+        && request.resource.data.receiverId is string
+        && request.resource.data.receiverId != request.auth.uid
+        && request.resource.data.text is string
+        && request.resource.data.text.size() > 0
+        && request.resource.data.text.size() <= 2000
+        && request.resource.data.participants is list
+        && request.resource.data.participants.size() == 2
+        && request.resource.data.participants[0] != request.resource.data.participants[1]
+        && request.resource.data.senderId in request.resource.data.participants
+        && request.resource.data.receiverId in request.resource.data.participants
+        // Premium identity is authoritative profile state, not client input.
+        && request.resource.data.senderIsPremium == (
+          get(/databases/$(database)/documents/players_v14/$(request.auth.uid)).data.isPremium == true
+        )
+        && request.resource.data.read == false
+        && request.resource.data.createdAt is string
+        && request.resource.data.keys().hasOnly([
+          'senderId', 'senderName', 'senderClubName', 'senderClubLogo',
+          'senderIsPremium', 'receiverId', 'receiverName', 'participants',
+          'text', 'createdAt', 'read'
+        ]);
+
+      allow update: if signedIn()
+        && request.auth.uid in resource.data.participants
+        && request.resource.data.senderId == resource.data.senderId
+        && request.resource.data.receiverId == resource.data.receiverId
+        && request.resource.data.participants == resource.data.participants
+        && request.resource.data.text == resource.data.text
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read'])
+        && request.resource.data.read is bool;
+
+      allow delete: if false;
+    }
+
+    // Association directory is visible to authenticated managers; all membership
+    // and leadership mutations are server-authoritative through Server Actions.
+    match /associations_v4/{associationId} {
+      allow read: if signedIn();
+      allow create, update, delete: if false;
+    }
+
+    // Notifications are server-created and visible only to their recipient.
+    match /notifications_v7/{notificationId} {
+      allow read: if signedIn() && resource.data.userId == request.auth.uid;
+      allow create, update, delete: if false;
+    }
+
+    // Admin/server-only catch-all. Client writes to gameplay collections remain
+    // blocked unless an explicit rule above grants them.
+    match /{allPaths=**} {
+      allow read, write: if isSystem();
+    }
+  }
+}

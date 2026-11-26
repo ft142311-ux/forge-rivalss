@@ -1,0 +1,57 @@
+name: Staging health check
+
+on:
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: "Base URL of the staging deployment (for example https://your-app.vercel.app)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: staging-health-check
+  cancel-in-progress: false
+
+jobs:
+  health:
+    name: Read-only staging health check
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Validate URL input
+        id: target
+        env:
+          BASE_URL: ${{ inputs.base_url }}
+        run: |
+          node <<'NODE'
+          const value = process.env.BASE_URL.trim();
+          let url;
+          try { url = new URL(value); } catch { throw new Error('base_url must be a valid URL'); }
+          if (url.protocol !== 'https:') throw new Error('Only HTTPS staging URLs are allowed');
+          if (url.username || url.password) throw new Error('Credentials must not be embedded in the URL');
+          url.pathname = url.pathname.replace(/\/$/, '');
+          url.search = '';
+          url.hash = '';
+          process.stdout.write(`BASE_URL=${url.toString().replace(/\/$/, '')}\n`);
+          NODE
+      - name: Check application and Firestore connectivity
+        env:
+          BASE_URL: ${{ inputs.base_url }}
+        run: |
+          set -euo pipefail
+          response="$(curl --fail --silent --show-error --max-time 30 "${BASE_URL%/}/api/health")"
+          echo "$response" | node -e '
+            let body = "";
+            process.stdin.on("data", chunk => body += chunk);
+            process.stdin.on("end", () => {
+              const result = JSON.parse(body);
+              if (result.status !== "UP" || result.services?.firestore !== "connected") {
+                console.error(JSON.stringify(result, null, 2));
+                process.exit(1);
+              }
+              console.log(JSON.stringify(result, null, 2));
+            });
+          '

@@ -1,0 +1,90 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 212 19% 8%;
+    --foreground: 210 40% 98%;
+    --card: 212 19% 12%;
+    --card-foreground: 210 40% 98%;
+    --popover: 212 19% 8%;
+    --popover-foreground: 210 40% 98%;
+    --primary: 199 89% 60%;
+    --primary-foreground: 212 19% 10%;
+    --secondary: 212 19% 16%;
+    --secondary-foreground: 210 40% 98%;
+    --muted: 212 19% 14%;
+    --muted-foreground: 215 20% 65%;
+    --accent: 189 71% 71%;
+    --accent-foreground: 212 19% 10%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 212 19% 18%;
+    --input: 212 19% 18%;
+    --ring: 199 89% 60%;
+    --radius: 1.25rem;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+    touch-action: manipulation;
+  }
+  body {
+    @apply text-foreground font-body antialiased bg-[#0a0d14];
+    overscroll-behavior: none;
+    min-height: 100dvh;
+  }
+}
+
+button, [role="button"], .cursor-pointer, a {
+  transition: transform 0.1s ease, opacity 0.1s ease;
+}
+
+button:active, [role="button"]:active, .cursor-pointer:active, a:active {
+  transform: scale(0.96) !important;
+  opacity: 0.8;
+}
+
+.glass-card {
+  @apply bg-card/60 backdrop-blur-xl border border-white/10 shadow-2xl;
+  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.8);
+}
+
+.hero-gradient {
+  background: linear-gradient(135deg, hsl(var(--primary)), #0ea5e9);
+}
+
+.text-glow-blue {
+  text-shadow: 0 0 10px rgba(56, 189, 248, 0.8), 0 0 20px rgba(56, 189, 248, 0.4);
+}
+
+.text-glow-primary {
+  text-shadow: 0 0 10px rgba(var(--primary), 0.8);
+}
+
+::-webkit-scrollbar {
+  display: none;
+}
+
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+
+@keyframes shimmer-loading {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+
+.animate-shimmer {
+  animation: shimmer-loading 1.5s infinite;
+}
+
+[data-state="open"] {
+  animation-duration: 120ms !important;
+}
+[data-state="closed"] {
+  animation-duration: 100ms !important;
+}

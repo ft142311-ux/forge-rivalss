@@ -1,0 +1,20 @@
+# Firebase App Hosting backend configuration.
+# Keep sensitive values available only to server runtime, never the browser build.
+
+runConfig:
+  maxInstances: 1
+
+env:
+  - variable: SYSTEM_ACCOUNT_PASSWORD
+    secret: SYSTEM_ACCOUNT_PASSWORD
+    availability:
+      - RUNTIME
+  - variable: CRON_SECRET
+    secret: CRON_SECRET
+    availability:
+      - RUNTIME
+  - variable: NEXT_PUBLIC_FIREBASE_API_KEY
+    value: AIzaSyDk-5jCdodI_Any76Jq2jiS3F_0DJBMnuo
+    availability:
+      - BUILD
+      - RUNTIME

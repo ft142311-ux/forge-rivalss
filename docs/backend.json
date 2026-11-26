@@ -1,0 +1,43 @@
+{
+  "entities": {
+    "PlayerProfile": {
+      "title": "PlayerProfile",
+      "description": "Основной профиль менеджера в системе v14 (Global Transition)",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "displayName": { "type": "string" },
+        "clubName": { "type": "string" },
+        "clubLogo": { "type": "string" },
+        "selectedLeagueId": { "type": "string" },
+        "leagueLevel": { "type": "number" },
+        "groupId": { "type": "number" },
+        "rank": { "type": "number" },
+        "country": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "lastLoginDate": { "type": "string", "format": "date-time" },
+        "version": { "type": "number" }
+      },
+      "required": ["id", "email", "clubName"]
+    }
+  },
+  "auth": {
+    "providers": ["anonymous", "email"]
+  },
+  "firestore": {
+    "/players_v14/{userId}": {
+      "schema": "#/backend/entities/PlayerProfile",
+      "description": "Глобальный реестр участников лиги v14"
+    },
+    "/league_tables_v2/{tableId}": {
+      "description": "Турнирные таблицы версии 140"
+    },
+    "/matches_v2/{matchId}": {
+      "description": "Архив зафиксированных результатов лиги v140"
+    },
+    "/verification_codes/{email}": {
+      "description": "Временные коды подтверждения регистрации"
+    }
+  }
+}

@@ -1,0 +1,52 @@
+{
+  "placeholderImages": [
+    {
+      "id": "hero-tank",
+      "description": "German professional e-sports player portrait v1",
+      "imageUrl": "https://i.postimg.cc/PPS3QFFM/de-1.jpg",
+      "imageHint": "gamer portrait"
+    },
+    {
+      "id": "hero-carry",
+      "description": "Korean professional player portrait v1",
+      "imageUrl": "https://i.postimg.cc/43mv7dsH/kr-1.jpg",
+      "imageHint": "carry gamer"
+    },
+    {
+      "id": "hero-mage",
+      "description": "Chinese professional player portrait v1",
+      "imageUrl": "https://i.postimg.cc/wvzKxSYS/1755011442109.jpg",
+      "imageHint": "midlaner gamer"
+    },
+    {
+      "id": "hero-jungler",
+      "description": "Russian professional player portrait v1",
+      "imageUrl": "https://i.postimg.cc/mg3yfqj5/rus-2.jpg",
+      "imageHint": "assassin forest"
+    },
+    {
+      "id": "hero-support",
+      "description": "Ukrainian professional player portrait v1",
+      "imageUrl": "https://i.postimg.cc/X7fs4pYn/ua-1.jpg",
+      "imageHint": "priestess light"
+    },
+    {
+      "id": "hero-sub-br",
+      "description": "Brazilian professional player portrait v1",
+      "imageUrl": "https://i.postimg.cc/Z5906yvS/br-1.jpg",
+      "imageHint": "brazilian gamer"
+    },
+    {
+      "id": "hero-sub-tr",
+      "description": "Turkish professional player portrait v1",
+      "imageUrl": "https://i.postimg.cc/MHvbRpyd/tr-1.jpg",
+      "imageHint": "turkish gamer"
+    },
+    {
+      "id": "arena-starter",
+      "description": "High resolution starter arena visual v3",
+      "imageUrl": "https://i.postimg.cc/75TSz68F/compressed-image-(2).jpg",
+      "imageHint": "stadium arena"
+    }
+  ]
+}
