@@ -477,7 +477,10 @@ async function resolveTournamentMatch(db: any, tournamentId: string, matchId: st
     // A crashed third attempt is made visibly retry-exhausted instead of
     // remaining in processing forever and blocking tournament progression.
     if (attempts >= 3) {
-      if (staleProcessing) {
+      // A normal failed third attempt is already in "error" state; a crashed
+      // third attempt remains "processing" until its lease expires. Both must
+      // become explicitly retry-exhausted, while an active worker stays fenced.
+      if (status !== 'processing' || staleProcessing) {
         t.update(matchRef, {
           status: 'error',
           processingToken: FieldValue.delete(),
