@@ -147,11 +147,11 @@ test('recovery plan comparison ignores object key order but preserves array orde
 });
 
 
-test('prepared recovery mode survives the final calendar readiness commit', () => {
+test('ordinary season calendar never persists legacy recovery mode', () => {
   const source = readFileSync(new URL('../src/app/actions/season-calendar.ts', import.meta.url), 'utf8');
-  const expected = "preparedRecoveryMode: directRecovery || rolloverPlan?.mode === 'recovery_carry_forward',";
-  assert.equal(source.split(expected).length - 1, 2,
-    'both the initial prepared-world commit and final readiness commit must preserve recovery mode');
+  assert.doesNotMatch(source, /preparedRecoveryMode:\\s*directRecovery/);
+  assert.equal((source.match(/prepareRecoveryCarryForwardPlan\\(db/g) || []).length, 0,
+    'legacy carry-forward planner must not have runtime call sites');
 });
 
 test('two consecutive promotion/relegation cycles preserve exactly 120 unique clubs across 15 groups', () => {
