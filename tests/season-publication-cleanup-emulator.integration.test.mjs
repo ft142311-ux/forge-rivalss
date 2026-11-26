@@ -11,6 +11,7 @@ import {
   SEASON_CALENDAR_BUILD_LOCK_ID,
 } from '../src/app/actions/season-rollover-lock.ts';
 import { completeSeasonHistoryCleanup } from '../src/app/actions/season-history-cleanup.ts';
+import { resolveArchivePrunePlan } from '../src/app/actions/season-archive.ts';
 
 const emulatorHost = process.env.FIRESTORE_EMULATOR_HOST;
 const projectId = process.env.GCLOUD_PROJECT || 'demo-forge-rivals';
@@ -42,7 +43,7 @@ async function withIsolatedFirestore(t) {
     await Promise.all([...refs].map(ref => ref.delete().catch(() => undefined)));
     await deleteApp(app);
   });
-  return { db, doc };
+  return { db, doc, firestore, collectionName };
 }
 
 test('Firestore Emulator publication is fenced and cannot publish twice', {
@@ -198,4 +199,115 @@ test('Firestore Emulator clears the cleanup marker only for the active target an
     shouldMarkComplete: false,
   });
   assert.equal((await configRef.get()).get('historyCleanupPending'), false);
+});
+
+
+test('Firestore Emulator rolling archive deletion preserves durable player awards and trophies', {
+  skip: !emulatorHost,
+}, async t => {
+  const { db, doc, firestore, collectionName } = await withIsolatedFirestore(t);
+  const configRef = doc('season_config');
+  const archiveRef = firestore.collection(`${collectionName}_archives`).doc('S1');
+  const archivedMatchRef = archiveRef.collection('matches').doc('legacy-match');
+  const historyRef = firestore.collection(`${collectionName}_history`).doc('S1');
+  const lifetimeProfileRef = firestore.collection(`${collectionName}_players`).doc('human-club');
+
+  const startingParticipants = Object.fromEntries(
+    Array.from({ length: 4 }, (_, levelIndex) => {
+      const level = levelIndex + 1;
+      return Array.from({ length: 2 ** levelIndex }, (_, groupIndex) => {
+        const group = `D${level}-G${groupIndex + 1}`;
+        return [group, Array.from({ length: 8 }, (_, rankIndex) => ({
+          id: `${group}-CLUB-${rankIndex + 1}`,
+          rank: rankIndex + 1,
+        }))];
+      });
+    }).flat(),
+  );
+  const recoveredArchive = {
+    sourceSeason: 1,
+    leagueId: 'ALPHA',
+    archiveVersion: 1,
+    status: 'recovered',
+    recoveredAt: '2026-11-01T00:00:00.000Z',
+    expectedMatches: 840,
+    finishedMatches: 0,
+    unresolvedMatches: 840,
+    groups: 15,
+    teamCount: 120,
+    standings: {},
+    startingParticipants,
+    recovery: {
+      status: 'incomplete',
+      finalStandingsAvailable: false,
+      reason: 'SEASON_INCOMPLETE',
+    },
+  };
+
+  await Promise.all([
+    configRef.set({
+      activeSeasonNumber: 3,
+      worldReady: true,
+      historyCleanupPending: true,
+      historyCleanupTargetSeason: 3,
+    }),
+    archiveRef.set(recoveredArchive),
+    archivedMatchRef.set({ matchId: 'legacy-match', season: 1, score: { home: 2, away: 1 } }),
+    historyRef.set({ status: 'SKIPPED', targetSeason: 3 }),
+    lifetimeProfileRef.set({
+      credits: 98765,
+      seasonAwards: { S1: { season: 1, rank: 1, prize: 5000 } },
+      trophies: [{ id: 'league-cup-season-1', season: 1, type: 'league_champion' }],
+      career: { matchesPlayed: 140, wins: 91 },
+      achievements: ['first-title', 'season-one-champion'],
+    }),
+  ]);
+  t.after(async () => {
+    await Promise.all([
+      archivedMatchRef.delete().catch(() => undefined),
+      archiveRef.delete().catch(() => undefined),
+      historyRef.delete().catch(() => undefined),
+      lifetimeProfileRef.delete().catch(() => undefined),
+    ]);
+  });
+
+  const archiveData = (await archiveRef.get()).data();
+  const cleanupPlan = resolveArchivePrunePlan([{
+    id: 'S1',
+    archive: archiveData,
+    matches: [],
+    historyStatus: (await historyRef.get()).get('status'),
+  }], 3, null);
+  assert.equal(cleanupPlan.ready, true);
+  assert.deepEqual(cleanupPlan.pruneIds, ['S1']);
+
+  const lease = await acquireSeasonCalendarBuildLock(db, 2, 3);
+  assert.equal(lease.acquired, true);
+  try {
+    await commitSeasonHistoryCleanupWrites(db, lease.ownerId, lease.token, 3, [{
+      ref: archiveRef,
+      data: {
+        pruneStatus: 'PRUNING',
+        pruneTargetSeason: 3,
+        pruneRetainedArchiveSeason: 0,
+        prunePolicyVersion: 1,
+      },
+      options: { merge: true },
+    }]);
+    await commitSeasonHistoryCleanupWrites(db, lease.ownerId, lease.token, 3, [], [archivedMatchRef]);
+    await commitSeasonHistoryCleanupWrites(db, lease.ownerId, lease.token, 3, [], [archiveRef]);
+
+    assert.equal((await archivedMatchRef.get()).exists, false);
+    assert.equal((await archiveRef.get()).exists, false);
+    assert.equal((await historyRef.get()).get('status'), 'SKIPPED');
+
+    const lifetime = (await lifetimeProfileRef.get()).data();
+    assert.equal(lifetime.credits, 98765);
+    assert.deepEqual(lifetime.seasonAwards.S1, { season: 1, rank: 1, prize: 5000 });
+    assert.deepEqual(lifetime.trophies, [{ id: 'league-cup-season-1', season: 1, type: 'league_champion' }]);
+    assert.deepEqual(lifetime.career, { matchesPlayed: 140, wins: 91 });
+    assert.deepEqual(lifetime.achievements, ['first-title', 'season-one-champion']);
+  } finally {
+    await releaseSeasonCalendarBuildLock(db, lease.ownerId, lease.token);
+  }
 });
