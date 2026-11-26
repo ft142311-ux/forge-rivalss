@@ -86,6 +86,7 @@ export async function purchasePremiumShopAction(idToken: string) {
     const { uid } = await requireServerActor(idToken);
     const db = getAdminDb();
     return await db.runTransaction(async (t) => {
+      await assertStagingSeasonOneResetNotInProgress(t, db);
       const ref = db.collection('players_v14').doc(uid);
       const snap = await t.get(ref);
       if (!snap.exists) throw new Error('PLAYER_NOT_FOUND');
@@ -143,6 +144,7 @@ export async function purchaseDiamondPackAction(idToken: string, amount: number,
 
     if (!isEmulator) {
       return await db.runTransaction(async (t) => {
+      await assertStagingSeasonOneResetNotInProgress(t, db);
         const receiptSnap = await t.get(receiptRef);
         if (receiptSnap.exists) {
           const receipt = receiptSnap.data() || {};
@@ -175,6 +177,7 @@ export async function purchaseDiamondPackAction(idToken: string, amount: number,
     }
 
     return await db.runTransaction(async (t) => {
+      await assertStagingSeasonOneResetNotInProgress(t, db);
       const receiptSnap = await t.get(receiptRef);
       if (receiptSnap.exists) {
         const receipt = receiptSnap.data() || {};
@@ -231,6 +234,7 @@ export async function exchangeCrystalsForCreditsAction(idToken: string, crystals
     const db = getAdminDb();
     const receiptRef = db.collection('shop_operation_receipts').doc(`${uid}_exchange_${normalizedOperationId}`);
     return await db.runTransaction(async (t) => {
+      await assertStagingSeasonOneResetNotInProgress(t, db);
       const receiptSnap = await t.get(receiptRef);
       if (receiptSnap.exists) {
         const receipt = receiptSnap.data() || {};
@@ -285,6 +289,7 @@ export async function changeClubNameAction(idToken: string, name: string) {
     if (clean.length < 3 || clean.length > 25) throw new Error('INVALID_CLUB_NAME');
     const db = getAdminDb();
     return await db.runTransaction(async (t) => {
+      await assertStagingSeasonOneResetNotInProgress(t, db);
       const ref = db.collection('players_v14').doc(uid);
       const snap = await t.get(ref);
       if (!snap.exists) throw new Error('PLAYER_NOT_FOUND');
@@ -310,6 +315,7 @@ export async function changeClubCountryAction(idToken: string, country: unknown)
     const parsed = CountrySchema.parse(country);
     const db = getAdminDb();
     return await db.runTransaction(async (t) => {
+      await assertStagingSeasonOneResetNotInProgress(t, db);
       const ref = db.collection('players_v14').doc(uid);
       const snap = await t.get(ref);
       if (!snap.exists) throw new Error('PLAYER_NOT_FOUND');
@@ -360,6 +366,7 @@ export async function createShopPlayerAction(
     const receiptRef = db.collection('shop_operation_receipts').doc(`${uid}_player_${normalizedOperationId}`);
     const playerId = `shop_${uid}_${randomUUID()}`;
     return await db.runTransaction(async (t) => {
+      await assertStagingSeasonOneResetNotInProgress(t, db);
       const receiptSnap = await t.get(receiptRef);
       if (receiptSnap.exists) {
         const receipt = receiptSnap.data() || {};
