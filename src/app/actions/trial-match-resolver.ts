@@ -11,6 +11,7 @@ import { hash32 } from '@/app/lib/hash-utils';
 import { timestampToMillis } from '@/app/lib/timestamp-utils';
 import { getMatchWinnerId } from '@/app/lib/match-winner';
 import { isProcessingLeaseStale } from '@/app/lib/match-processing-lease';
+import { assertStagingSeasonOneResetNotInProgress } from '@/app/lib/staging-season-one-write-fence';
 
 function startTimeMs(match: any): number {
   const raw = match?.startTime || match?.scheduledStartAt || match?.scheduledAt;
@@ -108,7 +109,17 @@ export async function createTrialMatchAction(idToken: string) {
 
     const matchRef = db.collection(MATCH_COLLECTIONS.trial).doc(matchId);
     await db.runTransaction(async (tx) => {
-      const existing = await tx.get(matchRef);
+      await assertStagingSeasonOneResetNotInProgress(tx, db);
+      const [existing, currentProfileSnap] = await Promise.all([
+        tx.get(matchRef),
+        tx.get(profileRef),
+      ]);
+      if (!currentProfileSnap.exists) throw new Error('PLAYER_NOT_FOUND');
+      const currentProfile: any = currentProfileSnap.data() || {};
+      if (JSON.stringify(currentProfile.lineup || {}) !== JSON.stringify(profile.lineup || {}) ||
+          JSON.stringify(currentProfile.ownedPlayers || []) !== JSON.stringify(profile.ownedPlayers || [])) {
+        throw new Error('TRIAL_PROFILE_CHANGED_RETRY');
+      }
       if (existing.exists) throw new Error('TRIAL_MATCH_ID_COLLISION');
       tx.create(matchRef, { ...report, createdAt: FieldValue.serverTimestamp() });
     });
@@ -161,6 +172,7 @@ export async function resolveDueTrialMatchesForUserAction(idToken: string) {
     const processingToken = randomUUID();
     try {
       claimed = await db.runTransaction(async transaction => {
+        await assertStagingSeasonOneResetNotInProgress(transaction, db);
         const fresh = await transaction.get(matchRef);
         const data = fresh.data() as any;
         if (!fresh.exists || data?.homeId !== uid || data?.isTrial !== true || isTrialMatchTerminal(data) || (data?.isProcessing === true && !isTrialMatchProcessingLeaseStale(data, Date.now()))) return false;
@@ -182,6 +194,7 @@ export async function resolveDueTrialMatchesForUserAction(idToken: string) {
       const finishedAt = new Date().toISOString();
 
       const finalized = await db.runTransaction(async transaction => {
+        await assertStagingSeasonOneResetNotInProgress(transaction, db);
         const fresh = await transaction.get(matchRef);
         const data = fresh.data() as any;
         if (!fresh.exists || data?.homeId !== uid || data?.isTrial !== true) throw new Error('TRIAL_MATCH_OWNERSHIP_CHANGED');
@@ -208,6 +221,7 @@ export async function resolveDueTrialMatchesForUserAction(idToken: string) {
       console.error('[TRIAL MATCH SERVER] Resolution failed:', matchId, error);
       if (claimed) {
         await db.runTransaction(async transaction => {
+          await assertStagingSeasonOneResetNotInProgress(transaction, db);
           const fresh = await transaction.get(matchRef);
           const data = fresh.data() as any;
           if (fresh.exists && data?.homeId === uid && data?.isTrial === true && !isTrialMatchTerminal(data) && data?.isProcessing === true && data?.processingToken === processingToken) {
