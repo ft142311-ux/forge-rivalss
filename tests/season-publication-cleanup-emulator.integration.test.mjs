@@ -320,68 +320,6 @@ test('Firestore Emulator rolling archive deletion preserves durable player award
 });
 
 
-function makeCompletedArchiveFixture(sourceSeason) {
-  const matches = [];
-  const standings = {};
-  for (const groupKey of expectedRolloverGroups()) {
-    const [, level, group] = /^D([1-4])-G(\\d+)$/.exec(groupKey);
-    const teamIds = Array.from({ length: 8 }, (_, index) => `S${sourceSeason}-${groupKey}-TEAM-${index + 1}`);
-    const fixtures = [];
-    for (let homeRank = 1; homeRank <= 8; homeRank++) {
-      for (let awayRank = 1; awayRank <= 8; awayRank++) {
-        if (homeRank === awayRank) continue;
-        const draw = (homeRank + awayRank) % 5 === 0;
-        const homeScore = draw ? 1 : homeRank < awayRank ? 2 : 0;
-        const awayScore = draw ? 1 : homeRank < awayRank ? 0 : 2;
-        const match = {
-          matchId: `S${sourceSeason}-${groupKey}-${homeRank}-${awayRank}`,
-          sourceSeason,
-          version: 140,
-          level: Number(level),
-          group: Number(group),
-          tour: Math.ceil(fixtures.length / 4) + 1,
-          homeRank,
-          awayRank,
-          homeId: teamIds[homeRank - 1],
-          homeName: teamIds[homeRank - 1],
-          awayId: teamIds[awayRank - 1],
-          awayName: teamIds[awayRank - 1],
-          score: { home: homeScore, away: awayScore },
-          status: 'finished',
-          isFinished: true,
-        };
-        fixtures.push(match);
-        matches.push(match);
-      }
-    }
-    standings[groupKey] = calculateGroupStandings({}, fixtures, 8)
-      .map((row, index) => ({ ...row, rank: index + 1 }));
-  }
-  return {
-    archive: {
-      sourceSeason,
-      leagueId: 'ALPHA',
-      archiveVersion: 1,
-      status: 'completed',
-      completedAt: '2026-11-01T00:00:00.000Z',
-      finalizedAt: '2026-11-01T00:00:00.000Z',
-      expectedMatches: 840,
-      finishedMatches: 840,
-      groups: 15,
-      teamCount: 120,
-      integrity: {
-        complete: true,
-        unfinishedMatches: 0,
-        invalidResults: 0,
-        canonicalMatches: 840,
-        duplicateCanonicalFixtures: 0,
-      },
-      standings,
-    },
-    matches,
-  };
-}
-
 async function writeDocsInBatches(firestore, docs) {
   for (let offset = 0; offset < docs.length; offset += 400) {
     const batch = firestore.batch();
@@ -399,7 +337,7 @@ test('Firestore Emulator prunes S1-S4 after S6 activation, retains verified S5, 
   const historyCollection = firestore.collection(`${collectionName}_rolling_history`);
   const playersCollection = firestore.collection(`${collectionName}_rolling_players`);
   const lifetimeProfileRef = playersCollection.doc('human-club');
-  const retained = makeCompletedArchiveFixture(5);
+  const retained = makeCompletedArchive(5);
   const archiveRefs = new Map();
   const historyRefs = new Map();
   const matchRefs = new Map();
@@ -419,7 +357,7 @@ test('Firestore Emulator prunes S1-S4 after S6 activation, retains verified S5, 
     historyRefs.set(season, historyRef);
     if (season === 4) {
       // S4 is a genuine completed archive with 840 persisted match snapshots.
-      const completed = makeCompletedArchiveFixture(4);
+      const completed = makeCompletedArchive(4);
       const refs = completed.matches.map(match => archiveRef.collection('matches').doc(match.matchId));
       matchRefs.set(season, refs);
       seedWrites.push({ ref: archiveRef, data: completed.archive });
@@ -806,11 +744,11 @@ test('Firestore Emulator prunes S1-S4 after S6 activation, retains S5 and resume
     }),
   ]);
 
-  // A malformed retained archive must stop cleanup before any deletion intent
-  // is written. Final skipped-season markers are safe to complete after S6.
-  await retainedArchiveRef.update({
-    integrity: { ...completed.archive.integrity, canonicalMatches: 839 },
-  });
+  // A malformed retained snapshot must stop cleanup before any deletion
+  // intent is written. Keep archive metadata valid so the retained snapshot
+  // validator—not the archive identity gate—detects the bad match result.
+  const corruptedRetainedMatchRef = retainedArchiveRef.collection('matches').doc(completed.matches[0].matchId);
+  await corruptedRetainedMatchRef.update({ score: { home: 0, away: 0 } });
   await assert.rejects(
     () => pruneSeasonHistoryAfterActivation(db, 6, 5),
     /RETAINED_ARCHIVE_INVALID/,
@@ -822,7 +760,7 @@ test('Firestore Emulator prunes S1-S4 after S6 activation, retains S5 and resume
     assert.equal((await historyRefs.get(seasonNumber).get()).get('status'), 'SKIPPED');
   }
   assert.equal((await retainedArchiveRef.get()).exists, true);
-  await retainedArchiveRef.update({ integrity: completed.archive.integrity });
+  await corruptedRetainedMatchRef.update({ score: completed.matches[0].score });
 
   // Fail during S3 child deletion after S1 and S2 were fully removed. The
   // persisted PRUNING intents must make the next invocation safely resumable.
