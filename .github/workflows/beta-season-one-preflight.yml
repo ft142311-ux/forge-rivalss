@@ -1,6 +1,9 @@
 name: Beta Season 1 read-only preflight
 
 on:
+  push:
+    branches:
+      - feature/beta-fresh-season-one
   workflow_dispatch:
     inputs:
       deployment_url:
@@ -148,22 +151,47 @@ jobs:
           let result;
           try { result = JSON.parse(raw.slice(0, marker)); }
           catch { throw new Error(`Preflight returned non-JSON response (HTTP ${status}).`); }
-          if (![200, 409].includes(status) ||
-              result.readOnly !== true ||
-              result.projectId !== 'forge-rivals-beta' ||
-              result.success !== true) {
-            console.error(JSON.stringify(result, null, 2));
-            process.exit(1);
-          }
-          console.log(JSON.stringify({
-            httpStatus: Number(status),
-            success: result.success,
+          const failures = [];
+          if (status !== 200) failures.push('HTTP_STATUS_' + status);
+          if (result.readOnly !== true) failures.push('READ_ONLY_FLAG_MISSING');
+          if (result.projectId !== 'forge-rivals-beta') failures.push('BETA_PROJECT_MISMATCH');
+          if (result.success !== true) failures.push('DIAGNOSTICS_UNSUCCESSFUL');
+          if (result.cupExists !== true || !result.cup) failures.push('SEASON_ONE_CUP_MISSING');
+          const cup = result.cup || {};
+          const integrity = result.cupIntegrity || {};
+          if (integrity.ready !== true) failures.push('SEASON_ONE_CUP_INTEGRITY_FAILED');
+          if (cup.status !== 'active' && cup.status !== 'completed') failures.push('SEASON_ONE_CUP_STATUS_INVALID');
+          if (cup.format !== 'D1_REST_OPENING_ROUND' || cup.formatVersion !== 4) failures.push('SEASON_ONE_CUP_FORMAT_INVALID');
+          if (cup.participants !== 120 || cup.totalParticipants !== 120) failures.push('SEASON_ONE_CUP_PARTICIPANT_COUNT_INVALID');
+          if (cup.totalMatches !== 119 || cup.preliminaryMatches !== 56) failures.push('SEASON_ONE_CUP_MATCH_COUNT_INVALID');
+          if (cup.openingRoundRestTeams !== 8) failures.push('SEASON_ONE_CUP_D1_ENTRY_INVALID');
+          if (integrity.participantSnapshots !== 120 || result.participantSnapshots !== 120) failures.push('SEASON_ONE_CUP_SNAPSHOT_COUNT_INVALID');
+          if (integrity.noByes !== true || integrity.openingRoundParticipants !== 112) failures.push('SEASON_ONE_CUP_OPENING_ROUND_INVALID');
+          const season = result.season || {};
+          if (season.worldReady !== true) failures.push('ACTIVE_SEASON_WORLD_NOT_READY');
+          if (season.league?.tables !== 15 || season.league?.slots !== 120 || season.league?.fixtures !== 840) failures.push('ACTIVE_SEASON_LEAGUE_COUNTS_INVALID');
+          if (season.league?.structureReady !== true) failures.push('ACTIVE_SEASON_LEAGUE_STRUCTURE_INVALID');
+          if (season.resetInProgress === true) failures.push('SEASON_RESET_IN_PROGRESS');
+          if (season.historyCleanupPending === true) failures.push('SEASON_HISTORY_CLEANUP_PENDING');
+          if (season.archiveRetention?.matchesPolicy !== true) failures.push('SEASON_ARCHIVE_RETENTION_INVALID');
+          if (season.transitionStatus === 'TRANSITION_BLOCKED_OR_INCOMPLETE') failures.push('SEASON_SUCCESSOR_TRANSITION_BLOCKED');
+          if (season.transitionStatus === 'ACTIVATED_CLEANUP_PENDING') failures.push('SEASON_SUCCESSOR_CLEANUP_PENDING');
+
+          const report = {
+            httpStatus: status,
+            success: failures.length === 0,
             readOnly: result.readOnly,
             projectId: result.projectId,
+            activeSeason: result.activeSeason,
+            phase: result.phase,
             cup: result.cup,
-            participantSnapshots: result.participantSnapshots,
-            dedicatedMatches: result.dedicatedMatches,
-            legacyMatches: result.legacyMatches
-          }, null, 2));
-          console.log('Read-only Beta Cup diagnostics completed. No writes were executed.');
+            cupIntegrity: result.cupIntegrity,
+            season: result.season,
+            season: result.season,
+            failures
+          };
+          fs.writeFileSync(summaryFile, JSON.stringify(report, null, 2));
+          console.log(JSON.stringify(report, null, 2));
+          if (failures.length) process.exit(1);
+          console.log('Read-only Beta Season 1 and season-lifecycle preflight passed. No writes were executed.');
           NODE

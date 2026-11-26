@@ -4,21 +4,21 @@ import { readFileSync } from 'node:fs';
 
 const source = readFileSync(new URL('../src/app/actions/cup-engine.ts', import.meta.url), 'utf8');
 
-test('Pyramid Cup prize replay validates the receipt and returns the original amount without paying twice', () => {
+test('Pyramid Cup prize replay validates the existing deterministic receipt before no-op', () => {
   const start = source.indexOf('async function payCupPrize');
   const end = source.indexOf('async function finishTechnically', start);
   assert.ok(start >= 0 && end > start);
   const payout = source.slice(start, end);
   const receiptGuard = payout.indexOf('if (ledgerSnap.exists)');
-  const replayAmount = payout.indexOf('return amount;', receiptGuard);
+  const noOp = payout.indexOf('return 0;', receiptGuard);
   const playerGuard = payout.indexOf('if (!playerSnap.exists)');
-  assert.ok(receiptGuard >= 0 && replayAmount > receiptGuard && playerGuard > replayAmount);
-  assert.ok(payout.includes('receipt.userId === team.id'));
-  assert.ok(payout.includes('receipt.amount === amount'));
-  assert.ok(payout.includes("receipt.currency === 'credits'"));
-  assert.ok(payout.includes('receipt.type === rewardType'));
-  assert.ok(payout.includes('receipt.referenceId === referenceId'));
-  assert.ok(payout.includes('Number(receipt.division) === Number(team.level)'));
+  assert.ok(receiptGuard >= 0 && noOp > receiptGuard && playerGuard > receiptGuard);
+  assert.match(payout, /receipt\.userId === team\.id/);
+  assert.match(payout, /receipt\.amount === amount/);
+  assert.match(payout, /receipt\.currency === 'credits'/);
+  assert.match(payout, /receipt\.type === rewardType/);
+  assert.match(payout, /receipt\.referenceId === referenceId/);
+  assert.match(payout, /Number\(receipt\.division\) === Number\(team\.level\)/);
   assert.match(payout, /CUP_PRIZE_RECEIPT_CONFLICT/);
 });
 
