@@ -723,7 +723,8 @@ async function buildSeasonCalendar(lease: BuildLease, pristineFirstWorld = false
   const sourceSeasonNumber = Number(current.activeSeasonNumber || 1);
   const recoveryTarget = Number(current.recoveryTargetSeason || 0);
   const requestedRecoveryTarget = Number(current.nextSeasonNumber || current.preparationTargetSeason || current.preparedSeasonNumber || 0);
-  const directRecovery = recoveryTarget > sourceSeasonNumber + 1 || requestedRecoveryTarget > sourceSeasonNumber + 1;
+  // Runtime transitions are always sequential; stale recovery targets cannot skip seasons.
+  const directRecovery = false;
   const stagingFreshSeasonOneReset =
     current.stagingFreshSeasonOneReset === true &&
     sourceSeasonNumber === 1 &&
@@ -858,8 +859,7 @@ async function buildSeasonCalendar(lease: BuildLease, pristineFirstWorld = false
     } else {
       const rollover = await prepareSeasonRollover(db, activeSeasonBefore, seasonNumber);
       if (!rollover.ready) {
-        const canSkipIncompleteSeason = rollover.writesStarted !== true &&
-          ['SEASON_RESULTS_INCOMPLETE', 'SEASON_STANDINGS_PREFLIGHT_FAILED'].includes(String(rollover.reason || ''));
+        const canSkipIncompleteSeason = false;
         if (!canSkipIncompleteSeason) {
           return {
             success: false, seasonNumber: activeSeasonBefore,
@@ -1220,8 +1220,10 @@ export async function publishPreparedSeason() {
   const sourceSeason = Number(initial.activeSeasonNumber || 1);
   const targetSeason = Number(initial.nextSeasonNumber || initial.preparationTargetSeason || 0);
   const recoveryMode = initial.preparedRecoveryMode === true;
-  const multiSeasonRecovery = recoveryMode && targetSeason > sourceSeason + 1;
-  if (!Number.isSafeInteger(targetSeason) || (targetSeason !== sourceSeason + 1 && !multiSeasonRecovery)) {
+  if (recoveryMode) {
+    return { success: false, action: 'WORLD_NOT_READY', reason: 'SEQUENTIAL_RECOVERY_MODE_DISABLED', sourceSeason, targetSeason, writesStarted: false };
+  }
+  if (!Number.isSafeInteger(targetSeason) || targetSeason !== sourceSeason + 1) {
     return { success: false, action: 'WORLD_NOT_READY', reason: 'INVALID_PUBLICATION_TARGET', sourceSeason, targetSeason };
   }
   // Enforce the Cup prerequisite at the publication boundary itself, not
@@ -1246,11 +1248,11 @@ export async function publishPreparedSeason() {
       initial.worldReady === true &&
       initial.preparedWorldReady === true &&
       String(initial.phase || '') === 'PUBLISHED' &&
-      (multiSeasonRecovery || preparedStartMs === new Date(initial.nextSeasonStart || '').getTime()) &&
+      preparedStartMs === new Date(initial.nextSeasonStart || '').getTime() &&
       preparedNextStartMs === preparedStartMs + TOTAL_CYCLE_DAYS * 24 * 60 * 60 * 1000 &&
-      validateRolloverPlan(plan, recoveryMode ? targetSeason - 1 : sourceSeason, targetSeason).valid &&
+      plan?.mode !== 'recovery_carry_forward' &&
+      validateRolloverPlan(plan, sourceSeason, targetSeason).valid &&
       isRolloverPlanPublicationReady(plan) &&
-      (!recoveryMode || getRecoveryRolloverPlanSignature(plan) === initial.preparedRolloverPlanSignature) &&
       readiness.ready;
     if (!validPublishedState) {
       return {
@@ -1285,13 +1287,15 @@ export async function publishPreparedSeason() {
   const preparedStartMs = new Date(initial.preparedSeasonStart).getTime();
   const preparedNextStartMs = new Date(initial.preparedNextSeasonStart).getTime();
   let lifecycle: ReturnType<typeof resolveSeasonLifecycleWindow> | null = null;
-  const overdueRecoveryMode = recoveryMode && Date.now() >= preparedStartMs;
-  if (overdueRecoveryMode) {
+  // A late worker may publish the immediate successor while its scheduled
+  // interval is still open. Expired intermediate seasons are never skipped.
+  const overdueSequentialPublication = Date.now() >= preparedStartMs;
+  if (overdueSequentialPublication) {
     const nowMs = Date.now();
     if (!Number.isFinite(preparedStartMs) || !Number.isFinite(preparedNextStartMs) ||
         preparedNextStartMs !== preparedStartMs + TOTAL_CYCLE_DAYS * 24 * 60 * 60 * 1000 ||
         nowMs < preparedStartMs || nowMs >= preparedNextStartMs) {
-      return { success: false, action: 'WORLD_BUILDING', reason: 'RECOVERY_PUBLICATION_OUTSIDE_TARGET_SEASON_WINDOW', sourceSeason, targetSeason, writesStarted: false };
+      return { success: false, action: 'WORLD_BUILDING', reason: 'SEQUENTIAL_PUBLICATION_WINDOW_EXPIRED', sourceSeason, targetSeason, writesStarted: false };
     }
   } else {
     try {
@@ -1364,14 +1368,14 @@ export async function publishPreparedSeason() {
           calendarRevision: Number(initial.preparedCalendarRevision || 0),
           phase: String(initial.phase || ''),
           planRef,
-          validatePlan: (candidate: any, currentConfig: any) => validateRolloverPlan(candidate, planSourceSeason, targetSeason).valid &&
+          validatePlan: (candidate: any) => candidate?.mode !== 'recovery_carry_forward' &&
+            validateRolloverPlan(candidate, sourceSeason, targetSeason).valid &&
             isRolloverPlanPublicationReady(candidate) &&
-            (!recoveryMode || getRecoveryRolloverPlanSignature(candidate) === currentConfig.preparedRolloverPlanSignature) &&
             isPlanBoundToValidatedSourceArchive(sourceArchiveValidation, candidate),
-          publicationDeadlineMs: overdueRecoveryMode ? preparedStartMs : lifecycle!.publicationDeadlineAt.getTime(),
-          activationAtMs: overdueRecoveryMode ? preparedStartMs : lifecycle!.activationAt.getTime(),
-          allowOverdueRecovery: overdueRecoveryMode,
-          activationEndAtMs: overdueRecoveryMode ? preparedNextStartMs : undefined,
+          publicationDeadlineMs: overdueSequentialPublication ? preparedStartMs : lifecycle!.publicationDeadlineAt.getTime(),
+          activationAtMs: overdueSequentialPublication ? preparedStartMs : lifecycle!.activationAt.getTime(),
+          allowOverdueRecovery: overdueSequentialPublication,
+          activationEndAtMs: overdueSequentialPublication ? preparedNextStartMs : undefined,
         },
         {
           ref: configRef,
@@ -1399,8 +1403,8 @@ export async function publishPreparedSeason() {
       preparedWorldReady: true,
       published: true,
       activated: false,
-      publicationDeadline: overdueRecoveryMode ? new Date(preparedStartMs).toISOString() : lifecycle!.publicationDeadlineAt.toISOString(),
-      activationAt: overdueRecoveryMode ? new Date(preparedStartMs).toISOString() : lifecycle!.activationAt.toISOString(),
+      publicationDeadline: overdueSequentialPublication ? new Date(preparedStartMs).toISOString() : lifecycle!.publicationDeadlineAt.toISOString(),
+      activationAt: overdueSequentialPublication ? new Date(preparedStartMs).toISOString() : lifecycle!.activationAt.toISOString(),
       ...readiness,
     };
   } finally {
@@ -1492,7 +1496,8 @@ export async function activatePublishedSeason() {
   const activationPlanSnap = await planRef.get();
   const activationPlan = activationPlanSnap.exists ? activationPlanSnap.data() || {} : null;
   if (!activationPlan ||
-      !validateRolloverPlan(activationPlan, recoveryMode ? targetSeason - 1 : sourceSeason, targetSeason).valid ||
+      activationPlan?.mode === 'recovery_carry_forward' ||
+      !validateRolloverPlan(activationPlan, sourceSeason, targetSeason).valid ||
       !isRolloverPlanPublicationReady(activationPlan)) {
     return { success: false, action: 'WORLD_NOT_READY', reason: 'ROLLOVER_PLAN_INVALID', sourceSeason, targetSeason, writesStarted: false };
   }
@@ -1512,21 +1517,12 @@ export async function activatePublishedSeason() {
     calendarRevision: CALENDAR_REVISION,
     activationAtMs,
     nextSeasonStartMs: preparedNextStartMs,
-    multiSeasonRecovery,
-    recoveryMode,
-    isPlanReady: (plan, currentConfig) => {
-      const validPlan = validateRolloverPlan(plan, recoveryMode ? targetSeason - 1 : sourceSeason, targetSeason).valid &&
-        isRolloverPlanPublicationReady(plan) &&
-        isPlanBoundToValidatedSourceArchive(sourceArchiveValidation, plan);
-      // Recovery plans seed the target slots and standings. Re-reading a merely
-      // valid plan is insufficient: it must still be the exact immutable plan
-      // used by the calendar build, or activation could publish different teams.
-      const recoveryPlanUnchanged = !recoveryMode || (
-        compareRecoveryRolloverPlans(activationPlan, plan).same &&
-        getRecoveryRolloverPlanSignature(plan) === currentConfig.preparedRolloverPlanSignature
-      );
-      return validPlan && recoveryPlanUnchanged;
-    },
+    multiSeasonRecovery: false,
+    recoveryMode: false,
+    isPlanReady: (plan) => plan?.mode !== 'recovery_carry_forward' &&
+      validateRolloverPlan(plan, sourceSeason, targetSeason).valid &&
+      isRolloverPlanPublicationReady(plan) &&
+      isPlanBoundToValidatedSourceArchive(sourceArchiveValidation, plan),
     buildUpdate: (current, plan) => ({
       activeSeasonNumber: targetSeason,
       phase: 'REGULAR_SEASON',
@@ -1546,10 +1542,10 @@ export async function activatePublishedSeason() {
       preparedRecoveryMode: FieldValue.delete(),
       preparedRolloverPlanSignature: FieldValue.delete(),
       recoveryTargetSeason: FieldValue.delete(),
-      retainedArchiveSeason: recoveryMode ? (plan.retainedArchiveSeason !== null && plan.retainedArchiveSeason !== undefined && Number.isSafeInteger(Number(plan.retainedArchiveSeason)) ? Number(plan.retainedArchiveSeason) : null) : sourceSeason,
+      retainedArchiveSeason: sourceSeason,
       historyCleanupPending: true,
       historyCleanupTargetSeason: targetSeason,
-      lastRecoverySkippedSeasons: recoveryMode ? (Array.isArray(plan.skippedSeasons) ? plan.skippedSeasons : []) : FieldValue.delete(),
+      lastRecoverySkippedSeasons: FieldValue.delete(),
       activatedAt: FieldValue.serverTimestamp(),
       updatedAt: FieldValue.serverTimestamp(),
     }),
@@ -1769,8 +1765,11 @@ export async function ensureSeasonCalendar(
       return { success: false, worldReady: false, action: 'WORLD_BUILDING', reason: 'SEASON_DATE_CONFIG_INVALID', writesStarted: false };
     }
 
-    if (datePlan.expectedSeasonNumber > sourceSeason + 1) {
-      targetSeason = datePlan.expectedSeasonNumber;
+    if (datePlan.expectedSeasonNumber > sourceSeason) {
+      targetSeason = resolveNextSeasonTarget(sourceSeason, datePlan.expectedSeasonNumber);
+    }
+    if (targetSeason > sourceSeason) {
+      targetSeason = resolveNextSeasonTarget(sourceSeason, targetSeason);
     }
   }
 
