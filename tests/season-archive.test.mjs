@@ -243,7 +243,7 @@ test('recovered archive cleanup does not resume a legacy prune intent with a pen
     { id: 'S2', archive: recovered, matches: [], historyStatus: 'SKIPPED' },
   ], 4, null);
   assert.equal(finalized.ready, true);
-  assert.deepEqual(finalized.pruneIds, []);
+  assert.deepEqual(finalized.pruneIds, ['S2']);
 });
 
 test('matching legacy prune intent safely resumes deletion of an older archive', async () => {
@@ -345,4 +345,19 @@ test('recovered season archive refuses incomplete or duplicate starting particip
   });
   assert.equal(result.ready, false);
   assert.equal(result.reason, 'CARRY_FORWARD_TEAM_OR_RANK_CONFLICT');
+});
+
+
+test('archive retention remains a rolling single-season window after many transitions', async () => {
+  const { resolveArchivePrunePlan } = await import('../src/app/actions/season-archive.ts');
+  const seasons = Array.from({ length: 5 }, (_, index) => makeSeasonArchive(index + 1));
+  const archives = seasons.map((entry, index) => {
+    entry.archive.status = 'completed';
+    entry.archive.completedAt = new Date(Date.UTC(2026, 0, index + 1)).toISOString();
+    return { id: `S${index + 1}`, archive: entry.archive, matches: entry.matches };
+  });
+  const result = resolveArchivePrunePlan(archives, 6, 5);
+  assert.equal(result.ready, true);
+  assert.equal(result.retainedArchiveSeason, 5);
+  assert.deepEqual(result.pruneIds, ['S1', 'S2', 'S3', 'S4']);
 });
