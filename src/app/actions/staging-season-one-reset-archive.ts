@@ -30,6 +30,7 @@ const DOCUMENT_COLLECTIONS = new Set([
   'match_player_effects_v1',
   'economy_transactions',
   'match_consequence_receipts',
+  'market_v7',
 ]);
 
 function isAllowedSourcePath(path: string): boolean {
@@ -64,6 +65,7 @@ function isSeasonOneDocumentIdentity(path: string, data: Record<string, any>): b
       Number(data.season) === 1 && Number(data.version) === 140 && data.leagueId === 'ALPHA';
   }
   if (collection === 'players_v14') return String(data.id || '') === id;
+  if (collection === 'market_v7') return true; // Whole legacy market snapshot; no account/auth documents are included.
   if (collection === 'cup_matches') {
     return /^cup_S1_R1_M(?:0[1-9]|[1-5][0-9])$/.test(id) &&
       Number(data.season) === 1 && data.cupId === 'cup_s1_lALPHA';
