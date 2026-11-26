@@ -54,11 +54,11 @@ test('ordinary calendar blocks incomplete rollover sources and only cleans histo
   const source = readFileSync(resolve(root, 'src/app/actions/season-calendar.ts'), 'utf8');
   const builder = source.slice(source.indexOf('async function buildSeasonCalendar'));
   const activation = source.slice(source.indexOf('export async function activatePublishedSeason'));
-  assert.match(builder, /prepareSeasonRollover\\(db, activeSeasonBefore, seasonNumber\\)/);
-  assert.match(builder, /waitingForSeasonResults:\\s*true/);
-  assert.match(builder, /resolveNextSeasonTarget\\(/);
+  assert.match(builder, /prepareSeasonRollover\(db, activeSeasonBefore, seasonNumber\)/);
+  assert.match(builder, /waitingForSeasonResults:\s*true/);
+  assert.match(builder, /resolveNextSeasonTarget\(/);
   assert.equal(source.includes('prepareRecoveryCarryForwardPlan(db, activeSeasonBefore'), false);
-  assert.match(activation, /pruneSeasonHistoryAfterActivation\\(/);
+  assert.match(activation, /pruneSeasonHistoryAfterActivation\(/);
 });
 
 test('incomplete source seasons cannot be silently skipped by ordinary calendar generation', () => {
