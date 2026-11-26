@@ -15,7 +15,7 @@ async function withIsolatedFirestore(t) {
   const app = initializeApp({ projectId }, `auction-expiry-test-${randomUUID()}`);
   const firestore = getFirestore(app);
   const prefix = `auctionExpiryTest_${randomUUID().replaceAll('-', '')}_`;
-  const names = ['market_v7', 'players_v14', 'economy_transactions', 'transfer_history', 'notifications_v7'];
+  const names = ['market_v7', 'players_v14', 'economy_transactions', 'transfer_history', 'notifications_v7', 'system_v1'];
   const db = {
     collection: name => firestore.collection(prefix + name),
     runTransaction: callback => firestore.runTransaction(callback),
@@ -49,6 +49,46 @@ function expiredLot(overrides = {}) {
     ...overrides,
   };
 }
+
+
+test('Firestore Emulator blocks standard and special bids while a fresh Season 1 reset is active', {
+  skip: !emulatorHost,
+}, async t => {
+  const { db } = await withIsolatedFirestore(t);
+  const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+
+  await db.collection('system_v1').doc('season_config').set({
+    stagingSeasonOneResetInProgress: true,
+    worldReady: false,
+  });
+  await db.collection('players_v14').doc('standard-buyer').set({ credits: 1000, ownedPlayers: [] });
+  await db.collection('players_v14').doc('pro-buyer').set({ crystals: 1000, ownedPlayers: [] });
+  await db.collection('market_v7').doc('standard-reset-fence').set({
+    sellerId: 'seller', currentBid: 100, startingPrice: 100, currency: 'credits',
+    expiresAt, highestBidderId: null, bidders: [],
+  });
+  await db.collection('market_v7').doc('pro-reset-fence').set({
+    sellerId: 'seller', currentBid: 100, startingPrice: 100, currency: 'crystals',
+    isPro: true, expiresAt, highestBidderId: null, bidders: [],
+    heroData: { id: 'pro-reset-player', name: 'Pro Reset Player' },
+  });
+
+  await assert.rejects(
+    placeStandardMarketBidWithDb(db, 'standard-buyer', 'standard-reset-fence', 103),
+    /STAGING_SEASON_ONE_RESET_IN_PROGRESS/,
+  );
+  await assert.rejects(
+    placeSpecialMarketBidWithDb(db, 'pro-buyer', 'pro-reset-fence', 103, 'pro'),
+    /STAGING_SEASON_ONE_RESET_IN_PROGRESS/,
+  );
+
+  assert.equal((await db.collection('players_v14').doc('standard-buyer').get()).get('credits'), 1000);
+  assert.equal((await db.collection('players_v14').doc('pro-buyer').get()).get('crystals'), 1000);
+  assert.equal((await db.collection('market_v7').doc('standard-reset-fence').get()).get('highestBidderId'), null);
+  assert.equal((await db.collection('market_v7').doc('pro-reset-fence').get()).get('highestBidderId'), null);
+  assert.equal((await db.collection('economy_transactions').get()).size, 0);
+  assert.equal((await db.collection('notifications_v7').get()).size, 0);
+});
 
 
 test('Firestore Emulator refunds the outbid manager and charges only the incremental amount for a same-bidder raise', {
