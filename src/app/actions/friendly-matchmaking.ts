@@ -3,6 +3,7 @@
 import { FieldPath, FieldValue, Timestamp } from 'firebase-admin/firestore';
 import type { Firestore } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
+import { assertStagingSeasonOneResetNotInProgress } from '@/app/lib/staging-season-one-write-fence';
 import { requireServerActor } from '@/lib/server-auth';
 import { buildMatchTeamSnapshot } from '@/app/lib/match-simulation';
 import { runMatchEngine } from '@/app/lib/match-engine';
@@ -62,6 +63,7 @@ export async function createFriendlyLobbyAction(idToken: string) {
   const expiresAt = Timestamp.fromMillis(now + LOBBY_TTL_MS);
 
   await db.runTransaction(async (t) => {
+    await assertStagingSeasonOneResetNotInProgress(t, db);
     const current = await t.get(lobbyRef);
     await assertFriendlyAvailabilityInTransaction(t, db, uid);
     if (current.exists) {
@@ -104,6 +106,7 @@ export async function cancelFriendlyLobbyAction(idToken: string) {
   const lobbyRef = db.collection('friendly_lobbies_v3').doc(uid);
 
   await db.runTransaction(async (t) => {
+    await assertStagingSeasonOneResetNotInProgress(t, db);
     const snap = await t.get(lobbyRef);
     if (!snap.exists) return;
     const data = snap.data() || {};
@@ -121,6 +124,7 @@ export async function expireFriendlyLobbyAction(idToken: string) {
   const lobbyRef = db.collection('friendly_lobbies_v3').doc(uid);
 
   await db.runTransaction(async (t) => {
+    await assertStagingSeasonOneResetNotInProgress(t, db);
     const snap = await t.get(lobbyRef);
     if (!snap.exists) return;
     const data = snap.data() || {};
@@ -141,6 +145,7 @@ export async function challengeFriendlyLobbyAction(idToken: string, lobbyId: str
   const now = Date.now();
 
   const transactionResult = await db.runTransaction(async (t) => {
+    await assertStagingSeasonOneResetNotInProgress(t, db);
     const snap = await t.get(lobbyRef);
     if (!snap.exists) throw new Error('FRIENDLY_LOBBY_NOT_FOUND');
     const data = snap.data() || {};
@@ -187,6 +192,7 @@ export async function respondFriendlyChallengeAction(
   const now = Date.now();
 
   const result = await db.runTransaction(async (t) => {
+    await assertStagingSeasonOneResetNotInProgress(t, db);
     const lobbySnap = await t.get(lobbyRef);
     if (!lobbySnap.exists) throw new Error('FRIENDLY_LOBBY_NOT_FOUND');
     const lobby = lobbySnap.data() || {};
@@ -266,6 +272,7 @@ async function resolveFriendlyMatchDocument(matchId: string, collectionName: 'fr
   const now = Timestamp.now();
 
   return db.runTransaction(async (t) => {
+    await assertStagingSeasonOneResetNotInProgress(t, db);
     const matchSnap = await t.get(matchRef);
     if (!matchSnap.exists) throw new Error('FRIENDLY_MATCH_NOT_FOUND');
     const match = matchSnap.data() || {};
