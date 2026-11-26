@@ -279,6 +279,9 @@ export function resolveArchivePrunePlan(
             Number(archive.prunePolicyVersion) !== 1) {
           return { ready: false as const, reason: 'ARCHIVE_PRUNE_MARKER_CONFLICT', archiveId: item.id, pruneIds: [] as string[] };
         }
+        // The durable intent is written only after the complete archive and all
+        // matches have passed preflight. Once deletion starts, a retry must not
+        // require the original 840 matches to still exist.
       } else {
         const validation = validateSeasonArchiveSnapshot(archive, item.matches || []);
         if (!validation.valid) {
