@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { buildCarryForwardGroups } from '../src/app/actions/season-rollover-plan.ts';
+import { buildCarryForwardGroups, buildPromotionRelegationGroups } from '../src/app/actions/season-rollover-plan.ts';
 
 function sourceGroups() {
   const result = {};
@@ -152,4 +152,35 @@ test('prepared recovery mode survives the final calendar readiness commit', () =
   const expected = "preparedRecoveryMode: directRecovery || rolloverPlan?.mode === 'recovery_carry_forward',";
   assert.equal(source.split(expected).length - 1, 2,
     'both the initial prepared-world commit and final readiness commit must preserve recovery mode');
+});
+
+test('two consecutive promotion/relegation cycles preserve exactly 120 unique clubs across 15 groups', () => {
+  const makeStandings = groups => Object.fromEntries(Object.entries(groups).map(([key, rows]) => [
+    key,
+    [...rows].sort((a, b) => Number(a.rank) - Number(b.rank)).map((row, index) => ({
+      ...row,
+      rank: index + 1,
+      points: 21 - index,
+      matchesPlayed: 14,
+    })),
+  ]));
+
+  const first = buildPromotionRelegationGroups(makeStandings(sourceGroups()));
+  assert.equal(first.ready, true);
+  assert.equal(Object.keys(first.groups).length, 15);
+  assert.equal(Object.values(first.groups).reduce((sum, rows) => sum + rows.length, 0), 120);
+  assert.equal(new Set(Object.values(first.groups).flat().map(row => row.id)).size, 120);
+
+  // Simulate the next completed season with the same roster, but a fresh final
+  // ranking. The second transition must be independently valid and must not
+  // duplicate or lose any club after the first movement has been applied.
+  const second = buildPromotionRelegationGroups(makeStandings(first.groups));
+  assert.equal(second.ready, true);
+  assert.equal(Object.keys(second.groups).length, 15);
+  assert.equal(Object.values(second.groups).reduce((sum, rows) => sum + rows.length, 0), 120);
+  assert.equal(new Set(Object.values(second.groups).flat().map(row => row.id)).size, 120);
+  assert.equal(Object.values(second.groups).every(rows =>
+    rows.length === 8 && rows.every((row, index) => row.rank === index + 1 &&
+      row.matchesPlayed === 0 && row.points === 0)
+  ), true);
 });
