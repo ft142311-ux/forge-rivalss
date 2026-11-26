@@ -61,3 +61,23 @@ export function isTournamentStageMatchSetComplete(
   }
   return expected.size === 0;
 }
+export type TournamentGroupOutcome = 'home_win' | 'draw' | 'away_win';
+
+/**
+ * Group standings are decided by the BO2 series result, not the aggregate
+ * in-game score. A 1-1 split remains a draw even when the two game scores
+ * do not add up to equal totals.
+ */
+export function resolveTournamentGroupOutcome(
+  winnerSide: unknown,
+  homeId: unknown,
+  awayId: unknown,
+): TournamentGroupOutcome | null {
+  const home = String(homeId || '').trim();
+  const away = String(awayId || '').trim();
+  if (!home || !away || home === away) return null;
+  if (winnerSide === 'home') return 'home_win';
+  if (winnerSide === 'away') return 'away_win';
+  if (winnerSide === 'draw') return 'draw';
+  return null;
+}

@@ -11,7 +11,7 @@ import { buildMatchTeamSnapshot, createDeterministicBotSquad } from '@/app/lib/m
 import { runMatchEngine } from '@/app/lib/match-engine';
 import { MATCH_COLLECTIONS } from '@/app/lib/match-storage';
 import { isTournamentMatchLeaseExpired, TOURNAMENT_MATCH_LEASE_MS } from '@/app/lib/tournament-match-lease';
-import { isTournamentStageMatchSetComplete } from '@/app/lib/tournament-stage-utils';
+import { isTournamentStageMatchSetComplete, resolveTournamentGroupOutcome } from '@/app/lib/tournament-stage-utils';
 import { getTournamentRegistrationCapacity, getTournamentRegistrationWindow, normalizeTournamentRegisteredIds } from '@/app/lib/tournament-registration-window';
 import { isTournamentStageFixtureCompatible } from '@/app/lib/tournament-stage-transition';
 
@@ -522,6 +522,13 @@ async function resolveTournamentMatch(db: any, tournamentId: string, matchId: st
     if (!winnerId && m.stage !== 'groups') {
       winnerId = home.id === away.id ? home.id : (simulation.homeStrength >= simulation.awayStrength ? home.id : away.id);
     }
+    const groupOutcome = m.stage === 'groups'
+      ? resolveTournamentGroupOutcome(simulation.winnerSide, home.id, away.id)
+      : null;
+    if (m.stage === 'groups' && !groupOutcome) {
+      throw new Error('TOURNAMENT_GROUP_OUTCOME_INVALID');
+    }
+    const resolvedWinnerSide = winnerId === home.id ? 'home' : winnerId === away.id ? 'away' : 'draw';
 
     const homeScore = simulation.games.reduce((s, g) => s + g.homeScore, 0);
     const awayScore = simulation.games.reduce((s, g) => s + g.awayScore, 0);
@@ -560,6 +567,8 @@ async function resolveTournamentMatch(db: any, tournamentId: string, matchId: st
         result: simulation,
         winnerId,
         winnerName,
+        winnerSide: resolvedWinnerSide,
+        seriesScore: simulation.seriesScore,
         homeScore,
         awayScore,
       });
@@ -584,8 +593,9 @@ async function resolveTournamentMatch(db: any, tournamentId: string, matchId: st
         awayScore,
         scoreA: homeScore,
         scoreB: awayScore,
-        seriesScore: `${homeScore}-${awayScore}`,
+        seriesScore: simulation.seriesScore,
         winnerId,
+        winnerSide: resolvedWinnerSide,
         winner: winnerName,
         simulation,
         games: simulation.games,
@@ -607,19 +617,22 @@ async function resolveTournamentMatch(db: any, tournamentId: string, matchId: st
         awayRow.against = Number(awayRow.against || 0) + homeScore;
         homeRow.diff = homeRow.for - homeRow.against;
         awayRow.diff = awayRow.for - awayRow.against;
-        if (homeScore === awayScore) {
+        if (!groupOutcome) throw new Error('TOURNAMENT_GROUP_OUTCOME_INVALID');
+        if (groupOutcome === 'draw') {
           homeRow.draws = Number(homeRow.draws || 0) + 1;
           awayRow.draws = Number(awayRow.draws || 0) + 1;
           homeRow.points = Number(homeRow.points || 0) + POINTS_DRAW;
           awayRow.points = Number(awayRow.points || 0) + POINTS_DRAW;
-        } else if (winnerId === home.id) {
+        } else if (groupOutcome === 'home_win') {
           homeRow.wins = Number(homeRow.wins || 0) + 1;
           homeRow.points = Number(homeRow.points || 0) + POINTS_WIN;
           awayRow.losses = Number(awayRow.losses || 0) + 1;
-        } else {
+        } else if (groupOutcome === 'away_win') {
           awayRow.wins = Number(awayRow.wins || 0) + 1;
           awayRow.points = Number(awayRow.points || 0) + POINTS_WIN;
           homeRow.losses = Number(homeRow.losses || 0) + 1;
+        } else {
+          throw new Error('TOURNAMENT_GROUP_OUTCOME_INVALID');
         }
         groupRows.sort((a: any, b: any) => b.points - a.points || b.diff - a.diff || b.wins - a.wins || a.name.localeCompare(b.name));
         t.update(groupRef, { teams: groupRows, updatedAt: FieldValue.serverTimestamp() });

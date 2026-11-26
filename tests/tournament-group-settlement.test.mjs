@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { resolveTournamentGroupOutcome } from '../src/app/lib/tournament-stage-utils.ts';
 
 const source = readFileSync(new URL('../src/app/actions/tournament-system.ts', import.meta.url), 'utf8');
 
@@ -58,4 +59,30 @@ test('stage transition reuses only a fully compatible scheduled fixture', () => 
   assert.equal(isTournamentStageFixtureCompatible({ ...existing, round: 2 }, expected), false);
   assert.equal(isTournamentStageFixtureCompatible({ ...existing, tournamentId: 'other-cup' }, expected), false);
   assert.equal(isTournamentStageFixtureCompatible({ ...existing, awayId: 'team-c' }, expected), false);
+});
+
+test('BO2 group standings use the series winner, not aggregate game-score totals', () => {
+  // A 1-1 split can have unequal aggregate in-game scores and is still a draw.
+  assert.equal(resolveTournamentGroupOutcome('draw', 'home-team', 'away-team'), 'draw');
+  // A series winner keeps the win even if aggregate game score is lower.
+  assert.equal(resolveTournamentGroupOutcome('home', 'home-team', 'away-team'), 'home_win');
+  assert.equal(resolveTournamentGroupOutcome('away', 'home-team', 'away-team'), 'away_win');
+});
+
+test('invalid BO2 outcomes or participant identities fail closed', () => {
+  assert.equal(resolveTournamentGroupOutcome('unknown', 'home-team', 'away-team'), null);
+  assert.equal(resolveTournamentGroupOutcome('draw', '', 'away-team'), null);
+  assert.equal(resolveTournamentGroupOutcome('home', 'same-team', 'same-team'), null);
+});
+
+test('group settlement persists the actual series score and applies points from the series outcome', () => {
+  const start = source.indexOf('async function resolveTournamentMatch');
+  const end = source.indexOf('async function stageMatchesDone', start);
+  const resolver = source.slice(start, end);
+  assert.match(resolver, /resolveTournamentGroupOutcome\(simulation\.winnerSide, home\.id, away\.id\)/);
+  assert.match(resolver, /seriesScore: simulation\.seriesScore/);
+  assert.match(resolver, /winnerSide: resolvedWinnerSide/);
+  assert.match(resolver, /if \(groupOutcome === 'draw'\)/);
+  assert.match(resolver, /else if \(groupOutcome === 'home_win'\)/);
+  assert.doesNotMatch(resolver, /homeScore === awayScore/);
 });
