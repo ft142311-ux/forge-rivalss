@@ -320,12 +320,16 @@ test('Firestore Emulator keeps Youth bids in credits and applies the same escrow
 }, async t => {
   const { db } = await withIsolatedFirestore(t);
   const now = Date.now();
-  await db.collection('players_v14').doc('seller-1').set({ credits: 0 });
+  const expiresAt = new Date(now + 60 * 60 * 1000).toISOString();
+  await db.collection('players_v14').doc('seller-1').set({
+    credits: 0,
+    youthAcademyPlayers: [{ id: 'youth-player', name: 'Youth Player', onTransferUntil: expiresAt, transferMarketId: 'youth-lot' }],
+  });
   await db.collection('players_v14').doc('youth-bidder').set({ credits: 800, crystals: 500 });
   await db.collection('market_v7').doc('youth-lot').set({
     sellerId: 'seller-1', isYouth: true, currency: 'credits',
     currentBid: 100, startingPrice: 100, highestBidderId: null,
-    bidders: [], expiresAt: new Date(now + 60 * 60 * 1000).toISOString(),
+    bidders: [], expiresAt, heroData: { id: 'youth-player', name: 'Youth Player' },
   });
 
   await placeSpecialMarketBidWithDb(db, 'youth-bidder', 'youth-lot', 250, 'youth', now);
@@ -343,10 +347,11 @@ test('Firestore Emulator completes a Youth bid and expiry settlement in credits 
 }, async t => {
   const { db } = await withIsolatedFirestore(t);
   const now = Date.now();
+  const expiresAt = new Date(now + 60 * 60 * 1000).toISOString();
   await db.collection('players_v14').doc('youth-seller').set({
     credits: 100,
     crystals: 900,
-    youthAcademyPlayers: [{ id: 'youth-player', name: 'Youth Player', onTransferUntil: 'reserved', transferMarketId: 'youth-flow' }],
+    youthAcademyPlayers: [{ id: 'youth-player', name: 'Youth Player', onTransferUntil: expiresAt, transferMarketId: 'youth-flow' }],
   });
   await db.collection('players_v14').doc('youth-buyer').set({
     credits: 800,
@@ -362,7 +367,7 @@ test('Firestore Emulator completes a Youth bid and expiry settlement in credits 
     startingPrice: 100,
     highestBidderId: null,
     bidders: [],
-    expiresAt: new Date(now + 60 * 60 * 1000).toISOString(),
+    expiresAt,
     heroData: { id: 'youth-player', name: 'Youth Player' },
   });
 
@@ -1196,4 +1201,112 @@ test('Firestore Emulator extends the seller reservation together with an anti-sn
   assert.ok(Date.parse(lot.get('expiresAt')) > Date.parse(initialExpiry));
   assert.equal(sellerPlayer.onTransferUntil, lot.get('expiresAt'));
   assert.equal(sellerPlayer.transferMarketId, 'anti-snipe-lot');
+});
+
+test('Firestore Emulator extends the Youth seller reservation with an anti-sniping lot extension', {
+  skip: !emulatorHost,
+}, async t => {
+  const { db } = await withIsolatedFirestore(t);
+  const now = Date.now();
+  const initialExpiry = new Date(now + 5 * 60 * 1000).toISOString();
+  const extendedExpiry = new Date(now + 10 * 60 * 1000).toISOString();
+  await db.collection('players_v14').doc('youth-seller').set({
+    credits: 0,
+    youthAcademyPlayers: [{
+      id: 'youth-player',
+      name: 'Youth Player',
+      onTransferUntil: initialExpiry,
+      transferMarketId: 'youth-anti-snipe',
+    }],
+  });
+  await db.collection('players_v14').doc('youth-buyer').set({ credits: 500, youthAcademyPlayers: [] });
+  const lotRef = db.collection('market_v7').doc('youth-anti-snipe');
+  await lotRef.set({
+    sellerId: 'youth-seller', isYouth: true, currency: 'credits',
+    currentBid: 100, startingPrice: 100, highestBidderId: null, bidders: [],
+    expiresAt: initialExpiry, heroData: { id: 'youth-player', name: 'Youth Player' },
+  });
+
+  await placeSpecialMarketBidWithDb(db, 'youth-buyer', 'youth-anti-snipe', 250, 'youth', now);
+  assert.equal((await lotRef.get()).get('expiresAt'), extendedExpiry);
+  const sellerAfterBid = await db.collection('players_v14').doc('youth-seller').get();
+  assert.equal(sellerAfterBid.get('youthAcademyPlayers')[0].onTransferUntil, extendedExpiry);
+
+  await lotRef.update({ expiresAt: new Date(now - 1).toISOString() });
+  const result = await runTransferMarketExpirySweepWithDb(db);
+  assert.equal(result.success, true);
+  assert.equal(result.sold, 1);
+  assert.deepEqual((await db.collection('players_v14').doc('youth-buyer').get()).get('youthAcademyPlayers').map(player => player.id), ['youth-player']);
+  assert.deepEqual((await db.collection('players_v14').doc('youth-seller').get()).get('youthAcademyPlayers'), []);
+});
+
+test('Firestore Emulator rejects a Youth bid against a stale seller reservation before charging escrow', {
+  skip: !emulatorHost,
+}, async t => {
+  const { db } = await withIsolatedFirestore(t);
+  const now = Date.now();
+  const expiresAt = new Date(now + 60 * 60 * 1000).toISOString();
+  await db.collection('players_v14').doc('youth-seller').set({
+    credits: 0,
+    youthAcademyPlayers: [{
+      id: 'youth-player',
+      onTransferUntil: expiresAt,
+      transferMarketId: 'different-lot',
+    }],
+  });
+  await db.collection('players_v14').doc('youth-buyer').set({ credits: 500 });
+  await db.collection('market_v7').doc('stale-youth-lot').set({
+    sellerId: 'youth-seller', isYouth: true, currency: 'credits',
+    currentBid: 100, startingPrice: 100, highestBidderId: null,
+    expiresAt, heroData: { id: 'youth-player' },
+  });
+
+  await assert.rejects(
+    placeSpecialMarketBidWithDb(db, 'youth-buyer', 'stale-youth-lot', 250, 'youth', now),
+    /MARKET_LOT_STALE/,
+  );
+  assert.equal((await db.collection('players_v14').doc('youth-buyer').get()).get('credits'), 500);
+  assert.equal((await db.collection('economy_transactions').get()).size, 0);
+  assert.equal((await db.collection('market_v7').doc('stale-youth-lot').get()).get('highestBidderId'), null);
+});
+
+test('Firestore Emulator refunds escrow and unlocks a Youth player when its reservation expires before the lot', {
+  skip: !emulatorHost,
+}, async t => {
+  const { db } = await withIsolatedFirestore(t);
+  const now = Date.now();
+  const lotExpiry = new Date(now - 60 * 1000).toISOString();
+  const shorterLock = new Date(now - 120 * 1000).toISOString();
+  await db.collection('players_v14').doc('youth-seller').set({
+    credits: 0,
+    youthAcademyPlayers: [{
+      id: 'youth-player',
+      onTransferUntil: shorterLock,
+      transferMarketId: 'short-youth-lock',
+    }],
+  });
+  await db.collection('players_v14').doc('youth-buyer').set({
+    credits: 250,
+    youthAcademyPlayers: [],
+  });
+  const lotRef = db.collection('market_v7').doc('short-youth-lock');
+  await lotRef.set({
+    sellerId: 'youth-seller', isYouth: true, currency: 'credits',
+    currentBid: 250, startingPrice: 100, highestBidderId: 'youth-buyer',
+    escrowCurrency: 'credits', escrowedAmount: 250,
+    expiresAt: lotExpiry, heroData: { id: 'youth-player', name: 'Youth Player' },
+  });
+
+  const result = await runTransferMarketExpirySweepWithDb(db);
+  assert.equal(result.success, true);
+  assert.equal(result.sold, 0);
+  assert.equal(result.expiredWithoutSale, 1);
+  assert.equal((await lotRef.get()).exists, false);
+  const seller = await db.collection('players_v14').doc('youth-seller').get();
+  assert.equal(seller.get('youthAcademyPlayers')[0].transferMarketId, null);
+  assert.equal(seller.get('youthAcademyPlayers')[0].onTransferUntil, null);
+  const buyer = await db.collection('players_v14').doc('youth-buyer').get();
+  assert.equal(buyer.get('credits'), 500);
+  assert.equal((await db.collection('transfer_history').get()).size, 0);
+  assert.equal((await db.collection('economy_transactions').where('referenceId', '==', 'short-youth-lock').get()).size, 1);
 });

@@ -34,6 +34,34 @@ async function assertStandardMarketSellerListing(tx: any, db: any, lot: any, mar
   return { sellerRef, players, playerIndex };
 }
 
+async function assertYouthMarketSellerListing(tx: any, db: any, lot: any, marketId: string, lotExpiryMs: number) {
+  const sellerId = String(lot.sellerId || '').trim();
+  const playerId = String(lot.heroData?.id || lot.playerId || '').trim();
+  if (!sellerId || sellerId === 'system') throw new Error('MARKET_SELLER_UNAVAILABLE');
+  if (!playerId) throw new Error('MARKET_PLAYER_UNAVAILABLE');
+
+  const sellerRef = db.collection('players_v14').doc(sellerId);
+  const sellerSnap = await tx.get(sellerRef);
+  if (!sellerSnap.exists) throw new Error('MARKET_SELLER_UNAVAILABLE');
+  const seller = sellerSnap.data() || {};
+  if (seller.youthAcademyPlayers !== undefined && seller.youthAcademyPlayers !== null &&
+      !Array.isArray(seller.youthAcademyPlayers)) {
+    throw new Error('MARKET_SELLER_ROSTER_INVALID');
+  }
+  const players: any[] = Array.isArray(seller.youthAcademyPlayers) ? [...seller.youthAcademyPlayers] : [];
+  const matches = players.filter(player => String(player?.id || '') === playerId);
+  if (matches.length !== 1) throw new Error('MARKET_PLAYER_NOT_LISTED');
+
+  const playerIndex = players.findIndex(player => String(player?.id || '') === playerId);
+  const player = players[playerIndex];
+  const lockId = String(player.transferMarketId || '').trim();
+  const lockUntil = resolveMarketBidExpiryMs(player.onTransferUntil);
+  if (lockId !== marketId || lockUntil === null || lockUntil < lotExpiryMs) {
+    throw new Error('MARKET_LOT_STALE');
+  }
+  return { sellerRef, players, playerIndex };
+}
+
 export async function placeSpecialMarketBidWithDb(
   db: any,
   uid: string,
@@ -76,6 +104,9 @@ export async function placeSpecialMarketBidWithDb(
     const rawExpiry = lot.expiresAt;
     const expiryMs = rawExpiry?.toMillis?.() ?? (typeof rawExpiry === 'number' ? rawExpiry : Date.parse(String(rawExpiry || '')));
     if (!Number.isFinite(expiryMs) || expiryMs <= now) throw new Error('MARKET_LOT_EXPIRED');
+    const youthSellerListing = marketKind === 'youth'
+      ? await assertYouthMarketSellerListing(tx, db, lot, marketId, expiryMs)
+      : null;
 
     const currentBid = resolveAuctionPrice(lot.currentBid, lot.startingPrice, 0);
     const minimumBid = Math.ceil(currentBid * 1.03);
@@ -91,6 +122,9 @@ export async function placeSpecialMarketBidWithDb(
     if (bid > maxBid) throw new Error('BID_TOO_HIGH');
     const currency = marketKind === 'pro' ? 'crystals' : 'credits';
     const previousBidderId = String(lot.highestBidderId || lot.highestBidderUid || '');
+    if (previousBidderId && previousBidderId === String(lot.sellerId || '')) {
+      throw new Error('MARKET_PREVIOUS_BIDDER_INVALID');
+    }
     const previousEscrow = resolvePreviousAuctionBidEscrow({
       currency,
       escrowCurrency: lot.escrowCurrency,
@@ -119,6 +153,19 @@ export async function placeSpecialMarketBidWithDb(
     }
 
     const nextExpiry = expiryMs - now < 10 * 60 * 1000 ? now + 10 * 60 * 1000 : expiryMs;
+    const nextExpiryIso = new Date(nextExpiry).toISOString();
+    if (youthSellerListing && nextExpiry > expiryMs) {
+      const youthPlayers = [...youthSellerListing.players];
+      youthPlayers[youthSellerListing.playerIndex] = {
+        ...youthPlayers[youthSellerListing.playerIndex],
+        onTransferUntil: nextExpiryIso,
+        transferMarketId: marketId,
+      };
+      tx.update(youthSellerListing.sellerRef, {
+        youthAcademyPlayers: youthPlayers,
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+    }
     tx.update(bidderRef, {
       [currency]: bidderBalance - chargeAmount,
       updatedAt: FieldValue.serverTimestamp(),
@@ -165,7 +212,7 @@ export async function placeSpecialMarketBidWithDb(
       escrowedAmount: bid,
       escrowCurrency: currency,
       updatedAt: FieldValue.serverTimestamp(),
-      expiresAt: new Date(nextExpiry).toISOString(),
+      expiresAt: nextExpiryIso,
     });
 
     if (previousBidderId && previousBidderId !== uid) {
