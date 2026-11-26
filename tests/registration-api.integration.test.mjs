@@ -377,6 +377,18 @@ test('registration HTTP API enforces its boundary and safely initializes a club'
     assert.equal((await playerRef.get()).exists, false);
     assert.equal((await db.collection('league_slots_v1').doc(targetSlotId).get()).get('status'), 'FREE');
 
+    const duplicateSlotCup = {
+      ...validCup,
+      participants: validCup.participants.map((team, index) => index === 1 ? { ...team, rank: 1 } : team),
+    };
+    await cupRef.set(duplicateSlotCup);
+    const duplicateSlotCupResponse = await request();
+    const duplicateSlotCupBody = await duplicateSlotCupResponse.json();
+    assert.equal(duplicateSlotCupResponse.status, 503);
+    assert.equal(duplicateSlotCupBody.error, 'WORLD_INITIALIZING');
+    assert.equal((await playerRef.get()).exists, false);
+    assert.equal((await db.collection('league_slots_v1').doc(targetSlotId).get()).get('status'), 'FREE');
+
     await cupRef.set(validCup);
 
     // A standings row alone is not enough to replace a bot. The backing

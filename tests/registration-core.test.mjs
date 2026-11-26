@@ -55,6 +55,12 @@ test('registration rejects duplicate, BYE, D1-opening and incomplete-rest Cup fi
   assert.equal(isPyramidCupReadyForRegistration(wrongRestTeams, 3), false);
 });
 
+test('registration rejects duplicate league slot coordinates even when IDs and seeds are unique', () => {
+  const cup = createRegistrationCup(3);
+  const duplicateSlot = { ...cup, participants: cup.participants.map((team, index) => index === 1 ? { ...team, rank: 1 } : team) };
+  assert.equal(isPyramidCupReadyForRegistration(duplicateSlot, 3), false);
+});
+
 test('registration accepts a completed Pyramid Cup only with a recorded champion', () => {
   const cup = createRegistrationCup(3);
   const completed = {
@@ -65,6 +71,8 @@ test('registration accepts a completed Pyramid Cup only with a recorded champion
   };
   assert.equal(isPyramidCupReadyForRegistration(completed, 3), true);
   assert.equal(isPyramidCupReadyForRegistration({ ...completed, winnerId: null }, 3), false);
+  assert.equal(isPyramidCupReadyForRegistration({ ...completed, winnerId: 'OUTSIDE_CUP' }, 3), false);
+  assert.equal(isPyramidCupReadyForRegistration({ ...completed, status: 'COMPLETED' }, 3), true);
 });
 
 test('new clubs start with the canonical 3,000-seat arena capacity', () => {

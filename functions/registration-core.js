@@ -68,10 +68,11 @@ function generateStartingSquad() {
  */
 function isPyramidCupReadyForRegistration(cup, season) {
   const expectedSeason = Number(season);
+  const status = String(cup.status || '').toLowerCase();
   if (!cup || !Number.isSafeInteger(expectedSeason) || expectedSeason < 1) return false;
   if (Number(cup.season) !== expectedSeason ||
       String(cup.leagueId || '') !== 'ALPHA' ||
-      !['active', 'completed'].includes(String(cup.status || '').toLowerCase()) ||
+      !['active', 'completed'].includes(status) ||
       Number(cup.formatVersion) !== 4 ||
       cup.format !== 'D1_REST_OPENING_ROUND' ||
       Number(cup.totalParticipants) !== 120 ||
@@ -83,12 +84,11 @@ function isPyramidCupReadyForRegistration(cup, season) {
 
   const currentRound = Number(cup.currentRound);
   if (!Number.isInteger(currentRound) || currentRound < 1 || currentRound > 7) return false;
-  if (cup.status === 'completed' && (currentRound !== 7 || !String(cup.winnerId || ''))) return false;
-
   const participants = Array.isArray(cup.participants) ? cup.participants : [];
   if (participants.length !== 120) return false;
   const participantById = new Map();
   const participantSeeds = new Set();
+  const participantSlots = new Set();
   const levelCounts = { 1: 0, 2: 0, 3: 0, 4: 0 };
 
   for (const team of participants) {
@@ -102,15 +102,18 @@ function isPyramidCupReadyForRegistration(cup, season) {
         !Number.isInteger(group) || group < 1 || group > Math.pow(2, level - 1) ||
         !Number.isInteger(rank) || rank < 1 || rank > 8 ||
         !Number.isInteger(seed) || seed < 1 || seed > 120 ||
-        participantSeeds.has(seed)) return false;
+        participantSeeds.has(seed) || participantSlots.has(`${level}:${group}:${rank}`)) return false;
     participantById.set(id, { level, group, rank, seed });
     participantSeeds.add(seed);
+    participantSlots.add(`${level}:${group}:${rank}`);
     levelCounts[level] += 1;
   }
 
-  if (participantSeeds.size !== 120 ||
+  if (participantSeeds.size !== 120 || participantSlots.size !== 120 ||
       levelCounts[1] !== 8 || levelCounts[2] !== 16 ||
       levelCounts[3] !== 32 || levelCounts[4] !== 64) return false;
+  if (status === 'completed' &&
+      (currentRound !== 7 || !participantById.has(String(cup.winnerId || '')))) return false;
 
   const restTeams = Array.isArray(cup.openingRoundRestTeams) ? cup.openingRoundRestTeams : [];
   if (restTeams.length !== 8) return false;
