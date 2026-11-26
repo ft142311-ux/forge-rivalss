@@ -9,6 +9,7 @@ import { getAdminDb } from '@/lib/firebase-admin';
 import { FinancialOpSchema } from '@/app/lib/validation-schemas';
 import { logger } from '@/app/lib/logger';
 import { requireServerActor } from '@/lib/server-auth';
+import { assertStagingSeasonOneResetNotInProgress } from '@/app/lib/staging-season-one-write-fence';
 
 function readFinancialBalance(value: unknown) {
   const balance = value === undefined || value === null
@@ -32,6 +33,7 @@ export async function processFinancialOperation(idToken: string, data: unknown) 
 
   try {
     return await db.runTransaction(async (transaction) => {
+      await assertStagingSeasonOneResetNotInProgress(transaction, db);
       const receiptRef = db.collection('system_v1').doc(`financial_op_${userId}_${idempotencyKey}`);
       const playerRef = db.collection('players_v14').doc(userId);
       const ledgerRef = db.collection('economy_transactions').doc(`financial_${userId}_${idempotencyKey}`);
