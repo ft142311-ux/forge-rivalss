@@ -774,6 +774,10 @@ async function repairCurrentRoundFixtures(db: any, cup: { ref: any; data: any },
       if (pairing.home) pairing.home.matchSnapshot = participantSnapshotById.get(pairing.home.id) || pairing.home.matchSnapshot;
       if (pairing.away) pairing.away.matchSnapshot = participantSnapshotById.get(pairing.away.id) || pairing.away.matchSnapshot;
     }
+    const scheduledAt = Timestamp.fromDate(roundDate(
+      resolveCupDate(data.seasonStart || activeSeasonStart),
+      ROUND_DAYS[round - 1],
+    ));
     const entries = pairings
       .filter(pairing => pairing.home && pairing.away)
       .map(pairing => {
@@ -785,8 +789,10 @@ async function repairCurrentRoundFixtures(db: any, cup: { ref: any; data: any },
           pairing.matchId = expectedId;
           changed = true;
         }
+        const expectedFixture = buildCupRoundMatchData(season, round, pairing, scheduledAt);
         return {
           pairing,
+          expectedFixture,
           dedicatedRef: db.collection(MATCH_COLLECTIONS.cup).doc(expectedId),
           legacyRef: db.collection('matches_v2').doc(expectedId),
         };
@@ -796,15 +802,18 @@ async function repairCurrentRoundFixtures(db: any, cup: { ref: any; data: any },
       legacy: await tx.get(entry.legacyRef),
     })));
     let repaired = 0;
-    const scheduledAt = Timestamp.fromDate(roundDate(
-      resolveCupDate(data.seasonStart || activeSeasonStart),
-      ROUND_DAYS[round - 1],
-    ));
     entries.forEach((entry, index) => {
-      // Older cup fixtures may already live in matches_v2. Preserve them and
-      // let the resolver's existing legacy fallback consume their results.
-      if (snapshots[index].dedicated.exists || snapshots[index].legacy.exists) return;
-      tx.create(entry.dedicatedRef, buildCupRoundMatchData(season, round, entry.pairing, scheduledAt));
+      const existing = snapshots[index].dedicated.exists
+        ? snapshots[index].dedicated.data() || {}
+        : snapshots[index].legacy.exists ? snapshots[index].legacy.data() || {} : null;
+      if (existing) {
+        // Preserve historical results, but never trust a malformed fixture.
+        if (!isCupRoundFixtureCompatible(existing, entry.expectedFixture)) {
+          throw new Error('CUP_FIXTURE_RECOVERY_CONFLICT');
+        }
+        return;
+      }
+      tx.create(entry.dedicatedRef, entry.expectedFixture);
       repaired++;
     });
     if (changed || repaired > 0) {

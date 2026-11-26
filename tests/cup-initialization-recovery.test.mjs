@@ -150,3 +150,18 @@ test('the scheduled Cup worker cannot race the initial Season 1 bootstrap', () =
   const calendar = readFileSync(new URL('../src/app/actions/season-calendar.ts', import.meta.url), 'utf8');
   assert.match(calendar, /generatePyramidCup\(1, \{ allowInitialBootstrap: true \}\)/);
 });
+
+
+test('interrupted-round recovery validates existing dedicated and legacy fixtures before trusting them', () => {
+  const helperStart = source.indexOf('function isCupRoundFixtureCompatible');
+  const repairStart = source.indexOf('async function repairCurrentRoundFixtures');
+  const repairEnd = source.indexOf('function assertValidCupRoundPairings', repairStart);
+  assert.ok(helperStart >= 0 && repairStart > helperStart && repairEnd > repairStart);
+  const recovery = source.slice(repairStart, repairEnd);
+  assert.ok(recovery.includes('const expectedFixture = buildCupRoundMatchData(season, round, pairing, scheduledAt)'));
+  assert.ok(recovery.includes('const existing = snapshots[index].dedicated.exists'));
+  assert.ok(recovery.includes('snapshots[index].legacy.exists ? snapshots[index].legacy.data() || {} : null'));
+  assert.ok(recovery.includes('isCupRoundFixtureCompatible(existing, entry.expectedFixture)'));
+  assert.ok(recovery.includes('CUP_FIXTURE_RECOVERY_CONFLICT'));
+  assert.ok(recovery.includes('tx.create(entry.dedicatedRef, entry.expectedFixture)'));
+});
