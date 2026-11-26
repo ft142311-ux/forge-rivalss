@@ -42,7 +42,8 @@ export async function ensureProMarketDailyDropAction(idToken: string) {
         tx.get(lotRef),
         tx.get(resetConfigRef),
       ]);
-      if (resetConfig.exists && resetConfig.data()?.stagingSeasonOneResetInProgress === true) {
+      if (resetConfig.exists && (resetConfig.data()?.stagingSeasonOneResetInProgress === true ||
+          resetConfig.data()?.stagingFreshSeasonOneReset === true)) {
         throw new Error('STAGING_SEASON_ONE_RESET_IN_PROGRESS');
       }
 
@@ -133,7 +134,8 @@ export async function listYouthPlayerOnMarketAction(idToken: string, playerId: s
         tx.get(profileRef),
         tx.get(resetConfigRef),
       ]);
-      if (resetConfig.exists && resetConfig.data()?.stagingSeasonOneResetInProgress === true) {
+      if (resetConfig.exists && (resetConfig.data()?.stagingSeasonOneResetInProgress === true ||
+          resetConfig.data()?.stagingFreshSeasonOneReset === true)) {
         throw new Error('STAGING_SEASON_ONE_RESET_IN_PROGRESS');
       }
       if (!profileSnap.exists) throw new Error('PLAYER_NOT_FOUND');
