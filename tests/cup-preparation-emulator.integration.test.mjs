@@ -63,6 +63,18 @@ test('prepared Season 2 receives its complete Pyramid Cup before publication in 
     preparedNextSeasonStart: new Date(seasonStart.getTime() + 15 * 86400000).toISOString(),
   });
 
+  // A stale/corrupted prepared-season projection must not let Cup preparation
+  // jump from active Season 1 directly to Season 3.
+  await configRef.update({ preparedSeasonNumber: 3 });
+  const skippedSeasonCup = await preparePyramidCupForSeason(3);
+  assert.deepEqual(skippedSeasonCup, {
+    success: false,
+    reason: 'PREPARED_SEASON_NOT_READY',
+    writesStarted: false,
+  });
+  assert.equal((await db.collection('cup_pyramid_v1').doc('cup_s3_lALPHA').get()).exists, false);
+  await configRef.update({ preparedSeasonNumber: season });
+
   const tableBatch = db.batch();
   const playerBatch = db.batch();
   let teamCount = 0;
