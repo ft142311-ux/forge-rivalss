@@ -29,7 +29,7 @@ test('fresh Season 1 reset rebuilds league and Pyramid Cup while preserving Fire
     'cup_pyramid_v1', 'cup_matches', 'cup_participant_snapshots_v1',
     'league_season_archives_v1', 'league_season_rollovers_v1', 'league_season_history_v1',
     'league_slot_history_v1', 'match_player_effects_v1', 'economy_transactions',
-    'match_consequence_receipts', 'staging_season_one_reset_archives_v1',
+    'match_consequence_receipts', 'market_v7', 'staging_season_one_reset_archives_v1',
   ];
   const clearCollection = async (name) => {
     const snap = await db.collection(name).get();
@@ -146,6 +146,15 @@ test('fresh Season 1 reset rebuilds league and Pyramid Cup while preserving Fire
     await batch.commit();
   }
   assert.equal(participants.length, 120);
+
+  // An old-world listing with bidder escrow must be archived and removed
+  // before the player profiles are regenerated.
+  const legacyMarketLot = {
+    id: 'legacy-s1-market-lot', sellerId: secondUid, playerId: `${secondUid}_old_player_0`,
+    highestBidderId: uid, currentBid: 250, currency: 'credits', escrowCurrency: 'credits',
+    escrowedAmount: 250, status: 'active', expiresAt: new Date(Date.now() + 86400000).toISOString(),
+  };
+  await db.collection('market_v7').doc('legacy-s1-market-lot').set(legacyMarketLot);
 
   // Old league fixtures and old Pyramid Cup artifacts must be removed.
   const oldMatchWrites = [];
@@ -269,6 +278,8 @@ test('fresh Season 1 reset rebuilds league and Pyramid Cup while preserving Fire
   assert.equal(result.verification.cupParticipantSnapshots, 120);
   assert.equal(result.verification.humanClubs, 2);
   assert.equal(result.verification.botClubs, 118);
+  assert.equal((await db.collection('market_v7').doc('legacy-s1-market-lot').get()).exists, false,
+    'old-world auction lots must not survive regenerated club/player identities');
 
   // Both human Firebase Auth accounts and their UIDs must survive the reset,
   // while their club identities and starter rosters are regenerated.
@@ -301,6 +312,9 @@ test('fresh Season 1 reset rebuilds league and Pyramid Cup while preserving Fire
   const archivedDocs = await durableArchiveRef.collection('documents').get();
   assert.equal(archivedDocs.size, durableArchive.sourceCount);
   assert.ok(archivedDocs.docs.some(doc => doc.data().sourcePath === 'system_v1/season_config'));
+  const archivedMarketLot = archivedDocs.docs.find(doc => doc.data().sourcePath === 'market_v7/legacy-s1-market-lot');
+  assert.ok(archivedMarketLot, 'old market lot must be included in the durable archive');
+  assert.deepEqual(archivedMarketLot.data().data, legacyMarketLot);
   assert.ok(archivedDocs.docs.some(doc => doc.data().sourcePath === 'league_slot_history_v1/S1_LALPHA_D2_G1_R3_G5'));
   for (const sourcePath of [
     'match_player_effects_v1/old-effect-lowercase',
@@ -368,6 +382,9 @@ test('fresh Season 1 reset rebuilds league and Pyramid Cup while preserving Fire
   assert.equal((await db.collection('league_slots_v1').doc('S1_LALPHA_D3_G2_R5').get()).data().occupantId, secondUid);
   assert.equal((await db.collection('players_v14').doc(uid).get()).data().clubName, 'Old Club Name');
   assert.equal((await db.collection('players_v14').doc(secondUid).get()).data().clubName, 'Second Old Club');
+  const restoredMarketLot = await db.collection('market_v7').doc('legacy-s1-market-lot').get();
+  assert.equal(restoredMarketLot.exists, true);
+  assert.deepEqual(restoredMarketLot.data(), legacyMarketLot);
   assert.equal((await db.collection('matches_v2').doc('old_s1_league_1').get()).exists, true);
   assert.equal((await db.collection('matches_v2').doc('unrelated_tournament_fixture').get()).exists, true);
   assert.equal((await db.collection('cup_pyramid_v1').doc(CUP_ID).get()).exists, true);
