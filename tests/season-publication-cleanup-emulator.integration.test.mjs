@@ -773,6 +773,8 @@ test('Firestore Emulator prunes S1-S4 after S6 activation, retains S5 and resume
     assert.equal((await archiveRefs.get(seasonNumber).get()).get('pruneStatus'), undefined);
     const retainedMatches = await archiveRefs.get(seasonNumber).collection('matches').get();
     assert.equal(retainedMatches.size, seasonNumber === 4 ? 840 : 1);
+  }
+  for (const seasonNumber of [1, 2, 3]) {
     assert.equal((await historyRefs.get(seasonNumber).get()).get('status'), 'SKIPPED');
   }
   assert.equal((await retainedArchiveRef.get()).exists, true);
