@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   DEFAULT_ARENA_CAPACITY,
+  isCompletedMatch,
   isEligibleRegistrationSlot,
   validateRegistrationSchedule,
   generateStartingSquad,
@@ -15,6 +16,7 @@ test('registration accepts only the canonical active-season Pyramid Cup opening 
   assert.equal(isPyramidCupReadyForRegistration(cup, 3), true);
   assert.equal(isPyramidCupReadyForRegistration(cup, 4), false);
   assert.equal(isPyramidCupReadyForRegistration(null, 3), false);
+  assert.equal(isPyramidCupReadyForRegistration(undefined, 3), false);
   assert.equal(isPyramidCupReadyForRegistration({ ...cup, season: 2 }, 3), false);
   assert.equal(isPyramidCupReadyForRegistration({ ...cup, formatVersion: 3 }, 3), false);
 });
@@ -61,6 +63,28 @@ test('registration rejects duplicate league slot coordinates even when IDs and s
   assert.equal(isPyramidCupReadyForRegistration(duplicateSlot, 3), false);
 });
 
+test('registration rejects Cup participant coordinates that disagree with canonical slot identities', () => {
+  const cup = createRegistrationCup(3);
+  const openingMetadataMismatch = {
+    ...cup,
+    rounds: {
+      ...cup.rounds,
+      r1: cup.rounds.r1.map((pairing, index) => index === 0
+        ? { ...pairing, home: { ...pairing.home, rank: pairing.home.rank === 8 ? 7 : 8 } }
+        : pairing),
+    },
+  };
+  assert.equal(isPyramidCupReadyForRegistration(openingMetadataMismatch, 3), false);
+
+  const restMetadataMismatch = {
+    ...cup,
+    openingRoundRestTeams: cup.openingRoundRestTeams.map((team, index) =>
+      index === 0 ? { ...team, rank: team.rank === 8 ? 7 : 8 } : team
+    ),
+  };
+  assert.equal(isPyramidCupReadyForRegistration(restMetadataMismatch, 3), false);
+});
+
 test('registration accepts a completed Pyramid Cup only with a recorded champion', () => {
   const cup = createRegistrationCup(3);
   const completed = {
@@ -75,8 +99,23 @@ test('registration accepts a completed Pyramid Cup only with a recorded champion
   assert.equal(isPyramidCupReadyForRegistration({ ...completed, status: 'COMPLETED' }, 3), true);
 });
 
-test('new clubs start with the canonical 3,000-seat arena capacity', () => {
-  assert.equal(DEFAULT_ARENA_CAPACITY, 3000);
+test('resolved fixtures are terminal and are never rebound during registration', () => {
+  const now = Date.now();
+  const matches = createRoundRobin(3, 'bot-3').map(match => ({ ...match, startTime: now + 60_000 }));
+  const resolved = matches.find(match => match.homeRank === 3 && match.awayRank === 1);
+  resolved.status = 'resolved';
+  resolved.isFinished = false;
+  resolved.startTime = now - 60_000;
+
+  assert.equal(isCompletedMatch(resolved), true);
+  const plan = buildRegistrationMatchPlan(matches, 'bot-3', 'new-manager', 'New Club', now);
+  assert.equal(plan.ok, true);
+  assert.equal(plan.updates.length, 13);
+  assert.equal(plan.updates.some(update => update.matchId === resolved.id), false);
+});
+
+test('new clubs start with the canonical 5,000-seat arena capacity', () => {
+  assert.equal(DEFAULT_ARENA_CAPACITY, 5000);
 });
 
 function createRegistrationCup(season = 3) {
