@@ -19,7 +19,8 @@ async function settleCandidate(candidate: any, db: any) {
         const [lotSnap, resetConfigSnap] = await Promise.all([tx.get(lotRef), tx.get(resetConfigRef)]);
         // Recheck inside the settlement transaction: a sweep may have acquired
         // its lease before the reset marker was asserted.
-        if (resetConfigSnap.exists && resetConfigSnap.data()?.stagingSeasonOneResetInProgress === true) {
+        if (resetConfigSnap.exists && (resetConfigSnap.data()?.stagingSeasonOneResetInProgress === true ||
+            resetConfigSnap.data()?.stagingFreshSeasonOneReset === true)) {
           return 'SKIPPED';
         }
         if (!lotSnap.exists) return 'SKIPPED';
