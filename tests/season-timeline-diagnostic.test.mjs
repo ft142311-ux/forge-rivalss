@@ -62,13 +62,13 @@ test('calendar recovery archives completed seasons, skips incomplete seasons and
   assert.doesNotMatch(source, /runMatchEngine|resolveUniversalMatchDocument/);
 });
 
-test('adjacent incomplete seasons can use the same carry-forward recovery path', () => {
+test('incomplete source seasons cannot be silently skipped by ordinary calendar generation', () => {
   const source = readFileSync(resolve(root, 'src/app/actions/season-calendar.ts'), 'utf8');
-  assert.match(source, /SEASON_RESULTS_INCOMPLETE/);
-  assert.match(source, /SEASON_STANDINGS_PREFLIGHT_FAILED/);
-  assert.match(source, /canClassifyIncompleteSource/);
-  assert.match(source, /preparedRecoveryMode: directRecovery \|\| rolloverPlan\?\.mode === 'recovery_carry_forward'/);
-  assert.match(source, /overdueRecoveryMode = recoveryMode/);
+  const builder = source.slice(source.indexOf('async function buildSeasonCalendar'));
+  assert.match(builder, /resolveNextSeasonTarget\\(/);
+  assert.match(builder, /targetSeason = Math\\.min\\(requestedTarget, sourceSeason \\+ 1\\)/);
+  assert.equal((source.match(/prepareRecoveryCarryForwardPlan\\(db/g) || []).length, 0);
+  assert.doesNotMatch(builder, /publishRecoveryRolloverDecision\\(/);
 });
 
 test('explicit league matches without canonical coordinates are integrity conflicts, not skippable emptiness', () => {
