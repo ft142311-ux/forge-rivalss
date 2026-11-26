@@ -9,6 +9,7 @@ import { requireServerActor } from '@/lib/server-auth';
 import { hash32 } from '@/app/lib/hash-utils';
 import { MATCH_REPORT_COLLECTIONS } from '@/app/lib/match-storage';
 import { placeStandardMarketBidWithDb } from '@/app/lib/auction-bid';
+import { assertStagingSeasonOneResetNotInProgress } from '@/app/lib/staging-season-one-write-fence';
 
 /**
  * @fileOverview Защищенный слой игровых действий.
@@ -69,7 +70,8 @@ export async function updateLineupAction(idToken: string, updates: Record<string
   const playerRef = db.collection('players_v14').doc(userId);
 
   try {
-    await db.runTransaction(async (t) => {
+    await db.runTransaction(async t => {
+      await assertStagingSeasonOneResetNotInProgress(t, db);
       const pSnap = await t.get(playerRef);
       if (!pSnap.exists) throw new Error("PLAYER_NOT_FOUND");
       
@@ -131,11 +133,15 @@ export async function updateTacticsAction(idToken: string, strategy: string, tac
   const safeTactics = parsedTactics.data;
   const db = getAdminDb();
   try {
-    await db.collection('players_v14').doc(userId).update({
-      strategy: safeStrategy,
-      tactics: safeTactics,
-      tacticalSettings: safeTactics,
-      updatedAt: FieldValue.serverTimestamp()
+    const playerRef = db.collection('players_v14').doc(userId);
+    await db.runTransaction(async (t) => {
+      await assertStagingSeasonOneResetNotInProgress(t, db);
+      t.update(playerRef, {
+        strategy: safeStrategy,
+        tactics: safeTactics,
+        tacticalSettings: safeTactics,
+        updatedAt: FieldValue.serverTimestamp()
+      });
     });
     return { success: true };
   } catch (e: any) {
@@ -149,6 +155,7 @@ export async function setTrainingFocusAction(idToken: string, playerId: string, 
   const db = getAdminDb();
   try {
     await db.runTransaction(async t => {
+      await assertStagingSeasonOneResetNotInProgress(t, db);
       const ref = db.collection('players_v14').doc(userId);
       const snap = await t.get(ref);
       if (!snap.exists) throw new Error('PLAYER_NOT_FOUND');
@@ -175,7 +182,8 @@ export async function startDailyTrainingAction(idToken: string, playerId: string
   const playerRef = db.collection('players_v14').doc(userId);
 
   try {
-    await db.runTransaction(async (t) => {
+    await db.runTransaction(async t => {
+      await assertStagingSeasonOneResetNotInProgress(t, db);
       const pSnap = await t.get(playerRef);
       if (!pSnap.exists) throw new Error("PLAYER_NOT_FOUND");
       
@@ -217,7 +225,8 @@ export async function listPlayerOnMarketAction(idToken: string, playerId: string
   const playerRef = db.collection('players_v14').doc(userId);
 
   try {
-    return await db.runTransaction(async (t) => {
+    return await db.runTransaction(async t => {
+      await assertStagingSeasonOneResetNotInProgress(t, db);
       const pSnap = await t.get(playerRef);
       if (!pSnap.exists) throw new Error("PLAYER_NOT_FOUND");
       
@@ -319,6 +328,7 @@ export async function applyMatchConsequencesAction(
 
     const receiptRef = db.collection('match_consequence_receipts').doc(`${userId}_${safeMatchId}`);
     const transactionResult = await db.runTransaction(async t => {
+      await assertStagingSeasonOneResetNotInProgress(t, db);
       const profileRef = db.collection('players_v14').doc(userId);
       const [matchSnap, profileSnap, receiptSnap] = await Promise.all([
         t.get(resolvedMatchRef),
