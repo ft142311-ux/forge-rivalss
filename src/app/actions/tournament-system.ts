@@ -13,6 +13,7 @@ import { MATCH_COLLECTIONS } from '@/app/lib/match-storage';
 import { isTournamentMatchLeaseExpired, TOURNAMENT_MATCH_LEASE_MS } from '@/app/lib/tournament-match-lease';
 import { isTournamentStageMatchSetComplete } from '@/app/lib/tournament-stage-utils';
 import { getTournamentRegistrationCapacity, getTournamentRegistrationWindow, normalizeTournamentRegisteredIds } from '@/app/lib/tournament-registration-window';
+import { isTournamentStageFixtureCompatible } from '@/app/lib/tournament-stage-transition';
 
 
 const TOURNAMENTS = [
@@ -769,8 +770,7 @@ async function commitTournamentStageTransition(
       const existing = existingSnaps[index];
       if (!existing.exists) continue;
       const data = existing.data() || {};
-      if (data.stage !== nextStage || String(data.homeId) !== String(fixture.homeId) ||
-          String(data.awayId) !== String(fixture.awayId) || Number(data.index) !== Number(fixture.index)) {
+      if (!isTournamentStageFixtureCompatible(data, fixture)) {
         throw new Error('TOURNAMENT_STAGE_FIXTURE_CONFLICT');
       }
     }
