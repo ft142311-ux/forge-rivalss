@@ -336,11 +336,9 @@ test('recovery carry-forward archive, plan, and skipped history writes are fence
 
 test('post-activation skipped history cleanup preflights existing markers before fenced writes', async () => {
   const fs = await import('node:fs/promises');
-  const source = await fs.readFile(new URL('../src/app/actions/season-calendar.ts', import.meta.url), 'utf8');
-  const cleanupStart = source.indexOf('async function pruneSeasonHistoryAfterActivation(');
-  const cleanupEnd = source.indexOf('\n}\n\n/** Read-only canonical gate', cleanupStart);
-  assert.ok(cleanupStart >= 0 && cleanupEnd > cleanupStart, 'history cleanup must be present');
-  const cleanup = source.slice(cleanupStart, cleanupEnd);
+  const source = await fs.readFile(new URL('../src/app/actions/season-history-prune.ts', import.meta.url), 'utf8');
+  const cleanup = source;
+  assert.match(cleanup, /export async function pruneSeasonHistoryAfterActivation/);
   assert.match(cleanup, /resolveActivatedSkippedHistoryMarker/,
     'final skipped markers must be validated before cleanup writes');
   assert.match(cleanup, /skippedHistorySnapshots = await Promise\.all\(skippedHistoryRefs\.map\(entry => entry\.ref\.get\(\)\)\)/,
@@ -628,10 +626,8 @@ test('cleanup mutations stop if a newer season activates during pruning', async 
 });
 
 test('post-activation archive and rollover pruning never bypass the cleanup lease', async () => {
-  const source = (await import('node:fs')).readFileSync(new URL('../src/app/actions/season-calendar.ts', import.meta.url), 'utf8');
-  const start = source.indexOf('async function pruneSeasonHistoryAfterActivation(');
-  const end = source.indexOf('/** Read-only canonical gate shared by build and the final publication step. */', start);
-  const cleanup = source.slice(start, end);
+  const source = (await import('node:fs')).readFileSync(new URL('../src/app/actions/season-history-prune.ts', import.meta.url), 'utf8');
+  const cleanup = source;
   assert.match(cleanup, /acquireSeasonCalendarBuildLock\(db, targetSeason - 1, targetSeason\)/);
   assert.match(cleanup, /commitSeasonHistoryCleanupWrites\(/);
   assert.match(cleanup, /finally\s*\{\s*await releaseSeasonCalendarBuildLock/);
