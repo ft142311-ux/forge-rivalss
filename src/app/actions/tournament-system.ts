@@ -276,7 +276,7 @@ export async function unregisterFromTournamentAction(idToken: string, tournament
       const registrationWindow = getTournamentRegistrationWindow(data);
       if (!registrationWindow) throw new Error('REGISTRATION_WINDOW_INVALID');
       if (Date.now() >= registrationWindow.closesAt) throw new Error('REGISTRATION_CLOSED');
-      const ids: string[] = Array.isArray(data.registeredIds) ? data.registeredIds : [];
+      const ids = normalizeTournamentRegisteredIds(data.registeredIds);
       if (!ids.includes(uid)) throw new Error('NOT_REGISTERED');
       const next = ids.filter(id => id !== uid);
       t.update(ref, { registeredIds: next, participantCount: next.length, updatedAt: FieldValue.serverTimestamp() });
@@ -324,15 +324,15 @@ async function initializeTournament(db: any, tournamentId: string, now: number) 
   if (!tournament) return false;
 
   try {
-    const maxParticipants = Number(tournament.maxParticipants);
-    if (![16, 32].includes(maxParticipants)) throw new Error('INVALID_TOURNAMENT_CAPACITY');
+    const maxParticipants = getTournamentRegistrationCapacity(tournament.maxParticipants);
+    if (!maxParticipants) throw new Error('INVALID_TOURNAMENT_CAPACITY');
 
-    // Normalize legacy/malformed registration data and remove duplicate IDs.
-    const registeredIds: string[] = Array.from(new Set<string>(
-      (Array.isArray(tournament.registeredIds) ? tournament.registeredIds : [])
-        .filter((id: unknown): id is string => typeof id === 'string' && id.trim().length > 0)
-        .map((id: string) => id.trim())
-    )).slice(0, maxParticipants);
+    // Normalize legacy/malformed registration data, but never silently drop
+    // valid managers when the persisted roster exceeds the tournament limit.
+    const registeredIds = normalizeTournamentRegisteredIds(tournament.registeredIds);
+    if (registeredIds.length > maxParticipants) {
+      throw new Error('TOURNAMENT_PARTICIPANT_INTEGRITY_FAILED');
+    }
     const managerResults = await Promise.all(registeredIds.map(id => readManager(db, id)));
     const realTeams = managerResults.filter((team): team is Team => Boolean(team));
     const uniqueRealTeams = Array.from(new Map(realTeams.map(team => [team.id, team])).values());
