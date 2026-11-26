@@ -245,3 +245,16 @@ test('CLEAN_S1_V1 uses the canonical Nov 9 to Nov 26 window and activates Season
   assert.equal(productionWindow.seasonStart.toISOString(), '2026-09-21T15:00:00.000Z');
   assert.equal(productionWindow.nextSeasonStart.toISOString(), '2026-10-08T15:00:00.000Z');
 });
+
+
+test('season date planning has no artificial 1000-season ceiling', async () => {
+  const { deriveSeasonDatePlan } = await import('../src/app/actions/season-boundary.ts');
+  const start = new Date('2026-01-01T00:00:00.000Z');
+  const boundary = new Date(start.getTime() + 15 * 86400000);
+  const now = new Date(start.getTime() + 1001 * 15 * 86400000);
+  const plan = deriveSeasonDatePlan(1, start, boundary, now, 15);
+  assert.equal(plan.expectedSeasonNumber, 1002);
+  assert.equal(plan.completedSeasons.length, 1001);
+  assert.equal(plan.completedSeasons[0], 1);
+  assert.equal(plan.completedSeasons.at(-1), 1001);
+});
