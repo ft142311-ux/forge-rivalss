@@ -4,6 +4,7 @@ import { FieldValue } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { requireServerActor } from '@/lib/server-auth';
 import { timestampToMillis } from '@/app/lib/timestamp-utils';
+import { assertStagingSeasonOneResetNotInProgress } from '@/app/lib/staging-season-one-write-fence';
 
 const PLAYER_GAME_YEAR_DAYS = 7;
 const PLAYER_GAME_MONTHS = 12;
@@ -50,6 +51,7 @@ export async function syncPlayerLifecycleAction(idToken: string) {
   const nowIso = new Date(nowMs).toISOString();
 
   return db.runTransaction(async (t) => {
+    await assertStagingSeasonOneResetNotInProgress(t, db);
     const snap = await t.get(ref);
     if (!snap.exists) return { success: false, error: 'PLAYER_NOT_FOUND' };
     const data = snap.data() || {};
