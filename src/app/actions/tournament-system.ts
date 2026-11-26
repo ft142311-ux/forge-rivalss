@@ -12,7 +12,7 @@ import { runMatchEngine } from '@/app/lib/match-engine';
 import { MATCH_COLLECTIONS } from '@/app/lib/match-storage';
 import { isTournamentMatchLeaseExpired, TOURNAMENT_MATCH_LEASE_MS } from '@/app/lib/tournament-match-lease';
 import { isTournamentStageMatchSetComplete } from '@/app/lib/tournament-stage-utils';
-import { getTournamentRegistrationWindow } from '@/app/lib/tournament-registration-window';
+import { getTournamentRegistrationCapacity, getTournamentRegistrationWindow, normalizeTournamentRegisteredIds } from '@/app/lib/tournament-registration-window';
 
 
 const TOURNAMENTS = [
@@ -237,13 +237,15 @@ export async function registerForTournamentAction(idToken: string, tournamentId:
       const data = snap.data() || {};
       const now = Date.now();
       const registrationWindow = getTournamentRegistrationWindow(data);
-      const ids: string[] = Array.isArray(data.registeredIds) ? data.registeredIds : [];
+      const capacity = getTournamentRegistrationCapacity(data.maxParticipants);
+      const ids = normalizeTournamentRegisteredIds(data.registeredIds);
       if (data.status !== 'registration') throw new Error('REGISTRATION_CLOSED');
       if (!registrationWindow) throw new Error('REGISTRATION_WINDOW_INVALID');
+      if (!capacity) throw new Error('INVALID_TOURNAMENT_CAPACITY');
       if (now < registrationWindow.opensAt) throw new Error('REGISTRATION_NOT_OPEN');
       if (now >= registrationWindow.closesAt) throw new Error('REGISTRATION_CLOSED');
       if (ids.includes(uid)) throw new Error('ALREADY_REGISTERED');
-      if (ids.length >= Number(data.maxParticipants)) throw new Error('TOURNAMENT_FULL');
+      if (ids.length >= capacity) throw new Error('TOURNAMENT_FULL');
       t.update(ref, {
         registeredIds: [...ids, uid],
         participantCount: ids.length + 1,
