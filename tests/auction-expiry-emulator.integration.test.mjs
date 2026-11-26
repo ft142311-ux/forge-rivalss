@@ -1154,3 +1154,46 @@ test('Firestore Emulator rejects bids against a stale lot after the seller relis
   assert.equal((await staleLot.get()).get('currentBid'), 200);
   assert.equal((await db.collection('economy_transactions').get()).size, 0);
 });
+
+
+test('Firestore Emulator extends the seller reservation together with an anti-sniping lot extension', {
+  skip: !emulatorHost,
+}, async t => {
+  const { db } = await withIsolatedFirestore(t);
+  const now = Date.now();
+  const initialExpiry = new Date(now + 5 * 60 * 1000).toISOString();
+  await db.collection('players_v14').doc('anti-snipe-seller').set({
+    credits: 0,
+    ownedPlayers: [{
+      id: 'anti-snipe-player',
+      name: 'Anti Snipe Player',
+      onTransferUntil: initialExpiry,
+      transferMarketId: 'anti-snipe-lot',
+    }],
+  });
+  await db.collection('players_v14').doc('anti-snipe-bidder').set({ credits: 1000, ownedPlayers: [] });
+  const lotRef = db.collection('market_v7').doc('anti-snipe-lot');
+  await lotRef.set({
+    sellerId: 'anti-snipe-seller',
+    marketType: 'player',
+    currency: 'credits',
+    currentBid: 200,
+    startingPrice: 200,
+    highestBidderId: null,
+    bidders: [],
+    expiresAt: initialExpiry,
+    heroData: { id: 'anti-snipe-player', name: 'Anti Snipe Player' },
+    isPro: false,
+    isYouth: false,
+  });
+
+  await placeStandardMarketBidWithDb(db, 'anti-snipe-bidder', 'anti-snipe-lot', 300);
+  const [lot, seller] = await Promise.all([
+    lotRef.get(),
+    db.collection('players_v14').doc('anti-snipe-seller').get(),
+  ]);
+  const sellerPlayer = seller.get('ownedPlayers')[0];
+  assert.ok(Date.parse(lot.get('expiresAt')) > Date.parse(initialExpiry));
+  assert.equal(sellerPlayer.onTransferUntil, lot.get('expiresAt'));
+  assert.equal(sellerPlayer.transferMarketId, 'anti-snipe-lot');
+});

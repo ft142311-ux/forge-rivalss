@@ -68,3 +68,9 @@ test('Foundation daily events and staff candidates are created atomically instea
     assert.ok(fence >= 0 && write > fence, `${name} must be fenced before writing`);
   }
 });
+
+
+test('daily event action keeps the event field present on both success and failure', () => {
+  const daily = actionBlock(management, 'getFoundationDailyEventAction');
+  assert.match(daily, /return \{ success: false, date: period, event: null, error: errorOf\(e\) \}/);
+});

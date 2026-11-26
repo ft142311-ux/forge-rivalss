@@ -296,10 +296,10 @@ export async function changePlayerRoleAction(idToken: string, playerId: string, 
 }
 
 export async function getFoundationDailyEventAction(idToken: string) {
+  const period = new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Moscow',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
   try {
     const { uid } = await requireServerActor(idToken);
     const db = getAdminDb();
-    const period = new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Moscow',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
     const ref = db.collection(FOUNDATION_COLLECTIONS.events).doc(`${uid}_${period}`);
     const managerRef = getFoundationManagerRef(db, uid);
     return await db.runTransaction(async t => {
@@ -314,7 +314,7 @@ export async function getFoundationDailyEventAction(idToken: string) {
       t.create(ref, { ...record, createdAt: FieldValue.serverTimestamp() });
       return { success: true, date: period, event: record };
     });
-  } catch (e) { return { success: false, error: errorOf(e) }; }
+  } catch (e) { return { success: false, date: period, event: null, error: errorOf(e) }; }
 }
 
 export async function getFoundationPlayerStatsAction(idToken: string) {
