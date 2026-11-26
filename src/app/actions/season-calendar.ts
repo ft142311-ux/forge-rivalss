@@ -1619,7 +1619,8 @@ export async function ensureSeasonCalendar(
   let config = configSnap.exists ? configSnap.data() || {} : {};
   // The reset executor is the only caller allowed to build the calendar while
   // the reset marker is asserted. Every ordinary cron/user path fails closed.
-  if (config.stagingSeasonOneResetInProgress === true && options.allowDuringStagingReset !== true) {
+  if ((config.stagingSeasonOneResetInProgress === true || config.stagingFreshSeasonOneReset === true) &&
+      options.allowDuringStagingReset !== true) {
     return {
       success: false,
       worldReady: false,
@@ -1748,7 +1749,9 @@ export async function ensureSeasonCalendar(
   if (!beforeLockPreflight.ready && !canClassifyIncompleteSource) {
     return { success: false, worldReady: false, action: 'WORLD_BUILDING', reason: 'SEASON_CALENDAR_PREFLIGHT_FAILED', diagnostics: beforeLockPreflight.diagnostics, writesStarted: false };
   }
-  const lock = await acquireSeasonCalendarBuildLock(db, sourceSeason, targetSeason);
+  const lock = await acquireSeasonCalendarBuildLock(db, sourceSeason, targetSeason, {
+    allowDuringStagingReset: options.allowDuringStagingReset === true,
+  });
   if (!lock.acquired) {
     return {
       success: false,
@@ -1756,13 +1759,15 @@ export async function ensureSeasonCalendar(
       seasonNumber: sourceSeason,
       targetSeasonNumber: targetSeason,
       action: 'WORLD_BUILDING',
-      reason: 'SEASON_CALENDAR_BUILD_LOCKED',
+      reason: lock.reason || 'SEASON_CALENDAR_BUILD_LOCKED',
       lockExpiresAtMs: lock.expiresAtMs,
     };
   }
   const lease: BuildLease = {
     assert: async () => { await assertSeasonCalendarBuildLock(db, lock.ownerId, lock.token); },
-    commit: writes => commitSeasonCalendarWrites(db, lock.ownerId, lock.token, writes),
+    commit: writes => commitSeasonCalendarWrites(db, lock.ownerId, lock.token, writes, {
+      allowDuringStagingReset: options.allowDuringStagingReset === true,
+    }),
   };
   try {
     const lockedPreflight = pristineFirstWorld || stagingFreshSeasonOneReset

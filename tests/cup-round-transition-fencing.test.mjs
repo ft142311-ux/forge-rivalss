@@ -50,7 +50,7 @@ test('existing next-round cup fixtures must match the complete immutable match c
   assert.match(compatibility, /\['id', 'type', 'cupId', 'homeId', 'awayId'\]/);
   assert.match(compatibility, /\['season', 'cupRound', 'bestOf'\]/);
   assert.match(compatibility, /\['scheduledAt', 'startTime', 'scheduledStartAt'\]/);
-  assert.match(compatibility, /return \['scheduled', 'processing', 'finished', 'completed'\]/);
+  assert.match(compatibility, /return \['scheduled', 'processing', 'finished', 'completed', 'resolved'\]/);
   const transitionStart = source.indexOf('async function commitCupRoundTransition');
   const transitionEnd = source.indexOf('async function commitCupRoundState', transitionStart);
   const transition = source.slice(transitionStart, transitionEnd);

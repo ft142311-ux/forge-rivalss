@@ -294,9 +294,9 @@ async function verifyFreshSeasonOne(db: any) {
   // and the journal step have both completed.
   if (!configSnap.exists || config.worldReady !== true ||
       config.pyramidCupReady !== true || config.stagingSeasonOneResetInProgress !== true ||
-      tablesSnap.size !== 15 || slotsSnap.size !== 120) {
+      config.stagingFreshSeasonOneReset !== true || tablesSnap.size !== 15 || slotsSnap.size !== 120) {
     throw new Error(
-      `FRESH_SEASON_ONE_WORLD_CONFIG_OR_COUNTS_INVALID:worldReady=${String(config.worldReady)},cupReady=${String(config.pyramidCupReady)},resetMarker=${String(config.stagingSeasonOneResetInProgress)},tables=${tablesSnap.size},slots=${slotsSnap.size}`,
+      `FRESH_SEASON_ONE_WORLD_CONFIG_OR_COUNTS_INVALID:worldReady=${String(config.worldReady)},cupReady=${String(config.pyramidCupReady)},resetMarker=${String(config.stagingSeasonOneResetInProgress)},freshResetMarker=${String(config.stagingFreshSeasonOneReset)},tables=${tablesSnap.size},slots=${slotsSnap.size}`,
     );
   }
   const leagueMatches = matchesSnap.docs.filter((doc: any) => isLeagueFixture(doc.data() || {}));

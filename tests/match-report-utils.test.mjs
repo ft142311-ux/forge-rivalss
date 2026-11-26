@@ -192,6 +192,10 @@ test('all Beta game mutation paths honor either fresh Season 1 reset marker', ()
     '../src/app/actions/universal-match-resolver.ts',
     '../src/app/api/registration/initialize/route.ts',
     '../src/app/lib/auction-expiry-sweep.ts',
+    '../src/app/actions/autonomous-cycle.ts',
+    '../src/app/actions/season-init.ts',
+    '../src/app/actions/season-calendar.ts',
+    '../src/app/actions/season-rollover-lock.ts',
   ];
   for (const relativePath of guardedPaths) {
     const source = readFileSync(new URL(relativePath, import.meta.url), 'utf8');

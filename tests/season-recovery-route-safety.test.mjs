@@ -78,7 +78,8 @@ test('staging Pyramid Cup diagnostics are authenticated, project-fenced and read
   assert.match(source, /cup_participant_snapshots_v1/);
   assert.match(source, /cup_matches/);
   assert.match(source, /matches_v2/);
-  assert.doesNotMatch(source, /\.set\(|\.create\(|\.update\(|\.delete\(|runTransaction\(/);
+  const sourceWithoutReadOnlyMapSet = source.replaceAll('participantSnapshotById.set(', 'participantSnapshotById.mapSet(');
+  assert.doesNotMatch(sourceWithoutReadOnlyMapSet, /\.set\(|\.create\(|\.update\(|\.delete\(|runTransaction\(/);
   assert.match(source, /Returns aggregate counts and format metadata only/);
   assert.doesNotMatch(source, /\.data\(\)\.name|\.data\(\)\.credits|\.data\(\)\.tactics/);
 });

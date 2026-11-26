@@ -156,14 +156,8 @@ function botTeam(tournamentId: string, index: number): Team {
 async function generateDailyTournamentsInternal() {
   const db = getAdminDb();
   const date = getMoscowDateString();
-  const created: string[] = [];
-
-  for (const template of TOURNAMENTS) {
+  const entries = TOURNAMENTS.map(template => {
     const id = `${date}_${template.id}`;
-    const ref = db.collection('tournaments_v1').doc(id);
-    const snap = await ref.get();
-    if (snap.exists) continue;
-
     const startAt = moscowDateAt(date, template.start);
     const data = {
       id,
@@ -187,20 +181,47 @@ async function generateDailyTournamentsInternal() {
       updatedAt: FieldValue.serverTimestamp(),
       version: 1,
     };
+    return { id, ref: db.collection('tournaments_v1').doc(id), data };
+  });
+  const configRef = db.collection('system_v1').doc('season_config');
+
+  // Read the reset marker and every deterministic tournament ID before the
+  // first write. This makes the entire daily set atomic and closes the direct
+  // ensureDailyTournamentsAction path as well as the cron path.
+  for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
-      await ref.create(data);
-      created.push(id);
+      const created = await db.runTransaction(async (tx: any) => {
+        const resetConfigSnap = await tx.get(configRef);
+        const resetState = resetConfigSnap.exists ? resetConfigSnap.data() || {} : {};
+        if (resetState.stagingSeasonOneResetInProgress === true ||
+            resetState.stagingFreshSeasonOneReset === true) {
+          throw new Error('STAGING_SEASON_ONE_RESET_IN_PROGRESS');
+        }
+
+        const snapshots = await Promise.all(entries.map(entry => tx.get(entry.ref)));
+        const createdIds: string[] = [];
+        entries.forEach((entry, index) => {
+          if (snapshots[index].exists) return;
+          tx.create(entry.ref, entry.data);
+          createdIds.push(entry.id);
+        });
+        return createdIds;
+      });
+      return { date, created };
     } catch (error: any) {
-      // The season orchestrator and the dedicated tournament cron may run
-      // concurrently. A competing worker can create this deterministic daily
-      // ID after our existence check; treat only that exact conflict as success.
+      // A competing worker can win a deterministic-ID create between the
+      // read and commit. Retry the whole atomic set so any still-missing IDs
+      // are created, while unrelated errors remain visible to the caller.
       const code = error?.code;
-      if (code === 6 || code === 'already-exists' || code === 'ALREADY_EXISTS') continue;
+      const deterministicIdCollision = code === 6 ||
+        code === 'already-exists' ||
+        code === 'ALREADY_EXISTS';
+      if (deterministicIdCollision && attempt < 2) continue;
       throw error;
     }
   }
 
-  return { date, created };
+  throw new Error('TOURNAMENT_GENERATION_RETRY_EXHAUSTED');
 }
 
 export async function generateDailyTournaments(cronToken: string) {
@@ -209,7 +230,14 @@ export async function generateDailyTournaments(cronToken: string) {
   } catch {
     return { success: false, error: 'UNAUTHORIZED' };
   }
-  return generateDailyTournamentsInternal();
+  try {
+    return await generateDailyTournamentsInternal();
+  } catch (error: any) {
+    if (error?.message === 'STAGING_SEASON_ONE_RESET_IN_PROGRESS') {
+      return { success: true, skipped: true, reason: 'STAGING_SEASON_ONE_RESET_IN_PROGRESS', writesStarted: false };
+    }
+    throw error;
+  }
 }
 export async function ensureDailyTournamentsAction(idToken: string) {
   try {
@@ -935,7 +963,15 @@ export async function runTournamentCycle(cronToken: string) {
   if (resetState.stagingSeasonOneResetInProgress === true || resetState.stagingFreshSeasonOneReset === true) {
     return { success: true, skipped: true, reason: 'STAGING_SEASON_ONE_RESET_IN_PROGRESS' };
   }
-  const generated = await generateDailyTournamentsInternal();
+  let generated: { date: string; created: string[] };
+  try {
+    generated = await generateDailyTournamentsInternal();
+  } catch (error: any) {
+    if (error?.message === 'STAGING_SEASON_ONE_RESET_IN_PROGRESS') {
+      return { success: true, skipped: true, reason: 'STAGING_SEASON_ONE_RESET_IN_PROGRESS', writesStarted: false };
+    }
+    throw error;
+  }
   const now = Date.now();
   // Retry participant history independently from active tournament stages.
   const pendingHistorySnap = await db.collection('tournaments_v1')

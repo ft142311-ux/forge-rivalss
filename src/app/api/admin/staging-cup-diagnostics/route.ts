@@ -667,7 +667,7 @@ async function readSeasonDiagnostics(db: any, config: Record<string, any>) {
       nextSeasonStart: preparedNextSeasonStart?.toISOString() || null,
     },
     historyCleanupPending: config.historyCleanupPending === true,
-    resetInProgress: config.stagingSeasonOneResetInProgress === true,
+    resetInProgress: config.stagingSeasonOneResetInProgress === true || config.stagingFreshSeasonOneReset === true,
   };
 }
 
