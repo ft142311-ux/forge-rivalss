@@ -4,18 +4,24 @@ import { readFileSync } from 'node:fs';
 
 const source = readFileSync(new URL('../src/app/actions/cup-engine.ts', import.meta.url), 'utf8');
 
-test('Pyramid Cup document and all preliminary fixtures are committed atomically', () => {
+test('Pyramid Cup document, snapshots and opening fixtures commit in one reset-fenced transaction', () => {
+  const helperStart = source.indexOf('export async function commitPyramidCupCreation');
+  const helperEnd = source.indexOf('export async function generatePyramidCup', helperStart);
+  assert.ok(helperStart >= 0 && helperEnd > helperStart);
+  const helper = source.slice(helperStart, helperEnd);
+  assert.match(helper, /db\\.runTransaction\\(async \\(tx: any\\) =>/);
+  assert.match(helper, /tx\\.get\\(configRef\\)/);
+  assert.match(helper, /stagingSeasonOneResetInProgress/);
+  assert.match(helper, /tx\\.create\\(snapshot\\.ref, snapshot\\.data\\)/);
+  assert.match(helper, /tx\\.create\\(fixture\\.ref, fixture\\.data\\)/);
+  assert.match(helper, /tx\\.create\\(cupRef, cupData\\)/);
+
   const start = source.indexOf('export async function generatePyramidCup');
   const end = source.indexOf('async function loadCup', start);
   assert.ok(start >= 0 && end > start);
   const generation = source.slice(start, end);
-  const firstFixtureWrite = generation.indexOf('batch.create(db.collection(MATCH_COLLECTIONS.cup)');
-  const cupCreate = generation.indexOf('batch.create(ref');
-  const commit = generation.indexOf('await batch.commit()');
-  assert.ok(firstFixtureWrite >= 0 && cupCreate > firstFixtureWrite);
-  assert.ok(commit > cupCreate);
-  assert.doesNotMatch(generation, /await ref\.create\(/);
-  assert.doesNotMatch(generation, /await ref\.update\(/);
+  assert.match(generation, /commitPyramidCupCreation\\(/);
+  assert.doesNotMatch(generation, /batch\\.commit\\(/);
 });
 
 test('concurrent Cup initialization treats only a winning root-document conflict as idempotent', () => {
