@@ -482,6 +482,7 @@ test('registration HTTP API enforces its boundary and safely initializes a club'
     ]);
 
     assert.equal(player.exists, true);
+    assert.equal(player.get('arena.capacity'), 5000);
     assert.equal(player.get('ownedPlayers').length, 10);
     assert.equal(botPlayer.exists, false);
     assert.equal(table.get(`stats.${uid}.rank`), 8);
