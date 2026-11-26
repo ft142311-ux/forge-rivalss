@@ -150,7 +150,9 @@ test('recovery plan comparison ignores object key order but preserves array orde
 test('ordinary season calendar never persists legacy recovery mode', () => {
   const source = readFileSync(new URL('../src/app/actions/season-calendar.ts', import.meta.url), 'utf8');
   const builder = source.slice(source.indexOf('async function buildSeasonCalendar'));
-  assert.doesNotMatch(builder, /preparedRecoveryMode:/);
+  assert.equal((builder.match(/preparedRecoveryMode: false/g) || []).length, 2,
+    'both prepared-world writes must explicitly disable legacy recovery mode');
+  assert.doesNotMatch(builder, /preparedRecoveryMode: true/);
   assert.equal(source.includes('prepareRecoveryCarryForwardPlan(db, activeSeasonBefore'), false,
     'legacy carry-forward planner must not have runtime call sites');
 });
