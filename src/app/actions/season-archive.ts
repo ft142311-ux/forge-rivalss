@@ -249,7 +249,7 @@ export function resolveArchivePrunePlan(
 
   const completedSeasons: number[] = [];
   for (const item of archives) {
-    const match = /^S([1-9]\\d*)$/.exec(String(item.id || ''));
+    const match = /^S([1-9]\d*)$/.exec(String(item.id || ''));
     const season = match ? Number(match[1]) : NaN;
     const archive = item.archive || {};
     if (!Number.isSafeInteger(season) || season >= targetSeason ||
