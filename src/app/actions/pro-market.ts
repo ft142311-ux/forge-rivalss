@@ -29,6 +29,7 @@ export async function ensureProMarketDailyDropAction(idToken: string) {
     const lotId = `sys_vtune_v900_final_standard_${today}`;
     const lotRef = db.collection('market_v7').doc(lotId);
     const systemLotsQuery = db.collection('market_v7').where('isSystem', '==', true);
+    const resetConfigRef = db.collection('system_v1').doc('season_config');
 
     const expiry = new Date(moscowNow);
     expiry.setDate(expiry.getDate() + 2);
@@ -36,10 +37,14 @@ export async function ensureProMarketDailyDropAction(idToken: string) {
     const generatedPlayer = generateVtunePlayer(today);
 
     const result = await db.runTransaction(async (tx) => {
-      const [systemLots, currentLot] = await Promise.all([
+      const [systemLots, currentLot, resetConfig] = await Promise.all([
         tx.get(systemLotsQuery),
         tx.get(lotRef),
+        tx.get(resetConfigRef),
       ]);
+      if (resetConfig.exists && resetConfig.data()?.stagingSeasonOneResetInProgress === true) {
+        throw new Error('STAGING_SEASON_ONE_RESET_IN_PROGRESS');
+      }
 
       let removed = 0;
       let retainedWithBids = 0;
@@ -121,9 +126,16 @@ export async function listYouthPlayerOnMarketAction(idToken: string, playerId: s
     const expiresAt = new Date(now + 12 * 60 * 60 * 1000).toISOString();
     const marketId = `youth_${uid}_${now}`;
     const marketRef = db.collection('market_v7').doc(marketId);
+    const resetConfigRef = db.collection('system_v1').doc('season_config');
 
     await db.runTransaction(async (tx) => {
-      const profileSnap = await tx.get(profileRef);
+      const [profileSnap, resetConfig] = await Promise.all([
+        tx.get(profileRef),
+        tx.get(resetConfigRef),
+      ]);
+      if (resetConfig.exists && resetConfig.data()?.stagingSeasonOneResetInProgress === true) {
+        throw new Error('STAGING_SEASON_ONE_RESET_IN_PROGRESS');
+      }
       if (!profileSnap.exists) throw new Error('PLAYER_NOT_FOUND');
       const profile: any = profileSnap.data() || {};
       const youthPlayers: any[] = Array.isArray(profile.youthAcademyPlayers) ? [...profile.youthAcademyPlayers] : [];
