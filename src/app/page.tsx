@@ -65,7 +65,17 @@ export default function Home() {
     let cancelled = false;
     const refreshUnreadReports = async () => {
       try {
-        const result = await getMyUnreadMatchReportsCountAction(await user.getIdToken());
+        const locallyViewedIds = (() => {
+          try {
+            const raw = JSON.parse(localStorage.getItem('lote_game_state_v245:viewed-match-ids') || '[]');
+            return Array.isArray(raw)
+              ? raw.filter((value): value is string => typeof value === 'string' && value.length > 0 && value.length <= 180).slice(-2000)
+              : [];
+          } catch {
+            return [];
+          }
+        })();
+        const result = await getMyUnreadMatchReportsCountAction(await user.getIdToken(), locallyViewedIds);
         if (!cancelled) setServerUnreadReportsCount(result?.success ? Number(result.count || 0) : 0);
       } catch (error) {
         console.error('[HOME REPORT BADGE] count lookup failed', error);

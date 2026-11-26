@@ -67,3 +67,12 @@ test('a report mirrored across mode collections is counted once by its route ID'
   ];
   assert.equal(countUnreadMatchReportRecords(records, uid, createdAt, league), 1);
 });
+
+
+test('locally acknowledged report IDs suppress stale server badge entries across all collections', () => {
+  const records = [
+    record(MATCH_COLLECTIONS.league, 'local-viewed', { homeId: uid }),
+    record(MATCH_COLLECTIONS.cup, 'still-unread', { awayId: uid }),
+  ];
+  assert.equal(countUnreadMatchReportRecords(records, uid, createdAt, league, ['local-viewed']), 1);
+});

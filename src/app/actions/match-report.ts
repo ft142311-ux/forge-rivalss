@@ -183,7 +183,7 @@ export async function getMyLeagueMatchReportsAction(idToken: string) {
 
 
 /** Authenticated unread-report badge count across every match mode. */
-export async function getMyUnreadMatchReportsCountAction(idToken: string) {
+export async function getMyUnreadMatchReportsCountAction(idToken: string, rawLocalViewedIds: unknown = []) {
   const { uid } = await requireServerActor(idToken);
   const db = getAdminDb();
   const [profileSnap, configSnap] = await Promise.all([
@@ -249,11 +249,17 @@ export async function getMyUnreadMatchReportsCountAction(idToken: string) {
     addSnapshot(querySpecs[index].collectionName, snapshot)
   );
 
+  const locallyViewedIds = Array.isArray(rawLocalViewedIds)
+    ? rawLocalViewedIds
+        .filter((value): value is string => typeof value === 'string' && value.length > 0 && value.length <= 180)
+        .slice(-2000)
+    : [];
   const count = countUnreadMatchReportRecords(
     [...records.values()],
     uid,
     profile.createdAt,
     league,
+    locallyViewedIds,
   );
   return { success: true, season, count };
 }

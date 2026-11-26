@@ -20,15 +20,17 @@ export function countUnreadMatchReportRecords(
   uid: string,
   profileCreatedAt: any,
   league: UnreadMatchReportLeagueContext,
+  locallyViewedIds: readonly string[] = [],
 ): number {
   if (!uid || !Array.isArray(records)) return 0;
+  const locallyViewed = new Set(locallyViewedIds);
   const unreadIds = new Set<string>();
   for (const record of records) {
     const match = record?.match || {};
     const id = String(record?.id || match.id || '');
     if (!id) continue;
     const finished = isMatchReportFinished(match);
-    if (!finished || match.seen === true || match.reportStatus === 'viewed') continue;
+    if (!finished || match.seen === true || match.reportStatus === 'viewed' || locallyViewed.has(id)) continue;
     if (!isMatchWithinClubLifetime(match, profileCreatedAt)) continue;
 
     const participant = [
