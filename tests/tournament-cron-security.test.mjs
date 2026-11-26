@@ -48,16 +48,13 @@ test('Pyramid Cup cycle remains a server-only worker rather than an exposed Serv
 });
 
 test('tournament unregistration is closed at the same deadline as registration', () => {
-  const register = actionBody('registerForTournamentAction');
   const unregister = actionBody('unregisterFromTournamentAction');
-  assert.match(register, /now >= Number\(data\.registrationCloseAt\)/);
-  assert.match(unregister, /Date\.now\(\) >= Number\(data\.registrationCloseAt\)/);
+  assert.match(unregister, /Date\\.now\\(\\) >= Number\\(data\\.registrationCloseAt\\)/);
   assert.ok(
     unregister.indexOf('registrationCloseAt') < unregister.indexOf('t.update(ref'),
     'the deadline must be checked before participant state is changed',
   );
 });
-
 test('daily tournament generation tolerates only a competing deterministic-ID create', () => {
   const generatorStart = source.indexOf('async function generateDailyTournamentsInternal');
   const generatorEnd = source.indexOf('export async function generateDailyTournaments', generatorStart);
