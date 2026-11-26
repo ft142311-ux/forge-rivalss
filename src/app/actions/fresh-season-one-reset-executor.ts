@@ -139,12 +139,13 @@ function isLeagueFixture(data: Record<string, any>) {
 }
 
 async function removeOldSeasonOneData(db: any, assertOwnership?: () => Promise<void>) {
-  const [matches, cupMatches, cupSnapshots, archiveMatches, slotHistory] = await Promise.all([
+  const [matches, cupMatches, cupSnapshots, archiveMatches, slotHistory, marketLots] = await Promise.all([
     db.collection('matches_v2').where('season', '==', 1).get(),
     db.collection('cup_matches').where('cupId', '==', CUP_ID).get(),
     db.collection('cup_participant_snapshots_v1').doc(CUP_ID).collection('teams').get(),
     db.collection('league_season_archives_v1').doc('S1').collection('matches').get(),
     db.collection('league_slot_history_v1').where('season', '==', 1).where('leagueId', '==', 'ALPHA').get(),
+    db.collection('market_v7').get(),
   ]);
   const disposableMatches = matches.docs.filter((doc: any) => {
     const data = doc.data() || {};
@@ -174,6 +175,9 @@ async function removeOldSeasonOneData(db: any, assertOwnership?: () => Promise<v
   deleted += await deleteDocs(db, cupRewards.docs.filter((doc: any) =>
     ['PYRAMID_CUP_CHAMPION_REWARD', 'PYRAMID_CUP_FINALIST_REWARD'].includes(String(doc.data()?.type || ''))), assertOwnership);
   deleted += await deleteDocs(db, slotHistory.docs, assertOwnership);
+  // Listings and escrow references belong to the old club/player identities.
+  // They are durably archived first, then removed before starter profiles are rebuilt.
+  deleted += await deleteDocs(db, marketLots.docs, assertOwnership);
 
   await assertOwnership?.();
   await db.collection('cup_pyramid_v1').doc(CUP_ID).delete().catch((error: any) => {
