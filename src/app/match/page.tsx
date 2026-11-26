@@ -102,12 +102,10 @@ function MatchContent() {
       const localCandidate = (matchHistory || []).find(
         (match: any) => String(match?.id || '') === matchIdFromUrl
       );
-      const localMatchIsLeague = String(localCandidate?.type || localCandidate?.matchType || '').toLowerCase() === 'league' ||
-        Boolean(localCandidate?.leagueId);
-      const localMatch = localCandidate && (
-        !localMatchIsLeague ||
-        (Boolean(profile) && isMatchWithinClubLifetime(localCandidate, profile.createdAt))
-      ) ? localCandidate : null;
+      const localMatch = localCandidate && profile &&
+        isMatchWithinClubLifetime(localCandidate, profile.createdAt)
+        ? localCandidate
+        : null;
 
       try {
         // If Firestore is not ready, use the local history fallback instead

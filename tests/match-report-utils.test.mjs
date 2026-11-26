@@ -111,7 +111,7 @@ test('club lifetime cutoff rejects recycled-slot fixtures scheduled before regis
   assert.equal(isMatchWithinClubLifetime({ startTime: '2026-11-01T10:00:00.000Z' }, null), true);
 });
 
-test('league report reads and acknowledgements enforce the current club lifetime', () => {
+test('server report reads and acknowledgements enforce the current club lifetime', () => {
   const action = readFileSync(new URL('../src/app/actions/match-report.ts', import.meta.url), 'utf8');
   assert.match(action, /isMatchWithinClubLifetime\(match, profile\.createdAt\)/);
   assert.match(action, /isMatchWithinClubLifetime\(m, profile\.createdAt\)/);
@@ -127,8 +127,15 @@ test('unread report queue and home badge exclude local history from a prior club
   assert.match(home, /isMatchWithinClubLifetime\(m, profile\.createdAt\)/);
 });
 
-test('match player does not fall back to an out-of-lifetime league report after server denial', () => {
+test('match player does not fall back to a report from a prior club lifetime', () => {
   const page = readFileSync(new URL('../src/app/match/page.tsx', import.meta.url), 'utf8');
   assert.match(page, /isMatchWithinClubLifetime\(localCandidate, profile\.createdAt\)/);
   assert.match(page, /response\.error === 'MATCH_ACCESS_DENIED' \? null/);
+});
+
+
+test('friendly and association report subscriptions are scoped to the current club lifetime', () => {
+  const reports = readFileSync(new URL('../src/app/reports/page.tsx', import.meta.url), 'utf8');
+  assert.match(reports, /isMatchWithinClubLifetime\(m, profile\.createdAt\).*friendly/);
+  assert.match(reports, /isMatchWithinClubLifetime\(m, profile\.createdAt\).*basket/);
 });

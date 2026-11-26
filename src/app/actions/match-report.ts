@@ -59,12 +59,9 @@ export async function getMatchReportAction(idToken: string, matchId: string) {
     const match: any = snap.data() || {};
     const participant = [match.homeId, match.awayId, match.homeUid, match.awayUid, match.hostId, match.challengerId]
       .some((participantId) => String(participantId || '') === uid);
-    const profileSnap = collectionName === MATCH_COLLECTIONS.league
-      ? await db.collection('players_v14').doc(uid).get()
-      : null;
-    const profile = profileSnap?.exists ? profileSnap.data() || {} : null;
-    if (collectionName === MATCH_COLLECTIONS.league && profile &&
-        !isMatchWithinClubLifetime(match, profile.createdAt)) {
+    const profileSnap = await db.collection('players_v14').doc(uid).get();
+    const profile = profileSnap.exists ? profileSnap.data() || {} : null;
+    if (!profile || !isMatchWithinClubLifetime(match, profile.createdAt)) {
       return { success: false, error: 'MATCH_ACCESS_DENIED' };
     }
     const rankParticipant = !participant
@@ -109,12 +106,9 @@ export async function markMatchViewedAction(idToken: string, matchId: string) {
     const m = snap.data() || {};
     const isParticipant = [m.homeId, m.awayId, m.homeUid, m.awayUid, m.hostId, m.challengerId]
       .some((participantId) => String(participantId || '') === uid);
-    const profileSnap = collectionName === MATCH_COLLECTIONS.league
-      ? await db.collection('players_v14').doc(uid).get()
-      : null;
-    const profile = profileSnap?.exists ? profileSnap.data() || {} : null;
-    if (collectionName === MATCH_COLLECTIONS.league && profile &&
-        !isMatchWithinClubLifetime(m, profile.createdAt)) {
+    const profileSnap = await db.collection('players_v14').doc(uid).get();
+    const profile = profileSnap.exists ? profileSnap.data() || {} : null;
+    if (!profile || !isMatchWithinClubLifetime(m, profile.createdAt)) {
       return { success: false, error: 'MATCH_ACCESS_DENIED' };
     }
     const rankParticipant = !isParticipant

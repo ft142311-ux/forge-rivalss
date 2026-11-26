@@ -140,11 +140,11 @@ export default function ReportsPage() {
       .map((m: any) => ({ ...m, source: 'cup', isUnread: true }));
 
     const friendly = [...currentClubPersonal.filter((m: any) => m?.type === 'friendly' || m?.matchType === 'friendly'), ...(friendlyHostReports || []), ...(friendlyAwayReports || [])]
-      .filter((m: any) => (m?.type === 'friendly' || m?.matchType === 'friendly') && m?.isFinished === true && m?.seen !== true && m?.reportStatus !== 'viewed' && !isLocallyViewed(m))
+      .filter((m: any) => isMatchWithinClubLifetime(m, profile.createdAt) && (m?.type === 'friendly' || m?.matchType === 'friendly') && m?.isFinished === true && m?.seen !== true && m?.reportStatus !== 'viewed' && !isLocallyViewed(m))
       .map((m: any) => ({ ...m, source: 'friendly', isUnread: true }));
 
     const association = [...(associationHostMatches || []), ...(associationChallengerMatches || [])]
-      .filter((m: any) => (m?.type === 'basket' || m?.matchType === 'basket' || m?.matchType === 'cw-basket') && m?.isFinished === true && m?.seen !== true && m?.reportStatus !== 'viewed' && !isLocallyViewed(m))
+      .filter((m: any) => isMatchWithinClubLifetime(m, profile.createdAt) && (m?.type === 'basket' || m?.matchType === 'basket' || m?.matchType === 'cw-basket') && m?.isFinished === true && m?.seen !== true && m?.reportStatus !== 'viewed' && !isLocallyViewed(m))
       .map((m: any) => ({ ...m, source: 'basket', isUnread: true }));
 
     const tournament = currentClubPersonal
