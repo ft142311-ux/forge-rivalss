@@ -1777,7 +1777,12 @@ export async function ensureSeasonCalendar(
     }
   }
 
-  const directRecoveryBuild = targetSeason > sourceSeason + 1;
+  // Even an explicit or stale requested target is clamped to the immediate
+  // successor. This also covers pristine bootstrap callers that supply a target.
+  if (targetSeason > sourceSeason) {
+    targetSeason = resolveNextSeasonTarget(sourceSeason, targetSeason);
+  }
+  const directRecoveryBuild = false;
   // A project-fenced Beta reset explicitly marks the active Season 1 as
   // rebuilding after its old S1 fixtures have been removed. In this one
   // controlled state, the source-season fixture preflight must not reject the
