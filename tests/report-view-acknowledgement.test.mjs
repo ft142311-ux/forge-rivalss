@@ -44,12 +44,12 @@ test('view acknowledgement rechecks the reset marker and report in one transacti
   const start = matchReportAction.indexOf('export async function markMatchViewedAction');
   const end = matchReportAction.indexOf('/** Authenticated, profile-scoped queue', start);
   const action = matchReportAction.slice(start, end);
-  assert.match(action, /db\\.runTransaction\\(async \\(tx: any\\) =>/);
-  assert.match(action, /tx\\.get\\(configRef\\)/);
-  assert.match(action, /stagingSeasonOneResetInProgress/);
-  assert.match(action, /tx\\.get\\(ref\\)/);
-  assert.match(action, /tx\\.update\\(ref/);
-  assert.doesNotMatch(action, /await ref\\.update\\(/);
+  assert.ok(action.includes('db.runTransaction(async (tx: any) =>'));
+  assert.ok(action.includes('tx.get(configRef)'));
+  assert.ok(action.includes('stagingSeasonOneResetInProgress'));
+  assert.ok(action.includes('tx.get(ref)'));
+  assert.ok(action.includes('tx.update(ref'));
+  assert.ok(!action.includes('await ref.update('));
 });
 
 test('legacy rank-based report access requires exact league, group and division coordinates', () => {

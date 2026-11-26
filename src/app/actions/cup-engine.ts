@@ -428,6 +428,7 @@ export async function generatePyramidCup(
   const teams = await loadAllLeagueTeams(db, season);
   const seasonStart = context.seasonStart;
   const first = createPreliminary(teams);
+  const scheduledAt = Timestamp.fromDate(roundDate(seasonStart, ROUND_DAYS[0]));
   const snapshotWrites = teams.map(team => ({
     ref: participantSnapshotRef(db, season, team.id),
     data: {
