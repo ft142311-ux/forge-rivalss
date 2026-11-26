@@ -48,5 +48,6 @@ test('age calculation fails closed for invalid or future dates', () => {
 
 test('player lifecycle action repairs malformed birth dates before computing age', () => {
   assert.match(action, /resolvePlayerBirthDate\(player, currentAge, nowMs, needsMigration\)/);
+  assert.match(action, /birthDate !== player\.birthDate/);
   assert.match(action, /ageFromBirthDate\(birthDate, nowMs\)/);
 });
