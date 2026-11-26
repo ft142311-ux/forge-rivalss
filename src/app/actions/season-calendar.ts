@@ -838,9 +838,9 @@ async function buildSeasonCalendar(lease: BuildLease, pristineFirstWorld = false
     const planSourceSeason = directRecovery ? seasonNumber - 1 : activeSeasonBefore;
     const planSnap = await db.collection('league_season_rollovers_v1').doc(`S${seasonNumber}`).get();
     const savedPlan = planSnap.exists ? planSnap.data() || {} : null;
-    if (savedPlan && validateRolloverPlan(savedPlan, planSourceSeason, seasonNumber).valid &&
-        isRolloverPlanPublicationReady(savedPlan) &&
-        (!directRecovery || savedPlan.mode === 'recovery_carry_forward')) {
+    if (savedPlan && savedPlan.mode !== 'recovery_carry_forward' &&
+        validateRolloverPlan(savedPlan, planSourceSeason, seasonNumber).valid &&
+        isRolloverPlanPublicationReady(savedPlan)) {
       rolloverPlan = savedPlan;
     } else if (directRecovery) {
       const recovery = await prepareRecoveryCarryForwardPlan(db, activeSeasonBefore, seasonNumber, lease);
@@ -908,7 +908,9 @@ async function buildSeasonCalendar(lease: BuildLease, pristineFirstWorld = false
     // activeSeasonNumber before all tables/slots/matches were committed.
     const planSnap = await db.collection('league_season_rollovers_v1').doc(`S${seasonNumber}`).get();
     const savedPlan = planSnap.exists ? planSnap.data() || {} : null;
-    if (validateRolloverPlan(savedPlan, seasonNumber - 1, seasonNumber).valid && isRolloverPlanPublicationReady(savedPlan)) {
+    if (savedPlan?.mode !== 'recovery_carry_forward' &&
+        validateRolloverPlan(savedPlan, seasonNumber - 1, seasonNumber).valid &&
+        isRolloverPlanPublicationReady(savedPlan)) {
       rolloverPlan = savedPlan;
     }
   }
@@ -956,7 +958,7 @@ async function buildSeasonCalendar(lease: BuildLease, pristineFirstWorld = false
         preparedCalendarRevision: CALENDAR_REVISION,
         preparedWorldReady: current.preparedWorldReady === true && Number(current.preparedSeasonNumber) === seasonNumber,
         preparedPublished: current.preparedPublished === true && Number(current.preparedSeasonNumber) === seasonNumber,
-        preparedRecoveryMode: directRecovery || rolloverPlan?.mode === 'recovery_carry_forward',
+        preparedRecoveryMode: false,
         preparedRolloverPlanSignature: rolloverPlan?.mode === 'recovery_carry_forward'
           ? getRecoveryRolloverPlanSignature(rolloverPlan)
           : FieldValue.delete(),
@@ -1152,7 +1154,7 @@ async function buildSeasonCalendar(lease: BuildLease, pristineFirstWorld = false
       preparedSeasonStart: seasonStart.toISOString(),
       preparedNextSeasonStart: nextSeasonStart.toISOString(),
       preparedCalendarRevision: CALENDAR_REVISION,
-      preparedRecoveryMode: directRecovery || rolloverPlan?.mode === 'recovery_carry_forward',
+      preparedRecoveryMode: false,
         preparedRolloverPlanSignature: rolloverPlan?.mode === 'recovery_carry_forward'
           ? getRecoveryRolloverPlanSignature(rolloverPlan)
           : FieldValue.delete(),
@@ -1453,8 +1455,10 @@ export async function activatePublishedSeason() {
   const sourceSeason = Number(initial.activeSeasonNumber || 1);
   const targetSeason = Number(initial.preparedSeasonNumber || initial.nextSeasonNumber || 0);
   const recoveryMode = initial.preparedRecoveryMode === true;
-  const multiSeasonRecovery = recoveryMode && targetSeason > sourceSeason + 1;
-  if (!Number.isSafeInteger(targetSeason) || (targetSeason !== sourceSeason + 1 && !multiSeasonRecovery)) {
+  if (recoveryMode) {
+    return { success: false, action: 'WORLD_NOT_READY', reason: 'SEQUENTIAL_RECOVERY_MODE_DISABLED', sourceSeason, targetSeason, writesStarted: false };
+  }
+  if (!Number.isSafeInteger(targetSeason) || targetSeason !== sourceSeason + 1) {
     return { success: false, action: 'WORLD_NOT_READY', reason: 'INVALID_ACTIVATION_TARGET', sourceSeason, targetSeason };
   }
   // Revalidate immediately before activation as well: a Cup removed or
