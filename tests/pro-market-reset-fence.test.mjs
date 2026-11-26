@@ -11,6 +11,7 @@ test('PRO daily lot rotation reads the Season 1 reset marker before mutating mar
   assert.match(action, /const resetConfigRef = db\.collection\('system_v1'\)\.doc\('season_config'\)/);
   assert.match(action, /tx\.get\(resetConfigRef\)/);
   assert.match(action, /stagingSeasonOneResetInProgress === true/);
+  assert.match(action, /stagingFreshSeasonOneReset === true/);
   assert.match(action, /throw new Error\('STAGING_SEASON_ONE_RESET_IN_PROGRESS'\)/);
   assert.ok(action.indexOf('stagingSeasonOneResetInProgress === true') < action.indexOf('tx.delete(oldLot.ref)'));
   assert.ok(action.indexOf('stagingSeasonOneResetInProgress === true') < action.indexOf('tx.set(lotRef'));
@@ -21,6 +22,7 @@ test('youth player listing reads the Season 1 reset marker before reserving a pl
   const action = source.slice(start);
   assert.match(action, /tx\.get\(resetConfigRef\)/);
   assert.match(action, /stagingSeasonOneResetInProgress === true/);
+  assert.match(action, /stagingFreshSeasonOneReset === true/);
   assert.match(action, /throw new Error\('STAGING_SEASON_ONE_RESET_IN_PROGRESS'\)/);
   assert.ok(action.indexOf('stagingSeasonOneResetInProgress === true') < action.indexOf('tx.create(marketRef'));
   assert.ok(action.indexOf('stagingSeasonOneResetInProgress === true') < action.indexOf('tx.update(profileRef'));
