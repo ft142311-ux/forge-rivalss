@@ -485,7 +485,6 @@ test('Firestore Emulator prunes S1-S4 after S6 activation, retains verified S5, 
       for (const ref of cleanupRefs.slice(offset, offset + 400)) batch.delete(ref);
       await batch.commit().catch(() => undefined);
     }
-    await deleteApp((await import('firebase-admin/app')).getApps().find(app => app.name.startsWith('season-publication-test-'))).catch(() => undefined);
   });
 
   const initialArchives = [];
