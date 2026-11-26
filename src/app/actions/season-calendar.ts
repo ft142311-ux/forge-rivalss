@@ -1676,9 +1676,9 @@ export async function ensureSeasonCalendar(
     }
   }
 
-  // A delayed cron may find several elapsed boundaries. Completed seasons are
-  // archived; genuinely incomplete seasons may be skipped. The final target is
-  // always the season currently active according to the canonical date plan.
+  // A delayed cron may observe several elapsed boundaries, but it may only
+  // prepare the immediate successor. Each intervening season must be activated
+  // and completed through the same archive and rollover gates before advancing.
   if (!pristineFirstWorld && configSnap.exists) {
     const hardcodedSeasonStart = sourceSeason === 1
       ? new Date(FIRST_SEASON_START_ISO)
