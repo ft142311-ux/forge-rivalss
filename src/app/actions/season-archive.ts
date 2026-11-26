@@ -219,10 +219,12 @@ function getUniqueSeasonArchives(
 }
 
 export function getVisibleSeasonArchives(archives: any[]): any[] {
+  // The archive UI represents the immediately preceding season only. Historical
+  // lifetime records remain in their dedicated collections, not as a season list.
   return getUniqueSeasonArchives(
     archives,
     archive => isCompletedSeasonArchive(archive) || isRecoveredSeasonArchive(archive),
-  );
+  ).slice(0, 1);
 }
 
 export function getCompletedSeasonArchives(archives: any[]): any[] {
