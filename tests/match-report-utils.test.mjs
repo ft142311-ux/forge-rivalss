@@ -178,7 +178,7 @@ test('reports queue uses the shared completion predicate for every game mode', (
 
 test('view acknowledgement updates an existing report without recreating a deleted document', () => {
   const action = readFileSync(new URL('../src/app/actions/match-report.ts', import.meta.url), 'utf8');
-  assert.match(action, /await ref\.update\(\{\s*seen: true/);
+  assert.match(action, /tx\.update\(ref, \{\s*seen: true/);
   assert.match(action, /persisted: false, localOnly: true/);
   assert.doesNotMatch(action, /await ref\.set\(\{\s*seen: true/);
 });
