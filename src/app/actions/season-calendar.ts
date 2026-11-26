@@ -721,10 +721,7 @@ async function buildSeasonCalendar(lease: BuildLease, pristineFirstWorld = false
   // Strip stale rank-9/duplicate rows before rollover reads the official table.
   // This preserves scores and the existing eight canonical ranks.
   const sourceSeasonNumber = Number(current.activeSeasonNumber || 1);
-  const recoveryTarget = Number(current.recoveryTargetSeason || 0);
   const requestedRecoveryTarget = Number(current.nextSeasonNumber || current.preparationTargetSeason || current.preparedSeasonNumber || 0);
-  // Runtime transitions are always sequential; stale recovery targets cannot skip seasons.
-  const directRecovery = false;
   const stagingFreshSeasonOneReset =
     current.stagingFreshSeasonOneReset === true &&
     sourceSeasonNumber === 1 &&
@@ -734,8 +731,7 @@ async function buildSeasonCalendar(lease: BuildLease, pristineFirstWorld = false
   // A reset executor deliberately removes the old Season 1 fixtures before
   // rebuilding the calendar. Do not run the normal source-season repair gate
   // against that intentionally empty intermediate state.
-  const skipSourceRepair = directRecovery ||
-    requestedRecoveryTarget <= sourceSeasonNumber ||
+  const skipSourceRepair = requestedRecoveryTarget <= sourceSeasonNumber ||
     stagingFreshSeasonOneReset;
   const sourceRepairPreflight = skipSourceRepair
     ? null
@@ -770,14 +766,8 @@ async function buildSeasonCalendar(lease: BuildLease, pristineFirstWorld = false
     ? addDays(seasonStart, TOTAL_CYCLE_DAYS)
     : resolvedSourceWindow.nextSeasonStart;
 
-  // Preserve the source world's actual next boundary before the one-step
-  // scheduler advances its local cursor. Multi-season recovery must derive from
-  // this persisted boundary, including CLEAN_S1_V1's custom first-season span.
-  const sourceNextBoundary = new Date(nextBoundary.getTime());
-
-  // Normal progression advances one boundary per invocation. A date-derived
-  // recovery target may override this below only after every elapsed season is
-  // classified as completed (and archived) or genuinely incomplete (skipped).
+  // Each scheduler invocation advances at most one boundary. Every season
+  // must pass its own completed-source archive and rollover gates.
   if (!pristineFirstWorld) {
     const boundaryStep = advanceAtMostOneSeasonBoundary(seasonNumber, seasonStart, nextBoundary, now, TOTAL_CYCLE_DAYS);
     seasonNumber = boundaryStep.seasonNumber;
@@ -785,26 +775,10 @@ async function buildSeasonCalendar(lease: BuildLease, pristineFirstWorld = false
     nextBoundary = boundaryStep.nextBoundary;
   }
 
-  if (directRecovery) {
-    // Recovery is allowed to bypass unavailable intermediate seasons only
-    // after their persisted results have been classified and a verified
-    // carry-forward/placement plan has been prepared. Derive dates from the
-    // source world's real next boundary rather than a hard-coded S1 timestamp.
-    const recoveryWindow = deriveRecoverySeasonWindow(
-      sourceSeasonNumber,
-      sourceNextBoundary,
-      recoveryTarget,
-      TOTAL_CYCLE_DAYS,
-    );
-    seasonNumber = recoveryTarget;
-    seasonStart = recoveryWindow.seasonStart;
-    nextBoundary = recoveryWindow.nextSeasonStart;
-  }
-
   const phase = String(current.phase || '').toUpperCase();
   const requestedTarget = Number(current.nextSeasonNumber || current.preparationTargetSeason || 0);
   const transitionRequested = ['FINALIZING', 'GENERATING_NEXT', 'PREPARING_NEXT_SEASON', 'PREPARATION', 'PUBLISHED'].includes(phase) || (phase === 'WORLD_BUILDING' && requestedTarget > Number(current.activeSeasonNumber || 1));
-  if (transitionRequested && !directRecovery) {
+  if (transitionRequested) {
     // A stale/corrupt target must never jump over an intermediate season.
     // Each season requires its own archive, standings, calendar and publication gates.
     const forcedTarget = resolveNextSeasonTarget(Number(current.activeSeasonNumber || 1), requestedTarget);
@@ -829,61 +803,30 @@ async function buildSeasonCalendar(lease: BuildLease, pristineFirstWorld = false
     String(current.seasonStart || '') !== seasonStart.toISOString();
   const needsRepair = Number(current.calendarRevision || 0) !== CALENDAR_REVISION;
 
-  // Never build a target world without a verified placement plan. Normal
-  // transitions require a completed archive; recovery plans explicitly mark
-  // incomplete seasons as skipped and carry forward only trusted team identities.
+  // Never build a target world without a verified completed archive and
+  // deterministic placement plan for its immediate predecessor.
   let rolloverPlan: any = null;
   const activeSeasonBefore = Number(current.activeSeasonNumber || 1);
   if (configSnap.exists && seasonChanged && seasonNumber > activeSeasonBefore) {
-    const planSourceSeason = directRecovery ? seasonNumber - 1 : activeSeasonBefore;
+    const planSourceSeason = activeSeasonBefore;
     const planSnap = await db.collection('league_season_rollovers_v1').doc(`S${seasonNumber}`).get();
     const savedPlan = planSnap.exists ? planSnap.data() || {} : null;
     if (savedPlan && savedPlan.mode !== 'recovery_carry_forward' &&
         validateRolloverPlan(savedPlan, planSourceSeason, seasonNumber).valid &&
         isRolloverPlanPublicationReady(savedPlan)) {
       rolloverPlan = savedPlan;
-    } else if (directRecovery) {
-      const recovery = await prepareRecoveryCarryForwardPlan(db, activeSeasonBefore, seasonNumber, lease);
-      if (!recovery.ready) {
-        return {
-          success: false,
-          seasonNumber: activeSeasonBefore,
-          targetSeasonNumber: seasonNumber,
-          worldReady: false,
-          waitingForSeasonResults: true,
-          rollover: { ready: false, reason: recovery.reason, details: recovery.details },
-          writesStarted: false,
-        };
-      }
-      rolloverPlan = recovery.plan;
     } else {
       const rollover = await prepareSeasonRollover(db, activeSeasonBefore, seasonNumber);
       if (!rollover.ready) {
-        const canSkipIncompleteSeason = false;
-        if (!canSkipIncompleteSeason) {
-          return {
-            success: false, seasonNumber: activeSeasonBefore,
-            targetSeasonNumber: seasonNumber, worldReady: false,
-            waitingForSeasonResults: true, rollover,
-            repairedSourceTables,
-            createdMatches: 0, repairedMatches: 0,
-            totalExpectedMatches: TOTAL_GROUPS * TEAMS_PER_GROUP * (TEAMS_PER_GROUP - 1),
-            totalExpectedSlots: TOTAL_GROUPS * TEAMS_PER_GROUP,
-          };
-        }
-        const recovery = await prepareRecoveryCarryForwardPlan(db, activeSeasonBefore, seasonNumber, lease);
-        if (!recovery.ready) {
-          return {
-            success: false,
-            seasonNumber: activeSeasonBefore,
-            targetSeasonNumber: seasonNumber,
-            worldReady: false,
-            waitingForSeasonResults: true,
-            rollover: { ready: false, reason: recovery.reason, details: recovery.details, originalRollover: rollover },
-            writesStarted: false,
-          };
-        }
-        rolloverPlan = recovery.plan;
+        return {
+          success: false, seasonNumber: activeSeasonBefore,
+          targetSeasonNumber: seasonNumber, worldReady: false,
+          waitingForSeasonResults: true, rollover,
+          repairedSourceTables,
+          createdMatches: 0, repairedMatches: 0,
+          totalExpectedMatches: TOTAL_GROUPS * TEAMS_PER_GROUP * (TEAMS_PER_GROUP - 1),
+          totalExpectedSlots: TOTAL_GROUPS * TEAMS_PER_GROUP,
+        };
       }
       if (!rolloverPlan) {
         const preparedPlanSnap = await db.collection('league_season_rollovers_v1').doc(`S${seasonNumber}`).get();
@@ -1782,7 +1725,6 @@ export async function ensureSeasonCalendar(
   if (targetSeason > sourceSeason) {
     targetSeason = resolveNextSeasonTarget(sourceSeason, targetSeason);
   }
-  const directRecoveryBuild = false;
   // A project-fenced Beta reset explicitly marks the active Season 1 as
   // rebuilding after its old S1 fixtures have been removed. In this one
   // controlled state, the source-season fixture preflight must not reject the
@@ -1792,7 +1734,7 @@ export async function ensureSeasonCalendar(
     sourceSeason === 1 &&
     targetSeason === 1 &&
     config.worldReady !== true;
-  const beforeLockPreflight = pristineFirstWorld || directRecoveryBuild || stagingFreshSeasonOneReset
+  const beforeLockPreflight = pristineFirstWorld || stagingFreshSeasonOneReset
     ? { ready: true, observedCanonicalMatches: 0, diagnostics: [] as any[] }
     : await inspectCalendarRepairPreflight(db, sourceSeason);
   const canClassifyIncompleteSource = targetSeason > sourceSeason &&
@@ -1817,7 +1759,7 @@ export async function ensureSeasonCalendar(
     commit: writes => commitSeasonCalendarWrites(db, lock.ownerId, lock.token, writes),
   };
   try {
-    const lockedPreflight = pristineFirstWorld || directRecoveryBuild || stagingFreshSeasonOneReset
+    const lockedPreflight = pristineFirstWorld || stagingFreshSeasonOneReset
       ? { ready: true, observedCanonicalMatches: 0, diagnostics: [] as any[] }
       : await inspectCalendarRepairPreflight(db, sourceSeason);
     const canClassifyLockedIncompleteSource = targetSeason > sourceSeason &&
@@ -1836,7 +1778,7 @@ export async function ensureSeasonCalendar(
         planRef.get(),
         inspectCanonicalSeason(db, targetSeason),
       ]);
-      const planSource = directRecoveryBuild ? targetSeason - 1 : sourceSeason;
+      const planSource = sourceSeason;
       const plan = planSnap.exists ? planSnap.data() || {} : null;
       const publishedReady = latestConfig.preparedWorldReady === true &&
         validateRolloverPlan(plan, planSource, targetSeason).valid &&
@@ -1877,7 +1819,7 @@ export async function ensureSeasonCalendar(
         nextSeasonNumber: targetSeason,
         preparationTargetSeason: targetSeason,
         preparedSeasonNumber: targetSeason,
-        ...(directRecoveryBuild ? { recoveryTargetSeason: targetSeason } : {}),
+        recoveryTargetSeason: FieldValue.delete(),
         preparedWorldReady: config.preparedWorldReady === true && Number(config.preparedSeasonNumber) === targetSeason,
         updatedAt: FieldValue.serverTimestamp(),
       }, options: { merge: true } }]);
