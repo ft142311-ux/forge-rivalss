@@ -38,7 +38,9 @@ test('interrupted cup initialization recreates only missing fixtures and preserv
   assert.match(recovery, /db\.runTransaction\(async \(tx: any\) =>/);
   assert.match(recovery, /tx\.get\(entry\.dedicatedRef\)/);
   assert.match(recovery, /tx\.get\(entry\.legacyRef\)/);
-  assert.match(recovery, /snapshots\[index\]\.dedicated\.exists \|\| snapshots\[index\]\.legacy\.exists/);
+  assert.match(recovery, /const existing = snapshots\[index\]\.dedicated\.exists/);
+  assert.match(recovery, /snapshots\[index\]\.legacy\.exists \? snapshots\[index\]\.legacy\.data\(\) \|\| \{\} : null/);
+  assert.match(recovery, /isCupRoundFixtureCompatible\(existing, entry\.expectedFixture\)/);
   assert.match(recovery, /tx\.create\(entry\.dedicatedRef/);
   assert.match(recovery, /pairing\.matchId !== expectedId/);
 });
