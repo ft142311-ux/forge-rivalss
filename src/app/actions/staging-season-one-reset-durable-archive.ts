@@ -82,7 +82,7 @@ export async function createOrVerifyDurableSeasonOneArchive(
     };
   }
 
-  const [tables, slots, matches, cupMatches, cupSnapshots, archiveMatches, slotHistory,
+  const [tables, slots, matches, cupMatches, cupSnapshots, archiveMatches, slotHistory, marketLots,
     effectsLeague, effectsCup, economyLeague, economyCup, economySeason, economyCupRewards,
     consequencesLeague, consequencesCup] = await Promise.all([
     collectQuery(db.collection('league_tables_v2').where('season', '==', 1).where('version', '==', 140)),
@@ -95,6 +95,7 @@ export async function createOrVerifyDurableSeasonOneArchive(
     collectQuery(db.collection('cup_participant_snapshots_v1').doc('cup_s1_lALPHA').collection('teams')),
     collectQuery(db.collection('league_season_archives_v1').doc('S1').collection('matches')),
     collectQuery(db.collection('league_slot_history_v1').where('season', '==', 1).where('leagueId', '==', 'ALPHA')),
+    collectQuery(db.collection('market_v7')),
     collectQuery(db.collection('match_player_effects_v1').where('matchId', '>=', 'match_v140_S1_LALPHA_').where('matchId', '<', 'match_v140_S1_LALPHA_\uf8ff')),
     collectQuery(db.collection('match_player_effects_v1').where('matchId', '>=', 'cup_S1_').where('matchId', '<', 'cup_S1_\uf8ff')),
     collectQuery(db.collection('economy_transactions').where('referenceId', '>=', 'match_v140_S1_LALPHA_').where('referenceId', '<', 'match_v140_S1_LALPHA_\uf8ff')),
@@ -133,7 +134,7 @@ export async function createOrVerifyDurableSeasonOneArchive(
   const unique = new Map<string, ArchiveSource>();
   for (const source of [
     ...tables, ...slots, ...profiles, ...matches, ...cupMatches, ...cupSnapshots,
-    ...archiveMatches, ...slotHistory, ...effectsLeague, ...effectsCup,
+    ...archiveMatches, ...slotHistory, ...marketLots, ...effectsLeague, ...effectsCup,
     ...economyLeague, ...economyCup, ...economySeason, ...economyCupRewards,
     ...consequencesLeague, ...consequencesCup, ...exact.flat().filter(source => source.path !== 'system_v1/season_config'),
     { path: 'system_v1/season_config', data: originalConfig },
@@ -269,6 +270,7 @@ export async function restoreSeasonOneFromDurableArchive(
   }
   const cleanupQueries = [
     db.collection('cup_matches').where('cupId', '==', 'cup_s1_lALPHA'),
+    db.collection('market_v7'),
     db.collection('cup_participant_snapshots_v1').doc('cup_s1_lALPHA').collection('teams'),
     db.collection('league_season_archives_v1').doc('S1').collection('matches'),
     db.collection('league_slot_history_v1').where('season', '==', 1).where('leagueId', '==', 'ALPHA'),
