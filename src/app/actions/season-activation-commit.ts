@@ -35,6 +35,9 @@ export async function commitSeasonActivation(
     if (!configSnap.exists) return { success: false, reason: 'SEASON_CONFIG_MISSING' };
 
     const current = configSnap.data() || {};
+    if (current.stagingSeasonOneResetInProgress === true) {
+      return { success: false, reason: 'STAGING_SEASON_ONE_RESET_IN_PROGRESS' };
+    }
     const plan = planSnap.exists ? planSnap.data() || {} : null;
     const stateMatches =
       Number(current.activeSeasonNumber || 1) === expected.sourceSeason &&
