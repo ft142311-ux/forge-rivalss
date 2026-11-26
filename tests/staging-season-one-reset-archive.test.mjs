@@ -41,6 +41,7 @@ function canonicalSources() {
       }
     }
   }
+  sources.push({ path: 'market_v7/legacy-auction-lot', data: { sellerId: 'club-1-1-1', highestBidderId: 'club-1-1-2', escrowedAmount: 250, escrowCurrency: 'credits' } });
   sources.push({
     path: 'cup_pyramid_v1/cup_s1_lALPHA',
     data: { id: 'cup_s1_lALPHA', season: 1 },
@@ -64,6 +65,7 @@ test('Season 1 backup allowlist includes canonical documents and complete profil
   assert.equal(completeness.valid, true, completeness.reasons.join(','));
   const profile = built.entries.find(entry => entry.sourcePath === 'players_v14/club-1-1-1');
   assert.deepEqual(profile.data, sources.find(source => source.path === 'players_v14/club-1-1-1').data);
+  assert.ok(built.entries.some(entry => entry.sourcePath === 'market_v7/legacy-auction-lot'));
 });
 
 test('Season 1 backup rejects account, credential, and unrelated collection paths', () => {
@@ -72,6 +74,7 @@ test('Season 1 backup rejects account, credential, and unrelated collection path
     'auth_users/user-1',
     'players_v14/club-1/private_credentials/password',
     'tournaments_v1/tournament-1',
+    'market_v7/private_credentials/password',
     'matches_v2/match-S2',
     'cup_participant_snapshots_v1/cup_s2_lALPHA/teams/club-1',
   ]) {
