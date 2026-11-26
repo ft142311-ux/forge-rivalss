@@ -18,6 +18,18 @@ test('Pyramid Cup document and all preliminary fixtures are committed atomically
   assert.doesNotMatch(generation, /await ref\.update\(/);
 });
 
+test('concurrent Cup initialization treats only a winning root-document conflict as idempotent', () => {
+  const start = source.indexOf('export async function generatePyramidCup');
+  const end = source.indexOf('export async function preparePyramidCupForSeason', start);
+  assert.ok(start >= 0 && end > start);
+  const generation = source.slice(start, end);
+  assert.match(generation, /String\\(error\\?\\.code \\?\\? ''\\)\\.toLowerCase\\(\\)\\.replace\\(\\/_\\/g, '-'\\)/);
+  assert.match(generation, /code !== '6' && code !== 'already-exists'/);
+  assert.match(generation, /competingCup = await ref\\.get\\(\\)/);
+  assert.match(generation, /if \\(!competingCup\\.exists\\) throw error/);
+  assert.match(generation, /return \\{ success: true, alreadyExists: true, cupId: id \\}/);
+});
+
 test('interrupted cup initialization recreates only missing fixtures and preserves legacy matches', () => {
   const start = source.indexOf('async function repairCurrentRoundFixtures');
   const end = source.indexOf('export async function runPyramidCupCycle', start);

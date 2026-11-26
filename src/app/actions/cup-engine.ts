@@ -403,7 +403,24 @@ export async function generatePyramidCup(
     byeCount: 0, participants: teams.map(publicTeam), rounds, winnerId: null, winnerName: null,
     seasonStart: seasonStart.toISOString(), createdAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp(), version: 4,
   });
-  await batch.commit();
+  try {
+    await batch.commit();
+  } catch (error: any) {
+    const code = String(error?.code ?? '').toLowerCase().replace(/_/g, '-');
+    if (code !== '6' && code !== 'already-exists') throw error;
+
+    // Concurrent schedulers can both observe a missing Cup and build the same
+    // atomic batch. Treat ALREADY_EXISTS as idempotent only when the winning
+    // batch also created the Cup root; orphaned fixtures/snapshots stay fatal.
+    let competingCup: any;
+    try {
+      competingCup = await ref.get();
+    } catch {
+      throw error;
+    }
+    if (!competingCup.exists) throw error;
+    return { success: true, alreadyExists: true, cupId: id };
+  }
   return { success: true, created: true, cupId: id, participants: TOTAL_TEAMS, totalMatches: TOTAL_CUP_MATCHES, preliminaryMatches: 56, openingRoundRestCount: openingRoundRestTeams.length };
 }
 /**

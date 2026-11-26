@@ -123,9 +123,19 @@ test('prepared Season 2 receives its complete Pyramid Cup before publication in 
     return JSON.stringify(snap.data());
   }));
 
-  const result = await preparePyramidCupForSeason(season);
+  // Two scheduler invocations can both pass the initial missing-Cup read.
+  // They must converge on the same complete bracket: one creates it and the
+  // other observes the winning atomic batch as an idempotent retry.
+  const [result, concurrentResult] = await Promise.all([
+    preparePyramidCupForSeason(season),
+    preparePyramidCupForSeason(season),
+  ]);
   assert.equal(result.success, true, JSON.stringify(result));
-  assert.equal(result.generated, true);
+  assert.equal(concurrentResult.success, true, JSON.stringify(concurrentResult));
+  assert.equal([result, concurrentResult].filter(value => value.generated).length, 1,
+    JSON.stringify({ result, concurrentResult }));
+  assert.equal([result, concurrentResult].filter(value => value.alreadyExists).length, 1,
+    JSON.stringify({ result, concurrentResult }));
   assert.equal(result.participants, 120);
   assert.equal(result.preliminaryMatches, 56);
   assert.equal(result.totalMatches, 119);
