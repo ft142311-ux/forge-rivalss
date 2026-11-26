@@ -80,13 +80,13 @@ test('explicit league matches without canonical coordinates are integrity confli
 });
 
 
-test('recovery builder uses the canonical source date window before deriving a multi-season target', () => {
+test('calendar derives only the immediate next season from the persisted source boundary', () => {
   const source = readFileSync(resolve(root, 'src/app/actions/season-calendar.ts'), 'utf8');
   assert.match(source, /resolvedSourceWindow = resolveCanonicalSeasonDateWindow/);
-  assert.match(source, /sourceNextBoundary = new Date\(nextBoundary\.getTime\(\)\)/);
-  assert.match(source, /deriveRecoverySeasonWindow\(/);
+  assert.match(source, /advanceAtMostOneSeasonBoundary\\(/);
+  assert.match(source, /resolveNextSeasonTarget\\(/);
+  assert.equal((source.match(/prepareRecoveryCarryForwardPlan\\(db/g) || []).length, 0);
 });
-
 
 test('invalid older archives block recovery and are never treated as harmless cleanup candidates', () => {
   const calendar = readFileSync(resolve(root, 'src/app/actions/season-calendar.ts'), 'utf8');
