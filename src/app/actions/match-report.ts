@@ -112,7 +112,8 @@ export async function markMatchViewedAction(idToken: string, matchId: string) {
       // The report acknowledgement and reset claim now contend on the same
       // config document. A reset cannot archive a stale unread state while a
       // concurrent acknowledgement silently lands after its archive snapshot.
-      if (configSnap.exists && configSnap.data()?.stagingSeasonOneResetInProgress === true) {
+      const resetState = configSnap.exists ? configSnap.data() || {} : {};
+      if (resetState.stagingSeasonOneResetInProgress === true || resetState.stagingFreshSeasonOneReset === true) {
         return { success: false, error: 'STAGING_SEASON_ONE_RESET_IN_PROGRESS' };
       }
       if (!freshMatchSnap.exists) {
