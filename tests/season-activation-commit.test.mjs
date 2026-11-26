@@ -180,14 +180,24 @@ test('two concurrent activation attempts can commit only once', async () => {
   assert.equal(db.updateCount(), 1);
 });
 
-test('multi-season recovery does not require the source nextSeasonStart to equal the target start', async () => {
+test('multi-season recovery is rejected even when a later target calendar is otherwise prepared', async () => {
   const config = preparedConfig();
   config.nextSeasonStart = new Date(activationAtMs - 5_000).toISOString();
   const db = activationDb({ config });
   const result = await commitSeasonActivation(db, configRef, planRef, expected({ multiSeasonRecovery: true }));
 
-  assert.deepEqual(result, { success: true });
-  assert.equal(db.read('season_config').activeSeasonNumber, 2);
+  assert.deepEqual(result, { success: false, reason: 'ACTIVATION_STATE_CHANGED' });
+  assert.equal(db.read('season_config').activeSeasonNumber, 1);
+  assert.equal(db.updateCount(), 0);
+});
+
+test('Season 3 cannot activate directly while Season 1 is still active', async () => {
+  const db = activationDb();
+  const result = await commitSeasonActivation(db, configRef, planRef, expected({ targetSeason: 3 }));
+
+  assert.deepEqual(result, { success: false, reason: 'ACTIVATION_STATE_CHANGED' });
+  assert.equal(db.read('season_config').activeSeasonNumber, 1);
+  assert.equal(db.updateCount(), 0);
 });
 
 
@@ -238,7 +248,7 @@ test('recovery activation rejects a valid but replaced plan that differs from th
       getRecoveryRolloverPlanSignature(plan) === currentConfig.preparedRolloverPlanSignature,
   }));
 
-  assert.deepEqual(result, { success: false, reason: 'ROLLOVER_PLAN_INVALID' });
+  assert.deepEqual(result, { success: false, reason: 'ACTIVATION_STATE_CHANGED' });
   assert.equal(db.read('season_config').activeSeasonNumber, 1);
   assert.equal(db.updateCount(), 0);
 });
