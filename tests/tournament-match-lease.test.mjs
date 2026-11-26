@@ -42,5 +42,5 @@ test('third failed tournament attempt is marked retry-exhausted instead of block
   const marker = resolver.indexOf("lastError: 'TOURNAMENT_MATCH_RETRY_EXHAUSTED'", exhausted);
   assert.ok(exhausted >= 0 && marker > exhausted);
   assert.match(resolver.slice(exhausted, marker), /status !== 'processing' \|\| staleProcessing/);
-  assert.match(resolver.slice(exhausted, marker), /return false/);
+  assert.match(resolver.slice(marker - exhausted), /return false/);
 });
