@@ -8,7 +8,7 @@
 
 import { useState, useEffect, useMemo, Suspense, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { useUser, useFirestore, useCollection, useMemoFirebase } from '@/firebase';
+import { useUser, useFirestore, useCollection, useMemoFirebase, useDoc } from '@/firebase';
 import { useGameState } from '../lib/store';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -27,7 +27,7 @@ import { cn } from '@/lib/utils';
 import { LoadingScreen } from '@/components/game/LoadingScreen';
 import { doc, collection, query, where } from 'firebase/firestore';
 import { getMatchReportAction } from '@/app/actions/match-report';
-import { getCompletedSeriesScore, normalizeMatchTimeline, parseMatchSeriesScore, resolveMatchSimulation } from '../lib/match-report-utils';
+import { getCompletedSeriesScore, isMatchWithinClubLifetime, normalizeMatchTimeline, parseMatchSeriesScore, resolveMatchSimulation } from '../lib/match-report-utils';
 
 type MatchStep = 'preview' | 'live' | 'stats';
 
@@ -40,6 +40,12 @@ function MatchContent() {
     language, isLoaded, markMatchIdAsSeen,
     matchHistory, clubLogo: myClubLogo, selectedLeagueId, leagueLevel, groupId, rank
   } = useGameState();
+
+  const profileRef = useMemoFirebase(
+    () => user?.uid && db ? doc(db, 'players_v14', user.uid) : null,
+    [db, user?.uid]
+  );
+  const { data: profile } = useDoc(profileRef);
 
   const matchIdFromUrl = searchParams.get('id');
   const [step, setStep] = useState<MatchStep>('preview');
@@ -93,9 +99,15 @@ function MatchContent() {
     let cancelled = false;
     const fetchMatch = async () => {
       setIsDataLoading(true);
-      const localMatch = (matchHistory || []).find(
+      const localCandidate = (matchHistory || []).find(
         (match: any) => String(match?.id || '') === matchIdFromUrl
       );
+      const localMatchIsLeague = String(localCandidate?.type || localCandidate?.matchType || '').toLowerCase() === 'league' ||
+        Boolean(localCandidate?.leagueId);
+      const localMatch = localCandidate && (
+        !localMatchIsLeague ||
+        (Boolean(profile) && isMatchWithinClubLifetime(localCandidate, profile.createdAt))
+      ) ? localCandidate : null;
 
       try {
         // If Firestore is not ready, use the local history fallback instead
@@ -108,7 +120,7 @@ function MatchContent() {
         const idToken = await user.getIdToken();
         const response = await getMatchReportAction(idToken, matchIdFromUrl);
         if (cancelled) return;
-        setMatchData(response.success ? response.match : localMatch || null);
+        setMatchData(response.success ? response.match : response.error === 'MATCH_ACCESS_DENIED' ? null : localMatch || null);
       } catch (error) {
         console.error('[MATCH] Firestore lookup failed; trying local history:', error);
         if (!cancelled) setMatchData(localMatch || null);
@@ -119,7 +131,7 @@ function MatchContent() {
 
     void fetchMatch();
     return () => { cancelled = true; };
-  }, [matchIdFromUrl, db, matchHistory, isLoaded, user]);
+  }, [matchIdFromUrl, db, matchHistory, isLoaded, user, profile]);
 
   const currentSimulation = useMemo(() => resolveMatchSimulation(matchData), [matchData]);
 

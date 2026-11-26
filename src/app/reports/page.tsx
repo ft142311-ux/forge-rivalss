@@ -18,6 +18,7 @@ import Link from 'next/link';
 import { cn } from '@/lib/utils';
 import { collection, query, where, doc } from 'firebase/firestore';
 import { getMyLeagueMatchReportsAction } from '@/app/actions/match-report';
+import { isMatchWithinClubLifetime } from '@/app/lib/match-report-utils';
 
 export default function ReportsPage() {
   const { user, isUserLoading } = useUser();
@@ -107,7 +108,7 @@ export default function ReportsPage() {
   }, [groupPlayers]);
 
   const unreadReports = useMemo(() => {
-    if (!user || !rank) return [];
+    if (!user || !rank || !profile) return [];
     const regTime = profile?.createdAt?.toMillis ? profile.createdAt.toMillis() : (profile?.createdAt ? new Date(profile.createdAt).getTime() : 0);
     let locallyViewed = new Set<string>();
     if (typeof window !== 'undefined') {
@@ -119,12 +120,13 @@ export default function ReportsPage() {
     const isLocallyViewed = (m: any) => m?.id ? locallyViewed.has(String(m.id)) : false;
 
     const history = (matchHistory || [])
-      .filter((m: any) => m?.isFinished !== false && m?.seen !== true && m?.reportStatus !== 'viewed' && !isLocallyViewed(m))
+      .filter((m: any) => isMatchWithinClubLifetime(m, profile.createdAt) && m?.isFinished !== false && m?.seen !== true && m?.reportStatus !== 'viewed' && !isLocallyViewed(m))
       .map((m: any) => ({ ...m, source: 'history', isUnread: true }));
 
     const personal = [...officialLeagueReports, ...(personalHomeMatches || []), ...(personalAwayMatches || []), ...(cupHomeMatches || []), ...(cupAwayMatches || []), ...(tournamentHomeMatches || []), ...(tournamentAwayMatches || []), ...(trainingHomeMatches || []), ...(trainingAwayMatches || [])];
+    const currentClubPersonal = personal.filter((m: any) => isMatchWithinClubLifetime(m, profile.createdAt));
 
-    const league = personal
+    const league = currentClubPersonal
       .filter((m: any) => m?.type === 'league' && m?.isFinished === true)
       .filter((m: any) => {
         const resolved = m.resolvedAt?.toMillis ? m.resolvedAt.toMillis() : (m.resolvedAt ? new Date(m.resolvedAt).getTime() : 0);
@@ -132,12 +134,12 @@ export default function ReportsPage() {
       })
       .map((m: any) => ({ ...m, source: 'league', isUnread: true }));
 
-    const cup = personal
+    const cup = currentClubPersonal
       .filter((m: any) => m?.type === 'cup' && m?.source === 'pyramid-cup' && m?.isFinished === true)
       .filter((m: any) => m.seen !== true && m.reportStatus !== 'viewed' && !isLocallyViewed(m))
       .map((m: any) => ({ ...m, source: 'cup', isUnread: true }));
 
-    const friendly = [...personal.filter((m: any) => m?.type === 'friendly' || m?.matchType === 'friendly'), ...(friendlyHostReports || []), ...(friendlyAwayReports || [])]
+    const friendly = [...currentClubPersonal.filter((m: any) => m?.type === 'friendly' || m?.matchType === 'friendly'), ...(friendlyHostReports || []), ...(friendlyAwayReports || [])]
       .filter((m: any) => (m?.type === 'friendly' || m?.matchType === 'friendly') && m?.isFinished === true && m?.seen !== true && m?.reportStatus !== 'viewed' && !isLocallyViewed(m))
       .map((m: any) => ({ ...m, source: 'friendly', isUnread: true }));
 
@@ -145,11 +147,11 @@ export default function ReportsPage() {
       .filter((m: any) => (m?.type === 'basket' || m?.matchType === 'basket' || m?.matchType === 'cw-basket') && m?.isFinished === true && m?.seen !== true && m?.reportStatus !== 'viewed' && !isLocallyViewed(m))
       .map((m: any) => ({ ...m, source: 'basket', isUnread: true }));
 
-    const tournament = personal
+    const tournament = currentClubPersonal
       .filter((m: any) => (m?.type === 'tournament' || m?.matchType === 'tournament') && m?.isFinished === true && m?.seen !== true && m?.reportStatus !== 'viewed' && !isLocallyViewed(m))
       .map((m: any) => ({ ...m, source: 'tournament', isUnread: true }));
 
-    const trial = personal
+    const trial = currentClubPersonal
       .filter((m: any) => (m?.type === 'trial' || m?.matchType === 'trial' || m?.isTrial === true) && m?.isFinished === true && m?.seen !== true && m?.reportStatus !== 'viewed' && !isLocallyViewed(m))
       .map((m: any) => ({ ...m, source: 'trial', isUnread: true }));
 

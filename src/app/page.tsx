@@ -19,6 +19,7 @@ import { collection, query, where, doc } from 'firebase/firestore';
 import { getBotName, LEAGUES } from './lib/leagues-data';
 import { PlaceHolderImages } from './lib/placeholder-images';
 import { getMyLeagueMatchReportsAction } from '@/app/actions/match-report';
+import { isMatchWithinClubLifetime } from '@/app/lib/match-report-utils';
 
 export default function Home() {
   const { user, isUserLoading } = useUser();
@@ -192,10 +193,10 @@ export default function Home() {
       const isMyMatch = Number(m.homeRank) === rank || Number(m.awayRank) === rank;
       const resolvedTime = m.resolvedAt?.toMillis ? m.resolvedAt.toMillis() : (m.resolvedAt ? new Date(m.resolvedAt).getTime() : 0);
       const isUnread = m.isFinished && m.seen !== true && m.reportStatus !== 'viewed' && !isLocallyViewed(m);
-      return isMyMatch && isUnread && resolvedTime > regTime;
+      return isMyMatch && isUnread && isMatchWithinClubLifetime(m, profile.createdAt) && resolvedTime > regTime;
     });
 
-    const unreadHistory = (matchHistory || []).filter(m => m?.isFinished !== false && m.seen !== true && m.reportStatus !== 'viewed' && !isLocallyViewed(m));
+    const unreadHistory = (matchHistory || []).filter(m => isMatchWithinClubLifetime(m, profile.createdAt) && m?.isFinished !== false && m.seen !== true && m.reportStatus !== 'viewed' && !isLocallyViewed(m));
 
     // Один и тот же отчет может одновременно присутствовать в local history
     // и в allSeasonMatches. Считаем его только один раз.

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
   getCompletedSeriesScore,
+  isMatchWithinClubLifetime,
   normalizeMatchTimeline,
   parseMatchSeriesScore,
   resolveMatchSimulation,
@@ -94,9 +95,40 @@ test('unread match count is shown on Match Review menu item, not the general not
 });
 
 
-test('new clubs do not inherit league reports from before profile creation', () => {
+test('club lifetime cutoff rejects recycled-slot fixtures scheduled before registration', () => {
+  const profileCreatedAt = '2026-11-10T10:00:00.000Z';
+  assert.equal(isMatchWithinClubLifetime({
+    startTime: '2026-11-09T10:00:00.000Z',
+    resolvedAt: '2026-11-11T10:00:00.000Z',
+  }, profileCreatedAt), false);
+  assert.equal(isMatchWithinClubLifetime({
+    startTime: '2026-11-10T10:00:00.000Z',
+  }, profileCreatedAt), true);
+  assert.equal(isMatchWithinClubLifetime({
+    playedAt: { seconds: 1794304800, nanoseconds: 0 },
+  }, profileCreatedAt), true);
+  assert.equal(isMatchWithinClubLifetime({ startTime: 'invalid' }, profileCreatedAt), false);
+  assert.equal(isMatchWithinClubLifetime({ startTime: '2026-11-01T10:00:00.000Z' }, null), true);
+});
+
+test('league report reads and acknowledgements enforce the current club lifetime', () => {
   const action = readFileSync(new URL('../src/app/actions/match-report.ts', import.meta.url), 'utf8');
-  assert.match(action, /matchBelongsToClubLifetime\(raw, profile\.createdAt\)/);
-  assert.match(action, /const matchAt = timestampMillis\(match\.startTime \|\| match\.playedAt \|\| match\.resolvedAt\)/);
-  assert.match(action, /return matchAt > 0 && matchAt >= createdAt/);
+  assert.match(action, /isMatchWithinClubLifetime\(match, profile\.createdAt\)/);
+  assert.match(action, /isMatchWithinClubLifetime\(m, profile\.createdAt\)/);
+  assert.match(action, /isMatchWithinClubLifetime\(raw, profile\.createdAt\)/);
+  assert.match(action, /return \{ success: false, error: 'MATCH_ACCESS_DENIED' \}/);
+});
+
+test('unread report queue and home badge exclude local history from a prior club lifetime', () => {
+  const reports = readFileSync(new URL('../src/app/reports/page.tsx', import.meta.url), 'utf8');
+  const home = readFileSync(new URL('../src/app/page.tsx', import.meta.url), 'utf8');
+  assert.match(reports, /isMatchWithinClubLifetime\(m, profile\.createdAt\)/);
+  assert.match(reports, /if \(!user \|\| !rank \|\| !profile\) return \[\]/);
+  assert.match(home, /isMatchWithinClubLifetime\(m, profile\.createdAt\)/);
+});
+
+test('match player does not fall back to an out-of-lifetime league report after server denial', () => {
+  const page = readFileSync(new URL('../src/app/match/page.tsx', import.meta.url), 'utf8');
+  assert.match(page, /isMatchWithinClubLifetime\(localCandidate, profile\.createdAt\)/);
+  assert.match(page, /response\.error === 'MATCH_ACCESS_DENIED' \? null/);
 });
