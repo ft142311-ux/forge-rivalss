@@ -20,6 +20,7 @@ export type FreshSeasonOneResetInput = {
   leagueSeasonRewardReceipts: number;
   pyramidCupRewardReceipts: number;
   slotHistoryEvents?: number;
+  marketLots?: number;
   liveLocks: string[];
   unclassifiedMatches: number;
   now?: Date;
@@ -168,6 +169,7 @@ export function buildFreshSeasonOneResetPlan(input: FreshSeasonOneResetInput) {
       leagueTables: input.tables.length,
       leagueSlots: input.slots.length,
       slotHistoryEvents: Number(input.slotHistoryEvents || 0),
+      marketLots: Number(input.marketLots || 0),
       leagueMatches: input.matches.length,
       legacyCupMatches: Number(input.legacyCupMatches || 0),
       cupExists: Boolean(input.cup),
