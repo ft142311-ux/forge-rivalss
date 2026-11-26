@@ -289,10 +289,15 @@ test('prepared Season 2 receives its complete Pyramid Cup before publication in 
   // the real worker can advance every round without waiting for wall-clock days.
   const runtimeSeasonStart = new Date(Date.now() - 10 * 86400000);
   await cupRef.update({ seasonStart: runtimeSeasonStart.toISOString() });
+  // Round 1 is scheduled on season day 2 at 07:00 Moscow (04:00 UTC).
+  // Keep fixture timestamps aligned with the immutable schedule contract while
+  // moving the isolated clock far enough forward for the worker to resolve it.
+  const runtimeRoundOneStart = new Date(runtimeSeasonStart.getTime() + 86400000);
+  runtimeRoundOneStart.setUTCHours(4, 0, 0, 0);
   await Promise.all(firstRound.map(pairing => db.collection(MATCH_COLLECTIONS.cup).doc(pairing.matchId).update({
-    scheduledAt: runtimeSeasonStart,
-    startTime: runtimeSeasonStart,
-    scheduledStartAt: runtimeSeasonStart,
+    scheduledAt: runtimeRoundOneStart,
+    startTime: runtimeRoundOneStart,
+    scheduledStartAt: runtimeRoundOneStart,
   })));
   await configRef.set({
     activeSeasonNumber: season,
