@@ -3,6 +3,7 @@
 import { FieldValue } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { requireServerActor } from '@/lib/server-auth';
+import { assertStagingSeasonOneResetNotInProgress } from '@/app/lib/staging-season-one-write-fence';
 import { calculatePlayerMarketValue, Player, StaffMember, StaffRole, generateScoutedPlayer, generateStaffMember } from '@/app/lib/moba-data';
 import { isFoundationSkill } from '@/game/foundation/skills';
 
@@ -19,6 +20,7 @@ export async function syncPlayerMarketValuesAction(idToken: string) {
     const db = getAdminDb();
     const ref = db.collection('players_v14').doc(uid);
     await db.runTransaction(async t => {
+      await assertStagingSeasonOneResetNotInProgress(t, db);
       const snap = await t.get(ref);
       if (!snap.exists) throw new Error('PLAYER_NOT_FOUND');
       const p = snap.data() || {};
@@ -38,6 +40,7 @@ export async function buyMarketPlayerAction(idToken: string, marketId: string) {
     const db = getAdminDb();
     if (!marketId) throw new Error('INVALID_MARKET_LOT');
     return await db.runTransaction(async t => {
+      await assertStagingSeasonOneResetNotInProgress(t, db);
       const marketRef = db.collection('market_v7').doc(marketId);
       const lotSnap = await t.get(marketRef);
       if (!lotSnap.exists) throw new Error('LOT_NOT_FOUND');
@@ -116,6 +119,7 @@ export async function completeDailyTrainingAction(idToken: string, playerId: str
     const db = getAdminDb();
     const ref = db.collection('players_v14').doc(uid);
     await db.runTransaction(async t => {
+      await assertStagingSeasonOneResetNotInProgress(t, db);
       const snap = await t.get(ref); if (!snap.exists) throw new Error('PLAYER_NOT_FOUND');
       const p = snap.data() || {}; const players: any[] = Array.isArray(p.ownedPlayers) ? p.ownedPlayers : [];
       const i = players.findIndex(x => x.id === playerId); if (i < 0) throw new Error('UNIT_NOT_FOUND');
@@ -145,6 +149,7 @@ export async function promoteYouthPlayerAction(idToken: string, playerId: string
   try {
     const { uid } = await requireServerActor(idToken); const db = getAdminDb(); const ref = db.collection('players_v14').doc(uid);
     await db.runTransaction(async t => {
+      await assertStagingSeasonOneResetNotInProgress(t, db);
       const snap = await t.get(ref); if (!snap.exists) throw new Error('PLAYER_NOT_FOUND'); const p = snap.data() || {};
       const youth: any[] = Array.isArray(p.youthAcademyPlayers) ? p.youthAcademyPlayers : []; const i = youth.findIndex(x => x.id === playerId); if (i < 0) throw new Error('YOUTH_NOT_FOUND');
       const y = youth[i]; if (Number(y.age || 0) < 18) throw new Error('YOUTH_TOO_YOUNG');
@@ -155,19 +160,23 @@ export async function promoteYouthPlayerAction(idToken: string, playerId: string
 }
 
 export async function releaseYouthPlayerAction(idToken: string, playerId: string) {
-  try { const { uid } = await requireServerActor(idToken); const db = getAdminDb(); const ref = db.collection('players_v14').doc(uid); await db.runTransaction(async t => { const s=await t.get(ref); if(!s.exists) throw new Error('PLAYER_NOT_FOUND'); const p=s.data()||{}; const y=Array.isArray(p.youthAcademyPlayers)?p.youthAcademyPlayers:[]; if(!y.some((x:any)=>x.id===playerId)) throw new Error('YOUTH_NOT_FOUND'); t.update(ref,{youthAcademyPlayers:y.filter((x:any)=>x.id!==playerId),updatedAt:FieldValue.serverTimestamp()}); }); return {success:true}; } catch(e){return {success:false,error:err(e)}}
+  try { const { uid } = await requireServerActor(idToken); const db = getAdminDb(); const ref = db.collection('players_v14').doc(uid); await db.runTransaction(async t => {
+      await assertStagingSeasonOneResetNotInProgress(t, db); const s=await t.get(ref); if(!s.exists) throw new Error('PLAYER_NOT_FOUND'); const p=s.data()||{}; const y=Array.isArray(p.youthAcademyPlayers)?p.youthAcademyPlayers:[]; if(!y.some((x:any)=>x.id===playerId)) throw new Error('YOUTH_NOT_FOUND'); t.update(ref,{youthAcademyPlayers:y.filter((x:any)=>x.id!==playerId),updatedAt:FieldValue.serverTimestamp()}); }); return {success:true}; } catch(e){return {success:false,error:err(e)}}
 }
 
 export async function scoutYouthPlayerAction(idToken: string) {
-  try { const { uid }=await requireServerActor(idToken); const db=getAdminDb(); const ref=db.collection('players_v14').doc(uid); return await db.runTransaction(async t=>{ const s=await t.get(ref); if(!s.exists) throw new Error('PLAYER_NOT_FOUND'); const p=s.data()||{}; const cost=25000; if(money(p.credits)<cost) throw new Error('INSUFFICIENT_FUNDS'); const candidates=Array.isArray(p.scoutingCandidates)?p.scoutingCandidates:[]; const candidate=generateScoutedPlayer(candidates.length,Number(p.staff?.scout?.skills?.primary||10)); candidate.marketValue=calculatePlayerMarketValue(candidate); candidate.price=candidate.marketValue; const before=money(p.credits); const after=before-cost; t.update(ref,{credits:after,scoutingCandidates:[...candidates,candidate],updatedAt:FieldValue.serverTimestamp()}); const tx=db.collection('economy_transactions').doc(); t.set(tx,{userId:uid,amount:-cost,currency:'credits',type:'YOUTH_SCOUTING',referenceId:candidate.id,description:'Youth scouting',balanceBefore:before,balanceAfter:after,timestamp:FieldValue.serverTimestamp()}); return {success:true,candidate}; }); } catch(e){return {success:false,error:err(e)}}
+  try { const { uid }=await requireServerActor(idToken); const db=getAdminDb(); const ref=db.collection('players_v14').doc(uid); return await db.runTransaction(async t => {
+      await assertStagingSeasonOneResetNotInProgress(t, db); const s=await t.get(ref); if(!s.exists) throw new Error('PLAYER_NOT_FOUND'); const p=s.data()||{}; const cost=25000; if(money(p.credits)<cost) throw new Error('INSUFFICIENT_FUNDS'); const candidates=Array.isArray(p.scoutingCandidates)?p.scoutingCandidates:[]; const candidate=generateScoutedPlayer(candidates.length,Number(p.staff?.scout?.skills?.primary||10)); candidate.marketValue=calculatePlayerMarketValue(candidate); candidate.price=candidate.marketValue; const before=money(p.credits); const after=before-cost; t.update(ref,{credits:after,scoutingCandidates:[...candidates,candidate],updatedAt:FieldValue.serverTimestamp()}); const tx=db.collection('economy_transactions').doc(); t.set(tx,{userId:uid,amount:-cost,currency:'credits',type:'YOUTH_SCOUTING',referenceId:candidate.id,description:'Youth scouting',balanceBefore:before,balanceAfter:after,timestamp:FieldValue.serverTimestamp()}); return {success:true,candidate}; }); } catch(e){return {success:false,error:err(e)}}
 }
 
 export async function hireStaffAction(idToken: string, role: StaffRole) {
-  try { const {uid}=await requireServerActor(idToken); const db=getAdminDb(); const ref=db.collection('players_v14').doc(uid); const allowed=['coach','analyst','scout','doctor','financier']; if(!allowed.includes(role)) throw new Error('INVALID_STAFF_ROLE'); await db.runTransaction(async t=>{const s=await t.get(ref);if(!s.exists)throw new Error('PLAYER_NOT_FOUND');const p=s.data()||{};if(p.staff?.[role])throw new Error('STAFF_ROLE_OCCUPIED');const member=generateStaffMember(role);const cost=50000; const before=money(p.credits); if(before<cost)throw new Error('INSUFFICIENT_FUNDS');const after=before-cost;const staff={...(p.staff||{}),[role]:member};t.update(ref,{credits:after,staff,updatedAt:FieldValue.serverTimestamp()});const tx=db.collection('economy_transactions').doc();t.set(tx,{userId:uid,amount:-cost,currency:'credits',type:'STAFF_HIRE',referenceId:member.id,description:`Hire ${role}`,balanceBefore:before,balanceAfter:after,timestamp:FieldValue.serverTimestamp()});});return{success:true}; } catch(e){return{success:false,error:err(e)}}
+  try { const {uid}=await requireServerActor(idToken); const db=getAdminDb(); const ref=db.collection('players_v14').doc(uid); const allowed=['coach','analyst','scout','doctor','financier']; if(!allowed.includes(role)) throw new Error('INVALID_STAFF_ROLE'); await db.runTransaction(async t => {
+      await assertStagingSeasonOneResetNotInProgress(t, db);const s=await t.get(ref);if(!s.exists)throw new Error('PLAYER_NOT_FOUND');const p=s.data()||{};if(p.staff?.[role])throw new Error('STAFF_ROLE_OCCUPIED');const member=generateStaffMember(role);const cost=50000; const before=money(p.credits); if(before<cost)throw new Error('INSUFFICIENT_FUNDS');const after=before-cost;const staff={...(p.staff||{}),[role]:member};t.update(ref,{credits:after,staff,updatedAt:FieldValue.serverTimestamp()});const tx=db.collection('economy_transactions').doc();t.set(tx,{userId:uid,amount:-cost,currency:'credits',type:'STAFF_HIRE',referenceId:member.id,description:`Hire ${role}`,balanceBefore:before,balanceAfter:after,timestamp:FieldValue.serverTimestamp()});});return{success:true}; } catch(e){return{success:false,error:err(e)}}
 }
 
 export async function fireStaffAction(idToken: string, role: StaffRole) {
-  try { const {uid}=await requireServerActor(idToken); const db=getAdminDb(); await db.runTransaction(async t=>{const ref=db.collection('players_v14').doc(uid);const s=await t.get(ref);if(!s.exists)throw new Error('PLAYER_NOT_FOUND');const p=s.data()||{};if(!p.staff?.[role])throw new Error('STAFF_NOT_FOUND');t.update(ref,{staff:{...(p.staff||{}),[role]:null},updatedAt:FieldValue.serverTimestamp()});});return{success:true}; } catch(e){return{success:false,error:err(e)}}
+  try { const {uid}=await requireServerActor(idToken); const db=getAdminDb(); await db.runTransaction(async t => {
+      await assertStagingSeasonOneResetNotInProgress(t, db);const ref=db.collection('players_v14').doc(uid);const s=await t.get(ref);if(!s.exists)throw new Error('PLAYER_NOT_FOUND');const p=s.data()||{};if(!p.staff?.[role])throw new Error('STAFF_NOT_FOUND');t.update(ref,{staff:{...(p.staff||{}),[role]:null},updatedAt:FieldValue.serverTimestamp()});});return{success:true}; } catch(e){return{success:false,error:err(e)}}
 }
 
 
@@ -189,6 +198,7 @@ async function mutateOwnedPlayer(
   const db = getAdminDb();
   const ref = db.collection('players_v14').doc(uid);
   return db.runTransaction(async t => {
+      await assertStagingSeasonOneResetNotInProgress(t, db);
     const snap = await t.get(ref);
     if (!snap.exists) throw new Error('PLAYER_NOT_FOUND');
     const manager = snap.data() || {};
@@ -287,6 +297,7 @@ export async function releaseOwnedPlayerAction(idToken: string, playerId: string
     const db = getAdminDb();
     const ref = db.collection('players_v14').doc(uid);
     await db.runTransaction(async t => {
+      await assertStagingSeasonOneResetNotInProgress(t, db);
       const snap = await t.get(ref);
       if (!snap.exists) throw new Error('PLAYER_NOT_FOUND');
       const manager = snap.data() || {};
