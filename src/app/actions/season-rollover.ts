@@ -1,4 +1,5 @@
 import { FieldValue } from 'firebase-admin/firestore';
+import { assertStagingSeasonOneResetNotInProgress } from '@/app/lib/staging-season-one-write-fence';
 import { getTableId, MAX_LEVELS, TEAMS_PER_GROUP, TOTAL_GROUPS } from '@/app/lib/leagues-data';
 import { buildCanonicalSlotRepairs, calculateGroupStandings, evaluateRolloverPreflight, hasCanonicalFixtureStructure, hasCompleteCanonicalFixtureSet, inspectGroupReconciliation } from './season-rollover-standings';
 import { acquireSeasonRolloverLock, commitSeasonRolloverWrites, releaseSeasonRolloverLock, SEASON_ROLLOVER_LOCK_TTL_MS } from './season-rollover-lock';
@@ -210,6 +211,7 @@ async function applySeasonAwards(db: any, sourceSeason: number, standings: Recor
     const playerRef = db.collection('players_v14').doc(uid);
     const txRef = db.collection('economy_transactions').doc(`season_${sourceSeason}_${uid}`);
     const result = await db.runTransaction(async (t: any) => {
+      await assertStagingSeasonOneResetNotInProgress(t, db);
       const lockRef = db.collection('system_v1').doc('season_rollover_v1');
       const [lockSnap, playerSnap, transactionSnap] = await Promise.all([t.get(lockRef), t.get(playerRef), t.get(txRef)]);
       const currentLock = lockSnap.exists ? lockSnap.data() || {} : {};
