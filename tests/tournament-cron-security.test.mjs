@@ -49,7 +49,7 @@ test('Pyramid Cup cycle remains a server-only worker rather than an exposed Serv
 
 test('tournament unregistration is closed at the same deadline as registration', () => {
   const unregister = actionBody('unregisterFromTournamentAction');
-  assert.match(unregister, /Date\\.now\\(\\) >= Number\\(data\\.registrationCloseAt\\)/);
+  assert.ok(unregister.includes('Date.now() >= Number(data.registrationCloseAt)'));
   assert.ok(
     unregister.indexOf('registrationCloseAt') < unregister.indexOf('t.update(ref'),
     'the deadline must be checked before participant state is changed',
