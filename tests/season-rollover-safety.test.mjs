@@ -305,33 +305,18 @@ test('each protected calendar write renews the lease atomically', async () => {
 });
 
 
-test('recovery carry-forward archive, plan, and skipped history writes are fenced by the calendar lease', async () => {
+test('legacy carry-forward recovery planner has no runtime callers', async () => {
   const fs = await import('node:fs/promises');
   const source = await fs.readFile(new URL('../src/app/actions/season-calendar.ts', import.meta.url), 'utf8');
-  const recoveryStart = source.indexOf('async function prepareRecoveryCarryForwardPlan(');
-  const recoveryEnd = source.indexOf('\n}\n\nasync function buildSeasonCalendar', recoveryStart);
-  assert.ok(recoveryStart >= 0 && recoveryEnd > recoveryStart, 'recovery planner must be present');
-  const recovery = source.slice(recoveryStart, recoveryEnd);
-  assert.match(recovery, /lease: BuildLease/, 'recovery planner must receive the active lease');
-  assert.match(recovery, /await lease\.commit\(\[\{ ref: archiveRef, data: snapshot\.archive \}\]\)/,
-    'recovered archive writes must be fenced');
-  assert.match(recovery, /commitPlan: async \(ref, value\) => \{/,
-    'carry-forward plan publication must use the lease-fenced writer');
-  assert.match(recovery, /commitHistory: async writes => \{\s*await lease\.commit\(writes\);\s*\}/,
-    'skipped history publication must use the lease-fenced writer');
-  assert.match(recovery, /publishRecoveryRolloverDecision\(/,
-    'recovery plan and history publication must use the retry-safe publication workflow');
-  const publication = await fs.readFile(new URL('../src/app/actions/season-recovery-publication.ts', import.meta.url), 'utf8');
-  assert.match(publication, /Promise\.all\(args\.historyEntries\.map\(entry => args\.read\(entry\.ref\)\)\)/,
-    'all history markers must be preflighted before the plan can be published');
-  assert.match(publication, /args\.commitHistory\(historyWrites\.slice\(offset, offset \+ args\.batchLimit\)\)/,
-    'history marker writes must be chunked through the injected fenced writer');
-  assert.match(publication, /persistedPlan = existingPlan/,
-    'retries must reuse the first durable plan');
-  assert.doesNotMatch(recovery, /\.set\(snapshot\.archive\)|\.set\(plan\)|historyBatch\.commit\(\)/,
-    'recovery must not bypass the lease with direct writes');
-  assert.equal((source.match(/prepareRecoveryCarryForwardPlan\(db, activeSeasonBefore, seasonNumber, lease\)/g) || []).length, 2,
-    'all recovery planner call sites must pass the same active lease');
+  assert.match(source, /async function prepareRecoveryCarryForwardPlan\\(/,
+    'legacy planner remains isolated for reference and must not be exported');
+  assert.equal((source.match(/prepareRecoveryCarryForwardPlan\\(db/g) || []).length, 0,
+    'ordinary calendar flow must never invoke multi-season carry-forward recovery');
+  const builder = source.slice(source.indexOf('async function buildSeasonCalendar'));
+  assert.match(builder, /resolveNextSeasonTarget\\(/,
+    'normal season generation must clamp to the immediate successor');
+  assert.doesNotMatch(builder, /publishRecoveryRolloverDecision\\(/,
+    'normal season generation must not publish skipped-season markers');
 });
 
 test('post-activation skipped history cleanup preflights existing markers before fenced writes', async () => {
