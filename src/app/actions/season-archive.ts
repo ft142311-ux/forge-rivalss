@@ -246,12 +246,10 @@ export function resolveArchivePrunePlan(
         retainedArchiveSeason < 1 || retainedArchiveSeason >= targetSeason))) {
     return { ready: false as const, reason: 'ARCHIVE_PRUNE_TARGET_INVALID', pruneIds: [] as string[] };
   }
-  const completedSeasons: number[] = [];
-  const pruneIds: string[] = [];
-  let retainedFound = retainedArchiveSeason === null;
 
+  const completedSeasons: number[] = [];
   for (const item of archives) {
-    const match = /^S([1-9]\d*)$/.exec(String(item.id || ''));
+    const match = /^S([1-9]\\d*)$/.exec(String(item.id || ''));
     const season = match ? Number(match[1]) : NaN;
     const archive = item.archive || {};
     if (!Number.isSafeInteger(season) || season >= targetSeason ||
@@ -260,65 +258,43 @@ export function resolveArchivePrunePlan(
     }
 
     if (isCompletedSeasonArchive(archive)) {
+      const validation = validateSeasonArchiveSnapshot(archive, item.matches || []);
+      if (!validation.valid) {
+        return {
+          ready: false as const,
+          reason: season === retainedArchiveSeason ? 'RETAINED_ARCHIVE_INVALID' : 'OBSOLETE_COMPLETED_ARCHIVE_INVALID',
+          archiveId: item.id,
+          details: validation.reasons,
+          pruneIds: [] as string[],
+        };
+      }
       completedSeasons.push(season);
-      if (season === retainedArchiveSeason) {
-        retainedFound = true;
-        if (archive.pruneStatus === 'PRUNING') {
-          return { ready: false as const, reason: 'RETAINED_ARCHIVE_MARKED_FOR_PRUNING', archiveId: item.id, pruneIds: [] as string[] };
-        }
-        const validation = validateSeasonArchiveSnapshot(archive, item.matches || []);
-        if (!validation.valid) {
-          return { ready: false as const, reason: 'RETAINED_ARCHIVE_INVALID', archiveId: item.id, details: validation.reasons, pruneIds: [] as string[] };
-        }
-        continue;
-      }
-      if (archive.pruneStatus === 'PRUNING') {
-        if (Number(archive.pruneTargetSeason) !== targetSeason ||
-            Number(archive.pruneRetainedArchiveSeason || 0) !== Number(retainedArchiveSeason || 0) ||
-            Number(archive.prunePolicyVersion) !== 1) {
-          return { ready: false as const, reason: 'ARCHIVE_PRUNE_MARKER_CONFLICT', archiveId: item.id, pruneIds: [] as string[] };
-        }
-      } else {
-        const validation = validateSeasonArchiveSnapshot(archive, item.matches || []);
-        if (!validation.valid) {
-          return { ready: false as const, reason: 'OBSOLETE_COMPLETED_ARCHIVE_INVALID', archiveId: item.id, details: validation.reasons, pruneIds: [] as string[] };
-        }
-      }
-      pruneIds.push(item.id);
       continue;
     }
 
     if (isRecoveredSeasonArchive(archive)) {
-      if (archive.pruneStatus === 'PRUNING') {
-        if (Number(archive.pruneTargetSeason) !== targetSeason ||
-            Number(archive.pruneRetainedArchiveSeason || 0) !== Number(retainedArchiveSeason || 0) ||
-            Number(archive.prunePolicyVersion) !== 1) {
-          return { ready: false as const, reason: 'ARCHIVE_PRUNE_MARKER_CONFLICT', archiveId: item.id, pruneIds: [] as string[] };
-        }
-        // Older cleanup workers could persist PRUNING from a pending marker.
-        // Re-check the finalized history state before resuming that deletion.
-        if (String(item.historyStatus || '') !== 'SKIPPED') {
-          return { ready: false as const, reason: 'RECOVERED_ARCHIVE_SKIP_MARKER_MISSING', archiveId: item.id, pruneIds: [] as string[] };
-        }
-      } else if (String(item.historyStatus || '') !== 'SKIPPED') {
+      if (String(item.historyStatus || '') !== 'SKIPPED') {
         return { ready: false as const, reason: 'RECOVERED_ARCHIVE_SKIP_MARKER_MISSING', archiveId: item.id, pruneIds: [] as string[] };
       }
-      pruneIds.push(item.id);
       continue;
     }
 
     return { ready: false as const, reason: 'UNKNOWN_OR_INCOMPLETE_ARCHIVE_CANNOT_BE_PRUNED', archiveId: item.id, pruneIds: [] as string[] };
   }
 
-  if (retainedArchiveSeason !== null && !retainedFound) {
-    return { ready: false as const, reason: 'RETAINED_ARCHIVE_MISSING', pruneIds: [] as string[] };
-  }
   const latestCompleted = completedSeasons.length ? Math.max(...completedSeasons) : null;
   if (latestCompleted !== retainedArchiveSeason) {
-    return { ready: false as const, reason: 'LATEST_COMPLETED_ARCHIVE_RETENTION_CONFLICT', latestCompleted, retainedArchiveSeason, pruneIds: [] as string[] };
+    return {
+      ready: false as const,
+      reason: 'LATEST_COMPLETED_ARCHIVE_RETENTION_CONFLICT',
+      latestCompleted,
+      retainedArchiveSeason,
+      pruneIds: [] as string[],
+    };
   }
-  // Do not delete old seasons. Archive and match history is part of the
-  // persistent world and must remain available regardless of season count.
+
+  // Permanent history policy: validate the complete archive set but never
+  // schedule deletion of an archive or its match subcollection.
   return { ready: true as const, reason: null, pruneIds: [] as string[], retainedArchiveSeason };
 }
 
