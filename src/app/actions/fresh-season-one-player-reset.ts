@@ -181,6 +181,7 @@ export function createFreshSeasonOneHumanClubProfile(
     lastProcessedSeason: 1,
     rewardDay: 1,
     lastLoginDate: now.toISOString(),
+    createdAt: now.toISOString(),
     version: 140,
   };
 }
