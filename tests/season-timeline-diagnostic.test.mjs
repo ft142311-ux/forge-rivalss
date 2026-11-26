@@ -65,10 +65,10 @@ test('calendar recovery archives completed seasons, skips incomplete seasons and
 test('incomplete source seasons cannot be silently skipped by ordinary calendar generation', () => {
   const source = readFileSync(resolve(root, 'src/app/actions/season-calendar.ts'), 'utf8');
   const builder = source.slice(source.indexOf('async function buildSeasonCalendar'));
-  assert.match(builder, /resolveNextSeasonTarget\\(/);
-  assert.match(builder, /targetSeason = Math\\.min\\(requestedTarget, sourceSeason \\+ 1\\)/);
-  assert.equal((source.match(/prepareRecoveryCarryForwardPlan\\(db/g) || []).length, 0);
-  assert.doesNotMatch(builder, /publishRecoveryRolloverDecision\\(/);
+  assert.match(builder, /resolveNextSeasonTarget\(/);
+  assert.match(builder, /targetSeason = Math\.min\(requestedTarget, sourceSeason \+ 1\)/);
+  assert.equal((source.match(/prepareRecoveryCarryForwardPlan\(db/g) || []).length, 0);
+  assert.doesNotMatch(builder, /publishRecoveryRolloverDecision\(/);
 });
 
 test('explicit league matches without canonical coordinates are integrity conflicts, not skippable emptiness', () => {
@@ -83,9 +83,9 @@ test('explicit league matches without canonical coordinates are integrity confli
 test('calendar derives only the immediate next season from the persisted source boundary', () => {
   const source = readFileSync(resolve(root, 'src/app/actions/season-calendar.ts'), 'utf8');
   assert.match(source, /resolvedSourceWindow = resolveCanonicalSeasonDateWindow/);
-  assert.match(source, /advanceAtMostOneSeasonBoundary\\(/);
-  assert.match(source, /resolveNextSeasonTarget\\(/);
-  assert.equal((source.match(/prepareRecoveryCarryForwardPlan\\(db/g) || []).length, 0);
+  assert.match(source, /advanceAtMostOneSeasonBoundary\(/);
+  assert.match(source, /resolveNextSeasonTarget\(/);
+  assert.equal((source.match(/prepareRecoveryCarryForwardPlan\(db/g) || []).length, 0);
 });
 
 test('invalid older archives block recovery and are never treated as harmless cleanup candidates', () => {
