@@ -117,6 +117,7 @@ export async function purchasePremiumAction(idToken: string) {
     const { uid } = await requireServerActor(idToken);
     const db = getAdminDb();
     return await db.runTransaction(async (t) => {
+      await assertStagingSeasonOneResetNotInProgress(t, db);
       const playerRef = db.collection('players_v14').doc(uid);
       const playerSnap = await t.get(playerRef);
       if (!playerSnap.exists) throw new Error('PLAYER_NOT_FOUND');
