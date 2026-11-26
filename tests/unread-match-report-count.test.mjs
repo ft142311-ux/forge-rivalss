@@ -58,3 +58,12 @@ test('finished status variants are accepted without requiring isFinished boolean
   ];
   assert.equal(countUnreadMatchReportRecords(records, uid, createdAt, league), 2);
 });
+
+
+test('a report mirrored across mode collections is counted once by its route ID', () => {
+  const records = [
+    record(MATCH_COLLECTIONS.league, 'shared-report', { homeId: uid }),
+    record(MATCH_COLLECTIONS.cup, 'shared-report', { awayId: uid }),
+  ];
+  assert.equal(countUnreadMatchReportRecords(records, uid, createdAt, league), 1);
+});

@@ -4,7 +4,7 @@ import { getAdminDb } from '@/lib/firebase-admin';
 import { requireServerActor } from '@/lib/server-auth';
 import { FieldValue } from 'firebase-admin/firestore';
 import { MATCH_COLLECTIONS, MATCH_REPORT_COLLECTIONS } from '@/app/lib/match-storage';
-import { isMatchWithinClubLifetime } from '@/app/lib/match-report-utils';
+import { isMatchReportFinished, isMatchWithinClubLifetime } from '@/app/lib/match-report-utils';
 import { countUnreadMatchReportRecords } from '@/app/lib/unread-match-report-count';
 
 /**
@@ -120,11 +120,21 @@ export async function markMatchViewedAction(idToken: string, matchId: string) {
       return { success: false, error: 'MATCH_ACCESS_DENIED' };
     }
 
-    await ref.set({
-      seen: true,
-      reportStatus: 'viewed',
-      viewedAt: FieldValue.serverTimestamp(),
-    }, { merge: true });
+    try {
+      // update() is intentionally non-creating: a report deleted after the
+      // ownership read must not be recreated as a partial viewed-only document.
+      await ref.update({
+        seen: true,
+        reportStatus: 'viewed',
+        viewedAt: FieldValue.serverTimestamp(),
+      });
+    } catch (error: any) {
+      const code = String(error?.code ?? '').toLowerCase();
+      if (code === '5' || code === 'not-found' || code === 'not_found' || code === 'firestore/not-found') {
+        return { success: true, persisted: false, localOnly: true };
+      }
+      throw error;
+    }
 
     return { success: true, persisted: true, collection: collectionName };
   } catch (error: any) {
@@ -163,7 +173,7 @@ export async function getMyLeagueMatchReportsAction(idToken: string) {
     const participant = String(raw.homeId || raw.homeUid || '') === uid ||
       String(raw.awayId || raw.awayUid || '') === uid ||
       (inGroup && [Number(raw.homeRank), Number(raw.awayRank)].includes(rank));
-    const finished = raw.isFinished === true || ['finished', 'completed', 'resolved'].includes(String(raw.status || '').toLowerCase());
+    const finished = isMatchReportFinished(raw);
     if (!inGroup || !participant || !finished || !isMatchWithinClubLifetime(raw, profile.createdAt) ||
         raw.seen === true || raw.reportStatus === 'viewed') return [];
     return [serializeMatchReport({ ...raw, id: doc.id, type: 'league' })];

@@ -1,5 +1,5 @@
 import { MATCH_COLLECTIONS } from './match-storage';
-import { isMatchWithinClubLifetime } from './match-report-utils';
+import { isMatchReportFinished, isMatchWithinClubLifetime } from './match-report-utils';
 
 export type UnreadMatchReportRecord = {
   id: string;
@@ -27,8 +27,7 @@ export function countUnreadMatchReportRecords(
     const match = record?.match || {};
     const id = String(record?.id || match.id || '');
     if (!id) continue;
-    const finished = match.isFinished === true ||
-      ['finished', 'completed', 'resolved'].includes(String(match.status || '').toLowerCase());
+    const finished = isMatchReportFinished(match);
     if (!finished || match.seen === true || match.reportStatus === 'viewed') continue;
     if (!isMatchWithinClubLifetime(match, profileCreatedAt)) continue;
 
@@ -42,7 +41,9 @@ export function countUnreadMatchReportRecords(
       String(match.groupId || '') === league.groupId &&
       [Number(match.homeRank), Number(match.awayRank)].includes(league.rank);
     if (!participant && !rankBasedLeagueParticipant) continue;
-    unreadIds.add(`${record.collectionName}/${id}`);
+    // Match Center routes reports by document ID, so count the same global ID once
+    // even when a legacy copy is present in another mode-specific collection.
+    unreadIds.add(id);
   }
   return unreadIds.size;
 }

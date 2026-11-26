@@ -72,3 +72,12 @@ export function getCompletedSeriesScore(games: any[], completedGameCount: number
     away: score.away + Number(game?.awayScore || 0),
   }), { home: 0, away: 0 });
 }
+
+
+/** Shared terminal-state predicate for every match-report surface. */
+export function isMatchReportFinished(match: any): boolean {
+  if (match?.isFinished === true) return true;
+  return ['finished', 'completed', 'resolved'].includes(
+    String(match?.status || '').trim().toLowerCase(),
+  );
+}

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
   getCompletedSeriesScore,
+  isMatchReportFinished,
   isMatchWithinClubLifetime,
   normalizeMatchTimeline,
   parseMatchSeriesScore,
@@ -157,4 +158,27 @@ test('friendly and association report subscriptions are scoped to the current cl
   const reports = readFileSync(new URL('../src/app/reports/page.tsx', import.meta.url), 'utf8');
   assert.match(reports, /isMatchWithinClubLifetime\(m, profile\.createdAt\).*friendly/);
   assert.match(reports, /isMatchWithinClubLifetime\(m, profile\.createdAt\).*basket/);
+});
+
+
+test('match report completion accepts explicit and terminal status variants consistently', () => {
+  assert.equal(isMatchReportFinished({ isFinished: true, status: 'scheduled' }), true);
+  assert.equal(isMatchReportFinished({ isFinished: false, status: 'finished' }), true);
+  assert.equal(isMatchReportFinished({ status: 'COMPLETED' }), true);
+  assert.equal(isMatchReportFinished({ status: 'resolved' }), true);
+  assert.equal(isMatchReportFinished({ isFinished: false, status: 'scheduled' }), false);
+  assert.equal(isMatchReportFinished({}), false);
+});
+
+test('reports queue uses the shared completion predicate for every game mode', () => {
+  const page = readFileSync(new URL('../src/app/reports/page.tsx', import.meta.url), 'utf8');
+  assert.match(page, /isMatchReportFinished\(m\)/);
+  assert.doesNotMatch(page, /m\?\.isFinished === true|m\?\.isFinished !== false/);
+});
+
+test('view acknowledgement updates an existing report without recreating a deleted document', () => {
+  const action = readFileSync(new URL('../src/app/actions/match-report.ts', import.meta.url), 'utf8');
+  assert.match(action, /await ref\.update\(\{\s*seen: true/);
+  assert.match(action, /persisted: false, localOnly: true/);
+  assert.doesNotMatch(action, /await ref\.set\(\{\s*seen: true/);
 });
