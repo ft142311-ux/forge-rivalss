@@ -288,7 +288,7 @@ test('legacy prune metadata cannot delete otherwise valid season history', async
   ];
   for (const archive of variants) {
     const result = resolveArchivePrunePlan([
-      { id: 'S1', archive, matches: [] },
+      { id: 'S1', archive, matches: first.matches },
       { id: 'S2', archive: second.archive, matches: second.matches },
     ], 4, 2);
     assert.equal(result.ready, true);
