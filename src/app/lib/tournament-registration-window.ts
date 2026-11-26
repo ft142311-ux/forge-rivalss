@@ -44,3 +44,20 @@ export function isTournamentRegistrationOpen(tournament: any, now = Date.now()):
   const window = getTournamentRegistrationWindow(tournament);
   return Boolean(window && now >= window.opensAt && now < window.closesAt);
 }
+
+/** Supported capacities are fixed by the tournament templates. Fail closed on corrupt values. */
+export function getTournamentRegistrationCapacity(value: unknown): 16 | 32 | null {
+  return value === 16 || value === 32 ? value : null;
+}
+
+/** Canonicalize legacy participant arrays before counting or appending registrations. */
+export function normalizeTournamentRegisteredIds(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const ids = new Set<string>();
+  for (const item of value) {
+    if (typeof item !== 'string') continue;
+    const id = item.trim();
+    if (id) ids.add(id);
+  }
+  return [...ids];
+}
