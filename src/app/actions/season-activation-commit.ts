@@ -44,6 +44,7 @@ export async function commitSeasonActivation(
     const stateMatches =
       expected.targetSeason === expected.sourceSeason + 1 &&
       expected.multiSeasonRecovery !== true &&
+      expected.recoveryMode !== true &&
       Number(current.activeSeasonNumber || 1) === expected.sourceSeason &&
       Number(current.preparedSeasonNumber || 0) === expected.targetSeason &&
       Number(current.nextSeasonNumber || 0) === expected.targetSeason &&
