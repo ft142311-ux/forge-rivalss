@@ -235,8 +235,13 @@ export async function registerForTournamentAction(idToken: string, tournamentId:
       if (!snap.exists) throw new Error('TOURNAMENT_NOT_FOUND');
       const data = snap.data() || {};
       const now = Date.now();
+      const opensAt = Number(data.registrationOpenAt);
+      const closesAt = Number(data.registrationCloseAt);
       const ids: string[] = Array.isArray(data.registeredIds) ? data.registeredIds : [];
-      if (data.status !== 'registration' || now >= Number(data.registrationCloseAt)) throw new Error('REGISTRATION_CLOSED');
+      if (data.status !== 'registration') throw new Error('REGISTRATION_CLOSED');
+      if (!Number.isFinite(opensAt) || !Number.isFinite(closesAt)) throw new Error('REGISTRATION_WINDOW_INVALID');
+      if (now < opensAt) throw new Error('REGISTRATION_NOT_OPEN');
+      if (now >= closesAt) throw new Error('REGISTRATION_CLOSED');
       if (ids.includes(uid)) throw new Error('ALREADY_REGISTERED');
       if (ids.length >= Number(data.maxParticipants)) throw new Error('TOURNAMENT_FULL');
       t.update(ref, {
