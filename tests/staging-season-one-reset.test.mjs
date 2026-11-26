@@ -401,9 +401,10 @@ test('calendar bypasses the old fixture gate only for an explicitly marked Beta 
 test('legacy full-world reset is hard-blocked outside local Firebase Emulator', () => {
   const source = read('src/app/actions/clean-season1-world.ts');
   assert.match(source, /'players_v14'/);
-  assert.match(source, /!process\.env\.FIRESTORE_EMULATOR_HOST/);
+  assert.match(source, /process\.env\.NEXT_PUBLIC_USE_FIREBASE_EMULATORS !== 'true'/);
+  assert.match(source, /configuredProject !== 'demo-forge-rivals'/);
+  assert.match(source, /emulatorHost/);
   assert.match(source, /process\.env\.VERCEL === '1'/);
-  assert.match(source, /configuredProject === 'forge-rivalstest'/);
   assert.match(source, /EMULATOR_ONLY_RESET_BLOCKED/);
   assert.ok(source.indexOf('EMULATOR_ONLY_RESET_BLOCKED') < source.indexOf('const db = getAdminDb()'));
 });
