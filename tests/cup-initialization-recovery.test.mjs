@@ -9,19 +9,19 @@ test('Pyramid Cup document, snapshots and opening fixtures commit in one reset-f
   const helperEnd = source.indexOf('export async function generatePyramidCup', helperStart);
   assert.ok(helperStart >= 0 && helperEnd > helperStart);
   const helper = source.slice(helperStart, helperEnd);
-  assert.match(helper, /db\\.runTransaction\\(async \\(tx: any\\) =>/);
-  assert.match(helper, /tx\\.get\\(configRef\\)/);
-  assert.match(helper, /stagingSeasonOneResetInProgress/);
-  assert.match(helper, /tx\\.create\\(snapshot\\.ref, snapshot\\.data\\)/);
-  assert.match(helper, /tx\\.create\\(fixture\\.ref, fixture\\.data\\)/);
-  assert.match(helper, /tx\\.create\\(cupRef, cupData\\)/);
+  assert.ok(helper.includes('db.runTransaction(async (tx: any) =>'));
+  assert.ok(helper.includes('tx.get(configRef)'));
+  assert.ok(helper.includes('stagingSeasonOneResetInProgress'));
+  assert.ok(helper.includes('tx.create(snapshot.ref, snapshot.data)'));
+  assert.ok(helper.includes('tx.create(fixture.ref, fixture.data)'));
+  assert.ok(helper.includes('tx.create(cupRef, cupData)'));
 
   const start = source.indexOf('export async function generatePyramidCup');
   const end = source.indexOf('async function loadCup', start);
   assert.ok(start >= 0 && end > start);
   const generation = source.slice(start, end);
-  assert.match(generation, /commitPyramidCupCreation\\(/);
-  assert.doesNotMatch(generation, /batch\\.commit\\(/);
+  assert.ok(generation.includes('commitPyramidCupCreation('));
+  assert.ok(!generation.includes('batch.commit('));
 });
 
 test('concurrent Cup initialization treats only a winning root-document conflict as idempotent', () => {
