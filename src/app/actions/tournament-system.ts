@@ -256,7 +256,9 @@ export async function unregisterFromTournamentAction(idToken: string, tournament
       const snap = await t.get(ref);
       if (!snap.exists) throw new Error('TOURNAMENT_NOT_FOUND');
       const data = snap.data() || {};
-      if (data.status !== 'registration') throw new Error('REGISTRATION_CLOSED');
+      if (data.status !== 'registration' || Date.now() >= Number(data.registrationCloseAt)) {
+        throw new Error('REGISTRATION_CLOSED');
+      }
       const ids: string[] = Array.isArray(data.registeredIds) ? data.registeredIds : [];
       if (!ids.includes(uid)) throw new Error('NOT_REGISTERED');
       const next = ids.filter(id => id !== uid);
