@@ -230,7 +230,8 @@ export async function registerForTournamentAction(idToken: string, tournamentId:
 
     await db.runTransaction(async (t: any) => {
     const resetConfigSnap = await t.get(db.collection('system_v1').doc('season_config'));
-    if (resetConfigSnap.exists && resetConfigSnap.data()?.stagingSeasonOneResetInProgress === true) {
+    const resetState = resetConfigSnap.exists ? resetConfigSnap.data() || {} : {};
+    if (resetState.stagingSeasonOneResetInProgress === true || resetState.stagingFreshSeasonOneReset === true) {
       throw new Error('STAGING_SEASON_ONE_RESET_IN_PROGRESS');
     }
       const snap = await t.get(ref);
@@ -267,7 +268,8 @@ export async function unregisterFromTournamentAction(idToken: string, tournament
     const ref = db.collection('tournaments_v1').doc(tournamentId);
     await db.runTransaction(async (t: any) => {
     const resetConfigSnap = await t.get(db.collection('system_v1').doc('season_config'));
-    if (resetConfigSnap.exists && resetConfigSnap.data()?.stagingSeasonOneResetInProgress === true) {
+    const resetState = resetConfigSnap.exists ? resetConfigSnap.data() || {} : {};
+    if (resetState.stagingSeasonOneResetInProgress === true || resetState.stagingFreshSeasonOneReset === true) {
       throw new Error('STAGING_SEASON_ONE_RESET_IN_PROGRESS');
     }
       const snap = await t.get(ref);
@@ -296,7 +298,8 @@ async function initializeTournament(db: any, tournamentId: string, now: number) 
   // cron cycle may reclaim it after the bounded lease expires.
   const tournament = await db.runTransaction(async (t: any) => {
     const resetConfigSnap = await t.get(db.collection('system_v1').doc('season_config'));
-    if (resetConfigSnap.exists && resetConfigSnap.data()?.stagingSeasonOneResetInProgress === true) {
+    const resetState = resetConfigSnap.exists ? resetConfigSnap.data() || {} : {};
+    if (resetState.stagingSeasonOneResetInProgress === true || resetState.stagingFreshSeasonOneReset === true) {
       throw new Error('STAGING_SEASON_ONE_RESET_IN_PROGRESS');
     }
     const snap = await t.get(ref);
@@ -397,7 +400,8 @@ async function initializeTournament(db: any, tournamentId: string, now: number) 
     // the initialization token is revalidated. A reclaimed worker is fenced.
     await db.runTransaction(async (t: any) => {
     const resetConfigSnap = await t.get(db.collection('system_v1').doc('season_config'));
-    if (resetConfigSnap.exists && resetConfigSnap.data()?.stagingSeasonOneResetInProgress === true) {
+    const resetState = resetConfigSnap.exists ? resetConfigSnap.data() || {} : {};
+    if (resetState.stagingSeasonOneResetInProgress === true || resetState.stagingFreshSeasonOneReset === true) {
       throw new Error('STAGING_SEASON_ONE_RESET_IN_PROGRESS');
     }
       const fresh = await t.get(ref);
@@ -429,7 +433,8 @@ async function initializeTournament(db: any, tournamentId: string, now: number) 
     // A stale worker must not reset a newer worker's initialization lease.
     await db.runTransaction(async (t: any) => {
     const resetConfigSnap = await t.get(db.collection('system_v1').doc('season_config'));
-    if (resetConfigSnap.exists && resetConfigSnap.data()?.stagingSeasonOneResetInProgress === true) {
+    const resetState = resetConfigSnap.exists ? resetConfigSnap.data() || {} : {};
+    if (resetState.stagingSeasonOneResetInProgress === true || resetState.stagingFreshSeasonOneReset === true) {
       throw new Error('STAGING_SEASON_ONE_RESET_IN_PROGRESS');
     }
       const fresh = await t.get(ref);
@@ -460,7 +465,8 @@ async function resolveTournamentMatch(db: any, tournamentId: string, matchId: st
   const processingToken = randomUUID();
   const claim = await db.runTransaction(async (t: any) => {
     const resetConfigSnap = await t.get(db.collection('system_v1').doc('season_config'));
-    if (resetConfigSnap.exists && resetConfigSnap.data()?.stagingSeasonOneResetInProgress === true) {
+    const resetState = resetConfigSnap.exists ? resetConfigSnap.data() || {} : {};
+    if (resetState.stagingSeasonOneResetInProgress === true || resetState.stagingFreshSeasonOneReset === true) {
       throw new Error('STAGING_SEASON_ONE_RESET_IN_PROGRESS');
     }
     const snap = await t.get(matchRef);
@@ -535,7 +541,8 @@ async function resolveTournamentMatch(db: any, tournamentId: string, matchId: st
 
     const finalized = await db.runTransaction(async (t: any) => {
     const resetConfigSnap = await t.get(db.collection('system_v1').doc('season_config'));
-    if (resetConfigSnap.exists && resetConfigSnap.data()?.stagingSeasonOneResetInProgress === true) {
+    const resetState = resetConfigSnap.exists ? resetConfigSnap.data() || {} : {};
+    if (resetState.stagingSeasonOneResetInProgress === true || resetState.stagingFreshSeasonOneReset === true) {
       throw new Error('STAGING_SEASON_ONE_RESET_IN_PROGRESS');
     }
       const fresh = await t.get(matchRef);
@@ -646,7 +653,8 @@ async function resolveTournamentMatch(db: any, tournamentId: string, matchId: st
     // worker's state or publish a stale result.
     await db.runTransaction(async (t: any) => {
     const resetConfigSnap = await t.get(db.collection('system_v1').doc('season_config'));
-    if (resetConfigSnap.exists && resetConfigSnap.data()?.stagingSeasonOneResetInProgress === true) {
+    const resetState = resetConfigSnap.exists ? resetConfigSnap.data() || {} : {};
+    if (resetState.stagingSeasonOneResetInProgress === true || resetState.stagingFreshSeasonOneReset === true) {
       throw new Error('STAGING_SEASON_ONE_RESET_IN_PROGRESS');
     }
       const fresh = await t.get(matchRef);
@@ -696,7 +704,8 @@ async function syncTournamentHistoryForParticipant(db: any, participantId: strin
   const archiveRef = db.collection('inactive_clubs_v1').doc(participantId);
   return db.runTransaction(async (t: any) => {
     const resetConfigSnap = await t.get(db.collection('system_v1').doc('season_config'));
-    if (resetConfigSnap.exists && resetConfigSnap.data()?.stagingSeasonOneResetInProgress === true) {
+    const resetState = resetConfigSnap.exists ? resetConfigSnap.data() || {} : {};
+    if (resetState.stagingSeasonOneResetInProgress === true || resetState.stagingFreshSeasonOneReset === true) {
       throw new Error('STAGING_SEASON_ONE_RESET_IN_PROGRESS');
     }
     const [playerSnap, archiveSnap] = await Promise.all([
@@ -772,7 +781,8 @@ async function commitTournamentStageTransition(
   const tournamentRef = db.collection('tournaments_v1').doc(tournamentId);
   return db.runTransaction(async (t: any) => {
     const resetConfigSnap = await t.get(db.collection('system_v1').doc('season_config'));
-    if (resetConfigSnap.exists && resetConfigSnap.data()?.stagingSeasonOneResetInProgress === true) {
+    const resetState = resetConfigSnap.exists ? resetConfigSnap.data() || {} : {};
+    if (resetState.stagingSeasonOneResetInProgress === true || resetState.stagingFreshSeasonOneReset === true) {
       throw new Error('STAGING_SEASON_ONE_RESET_IN_PROGRESS');
     }
     const tournamentSnap = await t.get(tournamentRef);
@@ -866,7 +876,8 @@ async function advanceTournament(db: any, tournament: any, now: number) {
     if (!finalMatch?.winnerId) return false;
     const completedTournament = await db.runTransaction(async (t: any) => {
     const resetConfigSnap = await t.get(db.collection('system_v1').doc('season_config'));
-    if (resetConfigSnap.exists && resetConfigSnap.data()?.stagingSeasonOneResetInProgress === true) {
+    const resetState = resetConfigSnap.exists ? resetConfigSnap.data() || {} : {};
+    if (resetState.stagingSeasonOneResetInProgress === true || resetState.stagingFreshSeasonOneReset === true) {
       throw new Error('STAGING_SEASON_ONE_RESET_IN_PROGRESS');
     }
       const fresh = await t.get(ref);
@@ -920,7 +931,8 @@ export async function runTournamentCycle(cronToken: string) {
   }
   const db = getAdminDb();
   const resetConfig = await db.collection('system_v1').doc('season_config').get();
-  if (resetConfig.exists && resetConfig.data()?.stagingSeasonOneResetInProgress === true) {
+  const resetState = resetConfig.exists ? resetConfig.data() || {} : {};
+  if (resetState.stagingSeasonOneResetInProgress === true || resetState.stagingFreshSeasonOneReset === true) {
     return { success: true, skipped: true, reason: 'STAGING_SEASON_ONE_RESET_IN_PROGRESS' };
   }
   const generated = await generateDailyTournamentsInternal();
