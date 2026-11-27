@@ -53,7 +53,7 @@ The branch contains 147 tests/*.test.mjs files. The inventory includes dedicated
 - economy ledgers, market bids, auction settlement and expiry;
 - match settlement, match reports, unread report counts and friendly match terminal states.
 
-The existence of tests does not by itself prove every live workflow or every cross-system path is covered. Only the commands and scenarios listed in the CI run above are confirmed as executed on the audited head.
+The existing Cup Emulator scenario includes full progression through all seven rounds and all 119 fixtures, BO3 finalization, champion payout/trophy integrity, and replay idempotency. The clean Season 1 Emulator scenario separately verifies canonical world generation and pre-season Cup creation. The existence of tests does not by itself prove every live workflow or every cross-system path is covered. Only the commands and scenarios listed in the CI run above are confirmed as executed on the audited head.
 
 ### Existing read-only Beta preflight
 
@@ -71,7 +71,7 @@ The workflow is a separate operational gate. A green branch CI does not prove th
 ### P0 — release blockers
 
 1. **Fresh live Beta preflight not evidenced.** Obtain a fresh authenticated read-only result for the exact current Preview commit and exact forge-rivals-beta project. Until then, actual Beta database readiness remains unknown.
-2. **No single full Season 1 lifecycle Emulator acceptance scenario found in the test inventory.** Existing tests cover many components, including prepared Cup, reset, activation and publication cleanup, but the audited workflow does not run one integrated scenario that simulates all 14 league rounds, completes all 119 Cup matches, validates final awards/archive, activates Season 2 and retries activation safely.
+2. **No single combined Season 1 lifecycle Emulator acceptance scenario found.** Important distinction: the existing Pyramid Cup Emulator test does drive the complete 119-match bracket, checks the BO3 final, prize ledger, trophy repair and idempotent retries; the clean Season 1 Emulator scenario separately verifies the 15/120/840 world and pre-season Cup creation. The gap is the combined end-to-end path that simulates all 14 league rounds, completes all 119 Cup matches, validates final league awards/archive, prepares and activates Season 2, and retries the transition safely in one isolated scenario.
 3. **Season 1 -> Season 2 operational acceptance remains unproven.** Need explicit proof of sequential activation, lock/lease recovery, no duplicate fixtures/awards, preserved human clubs and players, and cleanup completion.
 4. **Actual scheduled-worker configuration is not verified.** The runbook requires the exact Beta orchestrator URL, matching Cron secret, correct Secret Manager binding and a single intended Cloud Scheduler schedule. This requires a read-only infrastructure inventory before any operational change.
 5. **Do not run destructive reset or live activation as a substitute for diagnosis.** Any reset remains behind fresh preflight and explicit user authorization.
