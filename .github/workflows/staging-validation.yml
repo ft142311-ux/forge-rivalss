@@ -40,7 +40,10 @@ jobs:
           cache: npm
 
       - name: Install dependencies
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund
+
+      - name: Production dependency security gate
+        run: npm audit --omit=dev --audit-level=critical
 
       - name: TypeScript check
         run: npm run typecheck
