@@ -422,6 +422,19 @@ test('prepared Season 2 receives its complete Pyramid Cup before publication in 
   assert.equal(championLedger.amount, 35_000);
   assert.equal(championLedger.type, 'PYRAMID_CUP_CHAMPION_REWARD');
 
+  // Simulate interruption after the champion payout committed but before
+  // the Cup root completion write became durable. Reprocessing must replay
+  // the receipt without crediting the balance or duplicating the trophy.
+  await cupRef.update({ status: 'active' });
+  const resumedFinalization = await runPyramidCupCycle();
+  assert.equal(resumedFinalization.completed, true, JSON.stringify(resumedFinalization));
+  const resumedCup = (await cupRef.get()).data();
+  assert.equal(resumedCup.status, 'completed');
+  const resumedChampion = (await db.collection('players_v14').doc(humanUid).get()).data();
+  assert.equal(resumedChampion.credits, 1_035_000);
+  assert.equal(resumedChampion.trophies.filter(trophy => trophy.id === 'pyramid-cup-season-' + season).length, 1);
+  assert.deepEqual((await economyRefs[0].get()).data(), championLedger);
+
   // A retry after completion must be a strict no-op: no second reward,
   // no duplicate trophy, and no mutation of the published champion record.
   const completedSnapshot = {

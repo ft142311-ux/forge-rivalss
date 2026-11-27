@@ -41,3 +41,33 @@ export function resolveCupPrizeReplayAmount(
 
   return amount;
 }
+
+
+export type CupPrizeBalance = {
+  balanceBefore: number;
+  balanceAfter: number;
+};
+
+/**
+ * Resolve a safe balance update for a Cup prize.
+ * Invalid legacy balances and integer overflow fail closed instead of
+ * silently resetting a manager's credits to zero during settlement.
+ */
+export function resolveCupPrizeBalance(
+  currentCredits: unknown,
+  rewardAmount: unknown,
+): CupPrizeBalance | null {
+  if (typeof currentCredits !== 'number' ||
+      !Number.isSafeInteger(currentCredits) ||
+      currentCredits < 0 ||
+      typeof rewardAmount !== 'number' ||
+      !Number.isSafeInteger(rewardAmount) ||
+      rewardAmount <= 0) {
+    return null;
+  }
+
+  const balanceAfter = currentCredits + rewardAmount;
+  if (!Number.isSafeInteger(balanceAfter)) return null;
+
+  return { balanceBefore: currentCredits, balanceAfter };
+}

@@ -55,3 +55,26 @@ test('Pyramid Cup champion receives one separate trophy in the same payout trans
   assert.match(payout, /tx\.update\(playerRef, \{/);
   assert.match(payout, /tx\.create\(ledgerRef, \{/);
 });
+
+
+test('Pyramid Cup uses the frozen bot flag and fails closed on invalid human reward data', () => {
+  const start = source.indexOf('async function payCupPrize');
+  const end = source.indexOf('async function finishTechnically', start);
+  const payout = source.slice(start, end);
+
+  assert.match(payout, /typeof team\.isBot !== 'boolean'/);
+  assert.match(payout, /if \(team\.isBot \|\| team\.id\.startsWith\('BOT_'\)\) return 0/);
+  assert.match(payout, /CUP_PRIZE_RECIPIENT_PROFILE_MISSING/);
+  assert.match(payout, /CUP_PRIZE_RECIPIENT_BALANCE_INVALID/);
+});
+
+test('Pyramid Cup completion is committed only after both recipient settlements resolve', () => {
+  const finalStart = source.indexOf('if (round >= ROUND_COUNT)');
+  const finalEnd = source.indexOf('const winners: Team[]', finalStart);
+  assert.ok(finalStart >= 0 && finalEnd > finalStart);
+
+  const finalization = source.slice(finalStart, finalEnd);
+  const payouts = finalization.indexOf('const [championPrize, finalistPrize] = await Promise.all');
+  const completionCommit = finalization.indexOf('commitCupRoundState', payouts);
+  assert.ok(payouts >= 0 && completionCommit > payouts);
+});

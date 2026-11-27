@@ -10,7 +10,7 @@ import { MATCH_COLLECTIONS } from '@/app/lib/match-storage';
 import { resolveSeasonLifecycleWindow } from './season-boundary';
 import { isMatchReportFinished } from '@/app/lib/match-report-utils';
 import { isCanonicalPyramidCupMatchContract, isCanonicalPyramidCupOpeningField, isPyramidCupRoundProgressionValid, isCupParticipantMatchSnapshotCompatible, isValidCupParticipantMatchSnapshot, isValidPyramidCupWinner } from '@/app/lib/cup-participant-integrity';
-import { resolveCupPrizeReplayAmount } from '@/app/lib/cup-prize-ledger';
+import { resolveCupPrizeBalance, resolveCupPrizeReplayAmount } from '@/app/lib/cup-prize-ledger';
 
 const LEAGUE_ID = 'ALPHA';
 const CUP_COLLECTION = 'cup_pyramid_v1';
@@ -753,13 +753,17 @@ async function payCupPrize(db: any, season: number, team: Team | null, place: 'c
     }
     if (!playerSnap.exists) throw new Error('CUP_PRIZE_RECIPIENT_PROFILE_MISSING');
     const player = playerSnap.data() || {};
-    const before = Math.max(0, Math.floor(Number(player.credits) || 0));
+    const balance = resolveCupPrizeBalance(player.credits, amount);
+    if (!balance) throw new Error('CUP_PRIZE_RECIPIENT_BALANCE_INVALID');
+    if (player.trophies !== undefined && player.trophies !== null && !Array.isArray(player.trophies)) {
+      throw new Error('CUP_PRIZE_TROPHY_COLLECTION_INVALID');
+    }
     const existingTrophies = Array.isArray(player.trophies) ? player.trophies : [];
     const trophyId = `pyramid-cup-season-${season}`;
     const hasPyramidCupTrophy = existingTrophies.some((item: any) => item?.id === trophyId);
     const shouldAddTrophy = place === 'champion' && !hasPyramidCupTrophy;
     tx.update(playerRef, {
-      credits: before + amount,
+      credits: balance.balanceAfter,
       ...(shouldAddTrophy ? {
         trophies: [...existingTrophies, {
           id: trophyId,
@@ -774,7 +778,7 @@ async function payCupPrize(db: any, season: number, team: Team | null, place: 'c
     tx.create(ledgerRef, {
       userId: team.id, amount, currency: 'credits', type: rewardType,
       referenceId, description: `Pyramid Cup season ${season}: ${place}`,
-      division: team.level, balanceBefore: before, balanceAfter: before + amount, timestamp: FieldValue.serverTimestamp(),
+      division: team.level, balanceBefore: balance.balanceBefore, balanceAfter: balance.balanceAfter, timestamp: FieldValue.serverTimestamp(),
     });
     return amount;
   });
