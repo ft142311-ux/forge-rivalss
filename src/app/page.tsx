@@ -12,6 +12,7 @@ import { getMoscowTime, getGlobalSeasonInfo } from './lib/time-utils';
 import { doc } from 'firebase/firestore';
 import { getBotName } from './lib/leagues-data';
 import { PlaceHolderImages } from './lib/placeholder-images';
+import { isMatchReportFinished } from '@/app/lib/match-report-utils';
 
 export default function Home() {
   const { user, isUserLoading } = useUser();
@@ -85,7 +86,7 @@ export default function Home() {
     const sourceMatches = officialLeagueMatches ?? allSeasonMatches ?? [];
     if (!sourceMatches.length || !rank) return null;
     const myMatches = sourceMatches
-      .filter(m => (Number(m.homeRank) === rank || Number(m.awayRank) === rank) && !m.isFinished)
+      .filter(m => (Number(m.homeRank) === Number(rank) || Number(m.awayRank) === Number(rank)) && !isMatchReportFinished(m))
       .sort((a, b) => toMillis(a.startTime) - toMillis(b.startTime));
     const nowMs = now.getTime();
     // The card is for the NEXT opponent, so prefer the next future match.
@@ -169,7 +170,7 @@ export default function Home() {
     ? `${dashboardDate.toLocaleDateString(language === 'ru' ? 'ru-RU' : 'en-US', { day: 'numeric', month: 'short', timeZone: 'Europe/Moscow' })} · ${dashboardDate.toLocaleTimeString(language === 'ru' ? 'ru-RU' : 'en-US', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Moscow' })}`
     : (language === 'ru' ? 'Ожидается расписание' : 'Schedule pending');
   const cardStatusLabel = showOffseason
-    ? (cardCountdown === 'PREPARING'
+    ? (cardCountdown === 'PREPARING' || cardCountdown === 'ПОДГОТОВКА'
         ? (language === 'ru' ? 'ПОДГОТОВКА' : 'PREPARING')
         : `${language === 'ru' ? 'ДО МЕЖСЕЗОНЬЯ' : 'OFFSEASON IN'} ${cardCountdown}`)
     : currentNextMatch
