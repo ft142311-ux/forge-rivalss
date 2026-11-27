@@ -10,7 +10,7 @@ import {
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
-import { useUser, useFirestore, useCollection, useMemoFirebase, useDoc } from '@/firebase';
+import { useUser, useFirestore, useCollection, useMemoFirebase } from '@/firebase';
 import { LoadingScreen } from '@/components/game/LoadingScreen';
 import { Badge } from '@/components/ui/badge';
 import { useState, useEffect, useMemo } from 'react';
@@ -18,75 +18,18 @@ import { getMoscowTime, getGlobalSeasonInfo, isMatchLive } from './lib/time-util
 import { collection, query, where, doc } from 'firebase/firestore';
 import { getBotName, LEAGUES } from './lib/leagues-data';
 import { PlaceHolderImages } from './lib/placeholder-images';
-import { getMyUnreadMatchReportsCountAction } from '@/app/actions/match-report';
-import { isMatchReportFinished, isMatchWithinClubLifetime } from '@/app/lib/match-report-utils';
 
 export default function Home() {
   const { user, isUserLoading } = useUser();
   const db = useFirestore();
   const { 
-    language, isLoaded, isDataReady, matchHistory, experiencePoints, managerLevel, clubName, 
-    allSeasonMatches, lastSeenMatchDay, rank, selectedLeagueId,
+    language, isLoaded, isDataReady, experiencePoints, managerLevel, clubName, 
+    allSeasonMatches, rank, selectedLeagueId,
     leagueLevel, groupId, clubLogo: myClubLogo, numericId
   } = useGameState();
 
   const [now, setNow] = useState(getMoscowTime());
   const [officialLeagueMatches, setOfficialLeagueMatches] = useState<any[] | null>(null);
-  const [serverUnreadReportsCount, setServerUnreadReportsCount] = useState(0);
-
-  useEffect(() => {
-    const timer = setInterval(() => setNow(getMoscowTime()), 1000);
-    return () => clearInterval(timer);
-  }, []);
-
-  const groupPlayersQuery = useMemoFirebase(() => {
-    if (!db || !selectedLeagueId) return null;
-    return query(collection(db, 'players_v14'), 
-      where('selectedLeagueId', '==', selectedLeagueId),
-      where('leagueLevel', '==', leagueLevel),
-      where('groupId', '==', groupId)
-    );
-  }, [db, selectedLeagueId, leagueLevel, groupId]);
-
-  const { data: groupPlayers } = useCollection(groupPlayersQuery);
-
-  const userProfileRef = useMemoFirebase(() => {
-    if (!db || !user?.uid) return null;
-    return doc(db, 'players_v14', user.uid);
-  }, [db, user?.uid]);
-
-  const { data: profile } = useDoc(userProfileRef);
-
-  useEffect(() => {
-    if (!user || !rank) {
-      setServerUnreadReportsCount(0);
-      return;
-    }
-    let cancelled = false;
-    const refreshUnreadReports = async () => {
-      try {
-        const locallyViewedIds = (() => {
-          try {
-            const raw = JSON.parse(localStorage.getItem('lote_game_state_v245:viewed-match-ids') || '[]');
-            return Array.isArray(raw)
-              ? raw.filter((value): value is string => typeof value === 'string' && value.length > 0 && value.length <= 180).slice(-2000)
-              : [];
-          } catch {
-            return [];
-          }
-        })();
-        const result = await getMyUnreadMatchReportsCountAction(await user.getIdToken(), locallyViewedIds);
-        if (!cancelled) setServerUnreadReportsCount(result?.success ? Number(result.count || 0) : 0);
-      } catch (error) {
-        console.error('[HOME REPORT BADGE] count lookup failed', error);
-        if (!cancelled) setServerUnreadReportsCount(0);
-      }
-    };
-    void refreshUnreadReports();
-    return () => { cancelled = true; };
-  }, [user, rank, selectedLeagueId, leagueLevel, groupId, allSeasonMatches, matchHistory]);
-
-
   const seasonConfigRef = useMemoFirebase(() => {
     if (!db) return null;
     return doc(db, 'system_v1', 'season_config');
@@ -184,67 +127,10 @@ export default function Home() {
     return 'LIVE';
   };
 
-  const totalUnreadCount = useMemo(() => {
-    if (!profile || !user || !rank) return 0;
-    
-    const regTime = profile.createdAt?.toMillis ? profile.createdAt.toMillis() : (profile.createdAt ? new Date(profile.createdAt).getTime() : 0);
-
-    let locallyViewed = new Set<string>();
-    if (typeof window !== 'undefined') {
-      try {
-        const raw = JSON.parse(localStorage.getItem('lote_game_state_v245:viewed-match-ids') || '[]');
-        if (Array.isArray(raw)) locallyViewed = new Set(raw.map(String));
-      } catch {}
-    }
-
-    const isLocallyViewed = (m: any) => m?.id ? locallyViewed.has(String(m.id)) : false;
-
-    const unreadLeague = (allSeasonMatches || []).filter(m => {
-      const isMyMatch = Number(m.homeRank) === rank || Number(m.awayRank) === rank;
-      const resolvedTime = m.resolvedAt?.toMillis ? m.resolvedAt.toMillis() : (m.resolvedAt ? new Date(m.resolvedAt).getTime() : 0);
-      const isUnread = isMatchReportFinished(m) && m.seen !== true && m.reportStatus !== 'viewed' && !isLocallyViewed(m);
-      return isMyMatch && isUnread && isMatchWithinClubLifetime(m, profile.createdAt) && resolvedTime > regTime;
-    });
-
-    const unreadHistory = (matchHistory || []).filter(m => isMatchWithinClubLifetime(m, profile.createdAt) && isMatchReportFinished(m) && m.seen !== true && m.reportStatus !== 'viewed' && !isLocallyViewed(m));
-
-    // Один и тот же отчет может одновременно присутствовать в local history
-    // и в allSeasonMatches. Считаем его только один раз.
-    const uniqueUnreadIds = new Set<string>();
-    [...unreadLeague, ...unreadHistory].forEach((m: any) => {
-      if (m?.id) uniqueUnreadIds.add(String(m.id));
-    });
-
-    return uniqueUnreadIds.size;
-  }, [allSeasonMatches, matchHistory, lastSeenMatchDay, rank, user, profile]);
-
   const mapCardBg = PlaceHolderImages.find(img => img.id === 'tactical-map-card')?.imageUrl;
   const systemIconUrl = PlaceHolderImages.find(img => img.id === 'ui-system-icon')?.imageUrl;
 
   if (isUserLoading || !isLoaded || !isDataReady) return <LoadingScreen />;
-
-  const menuItems = [
-    { id: 'reports', label: language === 'ru' ? 'ОБЗОР МАТЧА' : 'MATCH REVIEW', href: '/reports', icon: Tv, color: 'text-primary', badge: Math.max(totalUnreadCount, serverUnreadReportsCount) > 0 ? Math.max(totalUnreadCount, serverUnreadReportsCount) : null },
-    { id: 'squad', label: language === 'ru' ? 'СОСТАВ КОМАНДЫ' : 'SQUAD', href: '/roster', icon: Users, color: 'text-blue-400' },
-    { id: 'transfers', label: language === 'ru' ? 'ТРАНСФЕРЫ' : 'TRANSFERS', href: '/transfers', icon: ArrowRightLeft, color: 'text-yellow-500' },
-    { id: 'training', label: language === 'ru' ? 'РАЗВИТИЕ' : 'INFRA', href: '/training', icon: Construction, color: 'text-orange-400' },
-    { id: 'staff', label: language === 'ru' ? 'ПЕРСОНАЛ' : 'STAFF', href: '/staff', icon: Briefcase, color: 'text-amber-500' },
-    { id: 'scouting', label: language === 'ru' ? 'ПОИСК ТАЛАНТОВ' : 'SCOUTING', href: '/youth-academy/scouting', icon: Radar, color: 'text-purple-400' },
-    { id: 'rankings', label: language === 'ru' ? 'ТАБЛИЦЫ' : 'RANKINGS', href: '/rankings', icon: LayoutList, color: 'text-green-400' },
-    { id: 'matches', label: language === 'ru' ? 'РАСПИСАНИЕ' : 'SCHEDULE', href: '/matches', icon: CalendarDays, color: 'text-red-400' },
-    { id: 'finances', label: language === 'ru' ? 'ФИНАНСЫ' : 'FINANCES', href: '/finances', icon: LineChart, color: 'text-emerald-400' },
-    { id: 'tournaments', label: language === 'ru' ? 'ТУРНИРЫ' : 'TOURNAMENTS', href: '/tournaments', icon: Swords, color: 'text-yellow-400' },
-    { id: 'fanclub', label: language === 'ru' ? 'ФАН БАЗА' : 'FANBASE', href: '/fanclub', icon: Heart, color: 'text-pink-400' },
-    { id: 'chats', label: language === 'ru' ? 'ЧАТЫ' : 'CHATS', href: '/chats', icon: MessageSquare, color: 'text-cyan-400' },
-    { id: 'friends', label: language === 'ru' ? 'ДРУЗЬЯ' : 'FRIENDS', href: '/managers', icon: UserCheck, color: 'text-indigo-400' },
-    { id: 'profile', label: language === 'ru' ? 'О СЕБЕ' : 'PROFILE', href: '/profile', icon: UserIcon, color: 'text-rose-400' },
-    { id: 'associations', label: language === 'ru' ? 'АССОЦИАЦИИ' : 'ALLIANCE', href: '/associations', icon: Shield, color: 'text-sky-400' },
-    { id: 'fans', label: language === 'ru' ? 'ФАН-БАЗА' : 'FAN BASE', href: '/fans', icon: Heart, color: 'text-pink-400' },
-    { id: 'shop', label: language === 'ru' ? 'МАГАЗИН' : 'SHOP', href: '/shop', icon: ShoppingCart, color: 'text-lime-400' },
-    { id: 'news', label: language === 'ru' ? 'НОВОСТИ' : 'NEWS', href: '/news', icon: Newspaper, color: 'text-slate-400' },
-    { id: 'system', label: language === 'ru' ? 'НАСТРОЙКИ' : 'SYSTEM', href: '/system', icon: Settings, color: 'text-primary', isSystem: true },
-    { id: 'search', label: language === 'ru' ? 'ПОИСК' : 'SEARCH', href: '/search', icon: Search, color: 'text-blue-500' },
-  ];
 
   const currentNextMatch = resolvedNextMatch?.match;
   const seasonInfo = getGlobalSeasonInfo();
