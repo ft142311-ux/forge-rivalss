@@ -7,7 +7,7 @@ import { buildPromotionRelegationGroups, validateRolloverPlan } from './season-r
 import { isSeasonArchiveReadyToComplete, validateSeasonArchiveRolloverPlan, validateSeasonArchiveSnapshot } from './season-archive';
 import { runTwoPhaseSeasonOrchestration } from './season-orchestration';
 import { isValidCleanSeasonOneBoundary } from './season-boundary';
-import { resolveSeasonAwardRecipientState, shouldPersistSeasonTrophies } from './season-awards-policy';
+import { resolveSeasonAwardBalance, resolveSeasonAwardRecipientState, resolveSeasonAwardTrophyState, shouldPersistSeasonTrophies } from './season-awards-policy';
 import { applySeasonAwardRecipients } from './season-award-reconciliation';
 
 const LEAGUE_ID = 'ALPHA';
@@ -223,28 +223,29 @@ async function applySeasonAwards(db: any, sourceSeason: number, standings: Recor
       t.set(lockRef, { expiresAtMs: nowMs + SEASON_ROLLOVER_LOCK_TTL_MS, renewedAtMs: nowMs }, { merge: true });
       const player = playerSnap.exists ? playerSnap.data() || {} : {};
       const recipientState = resolveSeasonAwardRecipientState(playerSnap.exists, transactionSnap.exists, player, sourceSeason);
-      if (recipientState === 'ALREADY_APPLIED') {
-        return { settled: true, prize, trophy: Boolean(isChampion || isPyramidWinner) };
-      }
       if (recipientState === 'PROFILE_MISSING') {
         return { settled: false, prize, trophy: false, missingProfile: true };
       }
       if (recipientState === 'ACCOUNTING_CONFLICT') {
         return { settled: false, prize, trophy: false, accountingConflict: true };
       }
-      const awardKey = `S${sourceSeason}`;
-      const awards = player.seasonAwards && typeof player.seasonAwards === 'object' ? player.seasonAwards : {};
 
-      const before = Math.max(0, Math.floor(Number(player.credits) || 0));
-      const after = before + prize;
-      const existingTrophies = Array.isArray(player.trophies) ? player.trophies : [];
+      const trophyState = resolveSeasonAwardTrophyState(
+        player.trophies,
+        sourceSeason,
+        prize,
+        isChampion,
+        isPyramidWinner,
+      );
+      if (!trophyState) {
+        return { settled: false, prize, trophy: false, accountingConflict: true };
+      }
+
       const trophyId = `league-cup-season-${sourceSeason}`;
       const pyramidTrophyId = `pyramid-cup-season-${sourceSeason}`;
-      const hasCup = existingTrophies.some((item: any) => item?.id === trophyId);
-      const hasPyramidCup = existingTrophies.some((item: any) => item?.id === pyramidTrophyId);
-      const shouldAddCup = Boolean(isChampion && !hasCup);
-      const shouldAddPyramidCup = Boolean(isPyramidWinner && !hasPyramidCup);
-      let trophies = existingTrophies;
+      const shouldAddCup = trophyState.shouldAddLeagueCup;
+      const shouldAddPyramidCup = trophyState.shouldAddPyramidCup;
+      let trophies = trophyState.existingTrophies;
       if (shouldAddCup) trophies = [...trophies, {
         id: trophyId,
         name: `Кубок лиги — сезон ${sourceSeason}`,
@@ -262,11 +263,28 @@ async function applySeasonAwards(db: any, sourceSeason: number, standings: Recor
         date: new Date().toISOString(),
         season: sourceSeason,
       }];
+      const persistTrophies = shouldPersistSeasonTrophies(shouldAddCup, shouldAddPyramidCup) || trophyState.needsRepair;
+
+      // An already-settled ledger must never be credited again. It may, however,
+      // repair this season's missing/malformed trophy records atomically.
+      if (recipientState === 'ALREADY_APPLIED') {
+        if (persistTrophies) {
+          t.update(playerRef, { trophies, updatedAt: FieldValue.serverTimestamp() });
+        }
+        return { settled: true, prize, trophy: Boolean(isChampion || isPyramidWinner) };
+      }
+
+      const balance = resolveSeasonAwardBalance(player.credits, prize);
+      if (!balance) {
+        return { settled: false, prize, trophy: false, accountingConflict: true };
+      }
+      const awardKey = `S${sourceSeason}`;
+      const awards = player.seasonAwards && typeof player.seasonAwards === 'object' ? player.seasonAwards : {};
 
       t.update(playerRef, {
-        credits: after,
+        credits: balance.balanceAfter,
         seasonAwards: { ...awards, [awardKey]: { season: sourceSeason, division: level, group, rank: Number(row.rank), prize, awardedAt: FieldValue.serverTimestamp() } },
-        ...(shouldPersistSeasonTrophies(shouldAddCup, shouldAddPyramidCup) ? { trophies } : {}),
+        ...(persistTrophies ? { trophies } : {}),
         updatedAt: FieldValue.serverTimestamp(),
       });
       t.set(txRef, {
@@ -279,8 +297,8 @@ async function applySeasonAwards(db: any, sourceSeason: number, standings: Recor
         division: level,
         group,
         rank: Number(row.rank),
-        balanceBefore: before,
-        balanceAfter: after,
+        balanceBefore: balance.balanceBefore,
+        balanceAfter: balance.balanceAfter,
         timestamp: FieldValue.serverTimestamp(),
       });
       return { settled: true, prize, trophy: shouldAddCup || shouldAddPyramidCup || Boolean(isChampion || isPyramidWinner) };
