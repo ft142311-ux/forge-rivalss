@@ -13,7 +13,7 @@ test('league settlement claims a per-attempt processing token transactionally', 
   assert.ok(resolver.includes('const processingToken = randomUUID();'));
   assert.ok(resolver.includes('const claimed = await db.runTransaction'));
   assert.ok(resolver.includes('processingToken,'));
-  assert.ok(resolver.includes("['finished', 'completed'].includes(String(current.status || '').toLowerCase())"));
+  assert.ok(resolver.includes('if (isMatchReportFinished(current)) return false;'));
   assert.ok(resolver.includes('if (!stale) return false;'));
 });
 
@@ -45,7 +45,7 @@ test('league worker scans all active-season fixtures and rebuilds standings befo
   assert.ok(resolver.includes('const standingsSync = await rebuildLeagueTablesFromFinishedMatches(db, currentSeason)'));
 });
 test('league match claims and settlement are fenced against rollover and active-season changes', () => {
-  assert.ok(source.includes("import { isSeasonRolloverLockStale, SEASON_ROLLOVER_LOCK_ID } from './season-rollover-lock'")); 
+  assert.ok(source.includes("import { isSeasonRolloverLockStale, SEASON_ROLLOVER_LOCK_ID } from './season-rollover-lock'"));
   assert.ok(resolver.includes('tx.get(configRef)'));
   assert.ok(resolver.includes('tx.get(rolloverLockRef)'));
   assert.ok(resolver.includes("reason: 'SEASON_ROLLOVER_IN_PROGRESS'"));

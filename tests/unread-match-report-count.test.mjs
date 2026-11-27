@@ -55,11 +55,10 @@ test('finished status variants are accepted without requiring isFinished boolean
   const records = [
     record(MATCH_COLLECTIONS.tournament, 'resolved', { homeId: uid, isFinished: false, status: 'resolved' }),
     record(MATCH_COLLECTIONS.cup, 'completed', { awayId: uid, isFinished: false, status: 'completed' }),
-    record(MATCH_COLLECTIONS.league, 'resolved', { homeId: uid, isFinished: false, status: 'resolved' }),
+    record(MATCH_COLLECTIONS.league, 'league-resolved', { homeId: uid, isFinished: false, status: 'resolved' }),
   ];
   assert.equal(countUnreadMatchReportRecords(records, uid, createdAt, league), 3);
 });
-
 
 test('a report mirrored across mode collections is counted once by its route ID', () => {
   const records = [
@@ -68,7 +67,6 @@ test('a report mirrored across mode collections is counted once by its route ID'
   ];
   assert.equal(countUnreadMatchReportRecords(records, uid, createdAt, league), 1);
 });
-
 
 test('locally acknowledged report IDs suppress stale server badge entries across all collections', () => {
   const records = [
