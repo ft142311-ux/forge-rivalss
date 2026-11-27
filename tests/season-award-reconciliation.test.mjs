@@ -135,3 +135,29 @@ test('every production award settlement path blocks rollover plan publication on
     assert.match(tail, /awards/);
   }
 });
+
+
+test('production season awards reject unsafe balances and repair trophy data without replaying credits', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const source = await readFile(new URL('../src/app/actions/season-rollover.ts', import.meta.url), 'utf8');
+  assert.ok(source.includes('resolveSeasonAwardBalance(player.credits, prize)'));
+  assert.ok(source.includes('if (!balance)'));
+  assert.ok(source.includes('credits: balance.balanceAfter'));
+  assert.ok(source.includes('balanceBefore: balance.balanceBefore'));
+  assert.ok(source.includes('balanceAfter: balance.balanceAfter'));
+  assert.ok(source.includes('resolveSeasonAwardTrophyState('));
+  assert.ok(source.includes('if (recipientState === \'ALREADY_APPLIED\')'));
+  const replayStart = source.indexOf("if (recipientState === 'ALREADY_APPLIED')");
+  const replayEnd = source.indexOf('const balance = resolveSeasonAwardBalance', replayStart);
+  const replay = source.slice(replayStart, replayEnd);
+  assert.match(replay, /if \(persistTrophies\)/);
+  assert.match(replay, /t\.update\(playerRef, \{ trophies,/);
+  assert.doesNotMatch(replay, /credits:/);
+});
+
+test('season award trophy collection corruption blocks settlement rather than replacing trophies with an empty array', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const source = await readFile(new URL('../src/app/actions/season-rollover.ts', import.meta.url), 'utf8');
+  assert.match(source, /const trophyState = resolveSeasonAwardTrophyState\([\s\S]*?if \(!trophyState\)\s*\{\s*return \{ settled: false, prize, trophy: false, accountingConflict: true \};/);
+  assert.doesNotMatch(source, /Array\.isArray\(player\.trophies\) \? player\.trophies : \[\]/);
+});
