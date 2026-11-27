@@ -229,6 +229,11 @@ async function applySeasonAwards(db: any, sourceSeason: number, standings: Recor
       if (recipientState === 'ACCOUNTING_CONFLICT') {
         return { settled: false, prize, trophy: false, accountingConflict: true };
       }
+      // A historical ledger can outlive a deleted player profile. Treat the
+      // payment as settled, but do not attempt to update a document that is gone.
+      if (recipientState === 'ALREADY_APPLIED' && !playerSnap.exists) {
+        return { settled: true, prize, trophy: Boolean(isChampion || isPyramidWinner) };
+      }
 
       const trophyState = resolveSeasonAwardTrophyState(
         player.trophies,
