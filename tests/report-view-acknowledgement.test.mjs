@@ -99,6 +99,7 @@ test('legacy rank-based report access requires exact league, group and division 
   assert.match(matchReportAction, /profile\.groupId \|\| ''\) === groupId/);
   assert.match(matchReportAction, /Number\(profile\.leagueLevel\) === level/);
   assert.match(matchReportAction, /\[homeRank, awayRank\]\.includes\(Number\(profile\.rank\)\)/);
-  assert.match(matchReportAction, /await isRankBasedLeagueParticipant\(db, uid, match, collectionName, profile\)/);
-  assert.match(matchReportAction, /await isRankBasedLeagueParticipant\(db, uid, match, candidates\[index\]\.collectionName, profile\)/);
+  assert.match(matchReportAction, /await isRankBasedLeagueParticipant\(db, uid, match, copy\.collectionName, profile\)/);
+  assert.match(matchReportAction, /isCanonicalMatchReportCopy/);
+  assert.match(matchReportAction, /isMatchReportFinished\(right\.match\)/);
 });

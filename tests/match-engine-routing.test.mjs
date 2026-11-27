@@ -56,7 +56,9 @@ test('all report collections are covered by server report lookup', () => {
   for (const name of ['matches_v2', 'cup_matches', 'friendly_matches_v1', 'association_matches_v1', 'tournament_matches_v1', 'training_matches_v1']) {
     assert.ok(storage.includes(name), `missing storage mapping for ${name}`);
   }
-  assert.match(reportAction, /for \(const collectionName of MATCH_REPORT_COLLECTIONS\)/);
+  assert.match(reportAction, /Promise\.all\(MATCH_REPORT_COLLECTIONS\.map/);
+  assert.match(reportAction, /copy\.collectionName/);
+  assert.match(reportAction, /isCanonicalMatchReportCopy/);
   assert.match(viewer, /getMatchReportAction/);
 });
 
