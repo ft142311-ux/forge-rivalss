@@ -157,3 +157,33 @@ export function isCupParticipantMatchSnapshotCompatible(
   const expectedJson = stableCupSnapshotJson(expected);
   return existingJson !== null && existingJson === expectedJson;
 }
+
+
+/** Validates the immutable Pyramid Cup match-routing and competition contract. */
+export function isCanonicalPyramidCupMatchContract(value: unknown, matchId: string): boolean {
+  const id = String(matchId || '').trim();
+  if (!id || !value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const match = value as Record<string, unknown>;
+  const identity = /^cup_S([1-9]\\d*)_R([1-7])_M(\\d{2})$/.exec(id);
+  if (!identity || match.id !== id) return false;
+
+  const season = Number(identity[1]);
+  const round = Number(identity[2]);
+  const index = Number(identity[3]);
+  const pairingCounts = [56, 32, 16, 8, 4, 2, 1];
+  const homeId = String(match.homeId ?? '').trim();
+  const awayId = String(match.awayId ?? '').trim();
+
+  return Number.isSafeInteger(season) && season >= 1 &&
+    Number.isInteger(index) && index >= 1 && index <= pairingCounts[round - 1] &&
+    Number(match.season) === season &&
+    Number(match.cupRound) === round &&
+    Number(match.bestOf) === (round === 7 ? 3 : 1) &&
+    match.type === 'cup' &&
+    match.matchType === 'cup' &&
+    match.source === 'pyramid-cup' &&
+    match.cupId === `cup_s${season}_lALPHA` &&
+    match.leagueId === 'ALPHA' &&
+    Boolean(homeId) && Boolean(awayId) && homeId !== awayId &&
+    match.affectsLeagueStandings === false;
+}

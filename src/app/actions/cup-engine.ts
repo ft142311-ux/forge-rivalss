@@ -9,7 +9,7 @@ import { buildMatchTeamSnapshot, type MatchTeamSnapshot } from '@/app/lib/match-
 import { MATCH_COLLECTIONS } from '@/app/lib/match-storage';
 import { resolveSeasonLifecycleWindow } from './season-boundary';
 import { isMatchReportFinished } from '@/app/lib/match-report-utils';
-import { isCanonicalPyramidCupOpeningField, isPyramidCupRoundProgressionValid, isCupParticipantMatchSnapshotCompatible, isValidCupParticipantMatchSnapshot } from '@/app/lib/cup-participant-integrity';
+import { isCanonicalPyramidCupMatchContract, isCanonicalPyramidCupOpeningField, isPyramidCupRoundProgressionValid, isCupParticipantMatchSnapshotCompatible, isValidCupParticipantMatchSnapshot } from '@/app/lib/cup-participant-integrity';
 import { resolveCupPrizeReplayAmount } from '@/app/lib/cup-prize-ledger';
 
 const LEAGUE_ID = 'ALPHA';
@@ -243,6 +243,9 @@ function cupFixtureTimestampMillis(value: any): number {
 
 /** Existing deterministic fixtures are reusable only when their immutable match contract is exact. */
 function isCupRoundFixtureCompatible(existing: any, expected: any) {
+  const expectedId = String(expected?.id || '');
+  if (!isCanonicalPyramidCupMatchContract(expected, expectedId) ||
+      !isCanonicalPyramidCupMatchContract(existing, expectedId)) return false;
   const stringFields = ['id', 'type', 'cupId', 'homeId', 'awayId'];
   for (const field of stringFields) {
     if (String(existing?.[field] ?? '') !== String(expected?.[field] ?? '')) return false;

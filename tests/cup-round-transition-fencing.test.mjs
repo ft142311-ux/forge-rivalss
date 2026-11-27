@@ -47,6 +47,8 @@ test('existing next-round cup fixtures must match the complete immutable match c
   const helperEnd = source.indexOf('async function commitCupRoundTransition', helperStart);
   assert.ok(helperStart >= 0 && helperEnd > helperStart);
   const compatibility = source.slice(helperStart, helperEnd);
+  assert.match(compatibility, /isCanonicalPyramidCupMatchContract\(expected, expectedId\)/);
+  assert.match(compatibility, /isCanonicalPyramidCupMatchContract\(existing, expectedId\)/);
   assert.match(compatibility, /\['id', 'type', 'cupId', 'homeId', 'awayId'\]/);
   assert.match(compatibility, /\['season', 'cupRound', 'bestOf'\]/);
   assert.match(compatibility, /\['scheduledAt', 'startTime', 'scheduledStartAt'\]/);

@@ -11,6 +11,7 @@ import { isMatchReportFinished } from '@/app/lib/match-report-utils';
 import { normalizeName } from '@/app/lib/normalize-name';
 import { assertMatchDocumentId } from '@/app/lib/match-id';
 import { getMatchWinnerId } from '@/app/lib/match-winner';
+import { isCanonicalPyramidCupMatchContract, isValidCupParticipantMatchSnapshot } from '@/app/lib/cup-participant-integrity';
 import { getGlobalSeasonInfo } from '@/app/lib/time-utils';
 import { resolveSeasonLifecycleWindow } from './season-boundary';
 
@@ -50,6 +51,15 @@ export async function resolveUniversalMatchDocument(
     const snap = await t.get(ref);
     if (!snap.exists) throw new Error('MATCH_NOT_FOUND');
     const match: any = snap.data() || {};
+    if (collectionName === 'cup_matches') {
+      const cupHomeId = String(match.homeId ?? '');
+      const cupAwayId = String(match.awayId ?? '');
+      if (!isCanonicalPyramidCupMatchContract(match, matchId) ||
+          !isValidCupParticipantMatchSnapshot(match.homeTeamSnapshot, cupHomeId) ||
+          !isValidCupParticipantMatchSnapshot(match.awayTeamSnapshot, cupAwayId)) {
+        throw new Error('CUP_MATCH_CONTRACT_INVALID');
+      }
+    }
     const rolloverLockRef = options?.rolloverLock
       ? db.collection('system_v1').doc(SEASON_ROLLOVER_LOCK_ID)
       : null;
@@ -129,18 +139,10 @@ export async function resolveUniversalMatchDocument(
     ]);
     const homeData: any = homeSnap.exists ? homeSnap.data() || {} : {};
     const awayData: any = awaySnap.exists ? awaySnap.data() || {} : {};
-    const frozenCupHome = collectionName === 'cup_matches' &&
-      match.homeTeamSnapshot?.id === String(homeId) &&
-      Array.isArray(match.homeTeamSnapshot?.players) &&
-      match.homeTeamSnapshot.players.length === 5
-        ? match.homeTeamSnapshot
-        : null;
-    const frozenCupAway = collectionName === 'cup_matches' &&
-      match.awayTeamSnapshot?.id === String(awayId) &&
-      Array.isArray(match.awayTeamSnapshot?.players) &&
-      match.awayTeamSnapshot.players.length === 5
-        ? match.awayTeamSnapshot
-        : null;
+    // The Cup contract was validated before the terminal fast path; never fall back
+    // to mutable live rosters for a Cup fixture.
+    const frozenCupHome = collectionName === 'cup_matches' ? match.homeTeamSnapshot : null;
+    const frozenCupAway = collectionName === 'cup_matches' ? match.awayTeamSnapshot : null;
     if ((!homeSnap.exists && !frozenCupHome) || (!awaySnap.exists && !frozenCupAway)) {
       throw new Error('PLAYER_NOT_FOUND');
     }
