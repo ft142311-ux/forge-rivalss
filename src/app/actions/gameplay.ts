@@ -4,12 +4,13 @@
 import { FieldValue, type DocumentReference } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { z } from 'zod';
-import { Player, calculatePlayerMarketValue } from '@/app/lib/moba-data';
+import { Player } from '@/app/lib/moba-data';
 import { requireServerActor } from '@/lib/server-auth';
 import { hash32 } from '@/app/lib/hash-utils';
 import { MATCH_REPORT_COLLECTIONS } from '@/app/lib/match-storage';
 import { isMatchReportFinished } from '@/app/lib/match-report-utils';
 import { placeStandardMarketBidWithDb } from '@/app/lib/auction-bid';
+import { createStandardMarketListingWithDb } from '@/app/lib/market-listing';
 import { assertStagingSeasonOneResetNotInProgress } from '@/app/lib/staging-season-one-write-fence';
 
 /**
@@ -222,51 +223,10 @@ export async function startDailyTrainingAction(idToken: string, playerId: string
  */
 export async function listPlayerOnMarketAction(idToken: string, playerId: string) {
   const { uid: userId } = await requireServerActor(idToken);
-  const db = getAdminDb();
-  const playerRef = db.collection('players_v14').doc(userId);
-
   try {
-    return await db.runTransaction(async t => {
-      await assertStagingSeasonOneResetNotInProgress(t, db);
-      const pSnap = await t.get(playerRef);
-      if (!pSnap.exists) throw new Error("PLAYER_NOT_FOUND");
-      
-      const pData = pSnap.data()!;
-      const players: Player[] = pData.ownedPlayers || [];
-      const idx = players.findIndex(p => p.id === playerId);
-      if (idx === -1) throw new Error("UNIT_NOT_FOUND");
-
-      const player = players[idx];
-      if (player.onTransferUntil) throw new Error("ALREADY_ON_MARKET");
-
-      const expiry = new Date(Date.now() + 12 * 3600000).toISOString();
-      const price = calculatePlayerMarketValue(player);
-      
-      const agentId = `market_${userId}_${Date.now()}`;
-      const marketRef = db.collection('market_v7').doc(agentId);
-
-      // 1. Создаем лот
-      t.set(marketRef, {
-        id: agentId,
-        heroData: player,
-        currentBid: price,
-        startingPrice: price,
-        sellerId: userId,
-        sellerName: pData.displayName || "Manager",
-        marketType: 'player',
-        expiresAt: expiry,
-        bidders: [],
-        createdAt: FieldValue.serverTimestamp(),
-        version: 140
-      });
-      // 2. Блокируем игрока у владельца
-      players[idx] = { ...player, onTransferUntil: expiry, transferMarketId: agentId };
-      t.update(playerRef, { ownedPlayers: players });
-
-      return { success: true, agentId };
-    });
-  } catch (e: any) {
-    return { success: false, error: e.message };
+    return await createStandardMarketListingWithDb(getAdminDb(), userId, playerId);
+  } catch (error: any) {
+    return { success: false, error: error?.message || 'MARKET_LISTING_FAILED' };
   }
 }
 

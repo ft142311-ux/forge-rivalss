@@ -5,6 +5,7 @@ import { deleteApp, initializeApp } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
 import { runTransferMarketExpirySweepWithDb } from '../src/app/lib/auction-expiry-sweep.ts';
 import { placeSpecialMarketBidWithDb, placeStandardMarketBidWithDb } from '../src/app/lib/auction-bid.ts';
+import { createStandardMarketListingWithDb, createYouthMarketListingWithDb } from '../src/app/lib/market-listing.ts';
 
 const emulatorHost = process.env.FIRESTORE_EMULATOR_HOST;
 const projectId = process.env.GCLOUD_PROJECT || 'demo-forge-rivals';
@@ -1309,4 +1310,113 @@ test('Firestore Emulator refunds escrow and unlocks a Youth player when its rese
   assert.equal(buyer.get('credits'), 500);
   assert.equal((await db.collection('transfer_history').get()).size, 0);
   assert.equal((await db.collection('economy_transactions').where('referenceId', '==', 'short-youth-lock').get()).size, 1);
+});
+
+
+test('Firestore Emulator creates distinct standard listing IDs for same-millisecond concurrent listings and atomically reserves both players', {
+  skip: !emulatorHost,
+}, async t => {
+  const { db } = await withIsolatedFirestore(t);
+  const now = 1_800_000_000_000;
+  await db.collection('players_v14').doc('listing-seller').set({
+    displayName: 'Listing Seller',
+    ownedPlayers: [
+      { id: 'standard-player-a', name: 'Standard A', overallRating: 60, proStats: {} },
+      { id: 'standard-player-b', name: 'Standard B', overallRating: 70, proStats: {} },
+    ],
+  });
+
+  const [first, second] = await Promise.all([
+    createStandardMarketListingWithDb(db, 'listing-seller', 'standard-player-a', now),
+    createStandardMarketListingWithDb(db, 'listing-seller', 'standard-player-b', now),
+  ]);
+  assert.notEqual(first.agentId, second.agentId);
+  const [firstLot, secondLot, seller] = await Promise.all([
+    db.collection('market_v7').doc(first.agentId).get(),
+    db.collection('market_v7').doc(second.agentId).get(),
+    db.collection('players_v14').doc('listing-seller').get(),
+  ]);
+  assert.equal(firstLot.exists, true);
+  assert.equal(secondLot.exists, true);
+  assert.equal(firstLot.get('sellerId'), 'listing-seller');
+  assert.equal(secondLot.get('sellerId'), 'listing-seller');
+  assert.equal(firstLot.get('currency'), 'credits');
+  assert.equal(secondLot.get('currency'), 'credits');
+  assert.ok(Number.isSafeInteger(firstLot.get('currentBid')) && firstLot.get('currentBid') > 0);
+  assert.ok(Number.isSafeInteger(secondLot.get('currentBid')) && secondLot.get('currentBid') > 0);
+
+  const players = seller.get('ownedPlayers');
+  const firstPlayer = players.find(player => player.id === 'standard-player-a');
+  const secondPlayer = players.find(player => player.id === 'standard-player-b');
+  assert.equal(firstPlayer.transferMarketId, first.agentId);
+  assert.equal(secondPlayer.transferMarketId, second.agentId);
+  assert.equal(firstPlayer.onTransferUntil, first.expiresAt);
+  assert.equal(secondPlayer.onTransferUntil, second.expiresAt);
+});
+
+test('Firestore Emulator rejects duplicate standard ownership and malformed market prices before writes', {
+  skip: !emulatorHost,
+}, async t => {
+  const { db } = await withIsolatedFirestore(t);
+  const now = 1_800_000_000_000;
+  await db.collection('players_v14').doc('ambiguous-seller').set({
+    ownedPlayers: [
+      { id: 'duplicate-player', overallRating: 50, proStats: {} },
+      { id: 'duplicate-player', overallRating: 60, proStats: {} },
+      { id: 'malformed-price-player', overallRating: 'corrupt', proStats: {} },
+    ],
+  });
+
+  await assert.rejects(
+    createStandardMarketListingWithDb(db, 'ambiguous-seller', 'duplicate-player', now),
+    /PLAYER_OWNERSHIP_AMBIGUOUS/,
+  );
+  await assert.rejects(
+    createStandardMarketListingWithDb(db, 'ambiguous-seller', 'malformed-price-player', now),
+    /MARKET_PRICE_INVALID/,
+  );
+  assert.equal((await db.collection('market_v7').get()).size, 0);
+  const seller = await db.collection('players_v14').doc('ambiguous-seller').get();
+  assert.equal(seller.get('ownedPlayers').every(player => !player.transferMarketId), true);
+});
+
+test('Firestore Emulator creates distinct Youth listing IDs for same-millisecond concurrent listings and validates rating before writes', {
+  skip: !emulatorHost,
+}, async t => {
+  const { db } = await withIsolatedFirestore(t);
+  const now = 1_800_000_000_000;
+  await db.collection('players_v14').doc('youth-listing-seller').set({
+    displayName: 'Youth Seller',
+    youthAcademyPlayers: [
+      { id: 'youth-player-a', name: 'Youth A', overallRating: 55 },
+      { id: 'youth-player-b', name: 'Youth B', overallRating: 65 },
+      { id: 'youth-player-invalid', name: 'Invalid Youth', overallRating: 101 },
+    ],
+  });
+
+  const [first, second] = await Promise.all([
+    createYouthMarketListingWithDb(db, 'youth-listing-seller', 'youth-player-a', now),
+    createYouthMarketListingWithDb(db, 'youth-listing-seller', 'youth-player-b', now),
+  ]);
+  assert.notEqual(first.marketId, second.marketId);
+  const [firstLot, secondLot, seller] = await Promise.all([
+    db.collection('market_v7').doc(first.marketId).get(),
+    db.collection('market_v7').doc(second.marketId).get(),
+    db.collection('players_v14').doc('youth-listing-seller').get(),
+  ]);
+  assert.equal(firstLot.exists, true);
+  assert.equal(secondLot.exists, true);
+  assert.equal(firstLot.get('currentBid'), 300000);
+  assert.equal(secondLot.get('currentBid'), 350000);
+  const players = seller.get('youthAcademyPlayers');
+  assert.equal(players.find(player => player.id === 'youth-player-a').transferMarketId, first.marketId);
+  assert.equal(players.find(player => player.id === 'youth-player-b').transferMarketId, second.marketId);
+
+  await assert.rejects(
+    createYouthMarketListingWithDb(db, 'youth-listing-seller', 'youth-player-invalid', now),
+    /MARKET_PRICE_INVALID/,
+  );
+  assert.equal((await db.collection('market_v7').get()).size, 2);
+  const afterInvalid = await db.collection('players_v14').doc('youth-listing-seller').get();
+  assert.equal(afterInvalid.get('youthAcademyPlayers').find(player => player.id === 'youth-player-invalid').transferMarketId, undefined);
 });
