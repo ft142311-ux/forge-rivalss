@@ -4,7 +4,7 @@ import { getAdminDb } from '@/lib/firebase-admin';
 import { requireServerActor } from '@/lib/server-auth';
 import { FieldValue } from 'firebase-admin/firestore';
 import { MATCH_COLLECTIONS, MATCH_REPORT_COLLECTIONS } from '@/app/lib/match-storage';
-import { isMatchReportFinished, isMatchWithinClubLifetime } from '@/app/lib/match-report-utils';
+import { hasValidClubCreatedAt, isMatchReportFinished, isMatchWithinClubLifetime } from '@/app/lib/match-report-utils';
 import { countUnreadMatchReportRecords } from '@/app/lib/unread-match-report-count';
 
 /** A match may carry both legacy club IDs and explicit manager UID fields. */
@@ -92,7 +92,7 @@ export async function getMatchReportAction(idToken: string, matchId: string) {
     if (!profile || !isMatchWithinClubLifetime(match, profile.createdAt)) continue;
 
     const participant = isMatchReportParticipant(match, uid);
-    const rankParticipant = !participant
+    const rankParticipant = !participant && hasValidClubCreatedAt(profile.createdAt)
       ? await isRankBasedLeagueParticipant(db, uid, match, copy.collectionName, profile)
       : false;
     if (!participant && !rankParticipant) continue;
@@ -170,7 +170,7 @@ export async function markMatchViewedAction(idToken: string, matchId: string) {
         if (!isMatchWithinClubLifetime(match, profile.createdAt)) continue;
 
         const participant = isMatchReportParticipant(match, uid);
-        const rankParticipant = !participant
+        const rankParticipant = !participant && hasValidClubCreatedAt(profile.createdAt)
           ? await isRankBasedLeagueParticipant(db, uid, match, candidates[index].collectionName, profile)
           : false;
         if (!participant && !rankParticipant) continue;
@@ -232,7 +232,7 @@ export async function getMyLeagueMatchReportsAction(idToken: string) {
   // Keep the queue aligned with the unread badge: legacy rank-addressed
   // fixtures are limited to the current season/group, while canonical
   // UID-addressed fixtures follow the manager across season boundaries.
-  const participantFields = ['homeId', 'awayId', 'homeUid', 'awayUid'];
+  const participantFields = ['homeId', 'awayId', 'homeUid', 'awayUid', 'hostId', 'challengerId'];
   const [groupSnapshot, ...participantSnapshots] = await Promise.all([
     db.collection(MATCH_COLLECTIONS.league)
       .where('season', '==', season)
@@ -255,7 +255,8 @@ export async function getMyLeagueMatchReportsAction(idToken: string) {
     const inGroup = String(raw.leagueId || '') === leagueId &&
       Number(raw.level) === level && String(raw.groupId || '') === groupId;
     const participant = isMatchReportParticipant(raw, uid);
-    const rankParticipant = inGroup && [Number(raw.homeRank), Number(raw.awayRank)].includes(rank);
+    const rankParticipant = !participant && hasValidClubCreatedAt(profile.createdAt) &&
+      inGroup && [Number(raw.homeRank), Number(raw.awayRank)].includes(rank);
     const finished = isMatchReportFinished(raw);
     if ((!participant && !rankParticipant) || !finished ||
         !isMatchWithinClubLifetime(raw, profile.createdAt) ||
@@ -297,6 +298,8 @@ export async function getMyUnreadMatchReportsCountAction(idToken: string, rawLoc
     { collectionName: MATCH_COLLECTIONS.league, field: 'awayId' },
     { collectionName: MATCH_COLLECTIONS.league, field: 'homeUid' },
     { collectionName: MATCH_COLLECTIONS.league, field: 'awayUid' },
+    { collectionName: MATCH_COLLECTIONS.league, field: 'hostId' },
+    { collectionName: MATCH_COLLECTIONS.league, field: 'challengerId' },
     { collectionName: MATCH_COLLECTIONS.cup, field: 'homeId' },
     { collectionName: MATCH_COLLECTIONS.cup, field: 'awayId' },
     { collectionName: MATCH_COLLECTIONS.friendly, field: 'hostId' },

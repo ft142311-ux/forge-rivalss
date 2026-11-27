@@ -8,6 +8,7 @@ import { Player, calculatePlayerMarketValue } from '@/app/lib/moba-data';
 import { requireServerActor } from '@/lib/server-auth';
 import { hash32 } from '@/app/lib/hash-utils';
 import { MATCH_REPORT_COLLECTIONS } from '@/app/lib/match-storage';
+import { isMatchReportFinished } from '@/app/lib/match-report-utils';
 import { placeStandardMarketBidWithDb } from '@/app/lib/auction-bid';
 import { assertStagingSeasonOneResetNotInProgress } from '@/app/lib/staging-season-one-write-fence';
 
@@ -341,7 +342,7 @@ export async function applyMatchConsequencesAction(
       const match: any = matchSnap.data() || {};
       const storedMatchType = String(match.matchType || match.type || 'league').toLowerCase();
       if (storedMatchType !== safeMatchType) throw new Error('MATCH_TYPE_MISMATCH');
-      if (match.isFinished !== true && !['finished', 'completed'].includes(String(match.status || '').toLowerCase())) {
+      if (!isMatchReportFinished(match)) {
         throw new Error('MATCH_NOT_FINISHED');
       }
 

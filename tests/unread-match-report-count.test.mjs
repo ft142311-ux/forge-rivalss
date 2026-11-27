@@ -92,3 +92,14 @@ test('unread badge rejects blank manager identities', () => {
   ];
   assert.equal(countUnreadMatchReportRecords(records, '   ', createdAt, league), 0);
 });
+
+
+test('rank-addressed legacy reports require a valid club lifetime while direct UID reports remain available', () => {
+  const records = [
+    record(MATCH_COLLECTIONS.league, 'rank-without-created-at', {
+      leagueId: 'ALPHA', level: 2, groupId: 'G1', homeRank: 3, awayRank: 4,
+    }),
+    record(MATCH_COLLECTIONS.league, 'uid-without-created-at', { homeId: uid }),
+  ];
+  assert.equal(countUnreadMatchReportRecords(records, uid, null, league), 1);
+});

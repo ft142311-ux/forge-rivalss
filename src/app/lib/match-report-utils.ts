@@ -13,6 +13,11 @@ export type MatchReportScore = { home: number; away: number };
  * creation instant onward. Prefer scheduled kickoff so a stale fixture
  * resolved after registration cannot become a new unread report.
  */
+export function hasValidClubCreatedAt(profileCreatedAt: any): boolean {
+  const createdAt = timestampToMillis(profileCreatedAt);
+  return Number.isFinite(createdAt) && createdAt > 0;
+}
+
 export function isMatchWithinClubLifetime(match: any, profileCreatedAt: any): boolean {
   const createdAt = timestampToMillis(profileCreatedAt);
   if (!Number.isFinite(createdAt) || createdAt <= 0) return true;

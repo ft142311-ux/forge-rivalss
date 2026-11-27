@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
   getCompletedSeriesScore,
+  hasValidClubCreatedAt,
   isMatchReportFinished,
   isMatchWithinClubLifetime,
   normalizeMatchTimeline,
@@ -115,6 +116,9 @@ test('club lifetime cutoff rejects recycled-slot fixtures scheduled before regis
   }, profileCreatedAt), true);
   assert.equal(isMatchWithinClubLifetime({ startTime: 'invalid' }, profileCreatedAt), false);
   assert.equal(isMatchWithinClubLifetime({ startTime: '2026-11-01T10:00:00.000Z' }, null), true);
+  assert.equal(hasValidClubCreatedAt(profileCreatedAt), true);
+  assert.equal(hasValidClubCreatedAt({ seconds: 0, nanoseconds: 0 }), false);
+  assert.equal(hasValidClubCreatedAt(null), false);
 });
 
 test('fresh Season 1 club profiles establish a lifetime cutoff for recycled-slot reports', () => {
@@ -139,6 +143,8 @@ test('server report reads, acknowledgements and unread counts enforce the curren
   const action = readFileSync(new URL('../src/app/actions/match-report.ts', import.meta.url), 'utf8');
   const unreadCount = readFileSync(new URL('../src/app/lib/unread-match-report-count.ts', import.meta.url), 'utf8');
   assert.match(action, /isMatchWithinClubLifetime\(match, profile\.createdAt\)/);
+  assert.match(action, /!participant && hasValidClubCreatedAt\(profile\.createdAt\)/);
+  assert.match(action, /const rankParticipant = inGroup && hasValidClubCreatedAt\(profile\.createdAt\)/);
   assert.match(action, /isMatchWithinClubLifetime\(raw, profile\.createdAt\)/);
   assert.match(unreadCount, /isMatchWithinClubLifetime\(match, profileCreatedAt\)/);
   assert.match(action, /return \{ success: false, error: 'MATCH_ACCESS_DENIED' \}/);
@@ -257,7 +263,7 @@ test('league report queue and unread badge retain unviewed reports across season
   const queue = action.slice(queueStart, badgeStart);
   const badge = action.slice(badgeStart);
 
-  assert.match(queue, /const participantFields = \['homeId', 'awayId', 'homeUid', 'awayUid'\]/);
+  assert.match(queue, /const participantFields = \['homeId', 'awayId', 'homeUid', 'awayUid', 'hostId', 'challengerId'\]/);
   assert.match(queue, /where\('season', '==', season\)/);
   assert.match(queue, /where\('leagueId', '==', leagueId\)/);
   assert.match(queue, /participantFields\.map\(field =>\s*db\.collection\(MATCH_COLLECTIONS\.league\)\.where\(field, '==', uid\)\.get\(\)/);
@@ -267,6 +273,8 @@ test('league report queue and unread badge retain unviewed reports across season
   assert.match(badge, /where\('season', '==', season\)/);
   assert.match(badge, /where\('leagueId', '==', league\.leagueId\)/);
   assert.match(badge, /countUnreadMatchReportRecords\(/);
+  assert.match(badge, /{ collectionName: MATCH_COLLECTIONS\.league, field: 'hostId' }/);
+  assert.match(badge, /{ collectionName: MATCH_COLLECTIONS\.league, field: 'challengerId' }/);
 });
 
 test('league report queue does not discard completed legacy results solely because resolvedAt is absent', () => {

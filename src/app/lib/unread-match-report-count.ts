@@ -1,5 +1,5 @@
 import { MATCH_COLLECTIONS } from './match-storage';
-import { isMatchReportFinished, isMatchWithinClubLifetime } from './match-report-utils';
+import { hasValidClubCreatedAt, isMatchReportFinished, isMatchWithinClubLifetime } from './match-report-utils';
 
 export type UnreadMatchReportRecord = {
   id: string;
@@ -45,7 +45,8 @@ export function countUnreadMatchReportRecords(
       match.homeId, match.awayId, match.homeUid, match.awayUid,
       match.hostId, match.challengerId,
     ].some(value => String(value ?? '').trim() === managerId);
-    const rankBasedLeagueParticipant = record.collectionName === MATCH_COLLECTIONS.league &&
+    const rankBasedLeagueParticipant = hasValidClubCreatedAt(profileCreatedAt) &&
+      record.collectionName === MATCH_COLLECTIONS.league &&
       String(match.leagueId || '') === leagueId &&
       Number(match.level) === leagueLevel &&
       String(match.groupId || '') === groupId &&
