@@ -72,11 +72,10 @@ test('viewed league reports are excluded from server unread count', () => {
   assert.match(action, /raw\.seen === true \|\| raw\.reportStatus === 'viewed'/);
 });
 
-test('home menu displays the unread match-report count on the Match Review item', () => {
-  const home = readFileSync(new URL('../src/app/page.tsx', import.meta.url), 'utf8');
-  assert.match(home, /getMyUnreadMatchReportsCountAction/);
-  assert.match(home, /serverUnreadReportsCount/);
-  assert.match(home, /id: 'reports'.*href: '\/reports'.*badge:/);
+test('home header exposes the unread report count on the report-specific link', () => {
+  const topBar = readFileSync(new URL('../src/components/game/TopBar.tsx', import.meta.url), 'utf8');
+  assert.match(topBar, /getMyUnreadMatchReportsCountAction/);
+  assert.match(topBar, /href="\/reports"[\s\S]*?unreadReportsCount/);
 });
 
 test('pyramid cup is not listed in tournament hub because it lives in rankings', () => {
@@ -87,13 +86,18 @@ test('pyramid cup is not listed in tournament hub because it lives in rankings',
 });
 
 
-test('unread match count is shown on Match Review menu item, not the general notifications bell', () => {
+test('unread match count stays on Reports and does not become a general notification badge', () => {
   const home = readFileSync(new URL('../src/app/page.tsx', import.meta.url), 'utf8');
   const topBar = readFileSync(new URL('../src/components/game/TopBar.tsx', import.meta.url), 'utf8');
-  assert.match(home, /getMyUnreadMatchReportsCountAction/);
-  assert.match(home, /serverUnreadReportsCount/);
-  assert.doesNotMatch(topBar, /unreadReportsCount|serverUnreadReports|getMyUnreadMatchReportsCountAction/);
-  assert.match(topBar, /href="\/notifications"/);
+  assert.doesNotMatch(home, /getMyUnreadMatchReportsCountAction|serverUnreadReportsCount/);
+  const notificationsLink = topBar.match(/<Link href="\/notifications"[\s\S]*?<\/Link>/);
+  assert.ok(notificationsLink, 'general notifications link must remain available');
+  assert.match(notificationsLink[0], /Bell/);
+  assert.doesNotMatch(notificationsLink[0], /unreadReportsCount/);
+  const reportsLink = topBar.match(/<Link href="\/reports"[\s\S]*?<\/Link>/);
+  assert.ok(reportsLink, 'reports link must remain available');
+  assert.match(reportsLink[0], /Mail/);
+  assert.match(reportsLink[0], /unreadReportsCount/);
 });
 
 
@@ -225,4 +229,17 @@ test('match report lookup prefers a completed canonical copy over an unfinished 
   assert.match(action, /isCanonicalMatchReportCopy/);
   assert.match(action, /Number\(isMatchReportFinished\(right\.match\)\) - Number\(isMatchReportFinished\(left\.match\)\)/);
   assert.match(action, /Number\(isCanonicalMatchReportCopy\(right\.collectionName, right\.match\)\)/);
+});
+
+
+test('home dashboard keeps its live clock and renders the computed season transition state', () => {
+  const home = readFileSync(new URL('../src/app/page.tsx', import.meta.url), 'utf8');
+  assert.match(home, /setInterval\(\(\) => setNow\(getMoscowTime\(\)\), 1000\)/);
+  assert.match(home, /const cardCountdown = showOffseason/);
+  assert.match(home, /const cardTitle = showOffseason/);
+  assert.match(home, /\{cardTitle\}/);
+  assert.match(home, /\{cardStatusLabel\}/);
+  assert.match(home, /showOffseason \? "\/roster" : "\/matches"/);
+  assert.match(home, /toMillis\(a\.startTime\)/);
+  assert.doesNotMatch(home, /groupPlayers/);
 });
