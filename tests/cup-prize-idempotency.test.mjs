@@ -4,22 +4,19 @@ import { readFileSync } from 'node:fs';
 
 const source = readFileSync(new URL('../src/app/actions/cup-engine.ts', import.meta.url), 'utf8');
 
-test('Pyramid Cup prize replay validates the existing deterministic receipt before no-op', () => {
+test('Pyramid Cup prize replay validates the deterministic receipt and preserves the original credited amount', () => {
   const start = source.indexOf('async function payCupPrize');
   const end = source.indexOf('async function finishTechnically', start);
   assert.ok(start >= 0 && end > start);
   const payout = source.slice(start, end);
   const receiptGuard = payout.indexOf('if (ledgerSnap.exists)');
-  const noOp = payout.indexOf('return 0;', receiptGuard);
   const playerGuard = payout.indexOf('if (!playerSnap.exists)');
-  assert.ok(receiptGuard >= 0 && noOp > receiptGuard && playerGuard > receiptGuard);
-  assert.match(payout, /receipt\.userId === team\.id/);
-  assert.match(payout, /receipt\.amount === amount/);
-  assert.match(payout, /receipt\.currency === 'credits'/);
-  assert.match(payout, /receipt\.type === rewardType/);
-  assert.match(payout, /receipt\.referenceId === referenceId/);
-  assert.match(payout, /Number\(receipt\.division\) === Number\(team\.level\)/);
-  assert.match(payout, /CUP_PRIZE_RECEIPT_CONFLICT/);
+  assert.ok(receiptGuard >= 0 && playerGuard > receiptGuard);
+  const replay = payout.slice(receiptGuard, playerGuard);
+  assert.match(replay, /resolveCupPrizeReplayAmount\(receipt/);
+  assert.match(replay, /if \(replayAmount === null\) throw new Error\('CUP_PRIZE_RECEIPT_CONFLICT'\)/);
+  assert.match(replay, /return replayAmount/);
+  assert.doesNotMatch(replay, /return 0/);
 });
 
 test('Pyramid Cup reward balance and ledger are created in the same transaction', () => {
