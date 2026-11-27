@@ -8,7 +8,7 @@ import Link from 'next/link';
 
 export function TopBar() {
   const pathname = usePathname();
-  const { credits, crystals, language, managerLevel, experiencePoints, displayName, clubName, clubLogo } = useGameState();
+  const { credits, crystals, language, managerLevel, experiencePoints, displayName, clubName, clubLogo, rank, leagueLevel, groupId } = useGameState();
   if (pathname === '/') {
     return (
       <header className="fixed left-0 right-0 top-0 z-50 border-b border-white/10 bg-[#030811]/95 shadow-[0_8px_28px_rgba(0,0,0,.35)] backdrop-blur-xl">
@@ -24,7 +24,7 @@ export function TopBar() {
             </div>
             <div className="min-w-0">
               <p className="truncate text-xs font-black text-white sm:text-sm">{clubName || displayName || 'Manager'}</p>
-              <p className="truncate text-[10px] font-semibold text-slate-400">{language === 'ru' ? 'Менеджер клуба' : 'Club manager'}</p>
+              <p className="truncate text-[10px] font-semibold text-slate-400">{rank ? (language === 'ru' ? `Дивизион ${leagueLevel} · Группа ${groupId} · #${rank}` : `Division ${leagueLevel} · Group ${groupId} · #${rank}`) : (language === 'ru' ? 'Менеджер клуба' : 'Club manager')}</p>
               <p className="text-[9px] text-slate-500">{Number(experiencePoints || 0).toLocaleString()} XP</p>
             </div>
           </Link>
