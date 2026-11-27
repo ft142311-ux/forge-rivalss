@@ -49,6 +49,8 @@ The protected Preview workflow uses these repository secrets:
 - `VERCEL_TOKEN`: permits the workflow to discover/access the exact protected Vercel Preview deployment.
 - `BETA_RESET_CRON_SECRET`: the same value as the Beta Preview server-side `CRON_SECRET`, used only for the authenticated read-only GET.
 
+For manual preflight dispatch, supply the immutable per-deployment READY Preview URL for the current commit (for example, `https://forge-rivalss-<deployment-id>-forge-rivals.vercel.app`). Do not use the mutable branch alias `forge-rivalss-git-feature-beta-fresh-season-one-forge-rivals.vercel.app`. The workflow verifies the supplied host against Vercel's READY Preview inventory and requires exact `githubCommitSha` and `githubCommitRef` metadata before it calls the Beta diagnostics endpoint. If no matching READY deployment exists, stop; never fall back to a previous Preview or branch alias.
+
 Create or update these secrets through repository settings. Never write their values into Git, workflow logs, or this document. Do not bypass Vercel Deployment Protection to make the check pass.
 
 ## Season orchestrator and scheduled workers
