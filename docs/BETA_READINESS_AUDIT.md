@@ -153,3 +153,13 @@ docs/ROADMAP.json still describes an older project phase model (version 1.0.61, 
 - The test performs the real atomic Season 1 -> Season 2 activation commit against disposable Emulator documents and asserts the human club profile, all ten owned-player identities, credits, occupied Season 1 slot ownership/generation, and a finished source-season fixture remain byte-for-byte unchanged.
 - The test is included in the existing `test:registration:emulator` workflow command, so it runs in the main staging-validation job without touching shared Beta or Production data.
 - The latest source CI run before this addition had passed TypeScript, core regression, full test suite, and registration Emulator tests; the Cup Emulator scenario was still running at the time of inspection. The follow-up commit must receive its own complete CI result before it is considered validated.
+
+## Follow-up validation — 2026-11-27 (latest tested head)
+
+- Latest branch head at this validation: `3cd46051482f6231542ee289145d4361c5d66636`.
+- GitHub Actions run [#46004523132](https://github.com/ft142311-ux/forge-rivalss/actions/runs/46004523132) completed with conclusion **success** on that exact SHA.
+- All three workflow jobs passed: main TypeScript/tests/production build; separate Control app validation; consolidated Beta Quality Gate.
+- This run executes the strengthened Season 1 -> Season 2 identity-preservation Emulator test added to `tests/season-activation-emulator.integration.test.mjs`.
+- Vercel checks for this SHA were blocked by the account's build-rate limit. No exact-SHA Preview was established; this is an infrastructure/plan limit, not a source CI failure. The older READY Preview for `7c419c8` is not evidence for the current SHA.
+- Therefore source/Emulator validation is **PASS**, while exact-SHA Preview, live read-only Beta preflight, scheduler/secret inventory, browser journeys and mobile journeys remain **NOT CHECKED**. The overall release decision remains **NO-GO** until P0/P1 operational gates are evidenced.
+- No live Beta or Production database was read or mutated; no deployment, reset, restore, seed or season activation was initiated. PR #5 remains Draft and unmerged.
