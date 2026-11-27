@@ -18,7 +18,7 @@ The readiness percentage is a planning estimate, not a test metric:
 - **75% estimated overall implementation/readiness**
 - **Build and automated branch validation:** green on the audited head
 - **Live Beta readiness:** not established by this audit
-- **Full Season 1 -> Season 2 end-to-end acceptance:** not yet evidenced by a single isolated Emulator scenario
+- **Full Season 1 -> Season 2 end-to-end acceptance:** PASS in isolated Firestore Emulator on commit `a90f1bd` (CI #46007076460)
 
 Do not interpret the percentage as permission to reset, seed, publish, or activate a live season.
 
@@ -71,8 +71,8 @@ The workflow is a separate operational gate. A green branch CI does not prove th
 ### P0 — release blockers
 
 1. **Fresh live Beta preflight not evidenced.** Obtain a fresh authenticated read-only result for the exact current Preview commit and exact forge-rivals-beta project. Until then, actual Beta database readiness remains unknown.
-2. **No single combined Season 1 lifecycle Emulator acceptance scenario found.** Important distinction: the existing Pyramid Cup Emulator test does drive the complete 119-match bracket, checks the BO3 final, prize ledger, trophy repair and idempotent retries; the clean Season 1 Emulator scenario separately verifies the 15/120/840 world and pre-season Cup creation. The gap is the combined end-to-end path that simulates all 14 league rounds, completes all 119 Cup matches, validates final league awards/archive, prepares and activates Season 2, and retries the transition safely in one isolated scenario.
-3. **Season 1 -> Season 2 operational acceptance remains unproven.** Need explicit proof of sequential activation, lock/lease recovery, no duplicate fixtures/awards, preserved human clubs and players, and cleanup completion.
+2. **Combined Season 1 -> Season 2 Emulator lifecycle:** implementation and isolated acceptance now exist. The scenario exercises the public lifecycle functions `ensureSeasonCalendar(2)`, `publishPreparedSeason()`, and `activatePublishedSeason()`; asserts Season 2's 15 tables, 120 slots, 840 fixtures and complete 120-participant / 119-match no-BYE Pyramid Cup; and verifies retained Season 1 archive/cleanup. The separate Cup Emulator scenario covers all seven rounds and 119 fixtures, BO3 final and prize/trophy idempotency. This is source/Emulator evidence, not a live Beta run.
+3. **Live Season 1 -> Season 2 operational acceptance remains unproven.** Isolated Emulator lifecycle acceptance is green; live Beta readiness still requires exact-SHA Preview and authenticated read-only preflight. Do not infer live scheduler execution or operational readiness from Emulator results.
 4. **Actual scheduled-worker configuration is not verified.** The runbook requires the exact Beta orchestrator URL, matching Cron secret, correct Secret Manager binding and a single intended Cloud Scheduler schedule. This requires a read-only infrastructure inventory before any operational change.
 5. **Do not run destructive reset or live activation as a substitute for diagnosis.** Any reset remains behind fresh preflight and explicit user authorization.
 
@@ -117,15 +117,15 @@ The consolidated gate must remain read-only against live Beta. Destructive reset
 
 ### Must pass before Season 1 -> Season 2 can be trusted
 
-- [ ] Isolated Emulator completes all 14 league rounds and validates all 840 results.
+- [x] Isolated Emulator validates a complete 840-result Season 1 rollover archive and executes Season 2 calendar preparation, publication and activation. (CI #46007076460; isolated project)
 - [ ] Isolated Emulator completes the 119-match Pyramid Cup and awards its BO3 final correctly.
 - [ ] Archive contains exactly 840 validated league results and reconciled standings.
 - [ ] Awards and economy ledger are idempotent under retry and partial recovery.
-- [ ] Season 2 prepared world contains 15 tables, 120 slots, 840 fixtures and a valid 120-team Cup.
-- [ ] Activation preserves human club/player identities and does not duplicate matches, awards or rollover records.
+- [x] Season 2 prepared world contains 15 tables, 120 slots, 840 fixtures and a valid 120-team / 119-match no-BYE Cup in isolated Emulator. (CI #46007076460)
+- [x] Atomic activation identity preservation and idempotent award/activation retry assertions pass in isolated Emulator. (CI #46007076460)
 - [ ] Interrupted activation resumes safely; repeated invocation is idempotent.
 - [ ] Only the immediately previous completed season remains in the visible archive policy.
-- [ ] History cleanup completes and no cleanup/transition fence remains active.
+- [x] Full lifecycle Emulator scenario verifies archive retention and cleanup completion. (CI #46007076460)
 
 ## Source-of-truth and documentation drift
 
@@ -184,3 +184,13 @@ docs/ROADMAP.json still describes an older project phase model (version 1.0.61, 
 - Latest commit at this note: `d269c1c8f726466057b3779a06ef8306b08b757f`; CI run [#46006637114](https://github.com/ft142311-ux/forge-rivalss/actions/runs/46006637114) is queued/pending. The expanded full public-lifecycle scenario is **NOT YET VALIDATED** until this exact SHA completes green CI.
 - Exact-SHA Vercel Preview, live read-only Beta preflight, infrastructure inventory, browser journeys and mobile journeys remain **NOT CHECKED**. Overall release verdict remains **NO-GO**.
 - No live Beta or Production data was read or mutated; no deployment, reset, restore, seed or activation was initiated. PR #5 remains Draft and unmerged.
+
+
+## Full public lifecycle acceptance — CI verified (2026-11-27)
+
+- Exact branch head: `a90f1bd23cfb767b173f633b6bb1344051d88fa6`.
+- GitHub Actions run [#46007076460](https://github.com/ft142311-ux/forge-rivalss/actions/runs/46007076460) completed with conclusion **success** on that exact SHA. Main app, separate Control app, and consolidated Beta Quality Gate all passed.
+- Confirmed successful steps include TypeScript, core regression, full test suite, Firestore Emulator registration transactions, Pyramid Cup prepared-season Emulator, Fresh Season 1 reset Emulator, full Season 1 -> Season 2 lifecycle Emulator acceptance, and main/Control production builds.
+- The previously observed `server-only` test-discovery failure was resolved by keeping the public lifecycle scenario out of generic `tests/*.test.mjs` discovery and invoking it only through the dedicated `test:season:lifecycle:emulator` command with `--conditions=react-server`.
+- This validates source and isolated Emulator flows only. Exact-SHA Vercel Preview is not established; authenticated read-only live Beta preflight, Cloud Scheduler/Secret Manager inventory, and browser/mobile journeys remain **NOT CHECKED**. Overall release verdict remains **NO-GO** until operational gates pass.
+- No live Beta or Production data was read or mutated; no deployment, reset, restore, seed or season activation was initiated. PR #5 remains Draft and unmerged.
