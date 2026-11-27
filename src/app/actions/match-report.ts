@@ -7,6 +7,16 @@ import { MATCH_COLLECTIONS, MATCH_REPORT_COLLECTIONS } from '@/app/lib/match-sto
 import { isMatchReportFinished, isMatchWithinClubLifetime } from '@/app/lib/match-report-utils';
 import { countUnreadMatchReportRecords } from '@/app/lib/unread-match-report-count';
 
+/** A match may carry both legacy club IDs and explicit manager UID fields. */
+function isMatchReportParticipant(match: any, uid: string): boolean {
+  const managerId = String(uid || '').trim();
+  if (!managerId) return false;
+  return [
+    match?.homeId, match?.awayId, match?.homeUid, match?.awayUid,
+    match?.hostId, match?.challengerId,
+  ].some(value => String(value || '').trim() === managerId);
+}
+
 /**
  * Legacy league fixtures may identify participants by their league rank rather
  * than UID. Rank alone is not an identity: it repeats across every group.
@@ -54,24 +64,26 @@ export async function getMatchReportAction(idToken: string, matchId: string) {
   if (!id) return { success: false, error: 'INVALID_MATCH_ID' };
   const db = getAdminDb();
 
+  const profileSnap = await db.collection('players_v14').doc(uid).get();
+  const profile = profileSnap.exists ? profileSnap.data() || {} : null;
+  let found = false;
+
   for (const collectionName of MATCH_REPORT_COLLECTIONS) {
     const snap = await db.collection(collectionName).doc(id).get();
     if (!snap.exists) continue;
+    found = true;
     const match: any = snap.data() || {};
-    const participant = [match.homeId, match.awayId, match.homeUid, match.awayUid, match.hostId, match.challengerId]
-      .some((participantId) => String(participantId || '') === uid);
-    const profileSnap = await db.collection('players_v14').doc(uid).get();
-    const profile = profileSnap.exists ? profileSnap.data() || {} : null;
-    if (!profile || !isMatchWithinClubLifetime(match, profile.createdAt)) {
-      return { success: false, error: 'MATCH_ACCESS_DENIED' };
-    }
+    if (!profile || !isMatchWithinClubLifetime(match, profile.createdAt)) continue;
+
+    const participant = isMatchReportParticipant(match, uid);
     const rankParticipant = !participant
       ? await isRankBasedLeagueParticipant(db, uid, match, collectionName, profile)
       : false;
-    if (!participant && !rankParticipant) return { success: false, error: 'MATCH_ACCESS_DENIED' };
+    if (!participant && !rankParticipant) continue;
+
     return { success: true, match: serializeMatchReport({ ...match, id: snap.id }), collection: collectionName };
   }
-  return { success: false, error: 'MATCH_NOT_FOUND' };
+  return { success: false, error: found ? 'MATCH_ACCESS_DENIED' : 'MATCH_NOT_FOUND' };
 }
 
 /**
@@ -86,27 +98,21 @@ export async function markMatchViewedAction(idToken: string, matchId: string) {
     if (!id) return { success: false, error: 'INVALID_MATCH_ID' };
 
     const db = getAdminDb();
-    let ref: any = null;
-    let collectionName = '';
-    for (const candidate of MATCH_REPORT_COLLECTIONS) {
-      const candidateRef = db.collection(candidate).doc(id);
-      const candidateSnap = await candidateRef.get();
-      if (candidateSnap.exists) {
-        ref = candidateRef;
-        collectionName = candidate;
-        break;
-      }
-    }
-
-    if (!ref) return { success: true, persisted: false, localOnly: true };
-
+    const candidates = MATCH_REPORT_COLLECTIONS.map(collectionName => ({
+      collectionName,
+      ref: db.collection(collectionName).doc(id),
+    }));
     const profileRef = db.collection('players_v14').doc(uid);
     const configRef = db.collection('system_v1').doc('season_config');
+
     return await db.runTransaction(async (tx: any) => {
-      const [freshMatchSnap, profileSnap, configSnap] = await Promise.all([
-        tx.get(ref),
+      // Read every possible mode-specific copy before writing anything. A
+      // shared route ID can exist in more than one collection after a legacy
+      // mirror, so acknowledging only the first copy leaves the queue stuck.
+      const [profileSnap, configSnap, ...matchSnaps] = await Promise.all([
         tx.get(profileRef),
         tx.get(configRef),
+        ...candidates.map(candidate => tx.get(candidate.ref)),
       ]);
 
       // The report acknowledgement and reset claim now contend on the same
@@ -116,32 +122,45 @@ export async function markMatchViewedAction(idToken: string, matchId: string) {
       if (resetState.stagingSeasonOneResetInProgress === true || resetState.stagingFreshSeasonOneReset === true) {
         return { success: false, error: 'STAGING_SEASON_ONE_RESET_IN_PROGRESS' };
       }
-      if (!freshMatchSnap.exists) {
-        return { success: true, persisted: false, localOnly: true };
+
+      const found = matchSnaps.some((snap: any) => snap.exists);
+      if (!found) return { success: true, persisted: false, localOnly: true };
+
+      const profile = profileSnap.exists ? profileSnap.data() || {} : null;
+      if (!profile) return { success: false, error: 'MATCH_ACCESS_DENIED' };
+
+      const acknowledged = [];
+      for (let index = 0; index < candidates.length; index += 1) {
+        const snap = matchSnaps[index];
+        if (!snap?.exists) continue;
+        const match = snap.data() || {};
+        if (!isMatchWithinClubLifetime(match, profile.createdAt)) continue;
+
+        const participant = isMatchReportParticipant(match, uid);
+        const rankParticipant = !participant
+          ? await isRankBasedLeagueParticipant(db, uid, match, candidates[index].collectionName, profile)
+          : false;
+        if (participant || rankParticipant) acknowledged.push(candidates[index]);
       }
 
-      const m = freshMatchSnap.data() || {};
-      const profile = profileSnap.exists ? profileSnap.data() || {} : null;
-      if (!profile || !isMatchWithinClubLifetime(m, profile.createdAt)) {
-        return { success: false, error: 'MATCH_ACCESS_DENIED' };
-      }
-      const isParticipant = [m.homeId, m.awayId, m.homeUid, m.awayUid, m.hostId, m.challengerId]
-        .some((participantId) => String(participantId || '') === uid);
-      const rankParticipant = !isParticipant
-        ? await isRankBasedLeagueParticipant(db, uid, m, collectionName, profile)
-        : false;
-      if (!isParticipant && !rankParticipant) {
-        return { success: false, error: 'MATCH_ACCESS_DENIED' };
-      }
+      if (!acknowledged.length) return { success: false, error: 'MATCH_ACCESS_DENIED' };
 
       // update is non-creating: the transaction never recreates a report that
       // was deleted between the collection lookup and this acknowledgement.
-      tx.update(ref, {
-        seen: true,
-        reportStatus: 'viewed',
-        viewedAt: FieldValue.serverTimestamp(),
-      });
-      return { success: true, persisted: true, collection: collectionName };
+      const viewedAt = FieldValue.serverTimestamp();
+      for (const candidate of acknowledged) {
+        tx.update(candidate.ref, {
+          seen: true,
+          reportStatus: 'viewed',
+          viewedAt,
+        });
+      }
+      return {
+        success: true,
+        persisted: true,
+        collections: acknowledged.map(candidate => candidate.collectionName),
+        updatedCopies: acknowledged.length,
+      };
     });
   } catch (error: any) {
     console.warn('[MATCH REPORT] mark viewed failed:', error);
@@ -176,8 +195,7 @@ export async function getMyLeagueMatchReportsAction(idToken: string) {
   const matches = snapshot.docs.flatMap((doc: any) => {
     const raw = doc.data() || {};
     const inGroup = String(raw.leagueId || '') === leagueId && Number(raw.level) === level && String(raw.groupId || '') === groupId;
-    const participant = String(raw.homeId || raw.homeUid || '') === uid ||
-      String(raw.awayId || raw.awayUid || '') === uid ||
+    const participant = isMatchReportParticipant(raw, uid) ||
       (inGroup && [Number(raw.homeRank), Number(raw.awayRank)].includes(rank));
     const finished = isMatchReportFinished(raw);
     if (!inGroup || !participant || !finished || !isMatchWithinClubLifetime(raw, profile.createdAt) ||
