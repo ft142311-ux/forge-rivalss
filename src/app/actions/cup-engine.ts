@@ -711,10 +711,18 @@ function isMatchDue(value: any, now: number) {
 // Cup prize money is tied to the participant's division and the existing season-economy scale.
 const DIVISION_CHAMPION_PRIZES: Record<number, number> = { 1: 4_000_000, 2: 1_800_000, 3: 900_000, 4: 350_000 };
 async function payCupPrize(db: any, season: number, team: Team | null, place: 'champion' | 'finalist') {
-  if (!team || !team.id || team.id.startsWith('BOT_')) return 0;
-  const base = DIVISION_CHAMPION_PRIZES[team.level] || 0;
+  if (!team || !String(team.id || '').trim() || typeof team.isBot !== 'boolean') {
+    throw new Error('CUP_PRIZE_PARTICIPANT_INVALID');
+  }
+  // The frozen participant flag is authoritative. Keep the legacy ID prefix
+  // as an additional fail-closed guard for older snapshots during migration.
+  if (team.isBot || team.id.startsWith('BOT_')) return 0;
+  const base = DIVISION_CHAMPION_PRIZES[team.level];
+  if (typeof base !== 'number' || !Number.isSafeInteger(base) || base <= 0) {
+    throw new Error('CUP_PRIZE_DIVISION_INVALID');
+  }
   const amount = Math.floor(base * (place === 'champion' ? 0.10 : 0.05));
-  if (amount <= 0) return 0;
+  if (!Number.isSafeInteger(amount) || amount <= 0) throw new Error('CUP_PRIZE_AMOUNT_INVALID');
   const playerRef = db.collection('players_v14').doc(team.id);
   const ledgerRef = db.collection('economy_transactions').doc(`pyramid_cup_S${season}_${place}_${team.id}`);
   return db.runTransaction(async (tx: any) => {
@@ -742,7 +750,7 @@ async function payCupPrize(db: any, season: number, team: Team | null, place: 'c
       // so the completed Cup summary does not incorrectly record zero.
       return replayAmount;
     }
-    if (!playerSnap.exists) return 0;
+    if (!playerSnap.exists) throw new Error('CUP_PRIZE_RECIPIENT_PROFILE_MISSING');
     const player = playerSnap.data() || {};
     const before = Math.max(0, Math.floor(Number(player.credits) || 0));
     const existingTrophies = Array.isArray(player.trophies) ? player.trophies : [];
