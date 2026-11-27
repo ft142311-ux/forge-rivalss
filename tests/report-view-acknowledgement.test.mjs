@@ -103,3 +103,14 @@ test('legacy rank-based report access requires exact league, group and division 
   assert.match(matchReportAction, /isCanonicalMatchReportCopy/);
   assert.match(matchReportAction, /isMatchReportFinished\(right\.match\)/);
 });
+
+
+test('reports queue aggregates the trial match collection queried for the current manager', () => {
+  const aggregationStart = reportsPage.indexOf('const personal = [');
+  const aggregationEnd = reportsPage.indexOf(';', aggregationStart);
+  assert.ok(aggregationStart >= 0 && aggregationEnd > aggregationStart);
+  const aggregation = reportsPage.slice(aggregationStart, aggregationEnd);
+  assert.match(aggregation, /\.\.\.trainingHomeMatches \|\| \[\]/);
+  assert.match(aggregation, /\.\.\.trainingAwayMatches \|\| \[\]/);
+  assert.match(reportsPage, /m\?\.type === 'trial'.*m\?\.matchType === 'trial'.*m\?\.isTrial === true/);
+});
