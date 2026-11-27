@@ -3,7 +3,7 @@
 **Audit date:** 2026-11-27  
 **Repository:** ft142311-ux/forge-rivalss  
 **Branch:** feature/beta-fresh-season-one  
-**Audited head:** 7c419c8dbd08175bb9f95f6303c13c4867686ca7  
+**Audited head:** a90f1bd23cfb767b173f633b6bb1344051d88fa6  
 **Firebase target:** forge-rivals-beta (Firestore region eur3)  
 **Scope:** read-only source/workflow audit and review of recorded CI evidence. No live Firebase reads, writes, resets, deployments, or season activations were performed for this audit.
 
@@ -11,11 +11,11 @@
 
 **Current decision: NO-GO for opening Beta to players until the P0 gates below are evidenced.**
 
-The codebase has substantial automated coverage and the latest branch validation is green, but green CI is not equivalent to a verified live Beta world or a completed end-to-end Season 1 lifecycle.
+The codebase has substantial automated coverage and the latest branch validation is green, including the combined public Season 1 -> Season 2 lifecycle against an isolated Emulator. Green CI is not equivalent to a verified live Beta world or live scheduled-worker operation.
 
 The readiness percentage is a planning estimate, not a test metric:
 
-- **75% estimated overall implementation/readiness**
+- **75% estimated overall implementation/readiness** (historical estimate; not recalculated by this verification)
 - **Build and automated branch validation:** green on the audited head
 - **Live Beta readiness:** not established by this audit
 - **Full Season 1 -> Season 2 end-to-end acceptance:** PASS in isolated Firestore Emulator on commit `a90f1bd` (CI #46007076460)
@@ -26,7 +26,7 @@ Do not interpret the percentage as permission to reset, seed, publish, or activa
 
 ### Latest CI
 
-GitHub Actions run [#1994](https://github.com/ft142311-ux/forge-rivalss/actions/runs/46002245961), push event for audited head 7c419c8, completed successfully.
+GitHub Actions run [#46007076460](https://github.com/ft142311-ux/forge-rivalss/actions/runs/46007076460), push event for audited head `a90f1bd23cfb767b173f633b6bb1344051d88fa6`, completed successfully.
 
 Main application job:
 - TypeScript check
@@ -117,7 +117,7 @@ The consolidated gate must remain read-only against live Beta. Destructive reset
 
 ### Must pass before Season 1 -> Season 2 can be trusted
 
-- [x] Isolated Emulator validates a complete 840-result Season 1 rollover archive and executes Season 2 calendar preparation, publication and activation. (CI #46007076460; isolated project)
+- [x] Isolated Emulator seeds 840 finished Season 1 league fixtures (14 tours across 15 groups), runs rollover/archive and awards, then executes Season 2 calendar preparation, publication and activation. This is a lifecycle/data-integrity test, not 840 match-engine simulations. (CI #46007076460; isolated project)
 - [ ] Isolated Emulator completes the 119-match Pyramid Cup and awards its BO3 final correctly.
 - [ ] Archive contains exactly 840 validated league results and reconciled standings.
 - [ ] Awards and economy ledger are idempotent under retry and partial recovery.
@@ -125,7 +125,7 @@ The consolidated gate must remain read-only against live Beta. Destructive reset
 - [x] Atomic activation identity preservation and idempotent award/activation retry assertions pass in isolated Emulator. (CI #46007076460)
 - [ ] Interrupted activation resumes safely; repeated invocation is idempotent.
 - [ ] Only the immediately previous completed season remains in the visible archive policy.
-- [x] Full lifecycle Emulator scenario verifies archive retention and cleanup completion. (CI #46007076460)
+- [x] Full lifecycle Emulator scenario verifies that only the immediately previous Season 1 archive remains and history cleanup is complete. (CI #46007076460)
 
 ## Source-of-truth and documentation drift
 
