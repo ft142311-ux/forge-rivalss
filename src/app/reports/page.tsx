@@ -123,7 +123,7 @@ export default function ReportsPage() {
       .filter((m: any) => isMatchWithinClubLifetime(m, profile.createdAt) && isMatchReportFinished(m) && m?.seen !== true && m?.reportStatus !== 'viewed' && !isLocallyViewed(m))
       .map((m: any) => ({ ...m, source: 'history', isUnread: true }));
 
-    const personal = [...officialLeagueReports, ...(personalHomeMatches || []), ...(personalAwayMatches || []), ...(trainingHomeMatches || []), ...(trainingAwayMatches || []), ...(cupHomeMatches || []), ...(cupAwayMatches || []), ...(tournamentHomeMatches || []), ...(tournamentAwayMatches || []), ...(trainingHomeMatches || []), ...(trainingAwayMatches || [])];
+    const personal = [...officialLeagueReports, ...(personalHomeMatches || []), ...(personalAwayMatches || []), ...(cupHomeMatches || []), ...(cupAwayMatches || []), ...(tournamentHomeMatches || []), ...(tournamentAwayMatches || []), ...(trainingHomeMatches || []), ...(trainingAwayMatches || [])];
     const currentClubPersonal = personal.filter((m: any) => isMatchWithinClubLifetime(m, profile.createdAt));
 
     const league = currentClubPersonal

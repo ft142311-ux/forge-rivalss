@@ -110,7 +110,9 @@ test('reports queue aggregates the trial match collection queried for the curren
   const aggregationEnd = reportsPage.indexOf(';', aggregationStart);
   assert.ok(aggregationStart >= 0 && aggregationEnd > aggregationStart);
   const aggregation = reportsPage.slice(aggregationStart, aggregationEnd);
-  assert.match(aggregation, /\.\.\.trainingHomeMatches \|\| \[\]/);
-  assert.match(aggregation, /\.\.\.trainingAwayMatches \|\| \[\]/);
+  assert.match(aggregation, /\.\.\.\(trainingHomeMatches \|\| \[\]\)/);
+  assert.match(aggregation, /\.\.\.\(trainingAwayMatches \|\| \[\]\)/);
+  assert.equal((aggregation.match(/\.\.\.\(trainingHomeMatches \|\| \[\]\)/g) || []).length, 1);
+  assert.equal((aggregation.match(/\.\.\.\(trainingAwayMatches \|\| \[\]\)/g) || []).length, 1);
   assert.match(reportsPage, /m\?\.type === 'trial'.*m\?\.matchType === 'trial'.*m\?\.isTrial === true/);
 });
