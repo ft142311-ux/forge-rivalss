@@ -5,6 +5,8 @@ import {
   resolveSeasonAwardRecipientState,
   isRolloverPlanPublicationReady,
   shouldPersistSeasonTrophies,
+  resolveSeasonAwardBalance,
+  resolveSeasonAwardTrophyState,
 } from '../src/app/actions/season-awards-policy.ts';
 
 test('season reward idempotency accepts only an unapplied valid season', () => {
@@ -58,4 +60,68 @@ test('matching player award and ledger markers are the only consistent already-p
   assert.equal(resolveSeasonAwardRecipientState(
     true, true, { seasonAwards: { S3: { prize: 100 } } }, 3,
   ), 'ALREADY_APPLIED');
+});
+
+
+test('season reward balance accepts legacy integer strings and absent zero but rejects malformed values and overflow', () => {
+  assert.deepEqual(resolveSeasonAwardBalance(undefined, 400), { balanceBefore: 0, balanceAfter: 400 });
+  assert.deepEqual(resolveSeasonAwardBalance(' 1000 ', 400), { balanceBefore: 1000, balanceAfter: 1400 });
+  for (const invalid of ['', 'invalid', '1.5', '-1', Number.NaN, Number.POSITIVE_INFINITY, -1, 1.5, true, {}]) {
+    assert.equal(resolveSeasonAwardBalance(invalid, 400), null);
+  }
+  assert.equal(resolveSeasonAwardBalance(Number.MAX_SAFE_INTEGER, 400), null);
+  assert.equal(resolveSeasonAwardBalance(1000, 0), null);
+});
+
+test('season award trophy validation preserves unrelated trophies and repairs malformed or duplicate season awards', () => {
+  const league = {
+    id: 'league-cup-season-2',
+    name: 'Кубок лиги — сезон 2',
+    type: 'league_champion',
+    date: '2026-11-27T12:00:00.000Z',
+    reward: 5000,
+    season: 2,
+    division: 1,
+    rank: 1,
+  };
+  const pyramid = {
+    id: 'pyramid-cup-season-2',
+    name: 'Кубок Пирамиды — сезон 2',
+    type: 'pyramid_cup_champion',
+    date: '2026-11-27T12:00:00.000Z',
+    season: 2,
+  };
+  const other = { id: 'historic-award', name: 'Historic award' };
+  assert.deepEqual(resolveSeasonAwardTrophyState([other, league, pyramid], 2, 5000, true, true), {
+    existingTrophies: [other, league, pyramid],
+    shouldAddLeagueCup: false,
+    shouldAddPyramidCup: false,
+    needsRepair: false,
+  });
+
+  const malformed = { id: 'league-cup-season-2', name: 'Forged trophy', type: 'other', date: 'invalid' };
+  const result = resolveSeasonAwardTrophyState([other, malformed, { ...pyramid }], 2, 5000, true, true);
+  assert.deepEqual(result, {
+    existingTrophies: [other, pyramid],
+    shouldAddLeagueCup: true,
+    shouldAddPyramidCup: false,
+    needsRepair: true,
+  });
+
+  const duplicates = resolveSeasonAwardTrophyState([league, { ...league }], 2, 5000, true, false);
+  assert.equal(duplicates?.existingTrophies.length, 1);
+  assert.equal(duplicates?.shouldAddLeagueCup, false);
+  assert.equal(duplicates?.needsRepair, true);
+});
+
+test('season award trophy validation refuses malformed trophy collection instead of replacing it', () => {
+  assert.equal(resolveSeasonAwardTrophyState({}, 1, 100, true, false), null);
+  assert.equal(resolveSeasonAwardTrophyState('invalid', 1, 100, true, false), null);
+  assert.equal(resolveSeasonAwardTrophyState([], 1, 0, true, false), null);
+  assert.equal(resolveSeasonAwardTrophyState([], 1.5, 100, true, false), null);
+});
+
+test('malformed season award containers and markers block accounting completion', () => {
+  assert.equal(resolveSeasonAwardRecipientState(true, false, { seasonAwards: [] }, 4), 'ACCOUNTING_CONFLICT');
+  assert.equal(resolveSeasonAwardRecipientState(true, false, { seasonAwards: { S4: 'paid' } }, 4), 'ACCOUNTING_CONFLICT');
 });
