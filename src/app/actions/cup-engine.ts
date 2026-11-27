@@ -9,7 +9,7 @@ import { buildMatchTeamSnapshot, type MatchTeamSnapshot } from '@/app/lib/match-
 import { MATCH_COLLECTIONS } from '@/app/lib/match-storage';
 import { resolveSeasonLifecycleWindow } from './season-boundary';
 import { isMatchReportFinished } from '@/app/lib/match-report-utils';
-import { isCanonicalPyramidCupOpeningField, isPyramidCupRoundProgressionValid } from '@/app/lib/cup-participant-integrity';
+import { isCanonicalPyramidCupOpeningField, isPyramidCupRoundProgressionValid, isCupParticipantMatchSnapshotCompatible, isValidCupParticipantMatchSnapshot } from '@/app/lib/cup-participant-integrity';
 import { resolveCupPrizeReplayAmount } from '@/app/lib/cup-prize-ledger';
 
 const LEAGUE_ID = 'ALPHA';
@@ -259,6 +259,16 @@ function isCupRoundFixtureCompatible(existing: any, expected: any) {
     const actual = cupFixtureTimestampMillis(existing?.[field]);
     if (!Number.isFinite(actual) || actual !== expectedStart) return false;
   }
+  if (!isCupParticipantMatchSnapshotCompatible(
+        existing?.homeTeamSnapshot,
+        expected?.homeTeamSnapshot,
+        String(expected?.homeId || ''),
+      ) ||
+      !isCupParticipantMatchSnapshotCompatible(
+        existing?.awayTeamSnapshot,
+        expected?.awayTeamSnapshot,
+        String(expected?.awayId || ''),
+      )) return false;
   return ['scheduled', 'processing', 'finished', 'completed', 'resolved'].includes(String(existing?.status || '').toLowerCase());
 }
 
@@ -298,10 +308,19 @@ async function commitCupRoundTransition(
       snap.exists ? (snap.data() || {}).matchSnapshot as MatchTeamSnapshot : null,
     ] as const));
     for (const pairing of nextPairings) {
-      if (pairing.home) pairing.home.matchSnapshot = participantSnapshotById.get(pairing.home.id) || undefined;
-      if (pairing.away) pairing.away.matchSnapshot = participantSnapshotById.get(pairing.away.id) || undefined;
-      if ((pairing.home && !pairing.home.matchSnapshot) || (pairing.away && !pairing.away.matchSnapshot)) {
-        throw new Error('CUP_PARTICIPANT_SNAPSHOT_MISSING_DURING_ADVANCEMENT');
+      if (pairing.home) {
+        const snapshot = participantSnapshotById.get(pairing.home.id);
+        if (!isValidCupParticipantMatchSnapshot(snapshot, pairing.home.id)) {
+          throw new Error('CUP_PARTICIPANT_SNAPSHOT_INVALID_DURING_ADVANCEMENT');
+        }
+        pairing.home.matchSnapshot = snapshot || undefined;
+      }
+      if (pairing.away) {
+        const snapshot = participantSnapshotById.get(pairing.away.id);
+        if (!isValidCupParticipantMatchSnapshot(snapshot, pairing.away.id)) {
+          throw new Error('CUP_PARTICIPANT_SNAPSHOT_INVALID_DURING_ADVANCEMENT');
+        }
+        pairing.away.matchSnapshot = snapshot || undefined;
       }
     }
     const entries = nextPairings
@@ -845,8 +864,20 @@ async function repairCurrentRoundFixtures(db: any, cup: { ref: any; data: any },
       snap.exists ? (snap.data() || {}).matchSnapshot as MatchTeamSnapshot : null,
     ] as const));
     for (const pairing of pairings) {
-      if (pairing.home) pairing.home.matchSnapshot = participantSnapshotById.get(pairing.home.id) || pairing.home.matchSnapshot;
-      if (pairing.away) pairing.away.matchSnapshot = participantSnapshotById.get(pairing.away.id) || pairing.away.matchSnapshot;
+      if (pairing.home) {
+        const snapshot = participantSnapshotById.get(pairing.home.id);
+        if (!isValidCupParticipantMatchSnapshot(snapshot, pairing.home.id)) {
+          throw new Error('CUP_PARTICIPANT_SNAPSHOT_INVALID_DURING_RECOVERY');
+        }
+        pairing.home.matchSnapshot = snapshot || undefined;
+      }
+      if (pairing.away) {
+        const snapshot = participantSnapshotById.get(pairing.away.id);
+        if (!isValidCupParticipantMatchSnapshot(snapshot, pairing.away.id)) {
+          throw new Error('CUP_PARTICIPANT_SNAPSHOT_INVALID_DURING_RECOVERY');
+        }
+        pairing.away.matchSnapshot = snapshot || undefined;
+      }
     }
     const scheduledAt = Timestamp.fromDate(roundDate(
       resolveCupDate(data.seasonStart || activeSeasonStart),

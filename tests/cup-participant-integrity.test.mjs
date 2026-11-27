@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { isCanonicalCupParticipantField, isCanonicalPyramidCupOpeningField, isPyramidCupRoundProgressionValid } from '../src/app/lib/cup-participant-integrity.ts';
+import { isCanonicalCupParticipantField, isCanonicalPyramidCupOpeningField, isPyramidCupRoundProgressionValid, isValidCupParticipantMatchSnapshot, isCupParticipantMatchSnapshotCompatible } from '../src/app/lib/cup-participant-integrity.ts';
 
 function createParticipants() {
   const participants = [];
@@ -97,4 +97,24 @@ test('round progression rejects D1 rest entrants in the opening round and malfor
     index === 0 ? { ...team, level: 2 } : team
   );
   assert.equal(isPyramidCupRoundProgressionValid(bracket.rounds, 1, nonD1Rest), false);
+});
+
+
+test('frozen Cup participant snapshots require the correct team ID and exactly five players', () => {
+  const snapshot = {
+    id: 'cup-team-1',
+    players: Array.from({ length: 5 }, (_, index) => ({ id: 'player-' + (index + 1) })),
+  };
+  assert.equal(isValidCupParticipantMatchSnapshot(snapshot, 'cup-team-1'), true);
+  assert.equal(isValidCupParticipantMatchSnapshot(snapshot, 'cup-team-2'), false);
+  assert.equal(isValidCupParticipantMatchSnapshot({ ...snapshot, players: snapshot.players.slice(0, 4) }, 'cup-team-1'), false);
+  assert.equal(isValidCupParticipantMatchSnapshot(null, 'cup-team-1'), false);
+});
+
+test('a recovered Cup fixture must match the exact frozen home and away snapshots', () => {
+  const home = { id: 'home-team', players: Array.from({ length: 5 }, (_, index) => ({ id: 'h-' + index, rating: 20 })) };
+  const away = { id: 'away-team', players: Array.from({ length: 5 }, (_, index) => ({ id: 'a-' + index, rating: 20 })) };
+  assert.equal(isCupParticipantMatchSnapshotCompatible(home, { ...home, players: home.players.map(player => ({ ...player })) }, 'home-team'), true);
+  assert.equal(isCupParticipantMatchSnapshotCompatible(home, { ...home, players: home.players.map((player, index) => index === 0 ? { ...player, rating: 21 } : player) }, 'home-team'), false);
+  assert.equal(isCupParticipantMatchSnapshotCompatible(away, home, 'away-team'), false);
 });

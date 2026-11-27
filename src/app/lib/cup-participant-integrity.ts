@@ -109,3 +109,25 @@ export function isPyramidCupRoundProgressionValid(rounds: any, currentRound: num
   }
   return true;
 }
+
+
+/** A frozen Cup entrant must retain the exact five-player match snapshot. */
+export function isValidCupParticipantMatchSnapshot(value: unknown, teamId: string): boolean {
+  const expectedId = String(teamId || '').trim();
+  if (!expectedId || !value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const snapshot = value as Record<string, unknown>;
+  return snapshot.id === expectedId &&
+    Array.isArray(snapshot.players) &&
+    snapshot.players.length === 5;
+}
+
+/** Existing fixtures may be reused only with the same frozen roster snapshot. */
+export function isCupParticipantMatchSnapshotCompatible(
+  existing: unknown,
+  expected: unknown,
+  teamId: string,
+): boolean {
+  return isValidCupParticipantMatchSnapshot(existing, teamId) &&
+    isValidCupParticipantMatchSnapshot(expected, teamId) &&
+    JSON.stringify(existing) === JSON.stringify(expected);
+}

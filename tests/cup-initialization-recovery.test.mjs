@@ -173,3 +173,25 @@ test('interrupted-round recovery validates existing dedicated and legacy fixture
   assert.ok(recovery.includes('CUP_FIXTURE_RECOVERY_CONFLICT'));
   assert.ok(recovery.includes('tx.create(entry.dedicatedRef, entry.expectedFixture)'));
 });
+
+
+test('Pyramid Cup advancement and recovery reject missing or altered frozen roster snapshots', () => {
+  const compatibilityStart = source.indexOf('function isCupRoundFixtureCompatible');
+  const transitionStart = source.indexOf('async function commitCupRoundTransition');
+  const transitionEnd = source.indexOf('async function commitCupRoundState', transitionStart);
+  const recoveryStart = source.indexOf('async function repairCurrentRoundFixtures');
+  const recoveryEnd = source.indexOf('function assertValidCupRoundPairings', recoveryStart);
+  assert.ok(compatibilityStart >= 0 && transitionStart > compatibilityStart);
+  assert.ok(transitionEnd > transitionStart && recoveryStart > transitionEnd && recoveryEnd > recoveryStart);
+
+  const compatibility = source.slice(compatibilityStart, transitionStart);
+  const transition = source.slice(transitionStart, transitionEnd);
+  const recovery = source.slice(recoveryStart, recoveryEnd);
+  assert.match(compatibility, /isCupParticipantMatchSnapshotCompatible\(/);
+  assert.match(transition, /isValidCupParticipantMatchSnapshot\(snapshot, pairing\.home\.id\)/);
+  assert.match(transition, /isValidCupParticipantMatchSnapshot\(snapshot, pairing\.away\.id\)/);
+  assert.match(recovery, /CUP_PARTICIPANT_SNAPSHOT_INVALID_DURING_RECOVERY/);
+  assert.match(recovery, /isValidCupParticipantMatchSnapshot\(snapshot, pairing\.home\.id\)/);
+  assert.match(recovery, /isValidCupParticipantMatchSnapshot\(snapshot, pairing\.away\.id\)/);
+  assert.ok(recovery.indexOf('isValidCupParticipantMatchSnapshot') < recovery.indexOf('tx.create(entry.dedicatedRef'));
+});
