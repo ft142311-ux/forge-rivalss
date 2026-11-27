@@ -9,6 +9,7 @@ import { runMatchEngine } from '@/app/lib/match-engine';
 import { MATCH_COLLECTIONS } from '@/app/lib/match-storage';
 import { hash32 } from '@/app/lib/hash-utils';
 import { timestampToMillis } from '@/app/lib/timestamp-utils';
+import { isMatchReportFinished } from '@/app/lib/match-report-utils';
 import { getMatchWinnerId } from '@/app/lib/match-winner';
 import { isProcessingLeaseStale } from '@/app/lib/match-processing-lease';
 import { assertStagingSeasonOneResetNotInProgress } from '@/app/lib/staging-season-one-write-fence';
@@ -19,8 +20,7 @@ function startTimeMs(match: any): number {
 }
 
 function isTrialMatchTerminal(match: any): boolean {
-  return match?.isFinished === true ||
-    ['finished', 'completed'].includes(String(match?.status || '').toLowerCase());
+  return isMatchReportFinished(match);
 }
 
 const TRIAL_MATCH_PROCESSING_LEASE_MS = 5 * 60 * 1000;

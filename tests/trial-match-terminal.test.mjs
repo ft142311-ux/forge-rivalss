@@ -2,12 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { isProcessingLeaseStale } from '../src/app/lib/match-processing-lease.ts';
+import { isMatchReportFinished } from '../src/app/lib/match-report-utils.ts';
 
 const source = readFileSync(new URL('../src/app/actions/trial-match-resolver.ts', import.meta.url), 'utf8');
 
-test('trial match scheduler treats finished and completed as terminal in every worker phase', () => {
-  assert.match(source, /function isTrialMatchTerminal\(match: any\): boolean/);
-  assert.match(source, /\['finished', 'completed'\]\.includes\(String\(match\?\.status \|\| ''\)\.toLowerCase\(\)\)/);
+test('trial match scheduler delegates every worker phase to the shared terminal-state predicate', () => {
+  assert.match(source, /import \{ isMatchReportFinished \} from '\@\/app\/lib\/match-report-utils'/);
+  assert.match(source, /function isTrialMatchTerminal\(match: any\): boolean \{\s*return isMatchReportFinished\(match\);\s*\}/);
   assert.match(source, /if \(isTrialMatchTerminal\(match\) \|\| !Number\.isFinite\(dueAt\)/);
   assert.match(source, /data\?\.isTrial !== true \|\| isTrialMatchTerminal\(data\) \|\| \(data\?\.isProcessing === true && !isTrialMatchProcessingLeaseStale\(data, Date\.now\(\)\)\)/);
   assert.match(source, /if \(isTrialMatchTerminal\(data\)\) return false/);
@@ -17,6 +18,8 @@ test('trial match scheduler treats finished and completed as terminal in every w
   assert.match(source, /data\?\.processingToken !== processingToken/);
   assert.match(source, /data\?\.processingToken === processingToken/);
   assert.match(source, /isTrialMatchProcessingLeaseStale\(data, Date\.now\(\)\)/);
+  assert.equal(isMatchReportFinished({ isFinished: false, status: 'resolved' }), true);
+  assert.equal(isMatchReportFinished({ status: ' RESOLVED ' }), true);
 });
 
 test('trial processing claims with missing or invalid timestamps are recoverable', () => {

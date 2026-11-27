@@ -12,13 +12,13 @@ import { normalizeName } from '@/app/lib/normalize-name';
 import { assertMatchDocumentId } from '@/app/lib/match-id';
 import { assertCronSecret } from '@/lib/server-cron-auth';
 import { timestampToMillis } from '@/app/lib/timestamp-utils';
+import { isMatchReportFinished } from '@/app/lib/match-report-utils';
 
 const LOBBY_TTL_MS = 5 * 60 * 1000;
 const MATCH_DELAY_MS = 5 * 60 * 1000;
 
 function isFriendlyMatchTerminal(match: any): boolean {
-  return match?.isFinished === true ||
-    ['finished', 'completed'].includes(String(match?.status || '').toLowerCase());
+  return isMatchReportFinished(match);
 }
 
 /** Server-side availability guard: never rely on client-only busy checks. */
