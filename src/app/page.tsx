@@ -313,7 +313,7 @@ export default function Home() {
   ];
 
   return (
-    <div className="relative min-h-[calc(100dvh-4rem-3.5rem)] overflow-y-auto overflow-x-hidden bg-[#050a12] text-white">
+    <div className="relative min-h-[calc(100dvh-4rem-3.5rem)] overflow-y-auto overflow-x-hidden bg-[#050a12] pb-24 text-white">
       <div className="pointer-events-none absolute inset-x-0 top-0 h-[560px] opacity-35" style={{ backgroundImage: `linear-gradient(180deg,rgba(3,8,16,.12),#050a12 95%),url('${mapCardBg || ''}')`, backgroundSize: 'cover', backgroundPosition: 'center' }} />
       <div className="relative z-10 mx-auto flex w-full max-w-3xl flex-col gap-4 px-3 pb-6 pt-4 sm:px-5">
         <section className="relative min-h-[330px] overflow-hidden rounded-[26px] border border-cyan-300/25 bg-[#071421] shadow-[0_18px_60px_rgba(0,0,0,.55)]">
