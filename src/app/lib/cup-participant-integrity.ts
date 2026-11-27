@@ -72,8 +72,11 @@ export function isPyramidCupRoundProgressionValid(rounds: any, currentRound: num
   const participantCounts = [112, 64, 32, 16, 8, 4, 2];
   if (!rounds || typeof rounds !== 'object' || !Number.isInteger(currentRound) ||
       currentRound < 1 || currentRound > 7 || !Array.isArray(restTeams) || restTeams.length !== 8) return false;
-  const restIds = new Set((restTeams as any[]).map(team => String(team?.id || '')).filter(Boolean));
-  if (restIds.size !== 8) return false;
+  const restEntries = restTeams as any[];
+  const restIds = new Set(restEntries.map(team => String(team?.id || '').trim()).filter(Boolean));
+  if (restIds.size !== 8 || restEntries.some(team =>
+    !team || typeof team !== 'object' || Number(team.level) !== 1
+  )) return false;
   for (let round = 1; round <= currentRound; round += 1) {
     const pairings = Array.isArray(rounds['r' + round]) ? rounds['r' + round] : [];
     if (pairings.length !== pairingCounts[round - 1]) return false;
@@ -86,7 +89,11 @@ export function isPyramidCupRoundProgressionValid(rounds: any, currentRound: num
       actualIds.add(awayId);
     }
     if (actualIds.size !== participantCounts[round - 1]) return false;
-    if (round === 1) continue;
+    if (round === 1) {
+      // The eight D1 entrants must be absent from the 112-team opening round.
+      if ([...restIds].some(id => actualIds.has(id))) return false;
+      continue;
+    }
     const previous = Array.isArray(rounds['r' + (round - 1)]) ? rounds['r' + (round - 1)] : [];
     const expectedIds = new Set<string>(round === 2 ? [...restIds] : []);
     for (const pairing of previous) {

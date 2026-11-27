@@ -131,11 +131,12 @@ test('fresh Season 1 club profiles establish a lifetime cutoff for recycled-slot
   }, profile.createdAt), true);
 });
 
-test('server report reads and acknowledgements enforce the current club lifetime', () => {
+test('server report reads, acknowledgements and unread counts enforce the current club lifetime', () => {
   const action = readFileSync(new URL('../src/app/actions/match-report.ts', import.meta.url), 'utf8');
+  const unreadCount = readFileSync(new URL('../src/app/lib/unread-match-report-count.ts', import.meta.url), 'utf8');
   assert.match(action, /isMatchWithinClubLifetime\(match, profile\.createdAt\)/);
-  assert.match(action, /isMatchWithinClubLifetime\(m, profile\.createdAt\)/);
   assert.match(action, /isMatchWithinClubLifetime\(raw, profile\.createdAt\)/);
+  assert.match(unreadCount, /isMatchWithinClubLifetime\(match, profileCreatedAt\)/);
   assert.match(action, /return \{ success: false, error: 'MATCH_ACCESS_DENIED' \}/);
 });
 
@@ -176,9 +177,11 @@ test('reports queue uses the shared completion predicate for every game mode', (
   assert.doesNotMatch(page, /m\?\.isFinished === true|m\?\.isFinished !== false/);
 });
 
-test('view acknowledgement updates an existing report without recreating a deleted document', () => {
+test('view acknowledgement updates every existing authorized report copy without recreating deleted documents', () => {
   const action = readFileSync(new URL('../src/app/actions/match-report.ts', import.meta.url), 'utf8');
-  assert.match(action, /tx\.update\(ref, \{\s*seen: true/);
+  assert.match(action, /const candidates = MATCH_REPORT_COLLECTIONS\.map/);
+  assert.match(action, /candidates\.map\(candidate => tx\.get\(candidate\.ref\)\)/);
+  assert.match(action, /tx\.update\(candidate\.ref, \{\s*seen: true/);
   assert.match(action, /persisted: false, localOnly: true/);
   assert.doesNotMatch(action, /await ref\.set\(\{\s*seen: true/);
 });

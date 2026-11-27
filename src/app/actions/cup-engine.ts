@@ -9,6 +9,8 @@ import { buildMatchTeamSnapshot, type MatchTeamSnapshot } from '@/app/lib/match-
 import { MATCH_COLLECTIONS } from '@/app/lib/match-storage';
 import { resolveSeasonLifecycleWindow } from './season-boundary';
 import { isMatchReportFinished } from '@/app/lib/match-report-utils';
+import { isCanonicalPyramidCupOpeningField, isPyramidCupRoundProgressionValid } from '@/app/lib/cup-participant-integrity';
+import { resolveCupPrizeReplayAmount } from '@/app/lib/cup-prize-ledger';
 
 const LEAGUE_ID = 'ALPHA';
 const CUP_COLLECTION = 'cup_pyramid_v1';
@@ -686,15 +688,19 @@ async function payCupPrize(db: any, season: number, team: Team | null, place: 'c
     const referenceId = `cup_s${season}_l${LEAGUE_ID}`;
     if (ledgerSnap.exists) {
       const receipt = ledgerSnap.data() || {};
-      const receiptMatchesReward =
-        receipt.userId === team.id &&
-        receipt.amount === amount &&
-        receipt.currency === 'credits' &&
-        receipt.type === rewardType &&
-        receipt.referenceId === referenceId &&
-        Number(receipt.division) === Number(team.level);
-      if (!receiptMatchesReward) throw new Error('CUP_PRIZE_RECEIPT_CONFLICT');
-      return 0;
+      const replayAmount = resolveCupPrizeReplayAmount(receipt, {
+        userId: team.id,
+        amount,
+        currency: 'credits',
+        type: rewardType,
+        referenceId,
+        division: Number(team.level),
+      });
+      if (replayAmount === null) throw new Error('CUP_PRIZE_RECEIPT_CONFLICT');
+      // A previous attempt may have credited this prize before the Cup root
+      // completion transaction failed. Return the original amount on replay
+      // so the completed Cup summary does not incorrectly record zero.
+      return replayAmount;
     }
     if (!playerSnap.exists) return 0;
     const player = playerSnap.data() || {};
@@ -901,13 +907,15 @@ function assertValidCupRoundPairings(pairings: Pairing[], round: number) {
   const indexes = new Set<number>();
   const teamIds = new Set<string>();
   for (const pairing of pairings) {
+    const index = Number(pairing?.index);
     if (!pairing || typeof pairing.id !== 'string' || !pairing.id ||
-        !Number.isSafeInteger(Number(pairing.index)) || Number(pairing.index) < 1 ||
-        pairingIds.has(pairing.id) || indexes.has(Number(pairing.index))) {
+        !Number.isSafeInteger(index) || index < 1 || index > expectedCount ||
+        pairing.id !== `r${round}_m${index}` ||
+        pairingIds.has(pairing.id) || indexes.has(index)) {
       throw new Error('CUP_ROUND_PAIRING_IDENTITY_INVALID');
     }
     pairingIds.add(pairing.id);
-    indexes.add(Number(pairing.index));
+    indexes.add(index);
     if (!['scheduled', 'finished'].includes(String(pairing.status)) ||
         !pairing.home?.id || !pairing.away?.id || pairing.home.id === pairing.away.id ||
         teamIds.has(pairing.home.id) || teamIds.has(pairing.away.id) ||
@@ -948,6 +956,36 @@ export async function runPyramidCupCycle() {
   if (Number(cup.data.formatVersion) !== CUP_FORMAT_VERSION || cup.data.format !== 'D1_REST_OPENING_ROUND' ||
       Number(cup.data.totalMatches) !== TOTAL_CUP_MATCHES) {
     return { generated: false, resolved: 0, advanced: 0, incompatibleFormat: true, reason: 'CUP_FORMAT_VERSION_MISMATCH' };
+  }
+
+  const currentRoundBeforeRepair = Number(cup.data.currentRound || 1);
+  const storedRounds = cup.data.rounds && typeof cup.data.rounds === 'object' ? cup.data.rounds : {};
+  const openingRound = Array.isArray(storedRounds.r1) ? storedRounds.r1 : [];
+  if (!Number.isSafeInteger(currentRoundBeforeRepair) ||
+      currentRoundBeforeRepair < 1 ||
+      currentRoundBeforeRepair > ROUND_COUNT ||
+      !isCanonicalPyramidCupOpeningField(
+        cup.data.participants,
+        openingRound,
+        cup.data.openingRoundRestTeams,
+      ) ||
+      !isPyramidCupRoundProgressionValid(
+        storedRounds,
+        currentRoundBeforeRepair,
+        cup.data.openingRoundRestTeams,
+      )) {
+    console.error('[PYRAMID CUP] Bracket integrity check failed', {
+      cupId: cup.data.id,
+      currentRound: currentRoundBeforeRepair,
+    });
+    return {
+      generated: false,
+      resolved: 0,
+      advanced: 0,
+      integrityFailed: true,
+      reason: 'CUP_BRACKET_INTEGRITY_FAILED',
+      currentRound: currentRoundBeforeRepair,
+    };
   }
 
   const activeSeasonStart = resolveCupDate(cup.data.seasonStart || context.seasonStart);

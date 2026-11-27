@@ -78,3 +78,23 @@ test('season publication and active Cup diagnostics enforce shared validators an
   assert.match(route, /fixture\.awayTeamSnapshot\?\.id/);
   assert.match(route, /JSON\.stringify\(fixture\.homeTeamSnapshot\)/);
 });
+
+
+test('round progression rejects D1 rest entrants in the opening round and malformed rest lists', () => {
+  const bracket = createBracket();
+  const d1InOpening = {
+    ...bracket.rounds,
+    r1: bracket.rounds.r1.map((pairing, index) =>
+      index === 0 ? { ...pairing, home: bracket.restTeams[0] } : pairing
+    ),
+  };
+  assert.equal(isPyramidCupRoundProgressionValid(d1InOpening, 1, bracket.restTeams), false);
+
+  const duplicateRest = [...bracket.restTeams.slice(0, 7), bracket.restTeams[0]];
+  assert.equal(isPyramidCupRoundProgressionValid(bracket.rounds, 1, duplicateRest), false);
+
+  const nonD1Rest = bracket.restTeams.map((team, index) =>
+    index === 0 ? { ...team, level: 2 } : team
+  );
+  assert.equal(isPyramidCupRoundProgressionValid(bracket.rounds, 1, nonD1Rest), false);
+});
