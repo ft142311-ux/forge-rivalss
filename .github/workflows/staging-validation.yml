@@ -60,6 +60,9 @@ jobs:
       - name: Fresh Season 1 reset Firestore emulator scenario
         run: ./node_modules/.bin/firebase emulators:exec --only auth,firestore --project demo-forge-rivals-reset-test "node --conditions=react-server --import tsx --test tests/fresh-season-one-reset-emulator.integration.test.mjs"
 
+      - name: Full Season 1 to Season 2 lifecycle emulator acceptance
+        run: npm run test:season:lifecycle:emulator
+
       - name: Production build
         run: npm run build
 
