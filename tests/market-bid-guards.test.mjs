@@ -79,7 +79,8 @@ test('standard market bids are indexed by UID for the My Bids array-contains que
   assert.ok(start >= 0 && end > start);
   const block = helper.slice(start, end);
   assert.ok(action.includes('placeStandardMarketBidWithDb(getAdminDb(), userId, marketId, amount)'));
-  assert.ok(block.includes('bidders.push(uid)'));
+  assert.ok(block.includes('const bidderId = normalizeAuctionUserId(uid)'));
+  assert.ok(block.includes('bidders.push(bidderId)'));
   assert.ok(!block.includes('bidders.push({'));
   assert.ok(page.includes("where('bidders', 'array-contains', user.uid)"));
 });
