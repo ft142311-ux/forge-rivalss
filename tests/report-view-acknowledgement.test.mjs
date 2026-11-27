@@ -47,10 +47,10 @@ test('report lookup, league queue and acknowledgement share every participant id
   for (const field of ['homeId', 'awayId', 'homeUid', 'awayUid', 'hostId', 'challengerId']) {
     assert.match(participantHelper, new RegExp(`match\\?\\.${field}`));
   }
-  assert.match(getReport, /isMatchReportParticipant\\(match, uid\\)/);
-  assert.match(markViewed, /isMatchReportParticipant\\(match, uid\\)/);
-  assert.match(leagueReports, /isMatchReportParticipant\\(raw, uid\\)/);
-  assert.doesNotMatch(leagueReports, /raw\\.homeId \\|\\| raw\\.homeUid/);
+  assert.match(getReport, /isMatchReportParticipant\(match, uid\)/);
+  assert.match(markViewed, /isMatchReportParticipant\(match, uid\)/);
+  assert.match(leagueReports, /isMatchReportParticipant\(raw, uid\)/);
+  assert.doesNotMatch(leagueReports, /raw\.homeId \|\| raw\.homeUid/);
 });
 
 test('view acknowledgement rechecks the reset marker and every report copy in one transaction', () => {
@@ -60,11 +60,11 @@ test('view acknowledgement rechecks the reset marker and every report copy in on
   assert.ok(action.includes('db.runTransaction(async (tx: any) =>'));
   assert.ok(action.includes('tx.get(configRef)'));
   assert.ok(action.includes('stagingSeasonOneResetInProgress'));
-  assert.match(action, /const candidates = MATCH_REPORT_COLLECTIONS\\.map/);
-  assert.match(action, /candidates\\.map\\(candidate => tx\\.get\\(candidate\\.ref\\)\\)/);
-  assert.match(action, /matchSnaps\\.some\\(\\(snap: any\\) => snap\\.exists\\)/);
-  assert.match(action, /tx\\.update\\(candidate\\.ref/);
-  assert.match(action, /updatedCopies: acknowledged\\.length/);
+  assert.match(action, /const candidates = MATCH_REPORT_COLLECTIONS\.map/);
+  assert.match(action, /candidates\.map\(candidate => tx\.get\(candidate\.ref\)\)/);
+  assert.match(action, /matchSnaps\.some\(\(snap: any\) => snap\.exists\)/);
+  assert.match(action, /tx\.update\(candidate\.ref/);
+  assert.match(action, /updatedCopies: acknowledged\.length/);
   assert.ok(action.indexOf('Promise.all') < action.indexOf('tx.update(candidate.ref'));
   assert.ok(!action.includes('await ref.update('));
 });
