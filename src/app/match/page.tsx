@@ -27,7 +27,7 @@ import { cn } from '@/lib/utils';
 import { LoadingScreen } from '@/components/game/LoadingScreen';
 import { doc, collection, query, where } from 'firebase/firestore';
 import { getMatchReportAction } from '@/app/actions/match-report';
-import { getCompletedSeriesScore, isMatchWithinClubLifetime, normalizeMatchTimeline, parseMatchSeriesScore, resolveMatchSimulation } from '../lib/match-report-utils';
+import { getCompletedSeriesScore, isMatchReportFinished, isMatchWithinClubLifetime, normalizeMatchTimeline, parseMatchSeriesScore, resolveMatchSimulation } from '../lib/match-report-utils';
 
 type MatchStep = 'preview' | 'live' | 'stats';
 
@@ -52,6 +52,7 @@ function MatchContent() {
   const [matchData, setMatchData] = useState<any | null>(null);
   const [isDataLoading, setIsDataLoading] = useState(true);
   const [isFinalizingReview, setIsFinalizingReview] = useState(false);
+  const [reviewError, setReviewError] = useState<string | null>(null);
   
   const [activeGameIdx, setActiveGameIdx] = useState(0);
   const [visibleEvents, setVisibleEvents] = useState<any[]>([]);
@@ -217,13 +218,25 @@ function MatchContent() {
     if (step === 'preview') { if (currentSimulation?.isTbdWin) setStep('stats'); else setStep('live'); }
     else if (step === 'live') setStep('stats');
     else {
-      // Не полагаемся только на Firestore: отчет мог быть удалён после его открытия.
-      // В таком случае Finish Viewing всё равно должен убрать его из счетчика.
       const viewedId = matchIdFromUrl || String(matchData?.id || '');
-      if (viewedId) {
+      if (isMatchReportFinished(matchData)) {
+        if (!viewedId) {
+          setReviewError(language === 'ru' ? 'Не удалось определить отчёт матча. Просмотр не подтверждён.' : 'Match report ID is missing. Review was not acknowledged.');
+          return;
+        }
         setIsFinalizingReview(true);
-        await markMatchIdAsSeen(viewedId);
+        setReviewError(null);
+        const acknowledged = await markMatchIdAsSeen(viewedId);
+        setIsFinalizingReview(false);
+        if (!acknowledged) {
+          setReviewError(language === 'ru'
+            ? 'Не удалось сохранить просмотр завершённого матча. Проверьте соединение и повторите попытку.'
+            : 'Could not save the completed match review. Check your connection and try again.');
+          return;
+        }
       }
+      // Upcoming or scheduled matches may be inspected, but they are not reports
+      // and must never be hidden from the unread queue by a local acknowledgement.
       router.replace('/');
     }
   };
@@ -466,7 +479,9 @@ function MatchContent() {
           </div>
         )}
 
-        <div className="mt-6 flex justify-center">
+        <div className="mt-6 space-y-3">
+          {reviewError && <p role="alert" className="text-center text-[10px] font-bold text-destructive">{reviewError}</p>}
+          <div className="flex justify-center">
           {step === 'preview' && (
             <Button type="button" onClick={() => handleNext()} className="w-full uppercase font-black tracking-widest text-[10px]">
               {t.next} <ArrowRight className="ml-2 w-4 h-4" />
@@ -477,6 +492,7 @@ function MatchContent() {
               {isFinalizingReview ? (language === 'ru' ? 'СОХРАНЯЕМ ПРОСМОТР…' : 'SAVING REVIEW…') : t.accept} <ChevronRight className="ml-2 w-4 h-4" />
             </Button>
           )}
+          </div>
         </div>
       </div>
     </div>
