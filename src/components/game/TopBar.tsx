@@ -4,9 +4,9 @@ import { useGameState } from '@/app/lib/store';
 import { useUser } from '@/firebase';
 import { useEffect, useState } from 'react';
 import { getMyUnreadMatchReportsCountAction } from '@/app/actions/match-report';
-import { Coins, Gem, Mail, Settings, Shield, Plus } from 'lucide-react';
+import { Bell, Coins, Gem, Mail, Settings, Shield, Plus } from 'lucide-react';
 import { usePathname } from 'next/navigation';
-import { cn, formatCurrency } from '@/lib/utils';
+import { formatCurrency } from '@/lib/utils';
 import Link from 'next/link';
 
 export function TopBar() {
@@ -15,12 +15,15 @@ export function TopBar() {
   const [unreadReportsCount, setUnreadReportsCount] = useState(0);
   const { credits, crystals, language, managerLevel, experiencePoints, displayName, clubName, clubLogo, rank, leagueLevel, groupId } = useGameState();
   useEffect(() => {
-    if (pathname !== '/' || !user || !rank) {
+    if (!user || !rank) {
       setUnreadReportsCount(0);
       return;
     }
     let cancelled = false;
+    let inFlight = false;
     const refresh = async () => {
+      if (cancelled || inFlight) return;
+      inFlight = true;
       try {
         let viewedIds: string[] = [];
         try {
@@ -30,13 +33,29 @@ export function TopBar() {
         const result = await getMyUnreadMatchReportsCountAction(await user.getIdToken(), viewedIds);
         if (!cancelled) setUnreadReportsCount(result?.success ? Math.max(0, Number(result.count || 0)) : 0);
       } catch (error) {
-        console.error('[HOME REPORT BADGE] unread report count failed', error);
+        console.error('[REPORT BADGE] unread report count failed', error);
         if (!cancelled) setUnreadReportsCount(0);
+      } finally {
+        inFlight = false;
       }
     };
+    const handleFocus = () => { void refresh(); };
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') void refresh();
+    };
     void refresh();
-    return () => { cancelled = true; };
-  }, [pathname, user, rank]);
+    window.addEventListener('focus', handleFocus);
+    document.addEventListener('visibilitychange', handleVisibility);
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === 'visible') void refresh();
+    }, 300000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+      window.removeEventListener('focus', handleFocus);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, [user, rank]);
 
   if (pathname === '/') {
     return (
@@ -66,6 +85,9 @@ export function TopBar() {
             </Link>
           </div>
           <div className="flex shrink-0 items-center gap-0.5">
+            <Link href="/notifications" aria-label={language === 'ru' ? 'Уведомления' : 'Notifications'} className="flex h-8 w-8 items-center justify-center rounded-xl text-slate-300 transition hover:bg-white/10 hover:text-white">
+              <Bell className="h-5 w-5" />
+            </Link>
             <Link href="/reports" aria-label={language === 'ru' ? 'Отчёты' : 'Reports'} className="relative flex h-8 w-8 items-center justify-center rounded-xl text-white transition hover:bg-white/10">
               <Mail className="h-6 w-6" />
               {unreadReportsCount > 0 && <span className="absolute -right-0.5 -top-0.5 flex h-[18px] min-w-[18px] items-center justify-center rounded-full border-2 border-[#030811] bg-rose-500 px-1 text-[9px] font-black leading-none text-white">{unreadReportsCount > 99 ? '99+' : unreadReportsCount}</span>}
@@ -86,7 +108,8 @@ export function TopBar() {
         <div className="flex items-center gap-2 text-xs font-bold">
           <span className="flex items-center gap-1 rounded-lg border border-amber-300/20 bg-amber-300/5 px-2 py-1 text-amber-200"><Coins className="h-3.5 w-3.5" />{formatCurrency(credits)}</span>
           <span className="flex items-center gap-1 rounded-lg border border-violet-300/20 bg-violet-300/5 px-2 py-1 text-violet-200"><Gem className="h-3.5 w-3.5" />{formatCurrency(crystals || 0)}</span>
-          <Link href="/reports" className="rounded-lg p-1.5 text-slate-300 hover:bg-white/10"><Mail className="h-5 w-5" /></Link>
+          <Link href="/notifications" aria-label={language === 'ru' ? 'Уведомления' : 'Notifications'} className="rounded-lg p-1.5 text-slate-300 hover:bg-white/10"><Bell className="h-5 w-5" /></Link>
+          <Link href="/reports" aria-label={language === 'ru' ? 'Отчёты' : 'Reports'} className="relative rounded-lg p-1.5 text-slate-300 hover:bg-white/10"><Mail className="h-5 w-5" />{unreadReportsCount > 0 && <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-rose-500 px-1 text-[8px] font-black text-white">{unreadReportsCount > 99 ? '99+' : unreadReportsCount}</span>}</Link>
         </div>
       </div>
     </header>
