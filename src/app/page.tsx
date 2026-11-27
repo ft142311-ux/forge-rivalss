@@ -301,8 +301,8 @@ export default function Home() {
   const menuCards = [
     { id: 'team', title: language === 'ru' ? 'КОМАНДА' : 'TEAM', subtitle: language === 'ru' ? 'Управляй своим клубом' : 'Manage your club', href: '/roster', image: PlaceHolderImages.find(img => img.id === 'hero-tank')?.imageUrl, icon: Users, tone: 'text-primary' },
     { id: 'matches', title: language === 'ru' ? 'МАТЧИ' : 'MATCHES', subtitle: language === 'ru' ? 'Просмотр и участие в играх' : 'View and play matches', href: '/matches', image: PlaceHolderImages.find(img => img.id === 'arena-starter')?.imageUrl, icon: CalendarDays, tone: 'text-primary' },
-    { id: 'transfers', title: language === 'ru' ? 'ТРАНСФЕРЫ' : 'TRANSFERS', subtitle: language === 'ru' ? 'Покупай и продавай игроков' : 'Buy and sell players', href: '/transfers', image: PlaceHolderImages.find(img => img.id === 'hero-carry')?.imageUrl, icon: ArrowRightLeft, tone: 'text-sky-300' },
-    { id: 'cups', title: language === 'ru' ? 'ТУРНИРЫ' : 'TOURNAMENTS', subtitle: language === 'ru' ? 'Соревнуйся за награды' : 'Compete for rewards', href: '/tournaments', image: PlaceHolderImages.find(img => img.id === 'arena-starter')?.imageUrl, icon: Medal, tone: 'text-amber-300' },
+    { id: 'transfers', title: language === 'ru' ? 'ТРАНСФЕРЫ' : 'TRANSFERS', subtitle: language === 'ru' ? 'Покупай и продавай игроков' : 'Buy and sell players', href: '/transfers', image: PlaceHolderImages.find(img => img.id === 'hero-mage')?.imageUrl, icon: ArrowRightLeft, tone: 'text-sky-300' },
+    { id: 'cups', title: language === 'ru' ? 'ТУРНИРЫ' : 'TOURNAMENTS', subtitle: language === 'ru' ? 'Соревнуйся за награды' : 'Compete for rewards', href: '/tournaments', image: PlaceHolderImages.find(img => img.id === 'hq-starter')?.imageUrl, icon: Medal, tone: 'text-amber-300' },
   ];
   const navItems = [
     { label: language === 'ru' ? 'Главная' : 'Home', href: '/', icon: Activity },
@@ -325,9 +325,10 @@ export default function Home() {
               <span className="h-2 w-2 animate-pulse rounded-full bg-cyan-300 shadow-[0_0_12px_#22d3ee]" />
               {language === 'ru' ? 'СЛЕДУЮЩИЙ МАТЧ' : 'NEXT MATCH'}
             </div>
-            <div className="mb-4 flex items-center gap-3 text-xs font-semibold text-slate-200">
-              <span className="inline-flex items-center gap-1.5"><Timer className="h-4 w-4 text-cyan-300" />{matchDateLabel}</span>
-              <span className="rounded-full border border-white/15 bg-black/30 px-2.5 py-1">{language === 'ru' ? 'ЛИГА СЕЗОНА' : 'SEASON LEAGUE'}</span>
+            <div className="mb-4 flex flex-wrap items-center gap-2 text-xs font-semibold text-slate-200">
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-black/35 px-3 py-1.5"><Timer className="h-4 w-4 text-cyan-300" />{matchDateLabel}</span>
+              <span className="rounded-full border border-white/15 bg-black/30 px-3 py-1.5">{language === 'ru' ? 'ЛИГА СЕЗОНА' : 'SEASON LEAGUE'}</span>
+              {currentNextMatch?.startTime && <span className={`rounded-full border px-3 py-1.5 font-black tabular-nums ${getCountdown(currentNextMatch.startTime) === 'LIVE' ? 'border-rose-400/40 bg-rose-500/15 text-rose-200' : 'border-cyan-300/25 bg-cyan-300/10 text-cyan-100'}`}>{getCountdown(currentNextMatch.startTime) === 'LIVE' ? (language === 'ru' ? 'МАТЧ ИДЁТ' : 'LIVE NOW') : (language === 'ru' ? 'ДО НАЧАЛА ' : 'STARTS IN ') + getCountdown(currentNextMatch.startTime)}</span>}
             </div>
             <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2 sm:max-w-lg">
               <div className="flex min-w-0 flex-col items-center gap-2">
@@ -345,7 +346,7 @@ export default function Home() {
               </div>
             </div>
             <a href="/matches" className="mt-5 flex h-14 items-center justify-center gap-3 rounded-xl bg-gradient-to-r from-cyan-300 to-teal-400 text-base font-black uppercase tracking-wider text-[#031018] shadow-[0_8px_28px_rgba(20,220,200,.25)] transition hover:brightness-110 active:scale-[.99]">
-              <span className="text-xl">▶</span>{language === 'ru' ? 'ОТКРЫТЬ МАТЧИ' : 'OPEN MATCHES'}
+              <span className="text-xl">▶</span>{language === 'ru' ? 'ПЕРЕЙТИ К МАТЧАМ' : 'GO TO MATCHES'}
             </a>
           </div>
         </section>
