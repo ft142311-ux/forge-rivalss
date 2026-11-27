@@ -133,12 +133,12 @@ docs/ROADMAP.json still describes an older project phase model (version 1.0.61, 
 
 ## Next implementation sequence
 
-1. Build the consolidated, non-destructive Quality Gate report with explicit PASS / FAIL / BLOCKED / NOT CHECKED statuses and commit/Preview identity.
-2. Add the missing isolated Emulator full-season acceptance scenario, reusing existing test fixtures and lifecycle functions rather than inventing game rules.
-3. Add focused integration assertions for archive retention, awards/ledger idempotency, preserved human identities and repeated Season 2 activation.
-4. Run the complete branch CI and inspect all failures on the exact new head.
-5. Run the authenticated live Beta preflight only after confirming the matching Preview URL and commit; GET only.
-6. Resolve P0 defects before considering limited Beta access.
+1. Complete and harden the end-to-end Season 1 -> Season 2 Emulator acceptance flow, including actual calendar preparation, Cup preparation, publication, activation and archive cleanup.
+2. Run full CI on the exact candidate SHA and inspect every Emulator assertion.
+3. Obtain an exact-SHA Vercel Preview; the current Vercel build-rate limit has prevented this.
+4. Run authenticated read-only Beta preflight only against that exact Preview; GET only.
+5. Perform read-only Cloud Scheduler / Secret Manager inventory and browser/mobile journey checks.
+6. Resolve all P0/P1 blockers before considering limited Beta access.
 
 ## Safety record
 
@@ -173,3 +173,14 @@ docs/ROADMAP.json still describes an older project phase model (version 1.0.61, 
 - Exact-head CI run [#46005551101](https://github.com/ft142311-ux/forge-rivalss/actions/runs/46005551101) for commit `9432757963cac8d4e8f49e295283f403926fa891` completed **success** across main app, Control app, and consolidated Quality Gate. This includes the new lifecycle Emulator scenario.
 - Release status remains **NO-GO**: exact-SHA Vercel Preview, authenticated read-only live Beta preflight, and live Cloud Scheduler/Secret Manager inventory are still not evidenced. Browser/mobile journeys also remain outstanding.
 - No live Beta or Production database was mutated; no deploy, reset, restore, seed, or season activation was initiated. PR #5 remains Draft and unmerged.
+
+
+## Follow-up validation — full-season acceptance expansion (2026-11-27)
+
+- Commit `9432757963cac8d4e8f49e295283f403926fa891` passed GitHub Actions run [#46005551101](https://github.com/ft142311-ux/forge-rivalss/actions/runs/46005551101) with all three jobs successful.
+- The new `tests/season-one-to-two-lifecycle-emulator.integration.test.mjs` runs the real `prepareSeasonRollover` and atomic activation commit against disposable namespaced Emulator documents. It verifies 840 league results, a complete S1 archive, 15-group rollover plan, award ledger and trophies, human club/profile/slot identity, and duplicate activation rejection.
+- Further expanded coverage in `tests/full-season-one-to-two-emulator.integration.test.mjs` to exercise the actual public lifecycle functions: `ensureSeasonCalendar(2)`, `publishPreparedSeason()`, and `activatePublishedSeason()`. The test uses its own disposable Firestore Emulator project `demo-forge-rivals-season-lifecycle-test` and asserts S2 has 15 tables, 120 slots, 840 fixtures, a fully prepared 120-participant / 119-match no-BYE Pyramid Cup, and the retained S1 archive after activation/cleanup.
+- Added `test:season:lifecycle:emulator` and wired the new isolated full lifecycle scenario into `.github/workflows/staging-validation.yml`.
+- Latest commit at this note: `d269c1c8f726466057b3779a06ef8306b08b757f`; CI run [#46006637114](https://github.com/ft142311-ux/forge-rivalss/actions/runs/46006637114) is queued/pending. The expanded full public-lifecycle scenario is **NOT YET VALIDATED** until this exact SHA completes green CI.
+- Exact-SHA Vercel Preview, live read-only Beta preflight, infrastructure inventory, browser journeys and mobile journeys remain **NOT CHECKED**. Overall release verdict remains **NO-GO**.
+- No live Beta or Production data was read or mutated; no deployment, reset, restore, seed or activation was initiated. PR #5 remains Draft and unmerged.
