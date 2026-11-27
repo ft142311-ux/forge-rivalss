@@ -7,14 +7,37 @@ const matchPage = readFileSync(new URL('../src/app/match/page.tsx', import.meta.
 const reportsPage = readFileSync(new URL('../src/app/reports/page.tsx', import.meta.url), 'utf8');
 const matchReportAction = readFileSync(new URL('../src/app/actions/match-report.ts', import.meta.url), 'utf8');
 
-test('view acknowledgement persists locally before awaiting the server', () => {
+test('view acknowledgement waits for server acceptance before local unread suppression', () => {
   const start = store.indexOf('const markMatchIdAsSeen = useCallback(async');
   assert.notEqual(start, -1);
   const end = store.indexOf('const recordMatch = useCallback', start);
   const block = store.slice(start, end);
-  assert.ok(block.indexOf('rememberViewedMatchId(matchId)') < block.indexOf('await markMatchViewedAction(idToken, matchId)'));
-  assert.match(block, /await markMatchViewedAction\(idToken, matchId\)/);
-  assert.doesNotMatch(block, /void\s*\(async\s*\(\)/);
+  assert.ok(block.indexOf('await markMatchViewedAction(idToken, matchId)') < block.indexOf('rememberViewedMatchId(matchId)'));
+  assert.match(block, /result\\.persisted !== true/);
+  assert.match(block, /return true/);
+  assert.match(block, /return false/);
+  assert.doesNotMatch(block, /void\\s*\\(async\\s*\\(\\)/);
+});
+
+test('scheduled match previews can exit without acknowledging a report', () => {
+  assert.match(matchPage, /isMatchReportFinished/);
+  const start = matchPage.indexOf('const handleNext = async');
+  const end = matchPage.indexOf('if (isUserLoading', start);
+  const handler = matchPage.slice(start, end);
+  assert.match(handler, /if \\(isMatchReportFinished\\(matchData\\)\\)/);
+  assert.ok(handler.indexOf('await markMatchIdAsSeen(viewedId)') < handler.indexOf("router.replace('/')"));
+  assert.match(handler, /if \\(!acknowledged\\)[\\s\\S]*?return;/);
+  assert.match(handler, /Upcoming or scheduled matches may be inspected/);
+});
+
+test('server refuses acknowledgements for missing or unfinished report documents', () => {
+  const start = matchReportAction.indexOf('export async function markMatchViewedAction');
+  const end = matchReportAction.indexOf('/** Authenticated, profile-scoped queue', start);
+  const action = matchReportAction.slice(start, end);
+  assert.match(action, /if \\(!found\\) return \\{ success: false, error: 'MATCH_NOT_FOUND' \}/);
+  assert.match(action, /if \\(!isMatchReportFinished\\(match\\)\\)/);
+  assert.match(action, /'MATCH_NOT_FINISHED'/);
+  assert.doesNotMatch(action, /localOnly: true/);
 });
 
 test('finishing a report waits for the viewed acknowledgement before leaving', () => {
