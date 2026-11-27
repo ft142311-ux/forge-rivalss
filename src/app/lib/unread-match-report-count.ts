@@ -25,15 +25,17 @@ export function countUnreadMatchReportRecords(
   const managerId = String(uid || '').trim();
   if (!managerId || !Array.isArray(records)) return 0;
 
-  const leagueId = String(league.leagueId || '').trim();
-  const groupId = String(league.groupId || '').trim();
+  // Keep legacy league coordinates byte-for-byte aligned with the report
+  // authorization path; only manager identity values are whitespace-normalized.
+  const leagueId = String(league.leagueId || '');
+  const groupId = String(league.groupId || '');
   const leagueLevel = Number(league.level);
   const leagueRank = Number(league.rank);
   const locallyViewed = new Set(locallyViewedIds);
   const unreadIds = new Set<string>();
   for (const record of records) {
     const match = record?.match || {};
-    const id = String(record?.id || match.id || '').trim();
+    const id = String(record?.id || match.id || '');
     if (!id) continue;
     const finished = isMatchReportFinished(match);
     if (!finished || match.seen === true || match.reportStatus === 'viewed' || locallyViewed.has(id)) continue;
@@ -44,9 +46,9 @@ export function countUnreadMatchReportRecords(
       match.hostId, match.challengerId,
     ].some(value => String(value ?? '').trim() === managerId);
     const rankBasedLeagueParticipant = record.collectionName === MATCH_COLLECTIONS.league &&
-      String(match.leagueId || '').trim() === leagueId &&
+      String(match.leagueId || '') === leagueId &&
       Number(match.level) === leagueLevel &&
-      String(match.groupId || '').trim() === groupId &&
+      String(match.groupId || '') === groupId &&
       [Number(match.homeRank), Number(match.awayRank)].includes(leagueRank);
     if (!participant && !rankBasedLeagueParticipant) continue;
     // Match Center routes reports by document ID, so count the same global ID once
