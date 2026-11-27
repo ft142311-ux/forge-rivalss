@@ -107,11 +107,13 @@ test('Firestore Emulator Season 1 to 2 activation preserves human club identity,
   const runId = randomUUID();
   const configRef = db.collection('seasonLifecycleIntegrationTests').doc(`${runId}-config`);
   const planRef = db.collection('seasonLifecycleIntegrationTests').doc(`${runId}-S2-plan`);
-  const profileRef = db.collection('seasonLifecycleIntegrationTests').doc(`${runId}-human-profile`);
-  const slotRef = db.collection('seasonLifecycleIntegrationTests').doc(`${runId}-human-slot`);
-  const sourceFixtureRef = db.collection('seasonLifecycleIntegrationTests').doc(`${runId}-source-fixture`);
+  const humanId = `human-${runId}`;
+  const profileRef = db.collection('players_v14').doc(humanId);
+  const slotRef = db.collection('league_slots_v1').doc(`test-season-activation-${runId}-slot`);
+  const sourceFixtureRef = db.collection('matches_v2').doc(`test-season-activation-${runId}-fixture`);
   const expectedProfile = {
-    uid: `human-${runId}`,
+    id: humanId,
+    uid: humanId,
     clubName: 'Human Club — Season One',
     displayName: 'Human Club — Season One',
     credits: 123456,
