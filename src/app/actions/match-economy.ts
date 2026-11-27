@@ -4,6 +4,7 @@ import { FieldValue } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { assertMatchDocumentId } from '@/app/lib/match-id';
 import { ARENA_BASE_CAPACITY } from '@/app/lib/arena-expansion';
+import { isValidMatchEconomyReceipt } from '@/app/lib/match-economy-ledger';
 
 export type MatchEconomy = {
   attendance: number;
@@ -102,14 +103,9 @@ export async function recordMatchEconomy(
     }
     if (!playerSnap.exists) throw new Error('PLAYER_NOT_FOUND');
     if (txSnap.exists) {
-      const receipt = txSnap.data() || {};
-      const receiptMatchesOperation =
-        receipt.userId === uid &&
-        receipt.referenceId === matchId &&
-        receipt.currency === 'credits' &&
-        receipt.type === 'MATCH_REVENUE' &&
-        Number(receipt.amount) === amount;
-      if (!receiptMatchesOperation) throw new Error('IDEMPOTENCY_KEY_REUSED');
+      if (!isValidMatchEconomyReceipt(txSnap.data(), { userId: uid, matchId, amount })) {
+        throw new Error('IDEMPOTENCY_KEY_REUSED');
+      }
       return;
     }
 
@@ -137,7 +133,7 @@ export async function recordMatchEconomy(
       [`matchEconomy.${matchId}`]: economy,
     });
 
-    t.set(txRef, {
+    t.create(txRef, {
       userId: uid,
       amount,
       currency: 'credits',
