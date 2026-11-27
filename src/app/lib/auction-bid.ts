@@ -271,7 +271,8 @@ export async function placeStandardMarketBidWithDb(
     const lot: any = marketSnap.data() || {};
     if (lot.status === 'settled' || lot.status === 'expired') throw new Error('MARKET_LOT_NOT_ACTIVE');
     if (lot.isPro === true || lot.isYouth === true) throw new Error('INVALID_MARKET_LOT_TYPE');
-    if (lot.sellerId === uid) throw new Error('SELLER_CANNOT_BID');
+    const sellerId = String(lot.sellerId || '');
+    if (sellerId === uid) throw new Error('SELLER_CANNOT_BID');
 
     const currency = resolveAuctionCurrency(lot.currency);
     if (currency !== 'credits') throw new Error('INVALID_MARKET_CURRENCY');
@@ -298,6 +299,11 @@ export async function placeStandardMarketBidWithDb(
     const bidderData: any = bidderSnap.data() || {};
 
     const previousBidderId = String(lot.highestBidderId || lot.highestBidderUid || '');
+    // A legacy or corrupt lot must not refund a seller-funded self-bid to the seller
+    // while allowing a third party to buy the player at the inflated price.
+    if (previousBidderId && previousBidderId === sellerId) {
+      throw new Error('MARKET_PREVIOUS_BIDDER_INVALID');
+    }
     const previousEscrow = resolvePreviousAuctionBidEscrow({
       currency,
       escrowCurrency: lot.escrowCurrency,

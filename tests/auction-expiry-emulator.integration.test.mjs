@@ -1420,3 +1420,56 @@ test('Firestore Emulator creates distinct Youth listing IDs for same-millisecond
   const afterInvalid = await db.collection('players_v14').doc('youth-listing-seller').get();
   assert.equal(afterInvalid.get('youthAcademyPlayers').find(player => player.id === 'youth-player-invalid').transferMarketId, undefined);
 });
+
+test('Firestore Emulator rejects standard bids when a legacy lot records the seller as its highest bidder', {
+  skip: !emulatorHost,
+}, async t => {
+  const { db } = await withIsolatedFirestore(t);
+  const now = Date.now();
+  const expiresAt = new Date(now + 60 * 60 * 1000).toISOString();
+  await db.collection('players_v14').doc('self-bid-seller').set({
+    credits: 700,
+    ownedPlayers: [{
+      id: 'self-bid-player',
+      name: 'Self Bid Player',
+      onTransferUntil: expiresAt,
+      transferMarketId: 'self-bid-lot',
+    }],
+  });
+  await db.collection('players_v14').doc('self-bid-buyer').set({
+    credits: 1000,
+    ownedPlayers: [],
+  });
+  const lotRef = db.collection('market_v7').doc('self-bid-lot');
+  await lotRef.set({
+    sellerId: 'self-bid-seller',
+    marketType: 'player',
+    currency: 'credits',
+    currentBid: 300,
+    startingPrice: 200,
+    highestBidderId: 'self-bid-seller',
+    highestBidderName: 'Seller',
+    bidders: ['self-bid-seller'],
+    escrowedAmount: 300,
+    escrowCurrency: 'credits',
+    expiresAt,
+    heroData: { id: 'self-bid-player', name: 'Self Bid Player' },
+    isPro: false,
+    isYouth: false,
+  });
+
+  await assert.rejects(
+    placeStandardMarketBidWithDb(db, 'self-bid-buyer', 'self-bid-lot', 400),
+    /MARKET_PREVIOUS_BIDDER_INVALID/,
+  );
+
+  const seller = await db.collection('players_v14').doc('self-bid-seller').get();
+  const buyer = await db.collection('players_v14').doc('self-bid-buyer').get();
+  const lot = await lotRef.get();
+  assert.equal(seller.get('credits'), 700, 'rejected bids must not refund the legacy seller escrow');
+  assert.equal(buyer.get('credits'), 1000, 'rejected bids must not charge the new bidder');
+  assert.equal(lot.get('highestBidderId'), 'self-bid-seller');
+  assert.equal(lot.get('currentBid'), 300);
+  assert.equal(lot.get('escrowedAmount'), 300);
+  assert.equal((await db.collection('economy_transactions').get()).size, 0);
+});
