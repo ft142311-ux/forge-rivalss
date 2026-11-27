@@ -1,22 +1,16 @@
 'use client';
 
 import { useGameState } from './lib/store';
-import { 
-  Users, MessageSquare, ShoppingCart, 
-  CalendarDays, Medal, ArrowRightLeft, 
-  Shield, Construction, Briefcase, 
-  LineChart, Heart, Newspaper, Settings, Search, Tv, User as UserIcon, UserCheck,
-  Radar, LayoutList, Swords, Timer, Activity, ChevronRight
+import {
+  Users, ShoppingCart, CalendarDays, Medal, ArrowRightLeft,
+  Shield, Newspaper, User as UserIcon, Swords, Timer, Activity, ChevronRight
 } from 'lucide-react';
-import { Card, CardContent } from '@/components/ui/card';
-import { cn } from '@/lib/utils';
-import { useUser, useFirestore, useCollection, useMemoFirebase, useDoc } from '@/firebase';
+import { useUser, useFirestore, useMemoFirebase, useDoc } from '@/firebase';
 import { LoadingScreen } from '@/components/game/LoadingScreen';
-import { Badge } from '@/components/ui/badge';
 import { useState, useEffect, useMemo } from 'react';
-import { getMoscowTime, getGlobalSeasonInfo, isMatchLive } from './lib/time-utils';
-import { collection, query, where, doc } from 'firebase/firestore';
-import { getBotName, LEAGUES } from './lib/leagues-data';
+import { getMoscowTime, getGlobalSeasonInfo } from './lib/time-utils';
+import { doc } from 'firebase/firestore';
+import { getBotName } from './lib/leagues-data';
 import { PlaceHolderImages } from './lib/placeholder-images';
 
 export default function Home() {
@@ -25,11 +19,16 @@ export default function Home() {
   const { 
     language, isLoaded, isDataReady, experiencePoints, managerLevel, clubName, 
     allSeasonMatches, rank, selectedLeagueId,
-    leagueLevel, groupId, clubLogo: myClubLogo, numericId
+    leagueLevel, groupId, clubLogo: myClubLogo
   } = useGameState();
 
   const [now, setNow] = useState(getMoscowTime());
   const [officialLeagueMatches, setOfficialLeagueMatches] = useState<any[] | null>(null);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(getMoscowTime()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
   const seasonConfigRef = useMemoFirebase(() => {
     if (!db) return null;
     return doc(db, 'system_v1', 'season_config');
@@ -68,38 +67,6 @@ export default function Home() {
   }, [user, selectedLeagueId, leagueLevel, groupId, rank, effectiveSeason]);
 
 
-  const nameMap = useMemo(() => {
-    const names: Record<number, string> = {};
-    const logos: Record<number, string> = {};
-    if (groupPlayers) {
-      groupPlayers.forEach(p => {
-        names[p.rank] = p.clubName || p.displayName;
-        logos[p.rank] = p.clubLogo;
-      });
-    }
-    return { names, logos };
-  }, [groupPlayers]);
-
-  const resolvedNextMatch = useMemo(() => {
-    const sourceMatches = officialLeagueMatches ?? allSeasonMatches ?? [];
-    if (!sourceMatches.length || !rank) return null;
-    const myMatches = sourceMatches
-      .filter(m => (Number(m.homeRank) === rank || Number(m.awayRank) === rank) && !m.isFinished)
-      .sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime());
-    const nowMs = now.getTime();
-    // The card is for the NEXT opponent, so prefer the next future match.
-    // A currently started match is shown as LIVE only when there is no future match.
-    const myNext = myMatches.find(m => new Date(m.startTime).getTime() > nowMs) || myMatches[0];
-    if (!myNext) return null;
-    const isHome = Number(myNext.homeRank) === rank;
-    const oppRank = isHome ? Number(myNext.awayRank) : Number(myNext.homeRank);
-    return {
-      match: myNext,
-      opponentName: (isHome ? myNext.awayName : myNext.homeName) || nameMap.names[oppRank] || getBotName(leagueLevel, groupId, oppRank),
-      opponentLogo: nameMap.logos[oppRank] || null
-    };
-  }, [officialLeagueMatches, allSeasonMatches, rank, nameMap, leagueLevel, groupId, now]);
-
   const toMillis = (value: any): number => {
     if (value == null) return Number.NaN;
     if (typeof value === 'number') return value;
@@ -113,6 +80,26 @@ export default function Home() {
     if (typeof value === 'string') return new Date(value).getTime();
     return Number.NaN;
   };
+
+  const resolvedNextMatch = useMemo(() => {
+    const sourceMatches = officialLeagueMatches ?? allSeasonMatches ?? [];
+    if (!sourceMatches.length || !rank) return null;
+    const myMatches = sourceMatches
+      .filter(m => (Number(m.homeRank) === rank || Number(m.awayRank) === rank) && !m.isFinished)
+      .sort((a, b) => toMillis(a.startTime) - toMillis(b.startTime));
+    const nowMs = now.getTime();
+    // The card is for the NEXT opponent, so prefer the next future match.
+    // A currently started match is shown as LIVE only when there is no future match.
+    const myNext = myMatches.find(m => toMillis(m.startTime) > nowMs) || myMatches[0];
+    if (!myNext) return null;
+    const isHome = Number(myNext.homeRank) === rank;
+    const oppRank = isHome ? Number(myNext.awayRank) : Number(myNext.homeRank);
+    return {
+      match: myNext,
+      opponentName: (isHome ? myNext.awayName : myNext.homeName) || getBotName(leagueLevel, groupId, oppRank),
+      opponentLogo: (isHome ? myNext.awayLogo : myNext.homeLogo) || null
+    };
+  }, [officialLeagueMatches, allSeasonMatches, rank, nameMap, leagueLevel, groupId, now]);
 
   const getCountdown = (targetTimeIso: any) => {
     const targetMs = toMillis(targetTimeIso);
@@ -128,7 +115,6 @@ export default function Home() {
   };
 
   const mapCardBg = PlaceHolderImages.find(img => img.id === 'tactical-map-card')?.imageUrl;
-  const systemIconUrl = PlaceHolderImages.find(img => img.id === 'ui-system-icon')?.imageUrl;
 
   if (isUserLoading || !isLoaded || !isDataReady) return <LoadingScreen />;
 
@@ -177,10 +163,20 @@ export default function Home() {
   const cardTitle = showOffseason ? (language === 'ru' ? 'МЕЖСЕЗОНЬЕ' : 'OFFSEASON') : (language === 'ru' ? 'СЛЕДУЮЩИЙ СОПЕРНИК' : 'NEXT OPPONENT');
 
   const matchStartMs = currentNextMatch?.startTime ? toMillis(currentNextMatch.startTime) : Number.NaN;
-  const matchDate = Number.isFinite(matchStartMs) ? new Date(matchStartMs) : null;
-  const matchDateLabel = matchDate && Number.isFinite(matchDate.getTime())
-    ? `${matchDate.toLocaleDateString(language === 'ru' ? 'ru-RU' : 'en-US', { day: 'numeric', month: 'short', timeZone: 'Europe/Moscow' })} · ${matchDate.toLocaleTimeString(language === 'ru' ? 'ru-RU' : 'en-US', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Moscow' })}`
+  const dashboardDateMs = showOffseason ? nextSeasonStartMs : matchStartMs;
+  const dashboardDate = Number.isFinite(dashboardDateMs) ? new Date(dashboardDateMs) : null;
+  const matchDateLabel = dashboardDate && Number.isFinite(dashboardDate.getTime())
+    ? `${dashboardDate.toLocaleDateString(language === 'ru' ? 'ru-RU' : 'en-US', { day: 'numeric', month: 'short', timeZone: 'Europe/Moscow' })} · ${dashboardDate.toLocaleTimeString(language === 'ru' ? 'ru-RU' : 'en-US', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Moscow' })}`
     : (language === 'ru' ? 'Ожидается расписание' : 'Schedule pending');
+  const cardStatusLabel = showOffseason
+    ? (cardCountdown === 'PREPARING'
+        ? (language === 'ru' ? 'ПОДГОТОВКА' : 'PREPARING')
+        : `${language === 'ru' ? 'ДО МЕЖСЕЗОНЬЯ' : 'OFFSEASON IN'} ${cardCountdown}`)
+    : currentNextMatch
+      ? (cardCountdown === 'LIVE'
+          ? (language === 'ru' ? 'МАТЧ ИДЁТ' : 'LIVE NOW')
+          : `${language === 'ru' ? 'ДО НАЧАЛА' : 'STARTS IN'} ${cardCountdown}`)
+      : (language === 'ru' ? 'РАСПИСАНИЕ ОЖИДАЕТСЯ' : 'SCHEDULE PENDING');
   const opponentLogo = resolvedNextMatch?.opponentLogo;
   const mainOpponent = resolvedNextMatch?.opponentName || (language === 'ru' ? 'СОПЕРНИК НЕ ОПРЕДЕЛЁН' : 'OPPONENT TBD');
   const xp = Math.max(0, Number(experiencePoints || 0));
@@ -210,30 +206,37 @@ export default function Home() {
           <div className="relative flex min-h-[330px] flex-col justify-end p-4 sm:p-6">
             <div className="mb-auto flex items-center gap-2 pt-1 text-[11px] font-black uppercase tracking-[.18em] text-cyan-200">
               <span className="h-2 w-2 animate-pulse rounded-full bg-cyan-300 shadow-[0_0_12px_#22d3ee]" />
-              {language === 'ru' ? 'СЛЕДУЮЩИЙ МАТЧ' : 'NEXT MATCH'}
+              {cardTitle}
             </div>
-            <div className="mb-4 flex flex-wrap items-center gap-2 text-xs font-semibold text-slate-200">
+            <div className="mb-4 flex flex-wrap items-center gap-2 text-[10px] font-semibold text-slate-200 sm:text-xs">
               <span className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-black/35 px-3 py-1.5"><Timer className="h-4 w-4 text-cyan-300" />{matchDateLabel}</span>
-              <span className="rounded-full border border-white/15 bg-black/30 px-3 py-1.5">{language === 'ru' ? 'ЛИГА СЕЗОНА' : 'SEASON LEAGUE'}</span>
-              {currentNextMatch?.startTime && <span className={`rounded-full border px-3 py-1.5 font-black tabular-nums ${getCountdown(currentNextMatch.startTime) === 'LIVE' ? 'border-rose-400/40 bg-rose-500/15 text-rose-200' : 'border-cyan-300/25 bg-cyan-300/10 text-cyan-100'}`}>{getCountdown(currentNextMatch.startTime) === 'LIVE' ? (language === 'ru' ? 'МАТЧ ИДЁТ' : 'LIVE NOW') : (language === 'ru' ? 'ДО НАЧАЛА ' : 'STARTS IN ') + getCountdown(currentNextMatch.startTime)}</span>}
+              <span className="rounded-full border border-white/15 bg-black/30 px-3 py-1.5">{showOffseason ? (language === 'ru' ? 'СЛЕДУЮЩИЙ СЕЗОН' : 'NEXT SEASON') : (language === 'ru' ? 'ЛИГА СЕЗОНА' : 'SEASON LEAGUE')}</span>
+              <span className={`rounded-full border px-3 py-1.5 font-black tabular-nums ${cardCountdown === 'LIVE' ? 'border-rose-400/40 bg-rose-500/15 text-rose-200' : showOffseason ? 'border-violet-300/30 bg-violet-300/10 text-violet-100' : 'border-cyan-300/25 bg-cyan-300/10 text-cyan-100'}`}>{cardStatusLabel}</span>
             </div>
-            <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2 sm:max-w-lg">
-              <div className="flex min-w-0 flex-col items-center gap-2">
-                <div className="flex h-20 w-20 items-center justify-center rounded-2xl border border-cyan-300/20 bg-black/35 p-2 sm:h-24 sm:w-24">
-                  {myClubLogo ? <img src={myClubLogo} alt="" className="h-full w-full object-contain" /> : <Shield className="h-12 w-12 text-cyan-300" />}
-                </div>
-                <span className="max-w-full truncate text-center text-sm font-black uppercase sm:text-base">{clubName || (language === 'ru' ? 'МОЯ КОМАНДА' : 'MY TEAM')}</span>
+            {showOffseason ? (
+              <div className="flex min-h-[120px] flex-col items-center justify-center gap-3 py-2 text-center">
+                <div className="flex h-20 w-20 items-center justify-center rounded-2xl border border-violet-300/25 bg-violet-300/10 text-violet-200 sm:h-24 sm:w-24"><CalendarDays className="h-12 w-12" /></div>
+                <span className="text-sm font-black uppercase tracking-wide text-violet-100">{language === 'ru' ? 'ПОДГОТОВКА К НОВОМУ СЕЗОНУ' : 'PREPARING FOR THE NEXT SEASON'}</span>
               </div>
-              <span className="text-2xl font-black italic text-white drop-shadow-[0_0_14px_rgba(34,211,238,.7)]">VS</span>
-              <div className="flex min-w-0 flex-col items-center gap-2">
-                <div className="flex h-20 w-20 items-center justify-center rounded-2xl border border-amber-300/20 bg-black/35 p-2 sm:h-24 sm:w-24">
-                  {opponentLogo ? <img src={opponentLogo} alt="" className="h-full w-full object-contain" /> : <Swords className="h-12 w-12 text-amber-300" />}
+            ) : (
+              <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2 sm:max-w-lg">
+                <div className="flex min-w-0 flex-col items-center gap-2">
+                  <div className="flex h-20 w-20 items-center justify-center rounded-2xl border border-cyan-300/20 bg-black/35 p-2 sm:h-24 sm:w-24">
+                    {myClubLogo ? <img src={myClubLogo} alt="" className="h-full w-full object-contain" /> : <Shield className="h-12 w-12 text-cyan-300" />}
+                  </div>
+                  <span className="max-w-full truncate text-center text-sm font-black uppercase sm:text-base">{clubName || (language === 'ru' ? 'МОЯ КОМАНДА' : 'MY TEAM')}</span>
                 </div>
-                <span className="max-w-full truncate text-center text-sm font-black uppercase sm:text-base">{mainOpponent}</span>
+                <span className="text-2xl font-black italic text-white drop-shadow-[0_0_14px_rgba(34,211,238,.7)]">VS</span>
+                <div className="flex min-w-0 flex-col items-center gap-2">
+                  <div className="flex h-20 w-20 items-center justify-center rounded-2xl border border-amber-300/20 bg-black/35 p-2 sm:h-24 sm:w-24">
+                    {opponentLogo ? <img src={opponentLogo} alt="" className="h-full w-full object-contain" /> : <Swords className="h-12 w-12 text-amber-300" />}
+                  </div>
+                  <span className="max-w-full truncate text-center text-sm font-black uppercase sm:text-base">{mainOpponent}</span>
+                </div>
               </div>
-            </div>
-            <a href="/matches" className="mt-5 flex h-14 items-center justify-center gap-3 rounded-xl bg-gradient-to-r from-cyan-300 to-teal-400 text-base font-black uppercase tracking-wider text-[#031018] shadow-[0_8px_28px_rgba(20,220,200,.25)] transition hover:brightness-110 active:scale-[.99]">
-              <span className="text-xl">▶</span>{language === 'ru' ? 'ПЕРЕЙТИ К МАТЧАМ' : 'GO TO MATCHES'}
+            )}
+            <a href={showOffseason ? "/roster" : "/matches"} className="mt-5 flex h-14 items-center justify-center gap-3 rounded-xl bg-gradient-to-r from-cyan-300 to-teal-400 text-base font-black uppercase tracking-wider text-[#031018] shadow-[0_8px_28px_rgba(20,220,200,.25)] transition hover:brightness-110 active:scale-[.99]">
+              <span className="text-xl">▶</span>{showOffseason ? (language === 'ru' ? 'ПОДГОТОВИТЬ КОМАНДУ' : 'PREPARE TEAM') : (language === 'ru' ? 'ПЕРЕЙТИ К МАТЧАМ' : 'GO TO MATCHES')}
             </a>
           </div>
         </section>
