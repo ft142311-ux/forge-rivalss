@@ -30,25 +30,42 @@ test('reports queue excludes locally and server-marked viewed matches', () => {
 });
 
 
-test('report loading and viewed acknowledgement recognize every participant identity field', () => {
-  const getReport = matchReportAction.slice(matchReportAction.indexOf('export async function getMatchReportAction'), matchReportAction.indexOf('export async function markMatchViewedAction'));
+test('report lookup, league queue and acknowledgement share every participant identity field', () => {
+  const participantHelper = matchReportAction.slice(
+    matchReportAction.indexOf('function isMatchReportParticipant'),
+    matchReportAction.indexOf('async function isRankBasedLeagueParticipant'),
+  );
+  const getReport = matchReportAction.slice(
+    matchReportAction.indexOf('export async function getMatchReportAction'),
+    matchReportAction.indexOf('export async function markMatchViewedAction'),
+  );
   const markViewed = matchReportAction.slice(matchReportAction.indexOf('export async function markMatchViewedAction'));
+  const leagueReports = matchReportAction.slice(
+    matchReportAction.indexOf('export async function getMyLeagueMatchReportsAction'),
+    matchReportAction.indexOf('export async function getMyUnreadMatchReportsCountAction'),
+  );
   for (const field of ['homeId', 'awayId', 'homeUid', 'awayUid', 'hostId', 'challengerId']) {
-    assert.match(getReport, new RegExp(`match\\.${field}`));
-    assert.match(markViewed, new RegExp(`m\\.${field}`));
+    assert.match(participantHelper, new RegExp(`match\\?\\.${field}`));
   }
-  assert.match(markViewed, /\.some\(\(participantId\) => String\(participantId \|\| ''\) === uid\)/);
+  assert.match(getReport, /isMatchReportParticipant\\(match, uid\\)/);
+  assert.match(markViewed, /isMatchReportParticipant\\(match, uid\\)/);
+  assert.match(leagueReports, /isMatchReportParticipant\\(raw, uid\\)/);
+  assert.doesNotMatch(leagueReports, /raw\\.homeId \\|\\| raw\\.homeUid/);
 });
 
-test('view acknowledgement rechecks the reset marker and report in one transaction', () => {
+test('view acknowledgement rechecks the reset marker and every report copy in one transaction', () => {
   const start = matchReportAction.indexOf('export async function markMatchViewedAction');
   const end = matchReportAction.indexOf('/** Authenticated, profile-scoped queue', start);
   const action = matchReportAction.slice(start, end);
   assert.ok(action.includes('db.runTransaction(async (tx: any) =>'));
   assert.ok(action.includes('tx.get(configRef)'));
   assert.ok(action.includes('stagingSeasonOneResetInProgress'));
-  assert.ok(action.includes('tx.get(ref)'));
-  assert.ok(action.includes('tx.update(ref'));
+  assert.match(action, /const candidates = MATCH_REPORT_COLLECTIONS\\.map/);
+  assert.match(action, /candidates\\.map\\(candidate => tx\\.get\\(candidate\\.ref\\)\\)/);
+  assert.match(action, /matchSnaps\\.some\\(\\(snap: any\\) => snap\\.exists\\)/);
+  assert.match(action, /tx\\.update\\(candidate\\.ref/);
+  assert.match(action, /updatedCopies: acknowledged\\.length/);
+  assert.ok(action.indexOf('Promise.all') < action.indexOf('tx.update(candidate.ref'));
   assert.ok(!action.includes('await ref.update('));
 });
 
@@ -60,5 +77,5 @@ test('legacy rank-based report access requires exact league, group and division 
   assert.match(matchReportAction, /Number\(profile\.leagueLevel\) === level/);
   assert.match(matchReportAction, /\[homeRank, awayRank\]\.includes\(Number\(profile\.rank\)\)/);
   assert.match(matchReportAction, /await isRankBasedLeagueParticipant\(db, uid, match, collectionName, profile\)/);
-  assert.match(matchReportAction, /await isRankBasedLeagueParticipant\(db, uid, m, collectionName, profile\)/);
+  assert.match(matchReportAction, /await isRankBasedLeagueParticipant\(db, uid, match, candidates\[index\]\.collectionName, profile\)/);
 });
