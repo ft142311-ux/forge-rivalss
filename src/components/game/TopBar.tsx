@@ -66,11 +66,11 @@ export function TopBar() {
             </Link>
           </div>
           <div className="flex shrink-0 items-center gap-0.5">
-            <Link href="/reports" aria-label={language === 'ru' ? 'Отчёты' : 'Reports'} className={cn("relative flex h-8 w-8 items-center justify-center rounded-xl text-white transition hover:bg-white/10", pathname === '/reports' && "text-cyan-300")}>
+            <Link href="/reports" aria-label={language === 'ru' ? 'Отчёты' : 'Reports'} className="relative flex h-8 w-8 items-center justify-center rounded-xl text-white transition hover:bg-white/10">
               <Mail className="h-6 w-6" />
               {unreadReportsCount > 0 && <span className="absolute -right-0.5 -top-0.5 flex h-[18px] min-w-[18px] items-center justify-center rounded-full border-2 border-[#030811] bg-rose-500 px-1 text-[9px] font-black leading-none text-white">{unreadReportsCount > 99 ? '99+' : unreadReportsCount}</span>}
             </Link>
-            <Link href="/system" aria-label={language === 'ru' ? 'Настройки' : 'Settings'} className={cn("flex h-8 w-8 items-center justify-center rounded-xl text-slate-300 transition hover:bg-white/10 hover:text-white", pathname?.startsWith('/system') && "text-cyan-300")}>
+            <Link href="/system" aria-label={language === 'ru' ? 'Настройки' : 'Settings'} className="flex h-8 w-8 items-center justify-center rounded-xl text-slate-300 transition hover:bg-white/10 hover:text-white">
               <Settings className="h-6 w-6" />
             </Link>
           </div>
