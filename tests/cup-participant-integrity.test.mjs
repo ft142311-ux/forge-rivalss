@@ -74,9 +74,12 @@ test('season publication and active Cup diagnostics enforce shared validators an
   assert.match(calendar, /isCanonicalPyramidCupOpeningField\(participants, firstRound, restTeams\)/);
   assert.match(route, /isCanonicalPyramidCupOpeningField\(participants, rounds\.r1, restTeams\)/);
   assert.match(route, /isPyramidCupRoundProgressionValid\(rounds, currentRound, restTeams\)/);
-  assert.match(route, /fixture\.homeTeamSnapshot\?\.id/);
-  assert.match(route, /fixture\.awayTeamSnapshot\?\.id/);
-  assert.match(route, /JSON\.stringify\(fixture\.homeTeamSnapshot\)/);
+  assert.match(route, /isValidCupParticipantMatchSnapshot\(data\.matchSnapshot, id\)/);
+  assert.match(route, /data\.cupId !== cupId/);
+  assert.match(route, /data\.teamId !== id/);
+  assert.match(route, /isCupParticipantMatchSnapshotCompatible\(fixture\.homeTeamSnapshot/);
+  assert.match(route, /isCupParticipantMatchSnapshotCompatible\(fixture\.awayTeamSnapshot/);
+  assert.doesNotMatch(route, /JSON\.stringify\(fixture\.homeTeamSnapshot\)/);
 });
 
 
@@ -100,7 +103,7 @@ test('round progression rejects D1 rest entrants in the opening round and malfor
 });
 
 
-test('frozen Cup participant snapshots require the correct team ID and exactly five players', () => {
+test('frozen Cup participant snapshots require five distinct non-empty player IDs', () => {
   const snapshot = {
     id: 'cup-team-1',
     players: Array.from({ length: 5 }, (_, index) => ({ id: 'player-' + (index + 1) })),
@@ -108,13 +111,36 @@ test('frozen Cup participant snapshots require the correct team ID and exactly f
   assert.equal(isValidCupParticipantMatchSnapshot(snapshot, 'cup-team-1'), true);
   assert.equal(isValidCupParticipantMatchSnapshot(snapshot, 'cup-team-2'), false);
   assert.equal(isValidCupParticipantMatchSnapshot({ ...snapshot, players: snapshot.players.slice(0, 4) }, 'cup-team-1'), false);
+  assert.equal(isValidCupParticipantMatchSnapshot({ ...snapshot, players: snapshot.players.map((player, index) => index === 4 ? { id: 'player-1' } : player) }, 'cup-team-1'), false);
+  assert.equal(isValidCupParticipantMatchSnapshot({ ...snapshot, players: snapshot.players.map((player, index) => index === 4 ? {} : player) }, 'cup-team-1'), false);
   assert.equal(isValidCupParticipantMatchSnapshot(null, 'cup-team-1'), false);
 });
 
-test('a recovered Cup fixture must match the exact frozen home and away snapshots', () => {
-  const home = { id: 'home-team', players: Array.from({ length: 5 }, (_, index) => ({ id: 'h-' + index, rating: 20 })) };
-  const away = { id: 'away-team', players: Array.from({ length: 5 }, (_, index) => ({ id: 'a-' + index, rating: 20 })) };
-  assert.equal(isCupParticipantMatchSnapshotCompatible(home, { ...home, players: home.players.map(player => ({ ...player })) }, 'home-team'), true);
-  assert.equal(isCupParticipantMatchSnapshotCompatible(home, { ...home, players: home.players.map((player, index) => index === 0 ? { ...player, rating: 21 } : player) }, 'home-team'), false);
-  assert.equal(isCupParticipantMatchSnapshotCompatible(away, home, 'away-team'), false);
+test('Cup snapshot equality ignores object key order but preserves roster order and values', () => {
+  const home = {
+    id: 'home-team',
+    players: Array.from({ length: 5 }, (_, index) => ({
+      id: 'h-' + index,
+      attributes: { role: 'carry', rating: 20 },
+    })),
+  };
+  const stored = {
+    players: home.players.map(player => ({
+      attributes: { rating: 20, role: 'carry' },
+      id: player.id,
+    })),
+    id: 'home-team',
+  };
+  assert.equal(isCupParticipantMatchSnapshotCompatible(stored, home, 'home-team'), true);
+  assert.equal(isCupParticipantMatchSnapshotCompatible(
+    { ...stored, players: [...stored.players].reverse() },
+    home,
+    'home-team',
+  ), false);
+  assert.equal(isCupParticipantMatchSnapshotCompatible(
+    { ...stored, players: stored.players.map((player, index) => index === 0 ? { ...player, attributes: { ...player.attributes, rating: 21 } } : player) },
+    home,
+    'home-team',
+  ), false);
+  assert.equal(isCupParticipantMatchSnapshotCompatible({ ...stored, id: 'away-team' }, home, 'home-team'), false);
 });

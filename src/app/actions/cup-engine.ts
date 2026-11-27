@@ -160,13 +160,13 @@ async function loadAllLeagueTeams(db: any, season: number): Promise<Team[]> {
       clubName: team.name,
       displayName: team.name,
     }, team.name, team.id, 'cup');
-    if (!Array.isArray(matchSnapshot.players) || matchSnapshot.players.length !== 5) {
+    // Firestore rejects undefined nested values (for example legacy tactics
+    // without lineSettings). Strip them before validating the exact persisted
+    // five-player identity set so duplicate or missing player IDs fail closed.
+    const persistedMatchSnapshot = JSON.parse(JSON.stringify(matchSnapshot)) as MatchTeamSnapshot;
+    if (!isValidCupParticipantMatchSnapshot(persistedMatchSnapshot, team.id)) {
       throw new Error(`CUP_PARTICIPANT_ROSTER_INVALID:${team.id}`);
     }
-    // Firestore rejects undefined nested values (for example legacy tactics
-    // without lineSettings). Snapshot data is JSON-shaped and deliberately
-    // stripped of undefined optional fields before persistence.
-    const persistedMatchSnapshot = JSON.parse(JSON.stringify(matchSnapshot)) as MatchTeamSnapshot;
     return { ...team, seed: index + 1, matchSnapshot: persistedMatchSnapshot };
   });
 }
@@ -609,13 +609,17 @@ export async function preparePyramidCupForSeason(targetSeasonNumber: number) {
     return data.cupId !== ref.id ||
       Number(data.season) !== targetSeasonNumber ||
       data.teamId !== String(participants[index]?.id || '') ||
-      frozen?.id !== String(participants[index]?.id || '') ||
-      !Array.isArray(frozen?.players) ||
-      frozen.players.length !== 5;
+      !isValidCupParticipantMatchSnapshot(frozen, String(participants[index]?.id || ''));
   });
   if (invalidParticipantSnapshot) {
     return { success: false, reason: 'CUP_PREPARED_PARTICIPANT_SNAPSHOT_INVALID', cupId: ref.id };
   }
+  const participantSnapshotById = new Map<string, MatchTeamSnapshot>(
+    participantSnapshots.map((snapshot: any, index: number) => [
+      String(participants[index]?.id || ''),
+      (snapshot.data() || {}).matchSnapshot as MatchTeamSnapshot,
+    ]),
+  );
 
   try {
     assertValidCupRoundPairings(firstRound as Pairing[], 1);
@@ -652,14 +656,17 @@ export async function preparePyramidCupForSeason(targetSeasonNumber: number) {
     }
     const homeSnapshot = fixture.homeTeamSnapshot;
     const awaySnapshot = fixture.awayTeamSnapshot;
-    const homeParticipant = participantSnapshots[participants.findIndex((team: any) => team.id === pairing.home.id)]?.data()?.matchSnapshot;
-    const awayParticipant = participantSnapshots[participants.findIndex((team: any) => team.id === pairing.away.id)]?.data()?.matchSnapshot;
     if (fixture.id !== pairing.matchId ||
-        homeSnapshot?.id !== pairing.home.id || awaySnapshot?.id !== pairing.away.id ||
-        !Array.isArray(homeSnapshot?.players) || homeSnapshot.players.length !== 5 ||
-        !Array.isArray(awaySnapshot?.players) || awaySnapshot.players.length !== 5 ||
-        JSON.stringify(homeSnapshot) !== JSON.stringify(homeParticipant) ||
-        JSON.stringify(awaySnapshot) !== JSON.stringify(awayParticipant)) {
+        !isCupParticipantMatchSnapshotCompatible(
+          homeSnapshot,
+          participantSnapshotById.get(pairing.home.id),
+          pairing.home.id,
+        ) ||
+        !isCupParticipantMatchSnapshotCompatible(
+          awaySnapshot,
+          participantSnapshotById.get(pairing.away.id),
+          pairing.away.id,
+        )) {
       return { success: false, reason: 'CUP_PREPARED_FIXTURE_SNAPSHOT_INVALID', matchId: fixture.id || null, cupId: ref.id };
     }
   }

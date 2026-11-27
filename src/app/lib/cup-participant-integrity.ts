@@ -90,7 +90,6 @@ export function isPyramidCupRoundProgressionValid(rounds: any, currentRound: num
     }
     if (actualIds.size !== participantCounts[round - 1]) return false;
     if (round === 1) {
-      // The eight D1 entrants must be absent from the 112-team opening round.
       if ([...restIds].some(id => actualIds.has(id))) return false;
       continue;
     }
@@ -110,15 +109,40 @@ export function isPyramidCupRoundProgressionValid(rounds: any, currentRound: num
   return true;
 }
 
-
-/** A frozen Cup entrant must retain the exact five-player match snapshot. */
+/** A frozen Cup entrant must retain five distinct, addressable player identities. */
 export function isValidCupParticipantMatchSnapshot(value: unknown, teamId: string): boolean {
   const expectedId = String(teamId || '').trim();
   if (!expectedId || !value || typeof value !== 'object' || Array.isArray(value)) return false;
   const snapshot = value as Record<string, unknown>;
-  return snapshot.id === expectedId &&
-    Array.isArray(snapshot.players) &&
-    snapshot.players.length === 5;
+  if (snapshot.id !== expectedId || !Array.isArray(snapshot.players) || snapshot.players.length !== 5) {
+    return false;
+  }
+
+  const playerIds = new Set<string>();
+  for (const rawPlayer of snapshot.players) {
+    if (!rawPlayer || typeof rawPlayer !== 'object' || Array.isArray(rawPlayer)) return false;
+    const playerId = String((rawPlayer as Record<string, unknown>).id ?? '').trim();
+    if (!playerId || playerIds.has(playerId)) return false;
+    playerIds.add(playerId);
+  }
+  return playerIds.size === 5;
+}
+
+/** Stable JSON comparison ignores object-key order but preserves array order and values. */
+function stableCupSnapshotJson(value: unknown): string | null {
+  try {
+    const serialized = JSON.stringify(value, (_key, current) => {
+      if (current && typeof current === 'object' && !Array.isArray(current)) {
+        const ordered: Record<string, unknown> = {};
+        for (const key of Object.keys(current).sort()) ordered[key] = current[key];
+        return ordered;
+      }
+      return current;
+    });
+    return typeof serialized === 'string' ? serialized : null;
+  } catch {
+    return null;
+  }
 }
 
 /** Existing fixtures may be reused only with the same frozen roster snapshot. */
@@ -127,7 +151,9 @@ export function isCupParticipantMatchSnapshotCompatible(
   expected: unknown,
   teamId: string,
 ): boolean {
-  return isValidCupParticipantMatchSnapshot(existing, teamId) &&
-    isValidCupParticipantMatchSnapshot(expected, teamId) &&
-    JSON.stringify(existing) === JSON.stringify(expected);
+  if (!isValidCupParticipantMatchSnapshot(existing, teamId) ||
+      !isValidCupParticipantMatchSnapshot(expected, teamId)) return false;
+  const existingJson = stableCupSnapshotJson(existing);
+  const expectedJson = stableCupSnapshotJson(expected);
+  return existingJson !== null && existingJson === expectedJson;
 }

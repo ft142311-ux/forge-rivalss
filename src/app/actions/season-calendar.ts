@@ -12,7 +12,12 @@ import { buildCarryForwardGroups, buildPromotionRelegationGroups, compareRecover
 import { getRecoveryRolloverPlanSignature } from './season-rollover-plan-signature';
 import { resolvePendingSkippedHistoryMarker, resolvePostActivationRetry, resolveSeasonCatchUpPolicy, type SeasonHistoryState } from './season-history-policy';
 import { evaluateCanonicalDocuments } from './season-canonical';
-import { isCanonicalCupParticipantField, isCanonicalPyramidCupOpeningField } from '@/app/lib/cup-participant-integrity';
+import {
+  isCanonicalCupParticipantField,
+  isCanonicalPyramidCupOpeningField,
+  isValidCupParticipantMatchSnapshot,
+  isCupParticipantMatchSnapshotCompatible,
+} from '@/app/lib/cup-participant-integrity';
 import { resolvePreparedSlotRetry, shouldRepairExistingMatchCoordinates } from './season-calendar-retry-policy';
 import { publishRecoveryRolloverDecision } from './season-recovery-publication';
 import { inspectGroupReconciliation } from './season-rollover-standings';
@@ -1555,6 +1560,22 @@ async function verifyInitialPyramidCup(db: any, seasonStartValue: any) {
   const expectedKickoff = new Date(seasonStart.getTime() + 86400000);
   expectedKickoff.setUTCHours(4, 0, 0, 0);
 
+  const participantSnapshots = await Promise.all(participants.map((team: any) =>
+    db.collection('cup_participant_snapshots_v1').doc(id).collection('teams').doc(String(team.id)).get()
+  ));
+  const participantSnapshotById = new Map<string, any>();
+  if (participantSnapshots.some((snapshot: any, index: number) => {
+    if (!snapshot.exists) return true;
+    const data = snapshot.data() || {};
+    const teamId = String(participants[index]?.id || '');
+    if (data.cupId !== id || Number(data.season) !== 1 || data.teamId !== teamId ||
+        !isValidCupParticipantMatchSnapshot(data.matchSnapshot, teamId)) return true;
+    participantSnapshotById.set(teamId, data.matchSnapshot);
+    return false;
+  })) {
+    return { ready: false, reason: 'INITIAL_CUP_PARTICIPANT_SNAPSHOTS_INCOMPLETE' };
+  }
+
   const invalidPairing = firstRound.some((pairing: any, index: number) => {
     const expectedId = `cup_S1_R1_M${String(index + 1).padStart(2, '0')}`;
     const stronger = eligible[eligible.length - 2 - index * 2];
@@ -1580,27 +1601,20 @@ async function verifyInitialPyramidCup(db: any, seasonStartValue: any) {
         Number(fixture.cupRound) !== 1 || fixture.bestOf !== 1 ||
         fixture.homeId !== pairing.home.id || fixture.awayId !== pairing.away.id ||
         scheduledAtMs !== expectedKickoff.getTime() ||
-        fixture.homeTeamSnapshot?.id !== pairing.home.id ||
-        fixture.awayTeamSnapshot?.id !== pairing.away.id ||
-        !Array.isArray(fixture.homeTeamSnapshot?.players) || fixture.homeTeamSnapshot.players.length !== 5 ||
-        !Array.isArray(fixture.awayTeamSnapshot?.players) || fixture.awayTeamSnapshot.players.length !== 5) {
+        !isCupParticipantMatchSnapshotCompatible(
+          fixture.homeTeamSnapshot,
+          participantSnapshotById.get(pairing.home.id),
+          pairing.home.id,
+        ) ||
+        !isCupParticipantMatchSnapshotCompatible(
+          fixture.awayTeamSnapshot,
+          participantSnapshotById.get(pairing.away.id),
+          pairing.away.id,
+        )) {
       return { ready: false, reason: 'INITIAL_CUP_FIXTURE_IDENTITY_INVALID', matchId: fixture.id || null };
     }
   }
 
-  const participantSnapshots = await Promise.all(participants.map((team: any) =>
-    db.collection('cup_participant_snapshots_v1').doc(id).collection('teams').doc(String(team.id)).get()
-  ));
-  if (participantSnapshots.some((snapshot: any, index: number) => {
-    if (!snapshot.exists) return true;
-    const data = snapshot.data() || {};
-    return data.cupId !== id || Number(data.season) !== 1 ||
-      data.teamId !== String(participants[index].id) ||
-      data.matchSnapshot?.id !== String(participants[index].id) ||
-      !Array.isArray(data.matchSnapshot?.players) || data.matchSnapshot.players.length !== 5;
-  })) {
-    return { ready: false, reason: 'INITIAL_CUP_PARTICIPANT_SNAPSHOTS_INCOMPLETE' };
-  }
 
   return { ready: true, participants: 120, totalMatches: 119, preliminaryMatches: 56, openingRoundRestCount: 8, byes: 0 };
 }

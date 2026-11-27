@@ -195,3 +195,35 @@ test('Pyramid Cup advancement and recovery reject missing or altered frozen rost
   assert.match(recovery, /isValidCupParticipantMatchSnapshot\(snapshot, pairing\.away\.id\)/);
   assert.ok(recovery.indexOf('isValidCupParticipantMatchSnapshot') < recovery.indexOf('tx.create(entry.dedicatedRef'));
 });
+
+
+test('Cup generation, prepared-season publication and initial Season 1 activation share frozen-roster validation', () => {
+  const integrity = readFileSync(new URL('../src/app/lib/cup-participant-integrity.ts', import.meta.url), 'utf8');
+  const calendar = readFileSync(new URL('../src/app/actions/season-calendar.ts', import.meta.url), 'utf8');
+  const diagnostics = readFileSync(new URL('../src/app/api/admin/staging-cup-diagnostics/route.ts', import.meta.url), 'utf8');
+
+  const loadStart = source.indexOf('async function loadAllLeagueTeams');
+  const loadEnd = source.indexOf('function publicTeam', loadStart);
+  assert.ok(loadStart >= 0 && loadEnd > loadStart);
+  assert.match(source.slice(loadStart, loadEnd), /isValidCupParticipantMatchSnapshot\(persistedMatchSnapshot, team\.id\)/);
+
+  const prepareStart = source.indexOf('export async function preparePyramidCupForSeason');
+  const prepareEnd = source.indexOf('async function loadCup', prepareStart);
+  assert.ok(prepareStart >= 0 && prepareEnd > prepareStart);
+  const preparation = source.slice(prepareStart, prepareEnd);
+  assert.match(preparation, /isValidCupParticipantMatchSnapshot\(frozen/);
+  assert.match(preparation, /isCupParticipantMatchSnapshotCompatible\(/);
+  assert.match(preparation, /participantSnapshotById/);
+
+  const initialStart = calendar.indexOf('async function verifyInitialPyramidCup');
+  const initialEnd = calendar.indexOf('export async function ensureSeasonCalendar', initialStart);
+  assert.ok(initialStart >= 0 && initialEnd > initialStart);
+  const initial = calendar.slice(initialStart, initialEnd);
+  assert.match(initial, /isValidCupParticipantMatchSnapshot\(data\.matchSnapshot, teamId\)/);
+  assert.match(initial, /isCupParticipantMatchSnapshotCompatible\(/);
+  assert.match(initial, /participantSnapshotById/);
+
+  assert.match(integrity, /playerIds\.has\(playerId\)/);
+  assert.match(diagnostics, /isValidCupParticipantMatchSnapshot\(data\.matchSnapshot, id\)/);
+  assert.match(diagnostics, /isCupParticipantMatchSnapshotCompatible\(/);
+});

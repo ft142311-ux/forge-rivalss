@@ -6,7 +6,13 @@ import { diagnoseSeasonRolloverPreflight } from '@/app/actions/season-rollover';
 import { validateRolloverPlan } from '@/app/actions/season-rollover-plan';
 import { isRolloverPlanPublicationReady } from '@/app/actions/season-awards-policy';
 import { validateSeasonArchiveRolloverPlan, validateSeasonArchiveSnapshot } from '@/app/actions/season-archive';
-import { isCanonicalCupParticipantField, isCanonicalPyramidCupOpeningField, isPyramidCupRoundProgressionValid } from '@/app/lib/cup-participant-integrity';
+import {
+  isCanonicalCupParticipantField,
+  isCanonicalPyramidCupOpeningField,
+  isPyramidCupRoundProgressionValid,
+  isValidCupParticipantMatchSnapshot,
+  isCupParticipantMatchSnapshotCompatible,
+} from '@/app/lib/cup-participant-integrity';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -131,14 +137,13 @@ async function readActiveSeasonCupIntegrity(db: any, season: number) {
   for (const doc of snapshotsSnap.docs || []) {
     const id = String(doc.id);
     const data = doc.data() || {};
-    const playerSnapshots = data.matchSnapshot?.players;
     snapshotIds.add(id);
     participantSnapshotById.set(id, data.matchSnapshot);
     if (!participantIds.has(id) ||
-        String(data.teamId || id) !== id ||
+        data.cupId !== cupId ||
+        data.teamId !== id ||
         Number(data.season) !== season ||
-        !Array.isArray(playerSnapshots) ||
-        playerSnapshots.length !== 5) {
+        !isValidCupParticipantMatchSnapshot(data.matchSnapshot, id)) {
       snapshotsValid = false;
     }
   }
@@ -219,15 +224,9 @@ async function readActiveSeasonCupIntegrity(db: any, season: number) {
             Number(fixture.bestOf) !== expectedBestOf ||
             String(fixture.homeId || '') !== homeId ||
             String(fixture.awayId || '') !== awayId ||
-            String(fixture.homeTeamSnapshot?.id || '') !== homeId ||
-            String(fixture.awayTeamSnapshot?.id || '') !== awayId ||
-            JSON.stringify(fixture.homeTeamSnapshot) !== JSON.stringify(participantSnapshotById.get(homeId)) ||
-            JSON.stringify(fixture.awayTeamSnapshot) !== JSON.stringify(participantSnapshotById.get(awayId)) ||
+            !isCupParticipantMatchSnapshotCompatible(fixture.homeTeamSnapshot, participantSnapshotById.get(homeId), homeId) ||
+            !isCupParticipantMatchSnapshotCompatible(fixture.awayTeamSnapshot, participantSnapshotById.get(awayId), awayId) ||
             isFinished !== fixtureFinished ||
-            !Array.isArray(fixture.homeTeamSnapshot?.players) ||
-            fixture.homeTeamSnapshot.players.length !== 5 ||
-            !Array.isArray(fixture.awayTeamSnapshot?.players) ||
-            fixture.awayTeamSnapshot.players.length !== 5 ||
             (isFinished && (!fixtureFinished ||
               ![homeId, awayId].includes(String(pairing.winnerId || '')) ||
               String(fixture.winnerId || '') !== String(pairing.winnerId || '')))) {
