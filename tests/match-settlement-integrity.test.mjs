@@ -34,7 +34,7 @@ test('match result, player progression and home revenue share one Firestore tran
   assert.ok(resolver.includes('balanceAfter: after'));
   assert.ok(resolver.includes('tx.set(homeEffectRef!'));
   assert.ok(resolver.includes('tx.set(awayEffectRef!'));
-  assert.ok(resolver.includes('tx.set(economyTxRef!'));
+  assert.ok(resolver.includes('tx.create(economyTxRef!'));
   assert.ok(resolver.includes('tx.update(matchDoc.ref, {'));
 });
 

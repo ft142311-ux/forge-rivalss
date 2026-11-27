@@ -21,12 +21,9 @@ test('replayed match revenue receipts are accepted only for the same user, match
   const start = source.indexOf('export async function recordMatchEconomy');
   const action = source.slice(start);
   assert.match(action, /if \(txSnap\.exists\) \{/);
-  assert.match(action, /receipt\.userId === uid/);
-  assert.match(action, /receipt\.referenceId === matchId/);
-  assert.match(action, /receipt\.currency === 'credits'/);
-  assert.match(action, /receipt\.type === 'MATCH_REVENUE'/);
-  assert.match(action, /Number\(receipt\.amount\) === amount/);
+  assert.ok(action.includes("isValidMatchEconomyReceipt(txSnap.data(), { userId: uid, matchId, amount })"));
   assert.match(action, /throw new Error\('IDEMPOTENCY_KEY_REUSED'\)/);
+  assert.match(action, /t\.create\(txRef,/);
 });
 
 test('match revenue rejects malformed, negative, fractional and overflowing club balances', () => {
