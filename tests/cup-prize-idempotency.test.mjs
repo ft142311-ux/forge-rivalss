@@ -24,7 +24,7 @@ test('Pyramid Cup reward balance and ledger are created in the same transaction'
   const end = source.indexOf('async function finishTechnically', start);
   const payout = source.slice(start, end);
   assert.match(payout, /return db\.runTransaction\(async \(tx: any\) =>/);
-  assert.match(payout, /tx\.update\(playerRef, \{[\s\S]*credits: before \+ amount/);
+  assert.match(payout, /tx\.update\(playerRef, \{[\s\S]*credits: balance\.balanceAfter/);
   assert.match(payout, /tx\.create\(ledgerRef, \{/);
 });
 
