@@ -11,7 +11,7 @@ import { resolveMarketBidExpiryMs } from './market-bid-guards';
  * reconciled. If the leading bidder is no longer eligible, the lot expires
  * without a sale and the seller's player is unlocked.
  */
-async function settleCandidate(candidate: any, db: any) {
+async function settleCandidate(candidate: any, db: any, nowMs = Date.now()) {
     const transferRef = db.collection('transfer_history').doc();
     try {
       const result = await db.runTransaction(async (tx: any) => {
@@ -27,17 +27,8 @@ async function settleCandidate(candidate: any, db: any) {
         if (!lotSnap.exists) return 'SKIPPED';
         const lot: any = lotSnap.data() || {};
         if (lot.status === 'settled' || lot.status === 'expired') return 'SKIPPED';
-        const rawExpiry = lot.expiresAt;
-        const expiryMs = rawExpiry && typeof rawExpiry.toMillis === 'function'
-          ? rawExpiry.toMillis()
-          : rawExpiry instanceof Date
-            ? rawExpiry.getTime()
-            : typeof rawExpiry === 'number'
-              ? rawExpiry
-              : typeof rawExpiry === 'string'
-                ? Date.parse(rawExpiry)
-                : NaN;
-        if (!Number.isFinite(expiryMs) || expiryMs > Date.now()) return 'SKIPPED';
+        const expiryMs = resolveMarketBidExpiryMs(lot.expiresAt);
+        if (expiryMs === null || expiryMs > nowMs) return 'SKIPPED';
 
         const sellerId = String(lot.sellerId || '');
         const bidderId = String(lot.highestBidderId || lot.highestBidderUid || '');
@@ -314,17 +305,8 @@ export async function runTransferMarketExpirySweepWithDb(
       for (const doc of page.docs) {
         const lot = doc.data() || {};
         if (lot.status === 'settled' || lot.status === 'expired') continue;
-        const raw = lot.expiresAt;
-        const expiresAt = raw && typeof raw.toMillis === 'function'
-          ? raw.toMillis()
-          : raw instanceof Date
-            ? raw.getTime()
-            : typeof raw === 'number'
-              ? raw
-              : typeof raw === 'string'
-                ? Date.parse(raw)
-                : NaN;
-        if (Number.isFinite(expiresAt) && expiresAt <= now()) pageDue.push(doc);
+        const expiresAt = resolveMarketBidExpiryMs(lot.expiresAt);
+        if (expiresAt !== null && expiresAt <= now()) pageDue.push(doc);
       }
 
       dueCount += pageDue.length;
@@ -336,7 +318,7 @@ export async function runTransferMarketExpirySweepWithDb(
           break;
         }
         const outcomes = await Promise.all(
-          pageDue.slice(offset, offset + concurrency).map((candidate) => settleCandidate(candidate, db)),
+          pageDue.slice(offset, offset + concurrency).map((candidate) => settleCandidate(candidate, db, now())),
         );
         for (const outcome of outcomes) {
           if (outcome.error) {

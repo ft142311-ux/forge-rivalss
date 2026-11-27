@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+
+const expirySweepSource = readFileSync(new URL('../src/app/lib/auction-expiry-sweep.ts', import.meta.url), 'utf8');
 import {
   resolveMarketBidExpiryMs,
   resolveMarketBidPrice,
@@ -16,7 +18,7 @@ test('standard market expiry accepts supported finite timestamp representations'
 });
 
 test('standard market expiry rejects missing, malformed, non-finite and throwing timestamps', () => {
-  for (const value of [undefined, null, '', 'not-a-date', 0, -1, NaN, Infinity, {}, { toMillis: () => { throw new Error('bad timestamp'); } }]) {
+  for (const value of [undefined, null, '', 'not-a-date', 0, -1, NaN, Infinity, {}, { toMillis: () => { throw new Error('bad timestamp'); } }, { toDate: () => { throw new Error('bad date'); } }]) {
     assert.equal(resolveMarketBidExpiryMs(value), null);
   }
 });
@@ -31,6 +33,23 @@ test('special and standard auction bids share strict expiry timestamp normalizat
   assert.match(specialAction, /resolveMarketBidExpiryMs\(lot\.expiresAt\)/);
   assert.match(standardAction, /resolveMarketBidExpiryMs\(lot\.expiresAt\)/);
   assert.match(specialAction, /MARKET_EXPIRY_INVALID/);
+});
+
+test('market expiry sweep shares bid timestamp normalization and a consistent clock', () => {
+  const settleStart = expirySweepSource.indexOf('async function settleCandidate');
+  const sweepStart = expirySweepSource.indexOf('export async function runTransferMarketExpirySweepWithDb');
+  assert.ok(settleStart >= 0 && sweepStart > settleStart);
+  const settleBlock = expirySweepSource.slice(settleStart, sweepStart);
+  const scanStart = expirySweepSource.indexOf('for (const doc of page.docs)');
+  const scanEnd = expirySweepSource.indexOf('dueCount += pageDue.length', scanStart);
+  assert.ok(scanStart >= 0 && scanEnd > scanStart);
+  const scanBlock = expirySweepSource.slice(scanStart, scanEnd);
+
+  assert.match(settleBlock, /resolveMarketBidExpiryMs\(lot\.expiresAt\)/);
+  assert.match(settleBlock, /expiryMs > nowMs/);
+  assert.match(scanBlock, /resolveMarketBidExpiryMs\(lot\.expiresAt\)/);
+  assert.match(scanBlock, /expiresAt <= now\(\)/);
+  assert.match(expirySweepSource, /settleCandidate\(candidate, db, now\(\)\)/);
 });
 
 test('standard market price accepts only non-negative safe integer values', () => {
