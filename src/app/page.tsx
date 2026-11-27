@@ -393,7 +393,7 @@ export default function Home() {
       <nav className="fixed bottom-0 left-0 right-0 z-40 border-t border-white/10 bg-[#050a12]/95 pb-[env(safe-area-inset-bottom)] backdrop-blur-xl">
         <div className="mx-auto grid h-[68px] max-w-3xl grid-cols-5">
           {navItems.map(item => {
-            const active = pathname === item.href;
+            const active = item.href === '/';
             return <a key={item.href} href={item.href} className={`relative flex flex-col items-center justify-center gap-1 text-[10px] font-bold transition ${active ? 'text-cyan-300' : 'text-slate-400 hover:text-white'}`}>
               {active && <span className="absolute top-0 h-[2px] w-10 rounded-full bg-cyan-300 shadow-[0_0_12px_#22d3ee]" />}
               <item.icon className="h-5 w-5" />
