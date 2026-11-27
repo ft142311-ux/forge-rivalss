@@ -236,6 +236,22 @@ test('Firestore Emulator completes the 840-match Season 1 rollover, settles awar
     ['league-cup-season-1', 'pyramid-cup-season-1'],
   );
 
+  // Re-run the actual rollover preparation after its archive and plan are
+  // complete. The ledger must classify this as already settled, not pay again.
+  const rolloverRetry = await prepareSeasonRollover(db, 1, 2);
+  assert.equal(rolloverRetry.ready, true, JSON.stringify(rolloverRetry));
+  assert.equal(rolloverRetry.completed, true);
+  const [retriedProfile, retriedLedger] = await Promise.all([
+    humanProfileRef.get(),
+    awardLedgerRef.get(),
+  ]);
+  assert.equal(retriedProfile.get('credits'), 5_000_000);
+  assert.equal(retriedLedger.get('amount'), 4_000_000);
+  assert.deepEqual(
+    retriedProfile.get('trophies').map(trophy => trophy.id).sort(),
+    ['league-cup-season-1', 'pyramid-cup-season-1'],
+  );
+
   // Simulate the already-prepared Season 2 publication boundary. The test
   // exercises the real atomic activation transaction; calendar generation is
   // independently covered by the prepared-season Emulator scenarios.
