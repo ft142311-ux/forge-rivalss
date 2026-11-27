@@ -22,12 +22,18 @@ export function countUnreadMatchReportRecords(
   league: UnreadMatchReportLeagueContext,
   locallyViewedIds: readonly string[] = [],
 ): number {
-  if (!uid || !Array.isArray(records)) return 0;
+  const managerId = String(uid || '').trim();
+  if (!managerId || !Array.isArray(records)) return 0;
+
+  const leagueId = String(league.leagueId || '').trim();
+  const groupId = String(league.groupId || '').trim();
+  const leagueLevel = Number(league.level);
+  const leagueRank = Number(league.rank);
   const locallyViewed = new Set(locallyViewedIds);
   const unreadIds = new Set<string>();
   for (const record of records) {
     const match = record?.match || {};
-    const id = String(record?.id || match.id || '');
+    const id = String(record?.id || match.id || '').trim();
     if (!id) continue;
     const finished = isMatchReportFinished(match);
     if (!finished || match.seen === true || match.reportStatus === 'viewed' || locallyViewed.has(id)) continue;
@@ -36,12 +42,12 @@ export function countUnreadMatchReportRecords(
     const participant = [
       match.homeId, match.awayId, match.homeUid, match.awayUid,
       match.hostId, match.challengerId,
-    ].some(value => String(value || '') === uid);
+    ].some(value => String(value ?? '').trim() === managerId);
     const rankBasedLeagueParticipant = record.collectionName === MATCH_COLLECTIONS.league &&
-      String(match.leagueId || '') === league.leagueId &&
-      Number(match.level) === league.level &&
-      String(match.groupId || '') === league.groupId &&
-      [Number(match.homeRank), Number(match.awayRank)].includes(league.rank);
+      String(match.leagueId || '').trim() === leagueId &&
+      Number(match.level) === leagueLevel &&
+      String(match.groupId || '').trim() === groupId &&
+      [Number(match.homeRank), Number(match.awayRank)].includes(leagueRank);
     if (!participant && !rankBasedLeagueParticipant) continue;
     // Match Center routes reports by document ID, so count the same global ID once
     // even when a legacy copy is present in another mode-specific collection.
