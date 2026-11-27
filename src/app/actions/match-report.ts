@@ -230,11 +230,12 @@ export async function getMyLeagueMatchReportsAction(idToken: string) {
     return { success: false, error: 'INVALID_MANAGER_LEAGUE_PROFILE', matches: [] };
   }
   // Keep the queue aligned with the unread badge: legacy rank-addressed
-  // fixtures are loaded from the manager's current group across seasons, while
-  // canonical UID-addressed fixtures follow the manager even after promotion.
+  // fixtures are limited to the current season/group, while canonical
+  // UID-addressed fixtures follow the manager across season boundaries.
   const participantFields = ['homeId', 'awayId', 'homeUid', 'awayUid'];
   const [groupSnapshot, ...participantSnapshots] = await Promise.all([
     db.collection(MATCH_COLLECTIONS.league)
+      .where('season', '==', season)
       .where('leagueId', '==', leagueId)
       .where('level', '==', level)
       .where('groupId', '==', groupId)
@@ -310,10 +311,10 @@ export async function getMyUnreadMatchReportsCountAction(idToken: string, rawLoc
     { collectionName: MATCH_COLLECTIONS.trial, field: 'awayId' },
   ];
   const [activeLeagueMatches, ...participantSnapshots] = await Promise.all([
-    // Include legacy rank-addressed reports from the current group across
-    // season boundaries; UID-addressed matches from other groups are loaded
-    // by the participant queries below.
+    // Rank-based legacy ownership is valid only for the active season.
+    // UID-addressed reports from prior seasons are loaded by participant queries.
     db.collection(MATCH_COLLECTIONS.league)
+      .where('season', '==', season)
       .where('leagueId', '==', league.leagueId)
       .where('level', '==', league.level)
       .where('groupId', '==', league.groupId)

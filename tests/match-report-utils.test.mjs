@@ -258,14 +258,15 @@ test('league report queue and unread badge retain unviewed reports across season
   const badge = action.slice(badgeStart);
 
   assert.match(queue, /const participantFields = \['homeId', 'awayId', 'homeUid', 'awayUid'\]/);
+  assert.match(queue, /where\('season', '==', season\)/);
   assert.match(queue, /where\('leagueId', '==', leagueId\)/);
+  assert.match(queue, /participantFields\.map\(field =>\s*db\.collection\(MATCH_COLLECTIONS\.league\)\.where\(field, '==', uid\)\.get\(\)/);
   assert.match(queue, /isMatchReportParticipant\(raw, uid\)/);
   assert.match(queue, /isMatchWithinClubLifetime\(raw, profile\.createdAt\)/);
-  assert.doesNotMatch(queue, /where\('season', '==', season\)/);
 
+  assert.match(badge, /where\('season', '==', season\)/);
   assert.match(badge, /where\('leagueId', '==', league\.leagueId\)/);
   assert.match(badge, /countUnreadMatchReportRecords\(/);
-  assert.doesNotMatch(badge.slice(0, badge.indexOf('const records =')), /where\('season', '==', season\)/);
 });
 
 test('league report queue does not discard completed legacy results solely because resolvedAt is absent', () => {
@@ -275,5 +276,6 @@ test('league report queue does not discard completed legacy results solely becau
   const leagueFilter = page.slice(start, end);
   assert.match(page, /const currentClubPersonal = personal\.filter\(\(m: any\) => isMatchWithinClubLifetime\(m, profile\.createdAt\)\)/);
   assert.match(leagueFilter, /isMatchReportFinished\(m\)/);
-  assert.doesNotMatch(leagueFilter, /resolvedAt|regTime/);
+  assert.match(leagueFilter, /\.filter\(\(m: any\) => m\.seen !== true && m\.reportStatus !== 'viewed' && !isLocallyViewed\(m\)\)/);
+  assert.doesNotMatch(leagueFilter, /const resolved|regTime/);
 });
