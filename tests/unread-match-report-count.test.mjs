@@ -55,8 +55,9 @@ test('finished status variants are accepted without requiring isFinished boolean
   const records = [
     record(MATCH_COLLECTIONS.tournament, 'resolved', { homeId: uid, isFinished: false, status: 'resolved' }),
     record(MATCH_COLLECTIONS.cup, 'completed', { awayId: uid, isFinished: false, status: 'completed' }),
+    record(MATCH_COLLECTIONS.league, 'resolved', { homeId: uid, isFinished: false, status: 'resolved' }),
   ];
-  assert.equal(countUnreadMatchReportRecords(records, uid, createdAt, league), 2);
+  assert.equal(countUnreadMatchReportRecords(records, uid, createdAt, league), 3);
 });
 
 

@@ -166,6 +166,14 @@ test('requires explicit completion and rejects contradictory terminal status', (
   assert.equal(hasCompleteCanonicalFixtureSet(contradictory), false);
 });
 
+test('legacy resolved status is terminal for reports but cannot bypass canonical rollover completion', () => {
+  const legacyResolved = completeFixtures();
+  legacyResolved[0].isFinished = false;
+  legacyResolved[0].status = 'resolved';
+  assert.equal(hasCompleteCanonicalFixtureSet(legacyResolved), false);
+  assert.equal(selectFinishedFixtures([legacyResolved[0]]).length, 0);
+});
+
 test('rollover may settle unfinished results only when fixture structure is canonical', () => {
   const unfinished = completeFixtures();
   unfinished[0].isFinished = false;

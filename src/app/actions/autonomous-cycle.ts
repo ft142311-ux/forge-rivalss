@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { clampNumber } from '@/app/lib/numeric-utils';
 import { isPlayerSkillKey } from '@/game/player-skills';
 import { getMatchWinnerId } from '@/app/lib/match-winner';
+import { isMatchReportFinished } from '@/app/lib/match-report-utils';
 import { aggregatePlayerCombatStats } from '@/app/lib/player-combat-stats';
 import { resolveSeasonLifecycleWindow } from './season-boundary';
 import { isSeasonRolloverLockStale, SEASON_ROLLOVER_LOCK_ID } from './season-rollover-lock';
@@ -590,7 +591,7 @@ export async function resolveDailyMatches() {
     // and other official match types have their own resolver and must never be
     // settled here, otherwise their results could alter league standings.
     if (String(m.type || 'league').toLowerCase() !== 'league') return false;
-    if (m.isFinished === true || ['finished', 'completed'].includes(String(m.status || '').toLowerCase())) return false;
+    if (isMatchReportFinished(m)) return false;
 
     const rawStart = m.startTime;
     let startMs = NaN;
@@ -660,7 +661,7 @@ export async function resolveDailyMatches() {
       const current = fresh.data() || {};
       const freshConfig = freshConfigSnap.data() || {};
       const freshRolloverLock = freshRolloverLockSnap.exists ? freshRolloverLockSnap.data() || {} : null;
-      if (current.isFinished === true || ['finished', 'completed'].includes(String(current.status || '').toLowerCase())) return false;
+      if (isMatchReportFinished(current)) return false;
       if (String(current.type || 'league').toLowerCase() !== 'league' ||
           Number(current.season) !== currentSeason || Number(current.version) !== 140) return false;
       if (freshConfig.stagingSeasonOneResetInProgress === true || freshConfig.stagingFreshSeasonOneReset === true ||
@@ -730,7 +731,7 @@ export async function resolveDailyMatches() {
         const m = latestSnap.data() || {};
         const settlementConfig = latestConfigSnap.data() || {};
         const settlementRolloverLock = latestRolloverLockSnap.exists ? latestRolloverLockSnap.data() || {} : null;
-        if (m.isFinished === true || ['finished', 'completed'].includes(String(m.status || '').toLowerCase())) return false;
+        if (isMatchReportFinished(m)) return false;
         if (m.processingToken !== processingToken || m.isProcessing !== true) {
           throw new Error('MATCH_PROCESSING_LOCK_LOST');
         }
@@ -954,7 +955,7 @@ export async function resolveDailyMatches() {
           const latestSnap = await tx.get(matchDoc.ref);
           if (!latestSnap.exists) return;
           const latest = latestSnap.data() || {};
-          if (latest.isFinished === true || ['finished', 'completed'].includes(String(latest.status || '').toLowerCase()) || latest.processingToken !== processingToken) return;
+          if (isMatchReportFinished(latest) || latest.processingToken !== processingToken) return;
           tx.update(matchDoc.ref, {
             isProcessing: false,
             processingStartedAt: FieldValue.delete(),

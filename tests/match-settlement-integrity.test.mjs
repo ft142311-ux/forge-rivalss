@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
+import { isMatchReportFinished } from '../src/app/lib/match-report-utils.ts';
+
 const source = readFileSync(new URL('../src/app/actions/autonomous-cycle.ts', import.meta.url), 'utf8');
 const start = source.indexOf('export async function resolveDailyMatches()');
 const end = source.indexOf('export async function ', start + 1);
@@ -54,9 +56,12 @@ test('league match claims and settlement are fenced against rollover and active-
   assert.ok(resolver.includes('settlementLifecycle.leagueMatchesPaused'));
 });
 test('completed matches are terminal and cannot be claimed, recovered, or settled again', () => {
-  assert.ok(source.includes("['finished', 'completed'].includes(String(m.status || '').toLowerCase())"));
-  assert.ok(source.includes("['finished', 'completed'].includes(String(current.status || '').toLowerCase())"));
-  assert.ok(source.includes("['finished', 'completed'].includes(String(latest.status || '').toLowerCase())"));
-  assert.ok(resolver.includes("['finished', 'completed'].includes(String(m.status || '').toLowerCase())"));
-  assert.ok(resolver.includes("['finished', 'completed'].includes(String(current.status || '').toLowerCase())"));
+  assert.ok(resolver.includes('isMatchReportFinished(m)'));
+  assert.ok(resolver.includes('isMatchReportFinished(current)'));
+  assert.ok(resolver.includes('isMatchReportFinished(latest)'));
+  assert.equal((resolver.match(/isMatchReportFinished\(/g) || []).length, 4);
+  assert.doesNotMatch(resolver, /\['finished', 'completed'\]\.includes/);
+  assert.equal(isMatchReportFinished({ isFinished: false, status: 'resolved' }), true);
+  assert.equal(isMatchReportFinished({ isFinished: false, status: 'completed' }), true);
+  assert.equal(isMatchReportFinished({ isFinished: false, status: 'scheduled' }), false);
 });
