@@ -155,7 +155,7 @@ export default function Home() {
       opponentName: (isHome ? myNext.awayName : myNext.homeName) || nameMap.names[oppRank] || getBotName(leagueLevel, groupId, oppRank),
       opponentLogo: nameMap.logos[oppRank] || null
     };
-  }, [officialLeagueMatches, allSeasonMatches, rank, nameMap, leagueLevel, groupId]);
+  }, [officialLeagueMatches, allSeasonMatches, rank, nameMap, leagueLevel, groupId, now]);
 
   const toMillis = (value: any): number => {
     if (value == null) return Number.NaN;
@@ -293,7 +293,7 @@ export default function Home() {
   const matchStartMs = currentNextMatch?.startTime ? toMillis(currentNextMatch.startTime) : Number.NaN;
   const matchDate = Number.isFinite(matchStartMs) ? new Date(matchStartMs) : null;
   const matchDateLabel = matchDate && Number.isFinite(matchDate.getTime())
-    ? `${matchDate.toLocaleDateString(language === 'ru' ? 'ru-RU' : 'en-US', { day: 'numeric', month: 'short' })} · ${matchDate.toLocaleTimeString(language === 'ru' ? 'ru-RU' : 'en-US', { hour: '2-digit', minute: '2-digit' })}`
+    ? `${matchDate.toLocaleDateString(language === 'ru' ? 'ru-RU' : 'en-US', { day: 'numeric', month: 'short', timeZone: 'Europe/Moscow' })} · ${matchDate.toLocaleTimeString(language === 'ru' ? 'ru-RU' : 'en-US', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Moscow' })}`
     : (language === 'ru' ? 'Ожидается расписание' : 'Schedule pending');
   const opponentLogo = resolvedNextMatch?.opponentLogo;
   const mainOpponent = resolvedNextMatch?.opponentName || (language === 'ru' ? 'СОПЕРНИК НЕ ОПРЕДЕЛЁН' : 'OPPONENT TBD');
