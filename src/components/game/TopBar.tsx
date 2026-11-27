@@ -41,7 +41,7 @@ export function TopBar() {
   if (pathname === '/') {
     return (
       <header className="fixed left-0 right-0 top-0 z-50 border-b border-white/10 bg-[#030811]/95 shadow-[0_8px_28px_rgba(0,0,0,.35)] backdrop-blur-xl">
-        <div className="mx-auto flex h-16 w-full max-w-3xl items-center gap-2 px-3 sm:h-[76px] sm:gap-3 sm:px-5">
+        <div className="mx-auto flex h-16 w-full max-w-3xl items-center gap-1.5 px-2.5 sm:h-[76px] sm:gap-3 sm:px-5">
           <Link href="/" className="shrink-0 leading-[.78]">
             <span className="block text-[17px] font-black italic tracking-[-.08em] text-white sm:text-[22px]">FORGE</span>
             <span className="block pl-2 text-[17px] font-black italic tracking-[-.07em] text-cyan-300 sm:text-[22px]">RIVALS</span>
@@ -58,19 +58,19 @@ export function TopBar() {
             </div>
           </Link>
           <div className="flex shrink-0 flex-col gap-1">
-            <Link href="/shop" className="flex h-7 min-w-[76px] items-center justify-between gap-1 rounded-lg border border-amber-300/20 bg-amber-300/5 px-2 text-[11px] font-bold text-amber-200 sm:min-w-[92px]">
+            <Link href="/shop" className="flex h-7 min-w-[68px] items-center justify-between gap-0.5 rounded-lg border border-amber-300/20 bg-amber-300/5 px-1.5 text-[10px] font-bold text-amber-200 sm:min-w-[92px]">
               <span className="flex items-center gap-1"><Coins className="h-4 w-4" />{formatCurrency(credits)}</span><Plus className="h-3 w-3 text-cyan-300" />
             </Link>
-            <Link href="/shop" className="flex h-7 min-w-[76px] items-center justify-between gap-1 rounded-lg border border-violet-300/20 bg-violet-300/5 px-2 text-[11px] font-bold text-violet-200 sm:min-w-[92px]">
+            <Link href="/shop" className="flex h-7 min-w-[68px] items-center justify-between gap-0.5 rounded-lg border border-violet-300/20 bg-violet-300/5 px-1.5 text-[10px] font-bold text-violet-200 sm:min-w-[92px]">
               <span className="flex items-center gap-1"><Gem className="h-4 w-4" />{formatCurrency(crystals || 0)}</span><Plus className="h-3 w-3 text-cyan-300" />
             </Link>
           </div>
-          <div className="flex shrink-0 items-center gap-1">
-            <Link href="/reports" aria-label={language === 'ru' ? 'Отчёты' : 'Reports'} className={cn("relative flex h-9 w-9 items-center justify-center rounded-xl text-white transition hover:bg-white/10", pathname === '/reports' && "text-cyan-300")}>
+          <div className="flex shrink-0 items-center gap-0.5">
+            <Link href="/reports" aria-label={language === 'ru' ? 'Отчёты' : 'Reports'} className={cn("relative flex h-8 w-8 items-center justify-center rounded-xl text-white transition hover:bg-white/10", pathname === '/reports' && "text-cyan-300")}>
               <Mail className="h-6 w-6" />
               {unreadReportsCount > 0 && <span className="absolute -right-0.5 -top-0.5 flex h-[18px] min-w-[18px] items-center justify-center rounded-full border-2 border-[#030811] bg-rose-500 px-1 text-[9px] font-black leading-none text-white">{unreadReportsCount > 99 ? '99+' : unreadReportsCount}</span>}
             </Link>
-            <Link href="/system" aria-label={language === 'ru' ? 'Настройки' : 'Settings'} className={cn("flex h-9 w-9 items-center justify-center rounded-xl text-slate-300 transition hover:bg-white/10 hover:text-white", pathname?.startsWith('/system') && "text-cyan-300")}>
+            <Link href="/system" aria-label={language === 'ru' ? 'Настройки' : 'Settings'} className={cn("flex h-8 w-8 items-center justify-center rounded-xl text-slate-300 transition hover:bg-white/10 hover:text-white", pathname?.startsWith('/system') && "text-cyan-300")}>
               <Settings className="h-6 w-6" />
             </Link>
           </div>
