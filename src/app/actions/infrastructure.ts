@@ -3,9 +3,15 @@
 import { FieldValue } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { requireServerActor } from '@/lib/server-auth';
-import { getArenaExpansionQuote } from '@/app/lib/arena-expansion';
-import { ARENA_BASE_CAPACITY } from '@/app/lib/arena-expansion';
-import { ALLOWED_CONSTRUCTION_IDS, resolveConstructionFinalization, type ConstructionSection } from '@/app/lib/infrastructure-construction';
+import { ARENA_BASE_CAPACITY, getArenaExpansionQuote } from '@/app/lib/arena-expansion';
+import {
+  ALLOWED_CONSTRUCTION_IDS,
+  getConstructionFinishMillis,
+  getConstructionStartBlocker,
+  getNextConstructionLevel,
+  resolveConstructionFinalization,
+  type ConstructionSection,
+} from '@/app/lib/infrastructure-construction';
 import { assertStagingSeasonOneResetNotInProgress } from '@/app/lib/staging-season-one-write-fence';
 
 const CONFIG: Record<ConstructionSection, { baseCost: number; baseHours: number }> = {
@@ -33,21 +39,16 @@ export async function startConstructionAction(idToken: string, section: Construc
       const snap = await t.get(playerRef);
       if (!snap.exists) throw new Error('PLAYER_NOT_FOUND');
       const p = snap.data() || {};
-      const current = Number((p[section] || {})[id] || 0);
       const sectionState = { ...(p[section] || {}) };
       const finishes = { ...(sectionState.constructionFinishes || {}) };
       const starts = { ...(sectionState.constructionStarts || {}) };
 
-      // One active project per infrastructure section/tab.
+      // A due project must be finalized before another project can replace its target.
       const now = Date.now();
-      for (const finish of Object.values(finishes)) {
-        const finishMs = new Date(String(finish)).getTime();
-        if (Number.isFinite(finishMs) && finishMs > now) {
-          throw new Error('CONSTRUCTION_ALREADY_IN_PROGRESS');
-        }
-      }
+      const startBlocker = getConstructionStartBlocker(finishes, now);
+      if (startBlocker) throw new Error(startBlocker);
 
-      const nextLevel = current + 1;
+      const nextLevel = getNextConstructionLevel(sectionState[id]);
       const cost = CONFIG[section].baseCost * nextLevel;
       const credits = Number(p.credits || 0);
       if (credits < cost) throw new Error('INSUFFICIENT_FUNDS');
@@ -111,12 +112,8 @@ export async function startCapacityExpansionAction(idToken: string, seats: numbe
       const starts = { ...(arena.constructionStarts || {}) };
       const now = Date.now();
 
-      for (const finish of Object.values(finishes)) {
-        const finishMs = new Date(String(finish)).getTime();
-        if (!Number.isFinite(finishMs)) throw new Error('INVALID_CONSTRUCTION_STATE');
-        if (finishMs <= now) throw new Error('CONSTRUCTION_COMPLETION_PENDING');
-        throw new Error('CONSTRUCTION_ALREADY_IN_PROGRESS');
-      }
+      const startBlocker = getConstructionStartBlocker(finishes, now);
+      if (startBlocker) throw new Error(startBlocker);
 
       const credits = Number(p.credits ?? 0);
       if (!Number.isSafeInteger(credits) || credits < 0) throw new Error('INVALID_BALANCE');
@@ -194,15 +191,24 @@ export async function accelerateConstructionAction(idToken: string, section: str
       const p = snap.data() || {};
       const sectionState = { ...(p[section] || {}) };
       const finish = sectionState.constructionFinishes?.[id];
-      const targetLevel = Number(sectionState.constructionTargets?.[id] || Number(sectionState[id] || 0) + 1);
-      if (!Number.isFinite(targetLevel) || targetLevel < 1) throw new Error('INVALID_CONSTRUCTION_STATE');
       if (!finish) throw new Error('NO_ACTIVE_CONSTRUCTION');
+      const now = Date.now();
+      const resolution = resolveConstructionFinalization({
+        section: section as ConstructionSection,
+        id,
+        finish,
+        currentValue: sectionState[id],
+        targetValue: sectionState.constructionTargets?.[id],
+        nowMs: now,
+      });
+      if (resolution.due) throw new Error('CONSTRUCTION_COMPLETION_PENDING');
+      const targetLevel = resolution.target;
       if (sectionState.isAccelerated?.[id]) throw new Error('CONSTRUCTION_ALREADY_ACCELERATED');
 
       const crystals = Number(p.crystals || 0);
       if (crystals < serverPrice) throw new Error('INSUFFICIENT_CRYSTALS');
-      const remaining = Math.max(0, new Date(String(finish)).getTime() - Date.now());
-      const newFinish = new Date(Date.now() + Math.ceil(remaining / multiplier)).toISOString();
+      const remaining = getConstructionFinishMillis(finish) - now;
+      const newFinish = new Date(now + Math.ceil(remaining / multiplier)).toISOString();
 
       sectionState.constructionFinishes = { ...(sectionState.constructionFinishes || {}), [id]: newFinish };
       sectionState.isAccelerated = { ...(sectionState.isAccelerated || {}), [id]: true };

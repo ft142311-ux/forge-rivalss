@@ -1,6 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveConstructionFinalization } from '../src/app/lib/infrastructure-construction.ts';
+import {
+  getConstructionStartBlocker,
+  getNextConstructionLevel,
+  resolveConstructionFinalization,
+} from '../src/app/lib/infrastructure-construction.ts';
 
 const nowMs = 1_800_000_000_000;
 
@@ -65,7 +69,7 @@ test('legacy arena capacity can finish a valid 500-seat expansion', () => {
 });
 
 test('capacity finalization rejects invalid seat increments and missing targets', () => {
-  for (const targetValue of [3550, 3000, 55000, null]) {
+  for (const targetValue of [3550, 3000, 55500, null]) {
     assert.throws(() => resolveConstructionFinalization({
       section: 'arena',
       id: 'capacity',
@@ -106,4 +110,48 @@ test('arena UI uses the canonical baseline for missing capacity values', async (
   assert.match(page, /arena\?\.capacity \?\? ARENA_BASE_CAPACITY/);
   assert.match(page, /currentArenaCapacity\.toLocaleString\(\)/);
   assert.doesNotMatch(page, /arena\?\.capacity \|\| 3000/);
+});
+
+test('exact maximum arena expansion remains valid at 50,000 additional seats', () => {
+  const result = resolveConstructionFinalization({
+    section: 'arena',
+    id: 'capacity',
+    finish: new Date(nowMs - 1).toISOString(),
+    currentValue: 5000,
+    targetValue: 55000,
+    nowMs,
+  });
+  assert.deepEqual(result, { due: true, target: 55000 });
+});
+
+test('new construction is blocked until an expired project has been finalized', () => {
+  assert.equal(getConstructionStartBlocker({}, nowMs), null);
+  assert.equal(
+    getConstructionStartBlocker({ cafeLevel: new Date(nowMs + 1000).toISOString() }, nowMs),
+    'CONSTRUCTION_ALREADY_IN_PROGRESS',
+  );
+  assert.equal(
+    getConstructionStartBlocker({ cafeLevel: new Date(nowMs - 1000).toISOString() }, nowMs),
+    'CONSTRUCTION_COMPLETION_PENDING',
+  );
+  assert.throws(
+    () => getConstructionStartBlocker({ cafeLevel: 'invalid' }, nowMs),
+    /INVALID_CONSTRUCTION_STATE/,
+  );
+});
+
+test('construction start validates current level before calculating a charge', () => {
+  assert.equal(getNextConstructionLevel(undefined), 1);
+  assert.equal(getNextConstructionLevel(2), 3);
+  for (const current of [-1, 1.5, Number.NaN, '', Number.MAX_SAFE_INTEGER]) {
+    assert.throws(() => getNextConstructionLevel(current), /INVALID_CONSTRUCTION_STATE/);
+  }
+});
+
+test('expired or malformed construction cannot be accelerated for crystals', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const source = await readFile(new URL('../src/app/actions/infrastructure.ts', import.meta.url), 'utf8');
+  assert.match(source, /if \(resolution\.due\) throw new Error\('CONSTRUCTION_COMPLETION_PENDING'\)/);
+  assert.match(source, /getConstructionFinishMillis\(finish\) - now/);
+  assert.match(source, /getConstructionStartBlocker\(finishes, now\)/);
 });
