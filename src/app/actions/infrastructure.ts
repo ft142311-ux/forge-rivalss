@@ -3,10 +3,10 @@
 import { FieldValue } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { requireServerActor } from '@/lib/server-auth';
-import { ARENA_BASE_CAPACITY, getArenaExpansionQuote } from '@/app/lib/arena-expansion';
+import { getArenaExpansionQuote } from '@/app/lib/arena-expansion';
+import { ARENA_BASE_CAPACITY } from '@/app/lib/arena-expansion';
+import { ALLOWED_CONSTRUCTION_IDS, resolveConstructionFinalization, type ConstructionSection } from '@/app/lib/infrastructure-construction';
 import { assertStagingSeasonOneResetNotInProgress } from '@/app/lib/staging-season-one-write-fence';
-
-export type ConstructionSection = 'arena' | 'hq' | 'bootcamp' | 'academy' | 'medical';
 
 const CONFIG: Record<ConstructionSection, { baseCost: number; baseHours: number }> = {
   arena: { baseCost: 15000, baseHours: 4 },
@@ -16,14 +16,6 @@ const CONFIG: Record<ConstructionSection, { baseCost: number; baseHours: number 
   medical: { baseCost: 30000, baseHours: 4 },
 };
 
-const ALLOWED_IDS: Record<ConstructionSection, string[]> = {
-  arena: ['pressCenterLevel', 'cafeLevel', 'shopLevel', 'screensLevel', 'parkingLevel', 'lightingLevel'],
-  hq: ['hrLevel', 'financeLevel', 'scoutsLevel', 'pressOfficeLevel', 'adminLevel'],
-  bootcamp: ['bootcampLevel', 'tacticsHallLevel', 'poolLevel', 'researchLevel'],
-  academy: ['youthBootcampLevel', 'streamingLevel', 'scoutsLevel', 'discoLevel'],
-  medical: ['physiotherapyLevel', 'massageLevel', 'psychiatristLevel', 'labLevel', 'psychologistLevel'],
-};
-
 function errorMessage(error: any) {
   return error instanceof Error ? error.message : String(error || 'CONSTRUCTION_FAILED');
 }
@@ -31,7 +23,7 @@ function errorMessage(error: any) {
 export async function startConstructionAction(idToken: string, section: ConstructionSection, id: string) {
   try {
     const { uid } = await requireServerActor(idToken);
-    if (!CONFIG[section] || !ALLOWED_IDS[section]?.includes(id)) throw new Error('INVALID_CONSTRUCTION');
+    if (!CONFIG[section] || !ALLOWED_CONSTRUCTION_IDS[section]?.includes(id)) throw new Error('INVALID_CONSTRUCTION');
 
     const db = getAdminDb();
     const playerRef = db.collection('players_v14').doc(uid);
@@ -184,7 +176,7 @@ export async function accelerateConstructionAction(idToken: string, section: str
   try {
     const { uid } = await requireServerActor(idToken);
     const isArenaCapacity = section === 'arena' && id === 'capacity';
-    if (!(section in CONFIG) || (!isArenaCapacity && !ALLOWED_IDS[section as ConstructionSection]?.includes(id))) {
+    if (!(section in CONFIG) || (!isArenaCapacity && !ALLOWED_CONSTRUCTION_IDS[section as ConstructionSection]?.includes(id))) {
       throw new Error('INVALID_ACCELERATION_TARGET');
     }
     const allowedMultiplierPrices: Record<number, number> = { 2: 100, 4: 250, 8: 600 };
@@ -254,9 +246,16 @@ export async function finalizeConstructionsAction(idToken: string) {
         let changed = false;
 
         for (const [id, finish] of Object.entries(finishes)) {
-          if (new Date(String(finish)).getTime() > now) continue;
-          const target = Number(targets[id] || Number(state[id] || 0) + 1);
-          state[id] = target;
+          const resolution = resolveConstructionFinalization({
+            section,
+            id,
+            finish,
+            currentValue: state[id],
+            targetValue: targets[id],
+            nowMs: now,
+          });
+          if (!resolution.due) continue;
+          state[id] = resolution.target;
           delete finishes[id]; delete starts[id]; delete targets[id]; delete accelerated[id]; delete details[id];
           changed = true;
         }
