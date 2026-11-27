@@ -144,12 +144,17 @@ test('server report reads, acknowledgements and unread counts enforce the curren
   assert.match(action, /return \{ success: false, error: 'MATCH_ACCESS_DENIED' \}/);
 });
 
-test('unread report queue and home badge exclude local history from a prior club lifetime', () => {
+test('unread report queue and header badge exclude local history from a prior club lifetime', () => {
   const reports = readFileSync(new URL('../src/app/reports/page.tsx', import.meta.url), 'utf8');
   const home = readFileSync(new URL('../src/app/page.tsx', import.meta.url), 'utf8');
+  const topBar = readFileSync(new URL('../src/components/game/TopBar.tsx', import.meta.url), 'utf8');
+  const unreadCount = readFileSync(new URL('../src/app/lib/unread-match-report-count.ts', import.meta.url), 'utf8');
   assert.match(reports, /isMatchWithinClubLifetime\(m, profile\.createdAt\)/);
   assert.match(reports, /if \(!user \|\| !rank \|\| !profile\) return \[\]/);
-  assert.match(home, /isMatchWithinClubLifetime\(m, profile\.createdAt\)/);
+  assert.match(topBar, /getMyUnreadMatchReportsCountAction/);
+  assert.match(unreadCount, /isMatchWithinClubLifetime\(match, profileCreatedAt\)/);
+  assert.doesNotMatch(home, /isMatchWithinClubLifetime|profile\.createdAt/);
+  assert.match(home, /!isMatchReportFinished\(m\)/);
 });
 
 test('match player does not fall back to a report from a prior club lifetime', () => {
