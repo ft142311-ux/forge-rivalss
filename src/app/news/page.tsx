@@ -31,25 +31,22 @@ export default function NewsPage() {
         </div>
       </header>
 
-      <div className="space-y-4">
-        <Card className="glass-card border-primary/20 bg-primary/5">
-          <CardContent className="p-6 text-center space-y-4">
-            <div className="w-16 h-16 rounded-full bg-secondary/50 border border-white/5 flex items-center justify-center mx-auto">
-              <Radio className="w-8 h-8 text-primary animate-pulse" />
-            </div>
-            <div className="space-y-2">
-              <h3 className="text-sm font-bold uppercase text-white">Version 1.1.0 Deployed</h3>
-              <p className="text-[10px] text-muted-foreground leading-relaxed italic">
-                "Global synchronization protocols updated. Current cycle stability confirmed. Ready for new season deployment."
-              </p>
-            </div>
-            <p className="text-[8px] font-black text-primary/40 uppercase tracking-widest">Received: February 24, 2025</p>
-          </CardContent>
-        </Card>
-
-        <div className="py-20 text-center opacity-20">
-          <Newspaper className="w-12 h-12 mx-auto mb-4" />
-          <p className="text-[10px] uppercase font-black tracking-widest">End of Transmission</p>
+      <div className="relative overflow-hidden rounded-2xl border border-cyan-300/20 bg-gradient-to-br from-[#0c1b2b] via-[#0a1422] to-[#10102a] p-6 text-center shadow-[0_16px_48px_rgba(0,0,0,.35)]">
+        <div className="pointer-events-none absolute -right-10 -top-12 h-40 w-40 rounded-full bg-cyan-400/10 blur-3xl" />
+        <div className="relative mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl border border-cyan-300/20 bg-cyan-300/10">
+          <Radio className="h-8 w-8 text-cyan-200" />
+        </div>
+        <h2 className="relative text-sm font-black uppercase tracking-wide text-white">
+          {language === 'ru' ? 'Пока нет новых новостей' : 'No new updates yet'}
+        </h2>
+        <p className="relative mx-auto mt-2 max-w-xs text-xs leading-relaxed text-slate-400">
+          {language === 'ru'
+            ? 'Здесь будут появляться официальные объявления и важные сообщения о развитии Forge-Rivals.'
+            : 'Official announcements and important Forge-Rivals updates will appear here.'}
+        </p>
+        <div className="relative mt-5 inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/20 px-3 py-1.5 text-[9px] font-bold uppercase tracking-[.16em] text-slate-500">
+          <span className="h-1.5 w-1.5 rounded-full bg-cyan-300/70" />
+          {language === 'ru' ? 'КАНАЛ НОВОСТЕЙ' : 'NEWS CHANNEL'}
         </div>
       </div>
     </div>
