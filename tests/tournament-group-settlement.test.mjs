@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { resolveTournamentGroupOutcome } from '../src/app/lib/tournament-stage-utils.ts';
+import { isTournamentStageMatchSetComplete, resolveTournamentGroupOutcome } from '../src/app/lib/tournament-stage-utils.ts';
 
 const source = readFileSync(new URL('../src/app/actions/tournament-system.ts', import.meta.url), 'utf8');
 
@@ -12,12 +12,17 @@ test('tournament stage readiness requires the canonical fixture matrix and compl
   const stageCheck = source.slice(start, end);
   assert.ok(stageCheck.includes('snap.docs.length !== expectedCount'));
   assert.ok(stageCheck.includes('isTournamentStageMatchSetComplete('));
+  assert.ok(stageCheck.includes("collection('groups').get()"));
+  assert.ok(stageCheck.includes('groupTeamsById[groupDoc.id] = teamIds'));
+  assert.ok(stageCheck.includes('groupTeamsById,'));
   assert.ok(stageCheck.includes('maxParticipants'));
 
   const helper = readFileSync(new URL('../src/app/lib/tournament-stage-utils.ts', import.meta.url), 'utf8');
   assert.ok(helper.includes('isTournamentStageMatchComplete(match, stage)'));
   assert.ok(helper.includes("if (stage !== 'groups' && !match.winnerId) return false"));
   assert.ok(helper.includes('expected.delete(key)'));
+  assert.ok(helper.includes('roundEntries.length !== 2'));
+  assert.ok(helper.includes('roundTeamIds.size !== 4'));
 });
 
 test('group match settlement validates standings rows before atomically publishing result and report', () => {
@@ -85,4 +90,77 @@ test('group settlement persists the actual series score and applies points from 
   assert.match(resolver, /if \(groupOutcome === 'draw'\)/);
   assert.match(resolver, /else if \(groupOutcome === 'home_win'\)/);
   assert.doesNotMatch(resolver, /homeScore === awayScore/);
+});
+
+
+function createGroupStageFixtureSet(maxParticipants) {
+  const groupTeamsById = {};
+  const entries = [];
+  const rounds = [
+    [[0, 1], [2, 3]],
+    [[0, 2], [1, 3]],
+    [[0, 3], [1, 2]],
+  ];
+  const groupCount = maxParticipants / 4;
+
+  for (let groupIndex = 0; groupIndex < groupCount; groupIndex += 1) {
+    const groupId = String.fromCharCode(65 + groupIndex);
+    const teamIds = Array.from({ length: 4 }, (_, index) => `team-${groupId}-${index + 1}`);
+    groupTeamsById[groupId] = teamIds;
+
+    rounds.forEach((pairs, roundIndex) => {
+      pairs.forEach(([homeIndex, awayIndex], pairIndex) => {
+        const id = `groups_${groupId}_${roundIndex + 1}_${pairIndex + 1}`;
+        entries.push({
+          id,
+          data: {
+            id,
+            stage: 'groups',
+            groupId,
+            round: roundIndex + 1,
+            index: pairIndex + 1,
+            homeId: teamIds[homeIndex],
+            awayId: teamIds[awayIndex],
+            status: 'finished',
+            winnerId: teamIds[homeIndex],
+          },
+        });
+      });
+    });
+  }
+
+  return { entries, groupTeamsById };
+}
+
+test('group stage fixture matrix covers every roster member exactly once in each round', () => {
+  for (const maxParticipants of [16, 32]) {
+    const { entries, groupTeamsById } = createGroupStageFixtureSet(maxParticipants);
+    assert.equal(isTournamentStageMatchSetComplete(entries, 'groups', maxParticipants, groupTeamsById), true);
+
+    const repeatedTeam = entries.map(entry => ({ id: entry.id, data: { ...entry.data } }));
+    const brokenRoundOne = repeatedTeam.find(entry =>
+      entry.data.groupId === 'A' && entry.data.round === 1 && entry.data.index === 2
+    );
+    brokenRoundOne.data.homeId = groupTeamsById.A[0];
+    assert.equal(isTournamentStageMatchSetComplete(repeatedTeam, 'groups', maxParticipants, groupTeamsById), false);
+
+    const foreignTeam = entries.map(entry => ({ id: entry.id, data: { ...entry.data } }));
+    const brokenRoundTwo = foreignTeam.find(entry =>
+      entry.data.groupId === 'A' && entry.data.round === 2 && entry.data.index === 1
+    );
+    brokenRoundTwo.data.homeId = groupTeamsById.B[0];
+    assert.equal(isTournamentStageMatchSetComplete(foreignTeam, 'groups', maxParticipants, groupTeamsById), false);
+  }
+});
+
+test('group stage fixture matrix rejects overlapping or incomplete group rosters', () => {
+  const { entries, groupTeamsById } = createGroupStageFixtureSet(16);
+  const overlappingRosters = {
+    ...groupTeamsById,
+    B: [...groupTeamsById.B.slice(0, 3), groupTeamsById.A[0]],
+  };
+  assert.equal(isTournamentStageMatchSetComplete(entries, 'groups', 16, overlappingRosters), false);
+
+  const incompleteRosters = { ...groupTeamsById, D: undefined };
+  assert.equal(isTournamentStageMatchSetComplete(entries, 'groups', 16, incompleteRosters), false);
 });
