@@ -25,7 +25,7 @@ export default function Home() {
   const { user, isUserLoading } = useUser();
   const db = useFirestore();
   const { 
-    language, isLoaded, isDataReady, matchHistory, 
+    language, isLoaded, isDataReady, matchHistory, experiencePoints, managerLevel, clubName, 
     allSeasonMatches, lastSeenMatchDay, rank, selectedLeagueId,
     leagueLevel, groupId, clubLogo: myClubLogo, numericId
   } = useGameState();
@@ -296,8 +296,8 @@ export default function Home() {
     : (language === 'ru' ? 'Ожидается расписание' : 'Schedule pending');
   const opponentLogo = resolvedNextMatch?.opponentLogo;
   const mainOpponent = resolvedNextMatch?.opponentName || (language === 'ru' ? 'СОПЕРНИК НЕ ОПРЕДЕЛЁН' : 'OPPONENT TBD');
-  const xp = Math.max(0, Number((useGameState() as any).experiencePoints || 0));
-  const managerLevel = Math.max(1, Number((useGameState() as any).managerLevel || 1));
+  const xp = Math.max(0, Number(experiencePoints || 0));
+  const managerLevelValue = Math.max(1, Number(managerLevel || 1));
   const menuCards = [
     { id: 'team', title: language === 'ru' ? 'КОМАНДА' : 'TEAM', subtitle: language === 'ru' ? 'Управляй своим клубом' : 'Manage your club', href: '/roster', image: PlaceHolderImages.find(img => img.id === 'hero-tank')?.imageUrl, icon: Users, tone: 'text-primary' },
     { id: 'matches', title: language === 'ru' ? 'МАТЧИ' : 'MATCHES', subtitle: language === 'ru' ? 'Просмотр и участие в играх' : 'View and play matches', href: '/matches', image: PlaceHolderImages.find(img => img.id === 'arena-starter')?.imageUrl, icon: CalendarDays, tone: 'text-primary' },
@@ -334,7 +334,7 @@ export default function Home() {
                 <div className="flex h-20 w-20 items-center justify-center rounded-2xl border border-cyan-300/20 bg-black/35 p-2 sm:h-24 sm:w-24">
                   {myClubLogo ? <img src={myClubLogo} alt="" className="h-full w-full object-contain" /> : <Shield className="h-12 w-12 text-cyan-300" />}
                 </div>
-                <span className="max-w-full truncate text-center text-sm font-black uppercase sm:text-base">{(profile as any)?.clubName || (useGameState() as any).clubName || (language === 'ru' ? 'МОЯ КОМАНДА' : 'MY TEAM')}</span>
+                <span className="max-w-full truncate text-center text-sm font-black uppercase sm:text-base">{clubName || (language === 'ru' ? 'МОЯ КОМАНДА' : 'MY TEAM')}</span>
               </div>
               <span className="text-2xl font-black italic text-white drop-shadow-[0_0_14px_rgba(34,211,238,.7)]">VS</span>
               <div className="flex min-w-0 flex-col items-center gap-2">
@@ -373,7 +373,7 @@ export default function Home() {
             <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-violet-400/15 text-violet-200"><Medal className="h-10 w-10" /></div>
             <div>
               <p className="text-base font-black uppercase">{language === 'ru' ? 'ПРОФИЛЬ МЕНЕДЖЕРА' : 'MANAGER PROFILE'}</p>
-              <p className="mt-1 text-xs text-violet-100/80">{language === 'ru' ? `Уровень ${managerLevel} · ${xp.toLocaleString()} XP` : `Level ${managerLevel} · ${xp.toLocaleString()} XP`}</p>
+              <p className="mt-1 text-xs text-violet-100/80">{language === 'ru' ? `Уровень ${managerLevelValue} · ${xp.toLocaleString()} XP` : `Level ${managerLevelValue} · ${xp.toLocaleString()} XP`}</p>
               <div className="mt-3 h-2 w-44 max-w-full overflow-hidden rounded-full bg-black/40"><div className="h-full rounded-full bg-gradient-to-r from-cyan-300 to-violet-400" style={{ width: `${Math.min(100, Math.max(5, (xp % 2000) / 20))}%` }} /></div>
             </div>
           </div>
