@@ -163,3 +163,13 @@ docs/ROADMAP.json still describes an older project phase model (version 1.0.61, 
 - Vercel checks for this SHA were blocked by the account's build-rate limit. No exact-SHA Preview was established; this is an infrastructure/plan limit, not a source CI failure. The older READY Preview for `7c419c8` is not evidence for the current SHA.
 - Therefore source/Emulator validation is **PASS**, while exact-SHA Preview, live read-only Beta preflight, scheduler/secret inventory, browser journeys and mobile journeys remain **NOT CHECKED**. The overall release decision remains **NO-GO** until P0/P1 operational gates are evidenced.
 - No live Beta or Production database was read or mutated; no deployment, reset, restore, seed or season activation was initiated. PR #5 remains Draft and unmerged.
+
+## Full-season Emulator acceptance — 2026-11-27
+
+- Added `tests/season-one-to-two-lifecycle-emulator.integration.test.mjs` and wired it into `test:registration:emulator`.
+- The new isolated `demo-forge-rivals` Emulator scenario constructs all 15 canonical groups and 840 finished Season 1 league fixtures across 14 tours, invokes the real `prepareSeasonRollover`, and verifies the completed 840-match archive, 15-group standings/placement plan, and idempotent human-club award ledger/trophies.
+- It then exercises the actual `commitSeasonActivation` Firestore transaction for the immediate Season 2 successor and verifies duplicate activation is rejected and Season 1 profile, balance, trophies, occupied slot/generation, and completed fixture remain intact.
+- The test deliberately seeds a prepared/published Season 2 boundary before calling the atomic activation transaction. It does not claim to exercise the full live calendar builder/publication orchestration; calendar preparation and publication retain their separate unit/Emulator coverage.
+- Exact-head CI run [#46005551101](https://github.com/ft142311-ux/forge-rivalss/actions/runs/46005551101) for commit `9432757963cac8d4e8f49e295283f403926fa891` completed **success** across main app, Control app, and consolidated Quality Gate. This includes the new lifecycle Emulator scenario.
+- Release status remains **NO-GO**: exact-SHA Vercel Preview, authenticated read-only live Beta preflight, and live Cloud Scheduler/Secret Manager inventory are still not evidenced. Browser/mobile journeys also remain outstanding.
+- No live Beta or Production database was mutated; no deploy, reset, restore, seed, or season activation was initiated. PR #5 remains Draft and unmerged.
