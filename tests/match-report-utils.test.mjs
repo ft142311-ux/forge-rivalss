@@ -248,3 +248,32 @@ test('home dashboard keeps its live clock and renders the computed season transi
   assert.match(home, /toMillis\(a\.startTime\)/);
   assert.doesNotMatch(home, /groupPlayers/);
 });
+
+
+test('league report queue and unread badge retain unviewed reports across season boundaries', () => {
+  const action = readFileSync(new URL('../src/app/actions/match-report.ts', import.meta.url), 'utf8');
+  const queueStart = action.indexOf('export async function getMyLeagueMatchReportsAction');
+  const badgeStart = action.indexOf('export async function getMyUnreadMatchReportsCountAction');
+  const queue = action.slice(queueStart, badgeStart);
+  const badge = action.slice(badgeStart);
+
+  assert.match(queue, /const participantFields = \['homeId', 'awayId', 'homeUid', 'awayUid'\]/);
+  assert.match(queue, /where\('leagueId', '==', leagueId\)/);
+  assert.match(queue, /isMatchReportParticipant\(raw, uid\)/);
+  assert.match(queue, /isMatchWithinClubLifetime\(raw, profile\.createdAt\)/);
+  assert.doesNotMatch(queue, /where\('season', '==', season\)/);
+
+  assert.match(badge, /where\('leagueId', '==', league\.leagueId\)/);
+  assert.match(badge, /countUnreadMatchReportRecords\(/);
+  assert.doesNotMatch(badge.slice(0, badge.indexOf('const records =')), /where\('season', '==', season\)/);
+});
+
+test('league report queue does not discard completed legacy results solely because resolvedAt is absent', () => {
+  const page = readFileSync(new URL('../src/app/reports/page.tsx', import.meta.url), 'utf8');
+  const start = page.indexOf('const league = currentClubPersonal');
+  const end = page.indexOf('const cup = currentClubPersonal', start);
+  const leagueFilter = page.slice(start, end);
+  assert.match(page, /const currentClubPersonal = personal\.filter\(\(m: any\) => isMatchWithinClubLifetime\(m, profile\.createdAt\)\)/);
+  assert.match(leagueFilter, /isMatchReportFinished\(m\)/);
+  assert.doesNotMatch(leagueFilter, /resolvedAt|regTime/);
+});

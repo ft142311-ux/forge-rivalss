@@ -109,7 +109,6 @@ export default function ReportsPage() {
 
   const unreadReports = useMemo(() => {
     if (!user || !rank || !profile) return [];
-    const regTime = profile?.createdAt?.toMillis ? profile.createdAt.toMillis() : (profile?.createdAt ? new Date(profile.createdAt).getTime() : 0);
     let locallyViewed = new Set<string>();
     if (typeof window !== 'undefined') {
       try {
@@ -128,10 +127,10 @@ export default function ReportsPage() {
 
     const league = currentClubPersonal
       .filter((m: any) => m?.type === 'league' && isMatchReportFinished(m))
-      .filter((m: any) => {
-        const resolved = m.resolvedAt?.toMillis ? m.resolvedAt.toMillis() : (m.resolvedAt ? new Date(m.resolvedAt).getTime() : 0);
-        return m.seen !== true && m.reportStatus !== 'viewed' && !isLocallyViewed(m) && (!regTime || resolved > regTime);
-      })
+      // currentClubPersonal already applies the shared club-lifetime cutoff.
+      // Do not require resolvedAt: older canonical results may only have
+      // playedAt or startTime, which the server also accepts as timestamps.
+      .filter((m: any) => m.seen !== true && m.reportStatus !== 'viewed' && !isLocallyViewed(m))
       .map((m: any) => ({ ...m, source: 'league', isUnread: true }));
 
     const cup = currentClubPersonal

@@ -229,22 +229,42 @@ export async function getMyLeagueMatchReportsAction(idToken: string) {
   if (!Number.isInteger(level) || level < 1 || level > 4 || !groupId || !Number.isInteger(rank) || rank < 1 || rank > 8) {
     return { success: false, error: 'INVALID_MANAGER_LEAGUE_PROFILE', matches: [] };
   }
-  const snapshot = await db.collection(MATCH_COLLECTIONS.league)
-    .where('season', '==', season)
-    .where('leagueId', '==', leagueId)
-    .where('level', '==', level)
-    .where('groupId', '==', groupId)
-    .get();
-  const matches = snapshot.docs.flatMap((doc: any) => {
+  // Keep the queue aligned with the unread badge: legacy rank-addressed
+  // fixtures are loaded from the manager's current group across seasons, while
+  // canonical UID-addressed fixtures follow the manager even after promotion.
+  const participantFields = ['homeId', 'awayId', 'homeUid', 'awayUid'];
+  const [groupSnapshot, ...participantSnapshots] = await Promise.all([
+    db.collection(MATCH_COLLECTIONS.league)
+      .where('leagueId', '==', leagueId)
+      .where('level', '==', level)
+      .where('groupId', '==', groupId)
+      .get(),
+    ...participantFields.map(field =>
+      db.collection(MATCH_COLLECTIONS.league).where(field, '==', uid).get()
+    ),
+  ]);
+  const candidateDocs = new Map<string, any>();
+  for (const doc of groupSnapshot.docs || []) candidateDocs.set(doc.id, doc);
+  participantSnapshots.forEach(snapshot => {
+    for (const doc of snapshot.docs || []) candidateDocs.set(doc.id, doc);
+  });
+
+  const matches = [...candidateDocs.values()].flatMap((doc: any) => {
     const raw = doc.data() || {};
-    const inGroup = String(raw.leagueId || '') === leagueId && Number(raw.level) === level && String(raw.groupId || '') === groupId;
-    const participant = isMatchReportParticipant(raw, uid) ||
-      (inGroup && [Number(raw.homeRank), Number(raw.awayRank)].includes(rank));
+    const inGroup = String(raw.leagueId || '') === leagueId &&
+      Number(raw.level) === level && String(raw.groupId || '') === groupId;
+    const participant = isMatchReportParticipant(raw, uid);
+    const rankParticipant = inGroup && [Number(raw.homeRank), Number(raw.awayRank)].includes(rank);
     const finished = isMatchReportFinished(raw);
-    if (!inGroup || !participant || !finished || !isMatchWithinClubLifetime(raw, profile.createdAt) ||
+    if ((!participant && !rankParticipant) || !finished ||
+        !isMatchWithinClubLifetime(raw, profile.createdAt) ||
         raw.seen === true || raw.reportStatus === 'viewed') return [];
     return [serializeMatchReport({ ...raw, id: doc.id, type: 'league' })];
-  }).sort((left: any, right: any) => new Date(right.playedAt || right.resolvedAt || right.startTime || 0).getTime() - new Date(left.playedAt || left.resolvedAt || left.startTime || 0).getTime());
+  }).sort((left: any, right: any) => {
+    const leftTime = new Date(left.playedAt || left.resolvedAt || left.finishedAt || left.startTime || 0).getTime();
+    const rightTime = new Date(right.playedAt || right.resolvedAt || right.finishedAt || right.startTime || 0).getTime();
+    return rightTime - leftTime;
+  });
   return { success: true, season, leagueId, level, groupId, rank, count: matches.length, matches };
 }
 
@@ -290,8 +310,10 @@ export async function getMyUnreadMatchReportsCountAction(idToken: string, rawLoc
     { collectionName: MATCH_COLLECTIONS.trial, field: 'awayId' },
   ];
   const [activeLeagueMatches, ...participantSnapshots] = await Promise.all([
+    // Include legacy rank-addressed reports from the current group across
+    // season boundaries; UID-addressed matches from other groups are loaded
+    // by the participant queries below.
     db.collection(MATCH_COLLECTIONS.league)
-      .where('season', '==', season)
       .where('leagueId', '==', league.leagueId)
       .where('level', '==', league.level)
       .where('groupId', '==', league.groupId)
