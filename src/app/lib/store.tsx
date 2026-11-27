@@ -178,7 +178,7 @@ const DEFAULT_STATE: GameState = {
   recoverAllFatigue: () => false, hireStaffMember: () => {}, trainStaffSkill: () => false, trainHeroSkill: async () => false,
   addPlayerDirectly: () => {}, addYouthPlayerDirectly: () => {}, promoteYouthPlayer: () => {},
   updateProfileName: () => {}, updateProfileCountry: () => {}, recordMatch: () => {},
-  markMatchIdAsSeen: async () => {}, deleteMatchHistoryEntry: () => {}, clearMatchHistory: () => {},
+  markMatchIdAsSeen: async () => false, deleteMatchHistoryEntry: () => {}, clearMatchHistory: () => {},
   upgradeManagerSkill: () => {},
   startArenaConstruction: async () => false, startHQConstruction: async () => false, startBootcampConstruction: async () => false,
   startAcademyConstruction: async () => false, startMedicalConstruction: async () => false, startCapacityExpansion: async () => false,
@@ -432,7 +432,7 @@ export function GameStateProvider({ children }: { children: ReactNode }) {
     try {
       const idToken = await user.getIdToken(true);
       const result = await markMatchViewedAction(idToken, matchId);
-      if (!result?.success || result.persisted !== true) {
+      if (!result?.success || !('persisted' in result) || result.persisted !== true) {
         console.warn('[MATCH REPORT] Server acknowledgement failed:', result?.error || 'ACKNOWLEDGEMENT_NOT_PERSISTED');
         return false;
       }
