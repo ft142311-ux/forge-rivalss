@@ -105,7 +105,7 @@ interface GameState {
   updateProfileName: (name: string) => void;
   updateProfileCountry: (country: string) => void;
   recordMatch: (winner: string, result: any, reward: number, opponentName: string, type: string, playedAt: string, matchId?: string, extraData?: any) => void;
-  markMatchIdAsSeen: (id: string) => Promise<void>;
+  markMatchIdAsSeen: (id: string) => Promise<boolean>;
   deleteMatchHistoryEntry: (id: string) => void;
   clearMatchHistory: () => void;
   upgradeManagerSkill: (skillKey: keyof GameState['managerSkills']) => void;
@@ -425,48 +425,46 @@ export function GameStateProvider({ children }: { children: ReactNode }) {
     updateLineup({ [role]: pId });
   }, [updateLineup]);
 
-  const markMatchIdAsSeen = useCallback(async (id: string): Promise<void> => {
+  const markMatchIdAsSeen = useCallback(async (id: string): Promise<boolean> => {
     const matchId = String(id || '').trim();
-    if (!matchId) return;
+    if (!matchId || !user?.uid) return false;
 
-    const viewedAt = new Date().toISOString();
-
-    // РљСЂРёС‚РёС‡РЅРѕ: С„РёРєСЃРёСЂСѓРµРј РїСЂРѕСЃРјРѕС‚СЂ Р”Рћ React setState/router. Р•СЃР»Рё РґРѕРєСѓРјРµРЅС‚ РјР°С‚С‡Р°
-    // СѓР¶Рµ СѓРґР°Р»С‘РЅ РёР· Firestore, СЃРµСЂРІРµСЂ РЅРµ СЃРјРѕР¶РµС‚ РµРіРѕ РїРѕРјРµС‚РёС‚СЊ вЂ” РЅРѕ СЃС‡РµС‚С‡РёРє РІСЃС‘ СЂР°РІРЅРѕ
-    // РѕР±СЏР·Р°РЅ РёСЃС‡РµР·РЅСѓС‚СЊ. Р­С‚РѕС‚ СЃРїРёСЃРѕРє СЏРІР»СЏРµС‚СЃСЏ Р»РѕРєР°Р»СЊРЅС‹Рј РїРѕРґС‚РІРµСЂР¶РґРµРЅРёРµРј РїСЂРѕСЃРјРѕС‚СЂР°.
-    rememberViewedMatchId(matchId);
-
-    const markSeen = (m: any) => {
-      if (!m || String(m.id || '') !== matchId) return m;
-      return { ...m, seen: true, reportStatus: 'viewed', viewedAt };
-    };
-
-    // РЎРЅР°С‡Р°Р»Р° РјРіРЅРѕРІРµРЅРЅРѕ РѕР±РЅРѕРІР»СЏРµРј РѕР±Р° Р»РѕРєР°Р»СЊРЅС‹С… РёСЃС‚РѕС‡РЅРёРєР°. Р­С‚Рѕ РІР°Р¶РЅРѕ:
-    // РїРѕР»СЊР·РѕРІР°С‚РµР»СЊ РґРѕР»Р¶РµРЅ СѓРІРёРґРµС‚СЊ 3 в†’ 2 в†’ 1 в†’ 0 Р±РµР· РїРµСЂРµР·Р°РіСЂСѓР·РєРё СЃС‚СЂР°РЅРёС†С‹.
-    setState(prev => {
-      const nextState = {
-        ...prev,
-        matchHistory: (prev.matchHistory || []).map(markSeen),
-        allSeasonMatches: (prev.allSeasonMatches || []).map(markSeen),
-      };
-      if (typeof window !== 'undefined') {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(nextState));
-      }
-      return nextState;
-    });
-
-    // РЎРµСЂРІРµСЂРЅР°СЏ Р·Р°РїРёСЃСЊ вЂ” РєР°РЅРѕРЅРёС‡РµСЃРєР°СЏ. Р­С‚Рѕ СѓСЃС‚СЂР°РЅСЏРµС‚ РіРѕРЅРєСѓ, РєРѕРіРґР° Firestore
-    // snapshot РІРѕР·РІСЂР°С‰Р°Р» СЃС‚Р°СЂРѕРµ seen=false Рё РІРѕСЃСЃС‚Р°РЅР°РІР»РёРІР°Р» badge РїРѕСЃР»Рµ РїСЂРѕСЃРјРѕС‚СЂР°.
     try {
-      if (user?.uid) {
-        const idToken = await user.getIdToken(true);
-        const result = await markMatchViewedAction(idToken, matchId);
-        if (!result?.success) {
-          console.warn('[MATCH REPORT] Server acknowledgement failed:', result?.error);
-        }
+      const idToken = await user.getIdToken(true);
+      const result = await markMatchViewedAction(idToken, matchId);
+      if (!result?.success || result.persisted !== true) {
+        console.warn('[MATCH REPORT] Server acknowledgement failed:', result?.error || 'ACKNOWLEDGEMENT_NOT_PERSISTED');
+        return false;
       }
+
+      const viewedAt = new Date().toISOString();
+      const markSeen = (m: any) => {
+        if (!m || String(m.id || '') !== matchId) return m;
+        return { ...m, seen: true, reportStatus: 'viewed', viewedAt };
+      };
+
+      // Only suppress the unread badge after the server has verified that this
+      // manager owns a completed report and persisted the acknowledgement.
+      rememberViewedMatchId(matchId);
+      setState(prev => {
+        const nextState = {
+          ...prev,
+          matchHistory: (prev.matchHistory || []).map(markSeen),
+          allSeasonMatches: (prev.allSeasonMatches || []).map(markSeen),
+        };
+        if (typeof window !== 'undefined') {
+          try {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(nextState));
+          } catch {
+            // Firestore remains authoritative if local storage is unavailable.
+          }
+        }
+        return nextState;
+      });
+      return true;
     } catch (error) {
       console.warn('[MATCH REPORT] Could not persist viewed state:', error);
+      return false;
     }
   }, [user]);
 
