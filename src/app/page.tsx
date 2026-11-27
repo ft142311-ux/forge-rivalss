@@ -374,7 +374,7 @@ export default function Home() {
             <div>
               <p className="text-base font-black uppercase">{language === 'ru' ? 'ПРОФИЛЬ МЕНЕДЖЕРА' : 'MANAGER PROFILE'}</p>
               <p className="mt-1 text-xs text-violet-100/80">{language === 'ru' ? `Уровень ${managerLevelValue} · ${xp.toLocaleString()} XP` : `Level ${managerLevelValue} · ${xp.toLocaleString()} XP`}</p>
-              <div className="mt-3 h-2 w-44 max-w-full overflow-hidden rounded-full bg-black/40"><div className="h-full rounded-full bg-gradient-to-r from-cyan-300 to-violet-400" style={{ width: `${Math.min(100, Math.max(5, (xp % 2000) / 20))}%` }} /></div>
+              
             </div>
           </div>
           <ChevronRight className="relative h-6 w-6 text-violet-100" />
