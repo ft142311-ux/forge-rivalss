@@ -23,6 +23,7 @@ test('tournament stage readiness requires the canonical fixture matrix and compl
   assert.ok(helper.includes('expected.delete(key)'));
   assert.ok(helper.includes('roundEntries.length !== 2'));
   assert.ok(helper.includes('roundTeamIds.size !== 4'));
+  assert.ok(helper.includes('playedPairs.size !== 6'));
 });
 
 test('group match settlement validates standings rows before atomically publishing result and report', () => {
@@ -163,4 +164,20 @@ test('group stage fixture matrix rejects overlapping or incomplete group rosters
 
   const incompleteRosters = { ...groupTeamsById, D: undefined };
   assert.equal(isTournamentStageMatchSetComplete(entries, 'groups', 16, incompleteRosters), false);
+});
+
+test('group stage fixture matrix rejects repeated opponents even when every round uses all four teams', () => {
+  const { entries, groupTeamsById } = createGroupStageFixtureSet(16);
+  const repeatedOpponents = entries.map(entry => ({ id: entry.id, data: { ...entry.data } }));
+  const roundTwo = repeatedOpponents.filter(entry =>
+    entry.data.groupId === 'A' && entry.data.round === 2
+  );
+  roundTwo[0].data.homeId = groupTeamsById.A[0];
+  roundTwo[0].data.awayId = groupTeamsById.A[1];
+  roundTwo[1].data.homeId = groupTeamsById.A[2];
+  roundTwo[1].data.awayId = groupTeamsById.A[3];
+
+  // Each team still plays exactly once in round two, but both fixtures repeat
+  // round one's pairings. A real round robin requires six distinct opponents.
+  assert.equal(isTournamentStageMatchSetComplete(repeatedOpponents, 'groups', 16, groupTeamsById), false);
 });
