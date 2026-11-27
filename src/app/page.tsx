@@ -6,7 +6,7 @@ import {
   CalendarDays, Medal, ArrowRightLeft, 
   Shield, Construction, Briefcase, 
   LineChart, Heart, Newspaper, Settings, Search, Tv, User as UserIcon, UserCheck,
-  Radar, LayoutList, Swords, Timer, Activity
+  Radar, LayoutList, Swords, Timer, Activity, ChevronRight
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
@@ -290,104 +290,116 @@ export default function Home() {
     : currentNextMatch ? getCountdown(currentNextMatch.startTime) : '--:--:--';
   const cardTitle = showOffseason ? (language === 'ru' ? 'МЕЖСЕЗОНЬЕ' : 'OFFSEASON') : (language === 'ru' ? 'СЛЕДУЮЩИЙ СОПЕРНИК' : 'NEXT OPPONENT');
 
-  return (
-    <div className="relative min-h-[calc(100dvh-4rem-3.5rem)] h-[calc(100dvh-4rem-3.5rem)] flex flex-col overflow-y-auto overflow-x-hidden overscroll-contain">
-      <div className="flex-none w-full max-w-md mx-auto px-4 pt-4 pb-4 flex flex-col z-10 overflow-visible">
-        
-        {/* NEXT MATCH TACTICAL CARD */}
-        <Card className="relative overflow-hidden mb-4 border-white/20 bg-[#1a2b45] rounded-2xl shadow-[0_10px_30px_rgba(0,0,0,0.5)] shrink-0 min-h-[110px]">
-          {/* Background Map Image */}
-          {mapCardBg && (
-            <div className="absolute inset-0 z-0 opacity-60">
-               <img 
-                  src={mapCardBg} 
-                  alt="" 
-                  className="w-full h-full object-cover object-center"
-               />
-            </div>
-          )}
-          
-          {/* Dark Gradient Overlay for readability */}
-          <div className="absolute inset-0 bg-gradient-to-r from-[#1a2b45]/90 via-transparent to-transparent z-[1]" />
-          
-          <CardContent className="p-4 flex items-center justify-between relative z-10 h-full min-h-[110px]">
-            <div className="flex items-center gap-4">
-              {/* Opponent Logo */}
-              <div className="w-14 h-14 flex items-center justify-center shrink-0">
-                {!showOffseason && resolvedNextMatch?.opponentLogo ? (
-                  <img 
-                    src={resolvedNextMatch.opponentLogo} 
-                    alt="Opponent Logo" 
-                    className="w-full h-full object-contain drop-shadow-[0_2px_8px_rgba(0,0,0,0.8)]" 
-                  />
-                ) : (
-                  <img 
-                    src="https://i.ibb.co/tpcQnnj1/1000078926-no-bg-preview-carve-photos.png"
-                    alt="Bot Logo"
-                    className="w-full h-full object-contain drop-shadow-[0_2px_8px_rgba(0,0,0,0.8)]"
-                  />
-                )}
-              </div>
-              <div>
-                <div className="flex items-center gap-2 mb-0.5">
-                  <p className="text-[8px] font-black text-primary uppercase tracking-widest drop-shadow-[0_2px_3px_rgba(0,0,0,0.8)]">{cardTitle}</p>
-                </div>
-                <h2 className="text-base font-headline font-bold text-white uppercase tracking-tight truncate max-w-[130px] drop-shadow-[0_2px_4px_rgba(0,0,0,0.9)]">{showOffseason ? (language === 'ru' ? 'НОВЫЙ СЕЗОН' : 'NEW SEASON') : (resolvedNextMatch?.opponentName || (language === 'ru' ? 'ОЖИДАНИЕ СОПЕРНИКА...' : 'WAITING FOR OPPONENT...'))}</h2>
-                <p className="text-[8px] font-bold text-white/80 uppercase drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)]">{showOffseason ? (language === 'ru' ? 'ПОДГОТОВКА К НОВОМУ СЕЗОНУ' : 'NEW SEASON PREPARATION') : `${language === 'ru' ? 'ТУР' : 'TOUR'} ${currentNextMatch?.tour || '--'}`}</p>
-              </div>
-            </div>
-            <div className="text-right flex flex-col items-end">
-              <p className="text-[7px] font-black text-white uppercase tracking-widest mb-1 drop-shadow-[0_2px_3px_rgba(0,0,0,1)] flex items-center gap-1">
-                <Timer className="w-2.5 h-2.5" />
-                {language === 'ru' ? 'ДО МАТЧА' : 'UNTIL MATCH'}
-              </p>
-              <p className="text-xl font-headline font-black text-primary italic text-glow-blue tabular-nums leading-none drop-shadow-[0_2px_5px_rgba(0,0,0,1)]">
-                {cardCountdown}
-              </p>
-            </div>
-          </CardContent>
-        </Card>
+  const matchDate = currentNextMatch?.startTime ? new Date(currentNextMatch.startTime) : null;
+  const matchDateLabel = matchDate && Number.isFinite(matchDate.getTime())
+    ? `${matchDate.toLocaleDateString(language === 'ru' ? 'ru-RU' : 'en-US', { day: 'numeric', month: 'short' })} · ${matchDate.toLocaleTimeString(language === 'ru' ? 'ru-RU' : 'en-US', { hour: '2-digit', minute: '2-digit' })}`
+    : (language === 'ru' ? 'Ожидается расписание' : 'Schedule pending');
+  const opponentLogo = resolvedNextMatch?.opponentLogo;
+  const mainOpponent = resolvedNextMatch?.opponentName || (language === 'ru' ? 'СОПЕРНИК НЕ ОПРЕДЕЛЁН' : 'OPPONENT TBD');
+  const xp = Math.max(0, Number((useGameState() as any).experiencePoints || 0));
+  const managerLevel = Math.max(1, Number((useGameState() as any).managerLevel || 1));
+  const menuCards = [
+    { id: 'team', title: language === 'ru' ? 'КОМАНДА' : 'TEAM', subtitle: language === 'ru' ? 'Управляй своим клубом' : 'Manage your club', href: '/roster', image: PlaceHolderImages.find(img => img.id === 'hero-tank')?.imageUrl, icon: Users, tone: 'text-primary' },
+    { id: 'matches', title: language === 'ru' ? 'МАТЧИ' : 'MATCHES', subtitle: language === 'ru' ? 'Просмотр и участие в играх' : 'View and play matches', href: '/matches', image: PlaceHolderImages.find(img => img.id === 'arena-starter')?.imageUrl, icon: CalendarDays, tone: 'text-primary' },
+    { id: 'transfers', title: language === 'ru' ? 'ТРАНСФЕРЫ' : 'TRANSFERS', subtitle: language === 'ru' ? 'Покупай и продавай игроков' : 'Buy and sell players', href: '/transfers', image: PlaceHolderImages.find(img => img.id === 'hero-carry')?.imageUrl, icon: ArrowRightLeft, tone: 'text-sky-300' },
+    { id: 'cups', title: language === 'ru' ? 'ТУРНИРЫ' : 'TOURNAMENTS', subtitle: language === 'ru' ? 'Соревнуйся за награды' : 'Compete for rewards', href: '/tournaments', image: PlaceHolderImages.find(img => img.id === 'arena-starter')?.imageUrl, icon: Medal, tone: 'text-amber-300' },
+  ];
+  const navItems = [
+    { label: language === 'ru' ? 'Главная' : 'Home', href: '/', icon: Activity },
+    { label: language === 'ru' ? 'Команда' : 'Team', href: '/roster', icon: Users },
+    { label: language === 'ru' ? 'Игроки' : 'Players', href: '/roster/squad', icon: UserIcon },
+    { label: language === 'ru' ? 'Турниры' : 'Cups', href: '/tournaments', icon: Medal },
+    { label: language === 'ru' ? 'Магазин' : 'Shop', href: '/shop', icon: ShoppingCart },
+  ];
 
-        {/* MAIN MENU GRID */}
-        <div className="grid grid-cols-4 gap-2 flex-none mb-2">
-          {menuItems.map((item) => (
-            <a key={item.id} href={item.href} className="block">
-              <Card className="aspect-square glass-card border-white/5 hover:border-primary/40 hover:bg-primary/5 transition-all group flex flex-col items-center justify-center p-1 relative rounded-[1.25rem] overflow-hidden">
-                {item.isSystem ? (
-                  <div className="relative w-12 h-12 transition-transform duration-300 group-hover:scale-110">
-                     <img 
-                        src={systemIconUrl || "https://i.ibb.co/07QQCFT/1787830105436.png"} 
-                        alt="System" 
-                        className="w-full h-full object-contain"
-                     />
-                  </div>
-                  <span className="text-[7px] font-black uppercase text-center text-muted-foreground group-hover:text-white mt-1.5 leading-none tracking-tighter">
-                    {item.label}
-                  </span>
-                ) : (
-                  <>
-                    <div className={cn("transition-transform duration-300 group-hover:scale-110", item.color)}>
-                      <item.icon className="w-7 h-7" />
-                    </div>
-                    <span className="text-[7px] font-black uppercase text-center text-muted-foreground group-hover:text-white mt-1.5 leading-none tracking-tighter">
-                      {item.label}
-                    </span>
-                  </>
-                )}
-                
-                {item.badge && (
-                  <div className="absolute top-1.5 right-1.5">
-                    <Badge className="bg-red-500 text-white text-[7px] h-3.5 min-w-[14px] px-1 font-black animate-pulse border-none shadow-lg">
-                      {item.badge}
-                    </Badge>
-                  </div>
-                )}
-              </Card>
+  return (
+    <div className="relative min-h-[calc(100dvh-4rem-3.5rem)] overflow-y-auto overflow-x-hidden bg-[#050a12] text-white">
+      <div className="pointer-events-none absolute inset-x-0 top-0 h-[560px] opacity-35" style={{ backgroundImage: `linear-gradient(180deg,rgba(3,8,16,.12),#050a12 95%),url('${mapCardBg || ''}')`, backgroundSize: 'cover', backgroundPosition: 'center' }} />
+      <div className="relative z-10 mx-auto flex w-full max-w-3xl flex-col gap-4 px-3 pb-6 pt-4 sm:px-5">
+        <section className="relative min-h-[330px] overflow-hidden rounded-[26px] border border-cyan-300/25 bg-[#071421] shadow-[0_18px_60px_rgba(0,0,0,.55)]">
+          {PlaceHolderImages.find(img => img.id === 'hero-carry')?.imageUrl && <img src={PlaceHolderImages.find(img => img.id === 'hero-carry')?.imageUrl} alt="" className="absolute inset-0 h-full w-full object-cover object-[center_25%] opacity-75" />}
+          <div className="absolute inset-0 bg-gradient-to-r from-[#03101b]/95 via-[#03101b]/70 to-transparent" />
+          <div className="absolute inset-0 bg-gradient-to-t from-[#04101a] via-transparent to-transparent" />
+          <div className="relative flex min-h-[330px] flex-col justify-end p-4 sm:p-6">
+            <div className="mb-auto flex items-center gap-2 pt-1 text-[11px] font-black uppercase tracking-[.18em] text-cyan-200">
+              <span className="h-2 w-2 animate-pulse rounded-full bg-cyan-300 shadow-[0_0_12px_#22d3ee]" />
+              {language === 'ru' ? 'СЛЕДУЮЩИЙ МАТЧ' : 'NEXT MATCH'}
+            </div>
+            <div className="mb-4 flex items-center gap-3 text-xs font-semibold text-slate-200">
+              <span className="inline-flex items-center gap-1.5"><Timer className="h-4 w-4 text-cyan-300" />{matchDateLabel}</span>
+              <span className="rounded-full border border-white/15 bg-black/30 px-2.5 py-1">{language === 'ru' ? 'ЛИГА СЕЗОНА' : 'SEASON LEAGUE'}</span>
+            </div>
+            <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2 sm:max-w-lg">
+              <div className="flex min-w-0 flex-col items-center gap-2">
+                <div className="flex h-20 w-20 items-center justify-center rounded-2xl border border-cyan-300/20 bg-black/35 p-2 sm:h-24 sm:w-24">
+                  {myClubLogo ? <img src={myClubLogo} alt="" className="h-full w-full object-contain" /> : <Shield className="h-12 w-12 text-cyan-300" />}
+                </div>
+                <span className="max-w-full truncate text-center text-sm font-black uppercase sm:text-base">{(profile as any)?.clubName || (useGameState() as any).clubName || (language === 'ru' ? 'МОЯ КОМАНДА' : 'MY TEAM')}</span>
+              </div>
+              <span className="text-2xl font-black italic text-white drop-shadow-[0_0_14px_rgba(34,211,238,.7)]">VS</span>
+              <div className="flex min-w-0 flex-col items-center gap-2">
+                <div className="flex h-20 w-20 items-center justify-center rounded-2xl border border-amber-300/20 bg-black/35 p-2 sm:h-24 sm:w-24">
+                  {opponentLogo ? <img src={opponentLogo} alt="" className="h-full w-full object-contain" /> : <Swords className="h-12 w-12 text-amber-300" />}
+                </div>
+                <span className="max-w-full truncate text-center text-sm font-black uppercase sm:text-base">{mainOpponent}</span>
+              </div>
+            </div>
+            <a href="/matches" className="mt-5 flex h-14 items-center justify-center gap-3 rounded-xl bg-gradient-to-r from-cyan-300 to-teal-400 text-base font-black uppercase tracking-wider text-[#031018] shadow-[0_8px_28px_rgba(20,220,200,.25)] transition hover:brightness-110 active:scale-[.99]">
+              <span className="text-xl">▶</span>{language === 'ru' ? 'ОТКРЫТЬ МАТЧИ' : 'OPEN MATCHES'}
+            </a>
+          </div>
+        </section>
+
+        <section className="grid grid-cols-2 gap-3">
+          {menuCards.map(item => (
+            <a key={item.id} href={item.href} className="group relative min-h-[150px] overflow-hidden rounded-2xl border border-slate-500/40 bg-[#0b1725] shadow-lg transition hover:-translate-y-0.5 hover:border-cyan-300/60">
+              {item.image && <img src={item.image} alt="" className="absolute inset-0 h-full w-full object-cover opacity-40 transition duration-500 group-hover:scale-105 group-hover:opacity-55" />}
+              <div className="absolute inset-0 bg-gradient-to-r from-[#07111e] via-[#07111e]/80 to-transparent" />
+              <div className="relative flex min-h-[150px] flex-col justify-between p-3 sm:p-4">
+                <item.icon className={`h-8 w-8 ${item.tone}`} />
+                <div className="pr-5">
+                  <h2 className="text-sm font-black tracking-wide sm:text-base">{item.title}</h2>
+                  <p className="mt-1 text-[11px] leading-snug text-slate-300 sm:text-xs">{item.subtitle}</p>
+                </div>
+                <ChevronRight className="absolute bottom-4 right-3 h-5 w-5 text-slate-300 transition group-hover:translate-x-1 group-hover:text-cyan-200" />
+              </div>
             </a>
           ))}
-        </div>
+        </section>
 
+        <a href="/profile" className="group relative flex min-h-[132px] items-center justify-between overflow-hidden rounded-2xl border border-violet-400/35 bg-gradient-to-r from-[#21134d] via-[#24105a] to-[#0d1634] p-4 shadow-[0_12px_38px_rgba(56,30,140,.25)]">
+          <div className="absolute -right-4 -top-12 h-48 w-48 rounded-full bg-violet-500/20 blur-3xl" />
+          <div className="relative flex items-center gap-3">
+            <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-violet-400/15 text-violet-200"><Medal className="h-10 w-10" /></div>
+            <div>
+              <p className="text-base font-black uppercase">{language === 'ru' ? 'ПРОФИЛЬ МЕНЕДЖЕРА' : 'MANAGER PROFILE'}</p>
+              <p className="mt-1 text-xs text-violet-100/80">{language === 'ru' ? `Уровень ${managerLevel} · ${xp.toLocaleString()} XP` : `Level ${managerLevel} · ${xp.toLocaleString()} XP`}</p>
+              <div className="mt-3 h-2 w-44 max-w-full overflow-hidden rounded-full bg-black/40"><div className="h-full rounded-full bg-gradient-to-r from-cyan-300 to-violet-400" style={{ width: `${Math.min(100, Math.max(5, (xp % 2000) / 20))}%` }} /></div>
+            </div>
+          </div>
+          <ChevronRight className="relative h-6 w-6 text-violet-100" />
+        </a>
+
+        <a href="/news" className="flex items-center gap-3 rounded-xl border border-slate-500/40 bg-[#0b1420]/90 px-4 py-3 text-sm text-slate-200 transition hover:border-cyan-300/50">
+          <span className="h-2 w-2 shrink-0 rounded-full bg-cyan-300 shadow-[0_0_10px_#22d3ee]" />
+          <Newspaper className="h-5 w-5 shrink-0 text-cyan-200" />
+          <span className="min-w-0 flex-1 truncate">{language === 'ru' ? 'Открой новости и события Forge-Rivals' : 'Read Forge-Rivals news and events'}</span>
+          <ChevronRight className="h-5 w-5 shrink-0 text-slate-400" />
+        </a>
       </div>
+
+      <nav className="fixed bottom-0 left-0 right-0 z-40 border-t border-white/10 bg-[#050a12]/95 pb-[env(safe-area-inset-bottom)] backdrop-blur-xl">
+        <div className="mx-auto grid h-[68px] max-w-3xl grid-cols-5">
+          {navItems.map(item => {
+            const active = pathname === item.href;
+            return <a key={item.href} href={item.href} className={`relative flex flex-col items-center justify-center gap-1 text-[10px] font-bold transition ${active ? 'text-cyan-300' : 'text-slate-400 hover:text-white'}`}>
+              {active && <span className="absolute top-0 h-[2px] w-10 rounded-full bg-cyan-300 shadow-[0_0_12px_#22d3ee]" />}
+              <item.icon className="h-5 w-5" />
+              <span>{item.label}</span>
+            </a>;
+          })}
+        </div>
+      </nav>
     </div>
   );
 }
