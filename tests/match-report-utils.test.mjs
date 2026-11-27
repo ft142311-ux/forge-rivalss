@@ -144,7 +144,7 @@ test('server report reads, acknowledgements and unread counts enforce the curren
   const unreadCount = readFileSync(new URL('../src/app/lib/unread-match-report-count.ts', import.meta.url), 'utf8');
   assert.match(action, /isMatchWithinClubLifetime\(match, profile\.createdAt\)/);
   assert.match(action, /!participant && hasValidClubCreatedAt\(profile\.createdAt\)/);
-  assert.match(action, /const rankParticipant = inGroup && hasValidClubCreatedAt\(profile\.createdAt\)/);
+  assert.match(action, /const rankParticipant = !participant && hasValidClubCreatedAt\(profile\.createdAt\) &&\s*inGroup/);
   assert.match(action, /isMatchWithinClubLifetime\(raw, profile\.createdAt\)/);
   assert.match(unreadCount, /isMatchWithinClubLifetime\(match, profileCreatedAt\)/);
   assert.match(action, /return \{ success: false, error: 'MATCH_ACCESS_DENIED' \}/);
