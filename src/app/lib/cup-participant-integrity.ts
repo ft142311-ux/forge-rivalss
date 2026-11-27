@@ -164,7 +164,7 @@ export function isCanonicalPyramidCupMatchContract(value: unknown, matchId: stri
   const id = String(matchId || '').trim();
   if (!id || !value || typeof value !== 'object' || Array.isArray(value)) return false;
   const match = value as Record<string, unknown>;
-  const identity = /^cup_S([1-9]\\d*)_R([1-7])_M(\\d{2})$/.exec(id);
+  const identity = /^cup_S([1-9]\d*)_R([1-7])_M(\d{2})$/.exec(id);
   if (!identity || match.id !== id) return false;
 
   const season = Number(identity[1]);

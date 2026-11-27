@@ -68,6 +68,11 @@ test('canonical Pyramid Cup fixture contract pins collection identity, source, d
     makeCupFixture({ id: 'cup_S1_R7_M01', cupRound: 7, bestOf: 1 }),
     'cup_S1_R7_M01',
   ), false);
+  assert.equal(isCanonicalPyramidCupMatchContract(
+    makeCupFixture({ id: 'cup_S1_R1_M57' }),
+    'cup_S1_R1_M57',
+  ), false);
+  assert.equal(isCanonicalPyramidCupMatchContract(makeCupFixture({ matchType: undefined }), 'cup_S1_R1_M01'), false);
   assert.equal(isCanonicalPyramidCupMatchContract(makeCupFixture({ source: undefined }), 'cup_S1_R1_M01'), false);
 });
 
