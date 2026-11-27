@@ -1,6 +1,9 @@
 'use client';
 
 import { useGameState } from '@/app/lib/store';
+import { useUser } from '@/firebase';
+import { useEffect, useState } from 'react';
+import { getMyUnreadMatchReportsCountAction } from '@/app/actions/match-report';
 import { Coins, Gem, Mail, Settings, Shield, Plus } from 'lucide-react';
 import { usePathname } from 'next/navigation';
 import { cn, formatCurrency } from '@/lib/utils';
@@ -8,7 +11,33 @@ import Link from 'next/link';
 
 export function TopBar() {
   const pathname = usePathname();
+  const { user } = useUser();
+  const [unreadReportsCount, setUnreadReportsCount] = useState(0);
   const { credits, crystals, language, managerLevel, experiencePoints, displayName, clubName, clubLogo, rank, leagueLevel, groupId } = useGameState();
+  useEffect(() => {
+    if (pathname !== '/' || !user || !rank) {
+      setUnreadReportsCount(0);
+      return;
+    }
+    let cancelled = false;
+    const refresh = async () => {
+      try {
+        let viewedIds: string[] = [];
+        try {
+          const raw = JSON.parse(localStorage.getItem('lote_game_state_v245:viewed-match-ids') || '[]');
+          if (Array.isArray(raw)) viewedIds = raw.filter((value): value is string => typeof value === 'string' && value.length > 0 && value.length <= 180).slice(-2000);
+        } catch { /* Ignore malformed local view history. */ }
+        const result = await getMyUnreadMatchReportsCountAction(await user.getIdToken(), viewedIds);
+        if (!cancelled) setUnreadReportsCount(result?.success ? Math.max(0, Number(result.count || 0)) : 0);
+      } catch (error) {
+        console.error('[HOME REPORT BADGE] unread report count failed', error);
+        if (!cancelled) setUnreadReportsCount(0);
+      }
+    };
+    void refresh();
+    return () => { cancelled = true; };
+  }, [pathname, user, rank]);
+
   if (pathname === '/') {
     return (
       <header className="fixed left-0 right-0 top-0 z-50 border-b border-white/10 bg-[#030811]/95 shadow-[0_8px_28px_rgba(0,0,0,.35)] backdrop-blur-xl">
@@ -39,6 +68,7 @@ export function TopBar() {
           <div className="flex shrink-0 items-center gap-1">
             <Link href="/reports" aria-label={language === 'ru' ? 'Отчёты' : 'Reports'} className={cn("relative flex h-9 w-9 items-center justify-center rounded-xl text-white transition hover:bg-white/10", pathname === '/reports' && "text-cyan-300")}>
               <Mail className="h-6 w-6" />
+              {unreadReportsCount > 0 && <span className="absolute -right-0.5 -top-0.5 flex h-[18px] min-w-[18px] items-center justify-center rounded-full border-2 border-[#030811] bg-rose-500 px-1 text-[9px] font-black leading-none text-white">{unreadReportsCount > 99 ? '99+' : unreadReportsCount}</span>}
             </Link>
             <Link href="/system" aria-label={language === 'ru' ? 'Настройки' : 'Settings'} className={cn("flex h-9 w-9 items-center justify-center rounded-xl text-slate-300 transition hover:bg-white/10 hover:text-white", pathname?.startsWith('/system') && "text-cyan-300")}>
               <Settings className="h-6 w-6" />
