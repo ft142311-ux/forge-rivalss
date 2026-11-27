@@ -706,13 +706,45 @@ async function stageMatchesDone(tournamentRef: any, stage: string, expectedCount
   // Count alone is insufficient: a malformed set can contain the right number
   // of unique but out-of-range fixtures. Require the exact canonical matrix.
   if (snap.docs.length !== expectedCount) return false;
+
+  let groupTeamsById: Record<string, string[]> | undefined;
+  if (stage === 'groups') {
+    const groupsSnap = await tournamentRef.collection('groups').get();
+    const expectedGroupCount = maxParticipants / 4;
+    if (!Number.isInteger(expectedGroupCount) || groupsSnap.docs.length !== expectedGroupCount) return false;
+
+    const expectedGroupIds = new Set(
+      Array.from({ length: expectedGroupCount }, (_, index) => String.fromCharCode(65 + index)),
+    );
+    const allTeamIds = new Set<string>();
+    groupTeamsById = {};
+
+    for (const groupDoc of groupsSnap.docs) {
+      if (!expectedGroupIds.delete(groupDoc.id)) return false;
+      const groupData = groupDoc.data() || {};
+      if (String(groupData.groupId || groupDoc.id) !== groupDoc.id) return false;
+      const rows = Array.isArray(groupData.teams) ? groupData.teams : [];
+      if (rows.length !== 4 || rows.some((row: any) => !row?.id)) return false;
+
+      const teamIds = rows.map((row: any) => String(row.id).trim());
+      if (teamIds.some((id: string) => !id) || new Set(teamIds).size !== 4) return false;
+      for (const id of teamIds) {
+        if (allTeamIds.has(id)) return false;
+        allTeamIds.add(id);
+      }
+      groupTeamsById[groupDoc.id] = teamIds;
+    }
+
+    if (expectedGroupIds.size !== 0 || allTeamIds.size !== maxParticipants) return false;
+  }
+
   return isTournamentStageMatchSetComplete(
     snap.docs.map((doc: any) => ({ id: doc.id, data: doc.data() || {} })),
     stage,
     maxParticipants,
+    groupTeamsById,
   );
 }
-
 function expectedStageMatchCount(maxParticipants: number, stage: string) {
   if (stage === 'groups') return (maxParticipants / 4) * 6;
   if (stage === 'round_of_16') return maxParticipants === 32 ? 8 : 0;
