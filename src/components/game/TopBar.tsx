@@ -55,7 +55,7 @@ export function TopBar() {
       window.removeEventListener('focus', handleFocus);
       document.removeEventListener('visibilitychange', handleVisibility);
     };
-  }, [user, rank]);
+  }, [pathname, user, rank]);
 
   if (pathname === '/') {
     return (
