@@ -181,3 +181,29 @@ test('group stage fixture matrix rejects repeated opponents even when every roun
   // round one's pairings. A real round robin requires six distinct opponents.
   assert.equal(isTournamentStageMatchSetComplete(repeatedOpponents, 'groups', 16, groupTeamsById), false);
 });
+
+test('knockout stage fixture matrix rejects a team appearing in multiple fixtures', () => {
+  const entries = Array.from({ length: 8 }, (_, index) => {
+    const homeId = `qualifier-${index * 2 + 1}`;
+    const awayId = `qualifier-${index * 2 + 2}`;
+    return {
+      id: `round_of_16_${index + 1}`,
+      data: {
+        id: `round_of_16_${index + 1}`,
+        stage: 'round_of_16',
+        round: 1,
+        index: index + 1,
+        homeId,
+        awayId,
+        winnerId: homeId,
+        status: 'finished',
+      },
+    };
+  });
+  assert.equal(isTournamentStageMatchSetComplete(entries, 'round_of_16', 32), true);
+
+  const duplicatedParticipant = entries.map(entry => ({ id: entry.id, data: { ...entry.data } }));
+  duplicatedParticipant[1].data.homeId = duplicatedParticipant[0].data.homeId;
+  duplicatedParticipant[1].data.winnerId = duplicatedParticipant[1].data.homeId;
+  assert.equal(isTournamentStageMatchSetComplete(duplicatedParticipant, 'round_of_16', 32), false);
+});
