@@ -79,6 +79,7 @@ export function isTournamentStageMatchSetComplete(
     // group must play a complete round-robin pairing in each of its 3 rounds.
     for (const groupId of expectedGroupIds) {
       const groupTeamIds = new Set((groupTeamsById[groupId] || []).map(id => String(id || '').trim()));
+      const playedPairs = new Set<string>();
       for (let round = 1; round <= 3; round += 1) {
         const roundEntries = entries.filter(entry =>
           String(entry.data?.groupId || '') === groupId &&
@@ -95,9 +96,15 @@ export function isTournamentStageMatchSetComplete(
               roundTeamIds.has(homeId) || roundTeamIds.has(awayId)) return false;
           roundTeamIds.add(homeId);
           roundTeamIds.add(awayId);
+
+          const pairKey = [homeId, awayId].sort().join(':');
+          if (playedPairs.has(pairKey)) return false;
+          playedPairs.add(pairKey);
         }
         if (roundTeamIds.size !== 4 || [...groupTeamIds].some(id => !roundTeamIds.has(id))) return false;
       }
+      // Three rounds of two fixtures must cover all six unique pairings.
+      if (playedPairs.size !== 6) return false;
     }
   }
 
