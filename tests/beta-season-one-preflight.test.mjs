@@ -18,6 +18,17 @@ test('Beta read-only preflight runs after a Preview deployment and is manually d
   assert.match(workflow, /cat "\$summary_file"/);
 });
 
+test('manual and automatic Beta preflight require an immutable READY Preview for the exact commit SHA', () => {
+  assert.doesNotMatch(workflow, /default:\s*["']https:\/\/forge-rivalss-git-/);
+  assert.match(workflow, /url\.hostname\.startsWith\('forge-rivalss-git-'\)/);
+  assert.match(workflow, /forge-rivalss-\[a-z0-9\]\+-forge-rivals\\\.vercel\\\.app/);
+  assert.match(workflow, /--meta "githubCommitSha=\$GITHUB_SHA"/);
+  assert.match(workflow, /item\.meta\?\.githubCommitSha !== expectedSha/);
+  assert.match(workflow, /item\.meta\?\.githubCommitRef !== 'feature\/beta-fresh-season-one'/);
+  assert.match(workflow, /deployment_sha=/);
+  assert.match(workflow, /DEPLOYMENT_SHA !== process\.env\.EXPECTED_SHA/);
+});
+
 test('Beta diagnostics explicitly identify the Firebase project and remain read-only', () => {
   assert.match(route, /EXPECTED_PROJECT = 'forge-rivals-beta'/);
   assert.match(route, /projectId: EXPECTED_PROJECT/);
