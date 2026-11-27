@@ -3,6 +3,7 @@ import 'server-only';
 import { FieldValue } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { assertMatchDocumentId } from '@/app/lib/match-id';
+import { ARENA_BASE_CAPACITY } from '@/app/lib/arena-expansion';
 
 export type MatchEconomy = {
   attendance: number;
@@ -27,7 +28,7 @@ function n(value: unknown, fallback = 0) {
  * The bonus is intentionally small at low levels and scales continuously.
  */
 export async function calculateMatchEconomy(home: any, match: any, scoreA: number, scoreB: number): Promise<MatchEconomy> {
-  const capacity = Math.max(0, Math.floor(n(home?.arena?.capacity, 5000)));
+  const capacity = Math.max(0, Math.floor(n(home?.arena?.capacity, ARENA_BASE_CAPACITY)));
   const arena = home?.arena || {};
 
   const press = Math.max(0, n(arena.pressCenterLevel));

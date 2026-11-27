@@ -1,6 +1,24 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { getArenaExpansionQuote, ARENA_BASE_CAPACITY, ARENA_MAX_EXPANSION } from '../src/app/lib/arena-expansion.ts';
+import { readFileSync } from 'node:fs';
+import { getArenaExpansionQuote, ARENA_BASE_CAPACITY, ARENA_MIN_SUPPORTED_CAPACITY, ARENA_MAX_EXPANSION } from '../src/app/lib/arena-expansion.ts';
+
+test('new club arena capacity uses the canonical 5,000-seat baseline across registration and game defaults', () => {
+  assert.equal(ARENA_BASE_CAPACITY, 5000);
+  const registration = readFileSync(new URL('../functions/registration-core.js', import.meta.url), 'utf8');
+  const infrastructure = readFileSync(new URL('../src/app/actions/infrastructure.ts', import.meta.url), 'utf8');
+  const store = readFileSync(new URL('../src/app/lib/store.tsx', import.meta.url), 'utf8');
+  const matchEconomy = readFileSync(new URL('../src/app/actions/match-economy.ts', import.meta.url), 'utf8');
+  assert.match(registration, /DEFAULT_ARENA_CAPACITY = 5000/);
+  assert.match(infrastructure, /arena\.capacity \?\? ARENA_BASE_CAPACITY/);
+  assert.match(store, /arena: \{ capacity: ARENA_BASE_CAPACITY \}/);
+  assert.match(matchEconomy, /n\(home\?\.arena\?\.capacity, ARENA_BASE_CAPACITY\)/);
+});
+
+test('legacy 3,000-seat clubs remain expandable without an implicit migration', () => {
+  assert.equal(ARENA_MIN_SUPPORTED_CAPACITY, 3000);
+  assert.equal(getArenaExpansionQuote(500, 3000).targetCapacity, 3500);
+});
 
 test('arena expansion preserves the approved first five price and time points', () => {
   const expected = [

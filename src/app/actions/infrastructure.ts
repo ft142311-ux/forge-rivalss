@@ -3,7 +3,7 @@
 import { FieldValue } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { requireServerActor } from '@/lib/server-auth';
-import { getArenaExpansionQuote } from '@/app/lib/arena-expansion';
+import { ARENA_BASE_CAPACITY, getArenaExpansionQuote } from '@/app/lib/arena-expansion';
 import { assertStagingSeasonOneResetNotInProgress } from '@/app/lib/staging-season-one-write-fence';
 
 export type ConstructionSection = 'arena' | 'hq' | 'bootcamp' | 'academy' | 'medical';
@@ -113,7 +113,7 @@ export async function startCapacityExpansionAction(idToken: string, seats: numbe
       if (!snap.exists) throw new Error('PLAYER_NOT_FOUND');
       const p = snap.data() || {};
       const arena = { ...(p.arena || {}) };
-      const currentCapacity = Number(arena.capacity ?? 3000);
+      const currentCapacity = Number(arena.capacity ?? ARENA_BASE_CAPACITY);
       const quote = getArenaExpansionQuote(seats, currentCapacity);
       const finishes = { ...(arena.constructionFinishes || {}) };
       const starts = { ...(arena.constructionStarts || {}) };

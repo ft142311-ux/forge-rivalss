@@ -21,6 +21,7 @@ import { useToast } from '@/hooks/use-toast';
 import { createDeterministicBotSquad, buildMatchTeamSnapshot } from './match-simulation';
 import { runMatchEngine } from './match-engine';
 import { hash32 } from './hash-utils';
+import { ARENA_BASE_CAPACITY } from './arena-expansion';
 
 
 export { getLevelThreshold };
@@ -167,7 +168,7 @@ const DEFAULT_STATE: GameState = {
   activeLicenseTier: null, rank: 0, salaryLedger: null, salaryPayments: [],
   rewardDay: 1, lastRewardClaimDate: null, matchHistory: [], lastSeenMatchDay: 0,
   managerSkills: { sponsors: 0, agents: 0, training: 0, medical: 0 },
-  arena: { capacity: 3000 }, hq: {}, bootcamp: {}, academy: {}, medical: {},
+  arena: { capacity: ARENA_BASE_CAPACITY }, hq: {}, bootcamp: {}, academy: {}, medical: {},
   country: null, isPremium: false, premiumUntil: null, activeSeasonNumber: 1, seasonNumber: 1, seasonDay: 1, isSyncing: false, language: 'ru',
   isDataReady: false, allSeasonMatches: [], nextMatch: null, isMatchesLoading: true,
   lastProcessedSeason: 0, trophies: [], version: 245,
