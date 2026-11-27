@@ -11,7 +11,8 @@ test('player economy mutations are transactionally fenced during fresh Season 1 
     ['../src/app/actions/player-care.ts', 1],
     ['../src/app/actions/player-lifecycle.ts', 1],
     ['../src/app/actions/shop.ts', 8],
-    ['../src/app/actions/gameplay.ts', 6],
+    ['../src/app/actions/gameplay.ts', 5],
+    ['../src/app/lib/market-listing.ts', 2],
     ['../src/app/actions/p2-management.ts', 10],
     ['../src/app/actions/season-rollover.ts', 1],
     ['../src/app/actions/infrastructure.ts', 4],
@@ -41,7 +42,7 @@ test('auction and match settlement writes honor both reset markers', () => {
   const cases = [
     ['../src/app/lib/auction-bid.ts', 2],
     ['../src/app/lib/auction-expiry-sweep.ts', 3],
-    ['../src/app/actions/pro-market.ts', 2],
+    ['../src/app/actions/pro-market.ts', 1],
     ['../src/app/actions/match-economy.ts', 1],
   ];
 
@@ -51,4 +52,7 @@ test('auction and match settlement writes honor both reset markers', () => {
     assert.equal(guards, expectedGuards, path + ' must honor every Beta reset guard');
     assert.match(source, /stagingSeasonOneResetInProgress === true/);
   }
+
+  const listing = read('../src/app/lib/market-listing.ts');
+  assert.equal((listing.match(/await assertStagingSeasonOneResetNotInProgress\(tx, db\)/g) || []).length, 2);
 });

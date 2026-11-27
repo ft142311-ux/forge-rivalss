@@ -1,6 +1,6 @@
 import { FieldValue } from 'firebase-admin/firestore';
 import { calculatePlayerMarketValue } from './moba-data';
-import { assertStagingSeasonOneResetNotInProgress } from './staging-season-one-write-fence';
+import { assertStagingSeasonOneResetNotInProgress } from '@/app/lib/staging-season-one-write-fence';
 
 export function resolveMarketListingPrice(value: unknown): number {
   if (typeof value !== 'number' || !Number.isSafeInteger(value) || value <= 0) {

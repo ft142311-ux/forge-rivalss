@@ -118,7 +118,6 @@ export async function placeYouthMarketBidAction(idToken: string, marketId: strin
 }
 
 /** Lists an owned youth player atomically and marks the authoritative profile entry as reserved. */
-/** Lists an owned youth player atomically and marks the authoritative profile entry as reserved. */
 export async function listYouthPlayerOnMarketAction(idToken: string, playerId: string) {
   try {
     const { uid } = await requireServerActor(idToken);

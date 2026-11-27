@@ -63,9 +63,9 @@ test('standard market price accepts only non-negative safe integer values', () =
 });
 
 test('standard player listings are discoverable by the quick-search market query', () => {
-  const source = readFileSync(new URL('../src/app/actions/gameplay.ts', import.meta.url), 'utf8');
-  const start = source.indexOf('export async function listPlayerOnMarketAction');
-  const end = source.indexOf('export async function placePlayerBidAction', start);
+  const source = readFileSync(new URL('../src/app/lib/market-listing.ts', import.meta.url), 'utf8');
+  const start = source.indexOf('export async function createStandardMarketListingWithDb');
+  const end = source.indexOf('export async function createYouthMarketListingWithDb', start);
   assert.ok(start >= 0 && end > start);
   assert.ok(source.slice(start, end).includes("marketType: 'player'"));
 });
