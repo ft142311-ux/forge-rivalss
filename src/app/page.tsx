@@ -290,7 +290,8 @@ export default function Home() {
     : currentNextMatch ? getCountdown(currentNextMatch.startTime) : '--:--:--';
   const cardTitle = showOffseason ? (language === 'ru' ? 'МЕЖСЕЗОНЬЕ' : 'OFFSEASON') : (language === 'ru' ? 'СЛЕДУЮЩИЙ СОПЕРНИК' : 'NEXT OPPONENT');
 
-  const matchDate = currentNextMatch?.startTime ? new Date(currentNextMatch.startTime) : null;
+  const matchStartMs = currentNextMatch?.startTime ? toMillis(currentNextMatch.startTime) : Number.NaN;
+  const matchDate = Number.isFinite(matchStartMs) ? new Date(matchStartMs) : null;
   const matchDateLabel = matchDate && Number.isFinite(matchDate.getTime())
     ? `${matchDate.toLocaleDateString(language === 'ru' ? 'ru-RU' : 'en-US', { day: 'numeric', month: 'short' })} · ${matchDate.toLocaleTimeString(language === 'ru' ? 'ru-RU' : 'en-US', { hour: '2-digit', minute: '2-digit' })}`
     : (language === 'ru' ? 'Ожидается расписание' : 'Schedule pending');
