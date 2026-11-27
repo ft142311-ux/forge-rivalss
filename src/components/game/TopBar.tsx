@@ -25,7 +25,7 @@ export function TopBar() {
             <div className="min-w-0">
               <p className="truncate text-xs font-black text-white sm:text-sm">{clubName || displayName || 'Manager'}</p>
               <p className="truncate text-[10px] font-semibold text-slate-400">{language === 'ru' ? 'Менеджер клуба' : 'Club manager'}</p>
-              <div className="mt-1 h-1 w-full max-w-24 overflow-hidden rounded-full bg-white/10"><div className="h-full rounded-full bg-cyan-300" style={{width: `${Math.min(100, Math.max(4, (Number(experiencePoints || 0) % 2000) / 20))}%`}} /></div>
+              <p className="text-[9px] text-slate-500">{Number(experiencePoints || 0).toLocaleString()} XP</p>
             </div>
           </Link>
           <div className="flex shrink-0 flex-col gap-1">
