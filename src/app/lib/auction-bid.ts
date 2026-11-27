@@ -1,5 +1,5 @@
 import { FieldValue, type DocumentReference } from 'firebase-admin/firestore';
-import { resolveAuctionPrice, resolvePreviousAuctionBidEscrow, normalizeAuctionBalance, resolveAuctionCurrency, resolveAuctionMaxBid } from './auction-settlement';
+import { resolveAuctionPrice, resolvePreviousAuctionBidEscrow, normalizeAuctionBalance, resolveAuctionCurrency, resolveAuctionMaxBid, normalizeAuctionUserId, resolveAuctionBidderId } from './auction-settlement';
 import { resolveMarketBidExpiryMs, resolveMarketBidPrice } from './market-bid-guards';
 
 function money(value: unknown) {
@@ -7,8 +7,8 @@ function money(value: unknown) {
 }
 
 async function assertStandardMarketSellerListing(tx: any, db: any, lot: any, marketId: string, now: number) {
-  const sellerId = String(lot.sellerId || '');
-  const playerId = String(lot.heroData?.id || lot.playerId || '');
+  const sellerId = normalizeAuctionUserId(lot.sellerId);
+  const playerId = String(lot.heroData?.id || '').trim() || String(lot.playerId || '').trim();
   if (!sellerId || sellerId === 'system') throw new Error('MARKET_SELLER_UNAVAILABLE');
   if (!playerId) throw new Error('MARKET_PLAYER_UNAVAILABLE');
 
@@ -35,8 +35,8 @@ async function assertStandardMarketSellerListing(tx: any, db: any, lot: any, mar
 }
 
 async function assertYouthMarketSellerListing(tx: any, db: any, lot: any, marketId: string, lotExpiryMs: number) {
-  const sellerId = String(lot.sellerId || '').trim();
-  const playerId = String(lot.heroData?.id || lot.playerId || '').trim();
+  const sellerId = normalizeAuctionUserId(lot.sellerId);
+  const playerId = String(lot.heroData?.id || '').trim() || String(lot.playerId || '').trim();
   if (!sellerId || sellerId === 'system') throw new Error('MARKET_SELLER_UNAVAILABLE');
   if (!playerId) throw new Error('MARKET_PLAYER_UNAVAILABLE');
 
@@ -73,9 +73,11 @@ export async function placeSpecialMarketBidWithDb(
   if (typeof marketId !== 'string' || !marketId.trim() || marketId.length > 180) throw new Error('INVALID_MARKET_LOT');
   if (typeof amount !== 'number' || !Number.isSafeInteger(amount) || amount <= 0) throw new Error('INVALID_BID');
   const bid = amount;
+  const bidderId = normalizeAuctionUserId(uid);
+  if (!bidderId) throw new Error('INVALID_BIDDER');
 
   const lotRef = db.collection('market_v7').doc(marketId);
-  const bidderRef = db.collection('players_v14').doc(uid);
+  const bidderRef = db.collection('players_v14').doc(bidderId);
   const notificationRef = db.collection('notifications_v7').doc();
   const bidderLedgerRef = db.collection('economy_transactions').doc();
   const refundLedgerRef = db.collection('economy_transactions').doc();
@@ -99,7 +101,8 @@ export async function placeSpecialMarketBidWithDb(
       ? lot.isPro === true && lot.currency === 'crystals'
       : lot.isYouth === true && (lot.currency === undefined || lot.currency === null || lot.currency === '' || lot.currency === 'credits');
     if (!isExpectedLot) throw new Error('INVALID_MARKET_LOT_TYPE');
-    if (String(lot.sellerId || '') === uid) throw new Error('SELLER_CANNOT_BID');
+    const sellerId = normalizeAuctionUserId(lot.sellerId);
+    if (sellerId === bidderId) throw new Error('SELLER_CANNOT_BID');
 
     const expiryMs = resolveMarketBidExpiryMs(lot.expiresAt);
     if (expiryMs === null) throw new Error('MARKET_EXPIRY_INVALID');
@@ -121,8 +124,8 @@ export async function placeSpecialMarketBidWithDb(
     if (bid < minimumBid) throw new Error('BID_TOO_LOW');
     if (bid > maxBid) throw new Error('BID_TOO_HIGH');
     const currency = marketKind === 'pro' ? 'crystals' : 'credits';
-    const previousBidderId = String(lot.highestBidderId || lot.highestBidderUid || '');
-    if (previousBidderId && previousBidderId === String(lot.sellerId || '')) {
+    const previousBidderId = resolveAuctionBidderId(lot);
+    if (previousBidderId && previousBidderId === sellerId) {
       throw new Error('MARKET_PREVIOUS_BIDDER_INVALID');
     }
     const previousEscrow = resolvePreviousAuctionBidEscrow({
@@ -132,14 +135,14 @@ export async function placeSpecialMarketBidWithDb(
       currentBid,
       previousBidderId,
     });
-    const sameEscrowedBidder = previousBidderId === uid && previousEscrow === currentBid;
+    const sameEscrowedBidder = previousBidderId === bidderId && previousEscrow === currentBid;
     const chargeAmount = sameEscrowedBidder ? bid - currentBid : bid;
     const bidderBalance = money(bidder[currency]);
     if (bidderBalance < chargeAmount) throw new Error(currency === 'crystals' ? 'INSUFFICIENT_CRYSTALS' : 'INSUFFICIENT_FUNDS');
 
     let previousBidderRef: DocumentReference | null = null;
     let previousBidder: any = null;
-    if (previousBidderId && previousBidderId !== uid && previousEscrow > 0) {
+    if (previousBidderId && previousBidderId !== bidderId && previousEscrow > 0) {
       previousBidderRef = db.collection('players_v14').doc(previousBidderId);
       const previousBidderSnap = await tx.get(previousBidderRef);
       if (!previousBidderSnap.exists) throw new Error('PREVIOUS_BIDDER_NOT_FOUND');
@@ -148,8 +151,8 @@ export async function placeSpecialMarketBidWithDb(
 
     const bidderName = String(bidder.displayName || bidder.clubName || 'Manager').slice(0, 80);
     const bidders = Array.isArray(lot.bidders) ? [...lot.bidders] : [];
-    if (!bidders.some((entry: any) => entry === uid || entry?.userId === uid || entry?.bidderId === uid || entry?.uid === uid)) {
-      bidders.push(uid);
+    if (!bidders.some((entry: any) => normalizeAuctionUserId(entry) === bidderId || normalizeAuctionUserId(entry?.userId) === bidderId || normalizeAuctionUserId(entry?.bidderId) === bidderId || normalizeAuctionUserId(entry?.uid) === bidderId)) {
+      bidders.push(bidderId);
     }
 
     const nextExpiry = expiryMs - now < 10 * 60 * 1000 ? now + 10 * 60 * 1000 : expiryMs;
@@ -171,7 +174,7 @@ export async function placeSpecialMarketBidWithDb(
       updatedAt: FieldValue.serverTimestamp(),
     });
     tx.set(bidderLedgerRef, {
-      userId: uid,
+      userId: bidderId,
       amount: -chargeAmount,
       currency,
       type: 'SPECIAL_AUCTION_BID_ESCROW',
@@ -206,7 +209,7 @@ export async function placeSpecialMarketBidWithDb(
 
     tx.update(lotRef, {
       currentBid: bid,
-      highestBidderId: uid,
+      highestBidderId: bidderId,
       highestBidderName: bidderName,
       bidders,
       escrowedAmount: bid,
@@ -215,7 +218,7 @@ export async function placeSpecialMarketBidWithDb(
       expiresAt: nextExpiryIso,
     });
 
-    if (previousBidderId && previousBidderId !== uid) {
+    if (previousBidderId && previousBidderId !== bidderId) {
       tx.set(notificationRef, {
         userId: previousBidderId,
         title: 'Ставка перебита!',
@@ -230,7 +233,7 @@ export async function placeSpecialMarketBidWithDb(
       success: true,
       marketId,
       currentBid: bid,
-      highestBidderId: uid,
+      highestBidderId: bidderId,
       previousBidderId: previousBidderId || null,
       expiresAt: new Date(nextExpiry).toISOString(),
     };
@@ -254,12 +257,14 @@ export async function placeStandardMarketBidWithDb(
     throw new Error('INVALID_BID');
   }
 
+  const bidderId = normalizeAuctionUserId(uid);
+  if (!bidderId) throw new Error('INVALID_BIDDER');
   const bidderLedgerRef = db.collection('economy_transactions').doc();
   const refundLedgerRef = db.collection('economy_transactions').doc();
 
   return db.runTransaction(async (tx: any) => {
     const marketRef = db.collection('market_v7').doc(marketId);
-    const bidderRef = db.collection('players_v14').doc(uid);
+    const bidderRef = db.collection('players_v14').doc(bidderId);
     const resetConfigRef = db.collection('system_v1').doc('season_config');
     const [marketSnap, resetConfigSnap] = await Promise.all([tx.get(marketRef), tx.get(resetConfigRef)]);
     if (resetConfigSnap.exists && (resetConfigSnap.data()?.stagingSeasonOneResetInProgress === true ||
@@ -271,8 +276,9 @@ export async function placeStandardMarketBidWithDb(
     const lot: any = marketSnap.data() || {};
     if (lot.status === 'settled' || lot.status === 'expired') throw new Error('MARKET_LOT_NOT_ACTIVE');
     if (lot.isPro === true || lot.isYouth === true) throw new Error('INVALID_MARKET_LOT_TYPE');
-    const sellerId = String(lot.sellerId || '');
-    if (sellerId === uid) throw new Error('SELLER_CANNOT_BID');
+    const sellerId = normalizeAuctionUserId(lot.sellerId);
+    if (!sellerId || sellerId === 'system') throw new Error('MARKET_SELLER_UNAVAILABLE');
+    if (sellerId === bidderId) throw new Error('SELLER_CANNOT_BID');
 
     const currency = resolveAuctionCurrency(lot.currency);
     if (currency !== 'credits') throw new Error('INVALID_MARKET_CURRENCY');
@@ -298,7 +304,7 @@ export async function placeStandardMarketBidWithDb(
     if (!bidderSnap.exists) throw new Error('PLAYER_NOT_FOUND');
     const bidderData: any = bidderSnap.data() || {};
 
-    const previousBidderId = String(lot.highestBidderId || lot.highestBidderUid || '');
+    const previousBidderId = resolveAuctionBidderId(lot);
     // A legacy or corrupt lot must not refund a seller-funded self-bid to the seller
     // while allowing a third party to buy the player at the inflated price.
     if (previousBidderId && previousBidderId === sellerId) {
@@ -311,14 +317,14 @@ export async function placeStandardMarketBidWithDb(
       currentBid,
       previousBidderId,
     });
-    const sameEscrowedBidder = previousBidderId === uid && previousEscrow === currentBid;
+    const sameEscrowedBidder = previousBidderId === bidderId && previousEscrow === currentBid;
     const chargeAmount = sameEscrowedBidder ? amount - currentBid : amount;
     const bidderBalance = normalizeAuctionBalance(bidderData.credits);
     if (!Number.isSafeInteger(bidderBalance - chargeAmount) || bidderBalance < chargeAmount) throw new Error('INSUFFICIENT_FUNDS');
 
     let previousBidderRef: DocumentReference | null = null;
     let previousBidder: any = null;
-    if (previousBidderId && previousBidderId !== uid && previousEscrow > 0) {
+    if (previousBidderId && previousBidderId !== bidderId && previousEscrow > 0) {
       previousBidderRef = db.collection('players_v14').doc(previousBidderId);
       const previousBidderSnap = await tx.get(previousBidderRef);
       if (!previousBidderSnap.exists) throw new Error('PREVIOUS_BIDDER_NOT_FOUND');
@@ -329,10 +335,10 @@ export async function placeStandardMarketBidWithDb(
     const previousBidders = Array.isArray(lot.bidders) ? [...lot.bidders] : [];
     const bidders = previousBidders.filter((entry: any) => {
       const id = typeof entry === 'string' ? entry : entry?.userId || entry?.bidderId || entry?.uid;
-      return id !== uid;
+      return normalizeAuctionUserId(id) !== bidderId;
     });
     // My Bids uses Firestore array-contains on the UID; keep this field string-based.
-    bidders.push(uid);
+    bidders.push(bidderId);
 
     const nextExpiry = expiresAt - now < 10 * 60 * 1000 ? now + 10 * 60 * 1000 : expiresAt;
     if (nextExpiry > expiresAt) {
@@ -352,7 +358,7 @@ export async function placeStandardMarketBidWithDb(
       updatedAt: FieldValue.serverTimestamp(),
     });
     tx.set(bidderLedgerRef, {
-      userId: uid,
+      userId: bidderId,
       amount: -chargeAmount,
       currency,
       type: 'SPECIAL_AUCTION_BID_ESCROW',
@@ -386,7 +392,7 @@ export async function placeStandardMarketBidWithDb(
 
     tx.update(marketRef, {
       currentBid: amount,
-      highestBidderId: uid,
+      highestBidderId: bidderId,
       highestBidderName: displayName,
       bidders,
       escrowedAmount: amount,
@@ -399,7 +405,7 @@ export async function placeStandardMarketBidWithDb(
       success: true,
       marketId,
       currentBid: amount,
-      highestBidderId: uid,
+      highestBidderId: bidderId,
       expiresAt: new Date(nextExpiry).toISOString(),
     };
   });

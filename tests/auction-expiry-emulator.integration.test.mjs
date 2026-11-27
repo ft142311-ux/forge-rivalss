@@ -6,6 +6,7 @@ import { getFirestore } from 'firebase-admin/firestore';
 import { runTransferMarketExpirySweepWithDb } from '../src/app/lib/auction-expiry-sweep.ts';
 import { placeSpecialMarketBidWithDb, placeStandardMarketBidWithDb } from '../src/app/lib/auction-bid.ts';
 import { createStandardMarketListingWithDb, createYouthMarketListingWithDb } from '../src/app/lib/market-listing.ts';
+import { canPruneUnbidSystemAuctionLot, normalizeAuctionUserId, resolveAuctionBidderId } from '../src/app/lib/auction-settlement.ts';
 
 const emulatorHost = process.env.FIRESTORE_EMULATOR_HOST;
 const projectId = process.env.GCLOUD_PROJECT || 'demo-forge-rivals';
@@ -1472,4 +1473,146 @@ test('Firestore Emulator rejects standard bids when a legacy lot records the sel
   assert.equal(lot.get('currentBid'), 300);
   assert.equal(lot.get('escrowedAmount'), 300);
   assert.equal((await db.collection('economy_transactions').get()).size, 0);
+});
+
+
+test('auction identity resolution falls back from blank canonical bidder IDs to legacy UID aliases', () => {
+  assert.equal(normalizeAuctionUserId(' seller-1 '), 'seller-1');
+  assert.equal(normalizeAuctionUserId('   '), '');
+  assert.equal(resolveAuctionBidderId({ highestBidderId: '   ', highestBidderUid: 'buyer-1' }), 'buyer-1');
+  assert.equal(resolveAuctionBidderId({ highestBidderId: ' buyer-2 ', highestBidderUid: 'buyer-1' }), 'buyer-2');
+  assert.equal(resolveAuctionBidderId({ highestBidderId: '  ', highestBidderUid: '  ' }), '');
+});
+
+test('system auction rotation never prunes a lot with a bidder hidden behind a blank canonical ID', () => {
+  assert.equal(canPruneUnbidSystemAuctionLot({ highestBidderId: '  ', highestBidderUid: 'buyer-1', escrowedAmount: 0 }), false);
+  assert.equal(canPruneUnbidSystemAuctionLot({ highestBidderId: '  ', highestBidderUid: '  ', escrowedAmount: 0 }), true);
+});
+
+
+test('Firestore Emulator resolves legacy bidder UID aliases when accepting standard, PRO and Youth outbids', {
+  skip: !emulatorHost,
+}, async t => {
+  const { db } = await withIsolatedFirestore(t);
+  const now = Date.now();
+  const expiresAt = new Date(now + 60 * 60 * 1000).toISOString();
+
+  await db.collection('players_v14').doc('standard-seller').set({
+    credits: 0,
+    ownedPlayers: [{ id: 'standard-legacy-player', name: 'Standard Legacy Player', onTransferUntil: expiresAt, transferMarketId: 'standard-legacy-alias' }],
+  });
+  await db.collection('players_v14').doc('standard-previous').set({ credits: 700, ownedPlayers: [] });
+  await db.collection('players_v14').doc('standard-buyer').set({ credits: 1000, ownedPlayers: [] });
+  await db.collection('market_v7').doc('standard-legacy-alias').set({
+    sellerId: 'standard-seller', marketType: 'player', currency: 'credits',
+    currentBid: 200, startingPrice: 100, highestBidderId: '   ', highestBidderUid: 'standard-previous',
+    escrowCurrency: 'credits', escrowedAmount: 200, expiresAt,
+    heroData: { id: 'standard-legacy-player', name: 'Standard Legacy Player' }, isPro: false, isYouth: false,
+  });
+  await placeStandardMarketBidWithDb(db, 'standard-buyer', 'standard-legacy-alias', 300);
+  assert.equal((await db.collection('players_v14').doc('standard-previous').get()).get('credits'), 900);
+  assert.equal((await db.collection('players_v14').doc('standard-buyer').get()).get('credits'), 700);
+  assert.equal((await db.collection('market_v7').doc('standard-legacy-alias').get()).get('highestBidderId'), 'standard-buyer');
+
+  await db.collection('players_v14').doc('pro-seller').set({ crystals: 0, ownedPlayers: [] });
+  await db.collection('players_v14').doc('pro-previous').set({ crystals: 700, ownedPlayers: [] });
+  await db.collection('players_v14').doc('pro-buyer').set({ crystals: 1000, ownedPlayers: [] });
+  await db.collection('market_v7').doc('pro-legacy-alias').set({
+    sellerId: 'pro-seller', isPro: true, currency: 'crystals',
+    currentBid: 200, startingPrice: 200, highestBidderId: ' ', highestBidderUid: 'pro-previous',
+    escrowCurrency: 'crystals', escrowedAmount: 200, expiresAt,
+    heroData: { id: 'pro-legacy-player', name: 'PRO Legacy Player' },
+  });
+  await placeSpecialMarketBidWithDb(db, 'pro-buyer', 'pro-legacy-alias', 300, 'pro', now);
+  assert.equal((await db.collection('players_v14').doc('pro-previous').get()).get('crystals'), 900);
+  assert.equal((await db.collection('players_v14').doc('pro-buyer').get()).get('crystals'), 700);
+  assert.equal((await db.collection('market_v7').doc('pro-legacy-alias').get()).get('highestBidderId'), 'pro-buyer');
+
+  await db.collection('players_v14').doc('youth-seller').set({
+    credits: 0,
+    youthAcademyPlayers: [{ id: 'youth-legacy-player', name: 'Youth Legacy Player', onTransferUntil: expiresAt, transferMarketId: 'youth-legacy-alias' }],
+  });
+  await db.collection('players_v14').doc('youth-previous').set({ credits: 700, youthAcademyPlayers: [] });
+  await db.collection('players_v14').doc('youth-buyer').set({ credits: 1000, youthAcademyPlayers: [] });
+  await db.collection('market_v7').doc('youth-legacy-alias').set({
+    sellerId: 'youth-seller', isYouth: true, currency: 'credits',
+    currentBid: 100, startingPrice: 100, highestBidderId: ' ', highestBidderUid: 'youth-previous',
+    escrowCurrency: 'credits', escrowedAmount: 100, expiresAt,
+    heroData: { id: 'youth-legacy-player', name: 'Youth Legacy Player' },
+  });
+  await placeSpecialMarketBidWithDb(db, 'youth-buyer', 'youth-legacy-alias', 150, 'youth', now);
+  assert.equal((await db.collection('players_v14').doc('youth-previous').get()).get('credits'), 800);
+  assert.equal((await db.collection('players_v14').doc('youth-buyer').get()).get('credits'), 850);
+  assert.equal((await db.collection('market_v7').doc('youth-legacy-alias').get()).get('highestBidderId'), 'youth-buyer');
+
+  const ledger = await db.collection('economy_transactions').get();
+  assert.equal(ledger.size, 6, 'each accepted outbid writes one escrow debit and one previous-bidder refund');
+});
+
+test('Firestore Emulator rejects a whitespace-padded PRO seller self-bid before charging escrow', {
+  skip: !emulatorHost,
+}, async t => {
+  const { db } = await withIsolatedFirestore(t);
+  const now = Date.now();
+  const expiresAt = new Date(now + 60 * 60 * 1000).toISOString();
+  await db.collection('players_v14').doc('pro-seller').set({ crystals: 1000, ownedPlayers: [] });
+  const lotRef = db.collection('market_v7').doc('padded-pro-seller');
+  await lotRef.set({
+    sellerId: ' pro-seller ', isPro: true, currency: 'crystals',
+    currentBid: 100, startingPrice: 100, highestBidderId: null, bidders: [],
+    expiresAt, heroData: { id: 'pro-player', name: 'PRO Player' },
+  });
+
+  await assert.rejects(
+    placeSpecialMarketBidWithDb(db, 'pro-seller', 'padded-pro-seller', 150, 'pro', now),
+    /SELLER_CANNOT_BID/,
+  );
+  assert.equal((await db.collection('players_v14').doc('pro-seller').get()).get('crystals'), 1000);
+  assert.equal((await lotRef.get()).get('highestBidderId'), null);
+  assert.equal((await lotRef.get()).get('escrowedAmount'), undefined);
+  assert.equal((await db.collection('economy_transactions').get()).size, 0);
+});
+
+test('Firestore Emulator settles a legacy lot through highestBidderUid when highestBidderId is blank', {
+  skip: !emulatorHost,
+}, async t => {
+  const { db } = await withIsolatedFirestore(t);
+  const lotId = 'legacy-bidder-alias-settlement';
+  const sellerId = 'legacy-alias-seller';
+  const buyerId = 'legacy-alias-buyer';
+  const playerId = 'legacy-alias-player';
+  await db.collection('players_v14').doc(sellerId).set({
+    credits: 10,
+    ownedPlayers: [{ id: playerId, name: 'Legacy Alias Player', onTransferUntil: 'reserved', transferMarketId: lotId }],
+  });
+  await db.collection('players_v14').doc(buyerId).set({ credits: 700, ownedPlayers: [] });
+  const lotRef = db.collection('market_v7').doc(lotId);
+  await lotRef.set(expiredLot({
+    sellerId,
+    highestBidderId: '   ',
+    highestBidderUid: buyerId,
+    currentBid: 300,
+    startingPrice: 200,
+    escrowCurrency: 'credits',
+    escrowedAmount: 300,
+    heroData: { id: playerId, name: 'Legacy Alias Player' },
+  }));
+
+  const result = await runTransferMarketExpirySweepWithDb(db);
+  assert.equal(result.success, true);
+  assert.equal(result.sold, 1);
+  assert.equal(result.expiredWithoutSale, 0);
+  assert.equal((await lotRef.get()).exists, false);
+  const [seller, buyer] = await Promise.all([
+    db.collection('players_v14').doc(sellerId).get(),
+    db.collection('players_v14').doc(buyerId).get(),
+  ]);
+  assert.equal(seller.get('credits'), 295, 'seller receives the 300-credit sale less the 5% commission');
+  assert.deepEqual(seller.get('ownedPlayers'), []);
+  assert.equal(buyer.get('credits'), 700, 'valid escrow prevents a second buyer debit');
+  assert.deepEqual(buyer.get('ownedPlayers').map(player => player.id), [playerId]);
+  const ledger = await db.collection('economy_transactions').where('referenceId', '==', lotId).get();
+  assert.equal(ledger.size, 1);
+  assert.equal(ledger.docs[0].get('type'), 'SPECIAL_AUCTION_SETTLEMENT_CREDIT');
+  assert.equal((await db.collection('transfer_history').get()).size, 1);
 });

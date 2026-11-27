@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { FieldPath, FieldValue } from 'firebase-admin/firestore';
-import { isSystemAuctionSeller, normalizeAuctionBalance, resolveAuctionCurrency, resolveAuctionEscrow, resolveAuctionPrice } from './auction-settlement';
+import { isSystemAuctionSeller, normalizeAuctionBalance, resolveAuctionCurrency, resolveAuctionEscrow, resolveAuctionPrice, normalizeAuctionUserId, resolveAuctionBidderId } from './auction-settlement';
 import { resolveMarketBidExpiryMs } from './market-bid-guards';
 
 /**
@@ -30,10 +30,10 @@ async function settleCandidate(candidate: any, db: any, nowMs = Date.now()) {
         const expiryMs = resolveMarketBidExpiryMs(lot.expiresAt);
         if (expiryMs === null || expiryMs > nowMs) return 'SKIPPED';
 
-        const sellerId = String(lot.sellerId || '');
-        const bidderId = String(lot.highestBidderId || lot.highestBidderUid || '');
+        const sellerId = normalizeAuctionUserId(lot.sellerId);
+        const bidderId = resolveAuctionBidderId(lot);
         const price = resolveAuctionPrice(lot.currentBid, lot.startingPrice, lot.price);
-        const playerId = String(lot.heroData?.id || lot.playerId || '');
+        const playerId = String(lot.heroData?.id || '').trim() || String(lot.playerId || '').trim();
 
         const isSystemSeller = isSystemAuctionSeller(sellerId, lot.isSystem);
         const currency = resolveAuctionCurrency(lot.currency);
