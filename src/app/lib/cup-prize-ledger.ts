@@ -39,6 +39,27 @@ export function resolveCupPrizeReplayAmount(
     return null;
   }
 
+  // Current receipts record the exact balance delta committed with the credit.
+  // Accept older receipts with neither field, but never trust a partial or
+  // internally inconsistent balance snapshot during an idempotent replay.
+  const hasBalanceBefore = Object.prototype.hasOwnProperty.call(value, 'balanceBefore');
+  const hasBalanceAfter = Object.prototype.hasOwnProperty.call(value, 'balanceAfter');
+  if (hasBalanceBefore !== hasBalanceAfter) return null;
+  if (hasBalanceBefore) {
+    const balanceBefore = value.balanceBefore;
+    const balanceAfter = value.balanceAfter;
+    if (typeof balanceBefore !== 'number' ||
+        typeof balanceAfter !== 'number' ||
+        !Number.isSafeInteger(balanceBefore) ||
+        balanceBefore < 0 ||
+        !Number.isSafeInteger(balanceAfter) ||
+        balanceAfter < 0) {
+      return null;
+    }
+    const expectedBalanceAfter = balanceBefore + amount;
+    if (!Number.isSafeInteger(expectedBalanceAfter) || balanceAfter !== expectedBalanceAfter) return null;
+  }
+
   return amount;
 }
 
@@ -83,9 +104,14 @@ export function resolveCupPrizeBalance(
 export type CupPrizeTrophyState = {
   existingTrophies: unknown[];
   hasChampionTrophy: boolean;
+  needsRepair: boolean;
 };
 
-/** Validate the trophy collection and detect the season's unique champion trophy. */
+/**
+ * Validate and normalize the season's unique champion trophy.
+ * A matching ID alone is not proof of a valid award: malformed or duplicate
+ * records are removed so the settlement path can repair them deterministically.
+ */
 export function resolveCupPrizeTrophyState(
   trophies: unknown,
   season: unknown,
@@ -95,11 +121,40 @@ export function resolveCupPrizeTrophyState(
       (trophies !== undefined && trophies !== null && !Array.isArray(trophies))) {
     return null;
   }
+
   const existingTrophies: unknown[] = Array.isArray(trophies) ? trophies : [];
   const trophyId = `pyramid-cup-season-${seasonNumber}`;
-  const hasChampionTrophy = existingTrophies.some(item =>
-    Boolean(item && typeof item === 'object' && !Array.isArray(item) &&
-      (item as Record<string, unknown>).id === trophyId)
-  );
-  return { existingTrophies, hasChampionTrophy };
+  const trophyName = `Кубок Пирамиды — сезон ${seasonNumber}`;
+  const normalizedTrophies: unknown[] = [];
+  let hasChampionTrophy = false;
+  let needsRepair = false;
+
+  for (const item of existingTrophies) {
+    const record = item && typeof item === 'object' && !Array.isArray(item)
+      ? item as Record<string, unknown>
+      : null;
+    if (record?.id !== trophyId) {
+      normalizedTrophies.push(item);
+      continue;
+    }
+
+    const dateMs = typeof record.date === 'string' ? Date.parse(record.date) : NaN;
+    const isCanonical = record.name === trophyName &&
+      record.type === 'pyramid_cup_champion' &&
+      Number(record.season) === seasonNumber &&
+      Number.isFinite(dateMs);
+
+    if (isCanonical && !hasChampionTrophy) {
+      normalizedTrophies.push(item);
+      hasChampionTrophy = true;
+    } else {
+      needsRepair = true;
+    }
+  }
+
+  return {
+    existingTrophies: normalizedTrophies,
+    hasChampionTrophy,
+    needsRepair,
+  };
 }

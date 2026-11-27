@@ -17,7 +17,7 @@ test('Pyramid Cup prize replay validates the deterministic receipt and preserves
   const replay = payout.slice(receiptGuard, replayEnd);
   assert.match(replay, /resolveCupPrizeReplayAmount\(receipt/);
   assert.match(replay, /if \(replayAmount === null\) throw new Error\('CUP_PRIZE_RECEIPT_CONFLICT'\)/);
-  assert.match(replay, /if \(place === 'champion' && !trophyState\.hasChampionTrophy\)/);
+  assert.match(replay, /if \(place === 'champion' && \(!trophyState\.hasChampionTrophy \|\| trophyState\.needsRepair\)\)/);
   assert.match(replay, /tx\.update\(playerRef, \{[\s\S]*trophies:/);
   assert.doesNotMatch(replay, /credits:/);
   assert.match(replay, /return replayAmount/);
@@ -54,9 +54,10 @@ test('Pyramid Cup champion receives one separate trophy in the same payout trans
   const payout = source.slice(start, end);
   assert.match(payout, /const trophyId = `pyramid-cup-season-\$\{season\}`/);
   assert.match(payout, /const shouldAddTrophy = place === 'champion' && !trophyState\.hasChampionTrophy/);
+  assert.match(payout, /const shouldRepairTrophy = place === 'champion' && trophyState\.needsRepair/);
   assert.match(payout, /type: 'pyramid_cup_champion'/);
-  assert.match(payout, /name: `Кубок Пирамиды — сезон \$\{season\}`/);
-  assert.match(payout, /trophies: \[\.\.\.trophyState\.existingTrophies/);
+  assert.match(payout, /name: `Кубок Пирамиды — сезон \$\{season}`/);
+  assert.match(payout, /trophies: championTrophies/);
   assert.match(payout, /tx\.update\(playerRef, \{/);
   assert.match(payout, /tx\.create\(ledgerRef, \{/);
 });
@@ -85,7 +86,7 @@ test('Pyramid Cup completion is committed only after both recipient settlements 
 });
 
 
-test('Pyramid Cup requires the recipient profile before replay and repairs only a missing champion trophy', () => {
+test('Pyramid Cup requires the recipient profile before replay and repairs missing or malformed champion trophies', () => {
   const start = source.indexOf('async function payCupPrize');
   const end = source.indexOf('async function finishTechnically', start);
   const payout = source.slice(start, end);

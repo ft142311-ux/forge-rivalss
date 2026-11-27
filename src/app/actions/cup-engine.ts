@@ -760,9 +760,12 @@ async function payCupPrize(db: any, season: number, team: Team | null, place: 'c
       if (replayAmount === null) throw new Error('CUP_PRIZE_RECEIPT_CONFLICT');
       // The balance and receipt were committed atomically. Repair only the
       // champion trophy if a later profile repair removed it; never re-credit.
-      if (place === 'champion' && !trophyState.hasChampionTrophy) {
+      if (place === 'champion' && (!trophyState.hasChampionTrophy || trophyState.needsRepair)) {
+        const championTrophies = trophyState.hasChampionTrophy
+          ? trophyState.existingTrophies
+          : [...trophyState.existingTrophies, trophy];
         tx.update(playerRef, {
-          trophies: [...trophyState.existingTrophies, trophy],
+          trophies: championTrophies,
           updatedAt: FieldValue.serverTimestamp(),
         });
       }
@@ -771,9 +774,13 @@ async function payCupPrize(db: any, season: number, team: Team | null, place: 'c
     const balance = resolveCupPrizeBalance(player.credits, amount);
     if (!balance) throw new Error('CUP_PRIZE_RECIPIENT_BALANCE_INVALID');
     const shouldAddTrophy = place === 'champion' && !trophyState.hasChampionTrophy;
+    const shouldRepairTrophy = place === 'champion' && trophyState.needsRepair;
+    const championTrophies = shouldAddTrophy
+      ? [...trophyState.existingTrophies, trophy]
+      : trophyState.existingTrophies;
     tx.update(playerRef, {
       credits: balance.balanceAfter,
-      ...(shouldAddTrophy ? { trophies: [...trophyState.existingTrophies, trophy] } : {}),
+      ...(shouldAddTrophy || shouldRepairTrophy ? { trophies: championTrophies } : {}),
       updatedAt: FieldValue.serverTimestamp(),
     });
     tx.create(ledgerRef, {

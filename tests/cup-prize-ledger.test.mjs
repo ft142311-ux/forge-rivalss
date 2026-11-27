@@ -17,6 +17,22 @@ test('matching Cup reward receipt replay returns the original credited amount', 
   assert.equal(resolveCupPrizeReplayAmount(receipt, expected), 400_000);
 });
 
+test('Cup reward receipt replay validates its recorded balance delta and accepts legacy receipts without balance fields', () => {
+  assert.equal(resolveCupPrizeReplayAmount(receipt, expected), 400_000);
+  const { balanceBefore, balanceAfter, ...legacyReceipt } = receipt;
+  assert.equal(resolveCupPrizeReplayAmount(legacyReceipt, expected), 400_000);
+  assert.equal(resolveCupPrizeReplayAmount({ ...legacyReceipt, balanceBefore }, expected), null);
+
+  for (const corrupted of [
+    { ...receipt, balanceBefore: -1 },
+    { ...receipt, balanceAfter: 499_999 },
+    { ...receipt, balanceAfter: '500000' },
+    { ...receipt, balanceBefore: Number.MAX_SAFE_INTEGER, balanceAfter: Number.MAX_SAFE_INTEGER },
+  ]) {
+    assert.equal(resolveCupPrizeReplayAmount(corrupted, expected), null);
+  }
+});
+
 test('Cup reward receipt replay rejects mismatched identity, amount, currency, type, reference or division', () => {
   for (const patch of [
     { userId: 'another-club' },
@@ -73,15 +89,38 @@ test('Cup prize balance accepts canonical legacy integer strings and absent zero
   assert.equal(resolveCupPrizeBalance(100_000, Number.MAX_SAFE_INTEGER), null);
 });
 
-test('Cup champion trophy state accepts legacy empty collections and detects an existing season trophy', () => {
+test('Cup champion trophy state validates canonical awards and normalizes malformed or duplicate season entries', () => {
   assert.deepEqual(resolveCupPrizeTrophyState(undefined, 1), {
     existingTrophies: [],
     hasChampionTrophy: false,
+    needsRepair: false,
   });
-  const existing = [{ id: 'other-trophy' }, { id: 'pyramid-cup-season-2' }];
+
+  const canonical = {
+    id: 'pyramid-cup-season-2',
+    name: 'Кубок Пирамиды — сезон 2',
+    type: 'pyramid_cup_champion',
+    date: '2026-11-27T12:00:00.000Z',
+    season: 2,
+  };
+  const existing = [{ id: 'other-trophy' }, canonical];
   assert.deepEqual(resolveCupPrizeTrophyState(existing, 2), {
     existingTrophies: existing,
     hasChampionTrophy: true,
+    needsRepair: false,
+  });
+
+  const corrupted = { id: 'pyramid-cup-season-2', name: 'Wrong award', type: 'other', date: 'invalid', season: 3 };
+  assert.deepEqual(resolveCupPrizeTrophyState([{ id: 'other-trophy' }, corrupted], 2), {
+    existingTrophies: [{ id: 'other-trophy' }],
+    hasChampionTrophy: false,
+    needsRepair: true,
+  });
+
+  assert.deepEqual(resolveCupPrizeTrophyState([canonical, { ...canonical }], 2), {
+    existingTrophies: [canonical],
+    hasChampionTrophy: true,
+    needsRepair: true,
   });
   assert.equal(resolveCupPrizeTrophyState({}, 1), null);
   assert.equal(resolveCupPrizeTrophyState('invalid', 1), null);

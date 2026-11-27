@@ -438,20 +438,29 @@ test('prepared Season 2 receives its complete Pyramid Cup before publication in 
   assert.equal((await cupRef.get()).data().status, 'active');
   assert.deepEqual((await economyRefs[0].get()).data(), championLedger);
 
-  // Restore the profile with its already-credited balance but remove the Cup
-  // trophy. Replay repairs that trophy only; it must never credit a second time.
-  const championWithoutCupTrophy = {
+  // Restore the profile with its already-credited balance but corrupt the Cup
+  // trophy payload. Replay must replace the forged record without re-crediting.
+  const cupTrophyId = `pyramid-cup-season-${season}`;
+  const championWithCorruptedCupTrophy = {
     ...championAfterFirstPayout,
-    trophies: championAfterFirstPayout.trophies.filter(trophy => trophy.id !== `pyramid-cup-season-${season}`),
+    trophies: [
+      ...championAfterFirstPayout.trophies.filter(trophy => trophy.id !== cupTrophyId),
+      { id: cupTrophyId, name: 'Wrong award', type: 'other', date: 'invalid', season: season + 1 },
+    ],
   };
-  await db.collection('players_v14').doc(humanUid).set(championWithoutCupTrophy);
+  await db.collection('players_v14').doc(humanUid).set(championWithCorruptedCupTrophy);
   const resumedFinalization = await runPyramidCupCycle();
   assert.equal(resumedFinalization.completed, true, JSON.stringify(resumedFinalization));
   const resumedCup = (await cupRef.get()).data();
   assert.equal(resumedCup.status, 'completed');
   const resumedChampion = (await db.collection('players_v14').doc(humanUid).get()).data();
   assert.equal(resumedChampion.credits, 1_035_000);
-  assert.equal(resumedChampion.trophies.filter(trophy => trophy.id === 'pyramid-cup-season-' + season).length, 1);
+  const repairedCupTrophies = resumedChampion.trophies.filter(trophy => trophy.id === cupTrophyId);
+  assert.equal(repairedCupTrophies.length, 1);
+  assert.equal(repairedCupTrophies[0].name, `Кубок Пирамиды — сезон ${season}`);
+  assert.equal(repairedCupTrophies[0].type, 'pyramid_cup_champion');
+  assert.equal(repairedCupTrophies[0].season, season);
+  assert.ok(Number.isFinite(Date.parse(repairedCupTrophies[0].date)));
   assert.deepEqual((await economyRefs[0].get()).data(), championLedger);
 
   // A retry after completion must be a strict no-op: no second reward,
