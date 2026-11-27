@@ -124,12 +124,13 @@ export async function markMatchViewedAction(idToken: string, matchId: string) {
       }
 
       const found = matchSnaps.some((snap: any) => snap.exists);
-      if (!found) return { success: true, persisted: false, localOnly: true };
+      if (!found) return { success: false, error: 'MATCH_NOT_FOUND' };
 
       const profile = profileSnap.exists ? profileSnap.data() || {} : null;
       if (!profile) return { success: false, error: 'MATCH_ACCESS_DENIED' };
 
       const acknowledged = [];
+      let unfinishedParticipantFound = false;
       for (let index = 0; index < candidates.length; index += 1) {
         const snap = matchSnaps[index];
         if (!snap?.exists) continue;
@@ -140,10 +141,20 @@ export async function markMatchViewedAction(idToken: string, matchId: string) {
         const rankParticipant = !participant
           ? await isRankBasedLeagueParticipant(db, uid, match, candidates[index].collectionName, profile)
           : false;
-        if (participant || rankParticipant) acknowledged.push(candidates[index]);
+        if (!participant && !rankParticipant) continue;
+        if (!isMatchReportFinished(match)) {
+          unfinishedParticipantFound = true;
+          continue;
+        }
+        acknowledged.push(candidates[index]);
       }
 
-      if (!acknowledged.length) return { success: false, error: 'MATCH_ACCESS_DENIED' };
+      if (!acknowledged.length) {
+        return {
+          success: false,
+          error: unfinishedParticipantFound ? 'MATCH_NOT_FINISHED' : 'MATCH_ACCESS_DENIED',
+        };
+      }
 
       // update is non-creating: the transaction never recreates a report that
       // was deleted between the collection lookup and this acknowledgement.
