@@ -722,7 +722,8 @@ async function payCupPrize(db: any, season: number, team: Team | null, place: 'c
     throw new Error('CUP_PRIZE_DIVISION_INVALID');
   }
   const amount = Math.floor(base * (place === 'champion' ? 0.10 : 0.05));
-  if (!Number.isSafeInteger(amount) || amount <= 0) throw new Error('CUP_PRIZE_AMOUNT_INVALID');
+  if (amount <= 0) return 0;
+  if (!Number.isSafeInteger(amount)) throw new Error('CUP_PRIZE_AMOUNT_INVALID');
   const playerRef = db.collection('players_v14').doc(team.id);
   const ledgerRef = db.collection('economy_transactions').doc(`pyramid_cup_S${season}_${place}_${team.id}`);
   return db.runTransaction(async (tx: any) => {
