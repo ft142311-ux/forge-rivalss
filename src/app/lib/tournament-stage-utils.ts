@@ -108,6 +108,23 @@ export function isTournamentStageMatchSetComplete(
     }
   }
 
+  if (stage !== 'groups') {
+    // Every knockout participant must appear in exactly one fixture in this
+    // stage. Otherwise a duplicate team can advance twice while another
+    // qualifier silently disappears from the bracket.
+    const stageParticipantIds = new Set<string>();
+    for (const entry of entries) {
+      const match = entry.data || {};
+      const homeId = String(match.homeId || '').trim();
+      const awayId = String(match.awayId || '').trim();
+      if (!homeId || !awayId || homeId === awayId ||
+          stageParticipantIds.has(homeId) || stageParticipantIds.has(awayId)) return false;
+      stageParticipantIds.add(homeId);
+      stageParticipantIds.add(awayId);
+    }
+    if (stageParticipantIds.size !== expectedCount * 2) return false;
+  }
+
   for (const entry of entries) {
     const match = entry.data || {};
     if (!isTournamentStageMatchComplete(match, stage)) return false;
