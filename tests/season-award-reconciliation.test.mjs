@@ -161,3 +161,14 @@ test('season award trophy collection corruption blocks settlement rather than re
   assert.match(source, /const trophyState = resolveSeasonAwardTrophyState\([\s\S]*?if \(!trophyState\)\s*\{\s*return \{ settled: false, prize, trophy: false, accountingConflict: true \};/);
   assert.doesNotMatch(source, /Array\.isArray\(player\.trophies\) \? player\.trophies : \[\]/);
 });
+
+test('season award replay with a ledger but deleted player profile does not attempt a profile update', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const source = await readFile(new URL('../src/app/actions/season-rollover.ts', import.meta.url), 'utf8');
+  assert.match(source, /recipientState === 'ALREADY_APPLIED' && !playerSnap\.exists/);
+  const start = source.indexOf("if (recipientState === 'ALREADY_APPLIED' && !playerSnap.exists)");
+  const end = source.indexOf('const trophyState = resolveSeasonAwardTrophyState', start);
+  const missingProfileReplay = source.slice(start, end);
+  assert.match(missingProfileReplay, /return \{ settled: true, prize, trophy:/);
+  assert.doesNotMatch(missingProfileReplay, /t\.update\(playerRef/);
+});
