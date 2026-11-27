@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { resolveCupPrizeBalance, resolveCupPrizeReplayAmount } from '../src/app/lib/cup-prize-ledger.ts';
+import { resolveCupPrizeBalance, resolveCupPrizeReplayAmount, resolveCupPrizeTrophyState } from '../src/app/lib/cup-prize-ledger.ts';
 
 const expected = {
   userId: 'human-club-1',
@@ -42,19 +42,51 @@ test('Cup prize settlement uses the replay amount instead of recording a false z
 });
 
 
-test('Cup prize balance updates require a non-negative safe integer and reject overflow', () => {
+test('Cup prize balance accepts canonical legacy integer strings and absent zero balances without allowing overflow', () => {
   assert.deepEqual(resolveCupPrizeBalance(100_000, 35_000), {
     balanceBefore: 100_000,
     balanceAfter: 135_000,
   });
+  assert.deepEqual(resolveCupPrizeBalance('100000', 35_000), {
+    balanceBefore: 100_000,
+    balanceAfter: 135_000,
+  });
+  assert.deepEqual(resolveCupPrizeBalance(' 100000 ', 35_000), {
+    balanceBefore: 100_000,
+    balanceAfter: 135_000,
+  });
+  assert.deepEqual(resolveCupPrizeBalance(undefined, 35_000), {
+    balanceBefore: 0,
+    balanceAfter: 35_000,
+  });
+  assert.deepEqual(resolveCupPrizeBalance(null, 35_000), {
+    balanceBefore: 0,
+    balanceAfter: 35_000,
+  });
 
-  for (const invalidBalance of [undefined, null, '100000', Number.NaN, Number.POSITIVE_INFINITY, -1, 1.5]) {
+  for (const invalidBalance of ['', '   ', 'not-a-number', '1.5', '-1', Number.NaN, Number.POSITIVE_INFINITY, -1, 1.5, true, {}]) {
     assert.equal(resolveCupPrizeBalance(invalidBalance, 35_000), null);
   }
 
   assert.equal(resolveCupPrizeBalance(Number.MAX_SAFE_INTEGER, 35_000), null);
   assert.equal(resolveCupPrizeBalance(100_000, 0), null);
   assert.equal(resolveCupPrizeBalance(100_000, Number.MAX_SAFE_INTEGER), null);
+});
+
+test('Cup champion trophy state accepts legacy empty collections and detects an existing season trophy', () => {
+  assert.deepEqual(resolveCupPrizeTrophyState(undefined, 1), {
+    existingTrophies: [],
+    hasChampionTrophy: false,
+  });
+  const existing = [{ id: 'other-trophy' }, { id: 'pyramid-cup-season-2' }];
+  assert.deepEqual(resolveCupPrizeTrophyState(existing, 2), {
+    existingTrophies: existing,
+    hasChampionTrophy: true,
+  });
+  assert.equal(resolveCupPrizeTrophyState({}, 1), null);
+  assert.equal(resolveCupPrizeTrophyState('invalid', 1), null);
+  assert.equal(resolveCupPrizeTrophyState([], 0), null);
+  assert.equal(resolveCupPrizeTrophyState([], 1.5), null);
 });
 
 test('Cup prize settlement refuses malformed balances and trophy collections instead of overwriting them', () => {
@@ -64,6 +96,7 @@ test('Cup prize settlement refuses malformed balances and trophy collections ins
   const settlement = source.slice(start, end);
 
   assert.match(settlement, /resolveCupPrizeBalance\(player\.credits, amount\)/);
+  assert.match(settlement, /resolveCupPrizeTrophyState\(player\.trophies, season\)/);
   assert.match(settlement, /CUP_PRIZE_RECIPIENT_BALANCE_INVALID/);
   assert.match(settlement, /CUP_PRIZE_TROPHY_COLLECTION_INVALID/);
   assert.match(settlement, /credits: balance\.balanceAfter/);

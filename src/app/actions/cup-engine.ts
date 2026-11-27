@@ -10,7 +10,7 @@ import { MATCH_COLLECTIONS } from '@/app/lib/match-storage';
 import { resolveSeasonLifecycleWindow } from './season-boundary';
 import { isMatchReportFinished } from '@/app/lib/match-report-utils';
 import { isCanonicalPyramidCupMatchContract, isCanonicalPyramidCupOpeningField, isPyramidCupRoundProgressionValid, isCupParticipantMatchSnapshotCompatible, isValidCupParticipantMatchSnapshot, isValidPyramidCupWinner } from '@/app/lib/cup-participant-integrity';
-import { resolveCupPrizeBalance, resolveCupPrizeReplayAmount } from '@/app/lib/cup-prize-ledger';
+import { resolveCupPrizeBalance, resolveCupPrizeReplayAmount, resolveCupPrizeTrophyState } from '@/app/lib/cup-prize-ledger';
 
 const LEAGUE_ID = 'ALPHA';
 const CUP_COLLECTION = 'cup_pyramid_v1';
@@ -733,6 +733,18 @@ async function payCupPrize(db: any, season: number, team: Team | null, place: 'c
       throw new Error('STAGING_SEASON_ONE_RESET_IN_PROGRESS');
     }
     const [ledgerSnap, playerSnap] = await Promise.all([tx.get(ledgerRef), tx.get(playerRef)]);
+    if (!playerSnap.exists) throw new Error('CUP_PRIZE_RECIPIENT_PROFILE_MISSING');
+    const player = playerSnap.data() || {};
+    const trophyState = resolveCupPrizeTrophyState(player.trophies, season);
+    if (!trophyState) throw new Error('CUP_PRIZE_TROPHY_COLLECTION_INVALID');
+    const trophyId = `pyramid-cup-season-${season}`;
+    const trophy = {
+      id: trophyId,
+      name: `Кубок Пирамиды — сезон ${season}`,
+      type: 'pyramid_cup_champion',
+      date: new Date().toISOString(),
+      season,
+    };
     const rewardType = place === 'champion' ? 'PYRAMID_CUP_CHAMPION_REWARD' : 'PYRAMID_CUP_FINALIST_REWARD';
     const referenceId = `cup_s${season}_l${LEAGUE_ID}`;
     if (ledgerSnap.exists) {
@@ -746,33 +758,22 @@ async function payCupPrize(db: any, season: number, team: Team | null, place: 'c
         division: Number(team.level),
       });
       if (replayAmount === null) throw new Error('CUP_PRIZE_RECEIPT_CONFLICT');
-      // A previous attempt may have credited this prize before the Cup root
-      // completion transaction failed. Return the original amount on replay
-      // so the completed Cup summary does not incorrectly record zero.
+      // The balance and receipt were committed atomically. Repair only the
+      // champion trophy if a later profile repair removed it; never re-credit.
+      if (place === 'champion' && !trophyState.hasChampionTrophy) {
+        tx.update(playerRef, {
+          trophies: [...trophyState.existingTrophies, trophy],
+          updatedAt: FieldValue.serverTimestamp(),
+        });
+      }
       return replayAmount;
     }
-    if (!playerSnap.exists) throw new Error('CUP_PRIZE_RECIPIENT_PROFILE_MISSING');
-    const player = playerSnap.data() || {};
     const balance = resolveCupPrizeBalance(player.credits, amount);
     if (!balance) throw new Error('CUP_PRIZE_RECIPIENT_BALANCE_INVALID');
-    if (player.trophies !== undefined && player.trophies !== null && !Array.isArray(player.trophies)) {
-      throw new Error('CUP_PRIZE_TROPHY_COLLECTION_INVALID');
-    }
-    const existingTrophies = Array.isArray(player.trophies) ? player.trophies : [];
-    const trophyId = `pyramid-cup-season-${season}`;
-    const hasPyramidCupTrophy = existingTrophies.some((item: any) => item?.id === trophyId);
-    const shouldAddTrophy = place === 'champion' && !hasPyramidCupTrophy;
+    const shouldAddTrophy = place === 'champion' && !trophyState.hasChampionTrophy;
     tx.update(playerRef, {
       credits: balance.balanceAfter,
-      ...(shouldAddTrophy ? {
-        trophies: [...existingTrophies, {
-          id: trophyId,
-          name: `Кубок Пирамиды — сезон ${season}`,
-          type: 'pyramid_cup_champion',
-          date: new Date().toISOString(),
-          season,
-        }],
-      } : {}),
+      ...(shouldAddTrophy ? { trophies: [...trophyState.existingTrophies, trophy] } : {}),
       updatedAt: FieldValue.serverTimestamp(),
     });
     tx.create(ledgerRef, {
@@ -783,7 +784,6 @@ async function payCupPrize(db: any, season: number, team: Team | null, place: 'c
     return amount;
   });
 }
-
 async function finishTechnically(db: any, season: number, round: number, pairing: Pairing, collectionName: 'cup_matches' | 'matches_v2' = 'cup_matches') {
   if (!pairing.home || !pairing.away || !pairing.matchId) return false;
   const ref = db.collection(collectionName).doc(String(pairing.matchId));

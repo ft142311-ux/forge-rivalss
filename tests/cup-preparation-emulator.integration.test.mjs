@@ -408,6 +408,8 @@ test('prepared Season 2 receives its complete Pyramid Cup before publication in 
     scoreA: 2,
     scoreB: 0,
   });
+  // Legacy integer-string balances are accepted by the Cup settlement reader.
+  await db.collection('players_v14').doc(humanUid).update({ credits: '1000000' });
   const completed = await runPyramidCupCycle();
   assert.equal(completed.completed, true, JSON.stringify(completed));
   const completedCup = (await cupRef.get()).data();
@@ -422,10 +424,27 @@ test('prepared Season 2 receives its complete Pyramid Cup before publication in 
   assert.equal(championLedger.amount, 35_000);
   assert.equal(championLedger.type, 'PYRAMID_CUP_CHAMPION_REWARD');
 
-  // Simulate interruption after the champion payout committed but before
-  // the Cup root completion write became durable. Reprocessing must replay
-  // the receipt without crediting the balance or duplicating the trophy.
+  const championAfterFirstPayout = (await db.collection('players_v14').doc(humanUid).get()).data();
+  assert.equal(championAfterFirstPayout.credits, 1_035_000);
+
+  // Simulate an interrupted root completion. A replay receipt must not bypass
+  // the recipient-profile guard, even though the credits were already posted.
   await cupRef.update({ status: 'active' });
+  await db.collection('players_v14').doc(humanUid).delete();
+  await assert.rejects(
+    () => runPyramidCupCycle(),
+    /CUP_PRIZE_RECIPIENT_PROFILE_MISSING/,
+  );
+  assert.equal((await cupRef.get()).data().status, 'active');
+  assert.deepEqual((await economyRefs[0].get()).data(), championLedger);
+
+  // Restore the profile with its already-credited balance but remove the Cup
+  // trophy. Replay repairs that trophy only; it must never credit a second time.
+  const championWithoutCupTrophy = {
+    ...championAfterFirstPayout,
+    trophies: championAfterFirstPayout.trophies.filter(trophy => trophy.id !== `pyramid-cup-season-${season}`),
+  };
+  await db.collection('players_v14').doc(humanUid).set(championWithoutCupTrophy);
   const resumedFinalization = await runPyramidCupCycle();
   assert.equal(resumedFinalization.completed, true, JSON.stringify(resumedFinalization));
   const resumedCup = (await cupRef.get()).data();

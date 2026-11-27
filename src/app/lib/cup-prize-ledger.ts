@@ -57,17 +57,49 @@ export function resolveCupPrizeBalance(
   currentCredits: unknown,
   rewardAmount: unknown,
 ): CupPrizeBalance | null {
-  if (typeof currentCredits !== 'number' ||
-      !Number.isSafeInteger(currentCredits) ||
-      currentCredits < 0 ||
+  // Match the canonical economy readers: absent legacy balances mean zero,
+  // and integer strings remain readable during numeric-field migrations.
+  let balanceBefore: number;
+  if (currentCredits === undefined || currentCredits === null) {
+    balanceBefore = 0;
+  } else {
+    if (typeof currentCredits !== 'number' && typeof currentCredits !== 'string') return null;
+    if (typeof currentCredits === 'string' && currentCredits.trim().length === 0) return null;
+    balanceBefore = Number(currentCredits);
+  }
+  if (!Number.isSafeInteger(balanceBefore) || balanceBefore < 0 ||
       typeof rewardAmount !== 'number' ||
       !Number.isSafeInteger(rewardAmount) ||
       rewardAmount <= 0) {
     return null;
   }
 
-  const balanceAfter = currentCredits + rewardAmount;
+  const balanceAfter = balanceBefore + rewardAmount;
   if (!Number.isSafeInteger(balanceAfter)) return null;
 
-  return { balanceBefore: currentCredits, balanceAfter };
+  return { balanceBefore, balanceAfter };
+}
+
+export type CupPrizeTrophyState = {
+  existingTrophies: unknown[];
+  hasChampionTrophy: boolean;
+};
+
+/** Validate the trophy collection and detect the season's unique champion trophy. */
+export function resolveCupPrizeTrophyState(
+  trophies: unknown,
+  season: unknown,
+): CupPrizeTrophyState | null {
+  const seasonNumber = Number(season);
+  if (!Number.isSafeInteger(seasonNumber) || seasonNumber < 1 ||
+      (trophies !== undefined && trophies !== null && !Array.isArray(trophies))) {
+    return null;
+  }
+  const existingTrophies: unknown[] = Array.isArray(trophies) ? trophies : [];
+  const trophyId = `pyramid-cup-season-${seasonNumber}`;
+  const hasChampionTrophy = existingTrophies.some(item =>
+    Boolean(item && typeof item === 'object' && !Array.isArray(item) &&
+      (item as Record<string, unknown>).id === trophyId)
+  );
+  return { existingTrophies, hasChampionTrophy };
 }
