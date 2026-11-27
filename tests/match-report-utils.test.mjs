@@ -182,7 +182,10 @@ test('view acknowledgement updates every existing authorized report copy without
   assert.match(action, /const candidates = MATCH_REPORT_COLLECTIONS\.map/);
   assert.match(action, /candidates\.map\(candidate => tx\.get\(candidate\.ref\)\)/);
   assert.match(action, /tx\.update\(candidate\.ref, \{\s*seen: true/);
-  assert.match(action, /persisted: false, localOnly: true/);
+  assert.match(action, /persisted: true/);
+  assert.match(action, /MATCH_NOT_FINISHED/);
+  assert.match(action, /MATCH_NOT_FOUND/);
+  assert.doesNotMatch(action, /localOnly: true/);
   assert.doesNotMatch(action, /await ref\.set\(\{\s*seen: true/);
 });
 
@@ -213,4 +216,13 @@ test('Universal Match Core and Pyramid Cup share the terminal match-report predi
   assert.match(universal, /isMatchReportFinished\(match\)/);
   assert.match(cup, /isMatchReportFinished\(match\)/);
   assert.equal(isMatchReportFinished({ isFinished: false, status: 'resolved' }), true);
+});
+
+
+test('match report lookup prefers a completed canonical copy over an unfinished legacy mirror', () => {
+  const action = readFileSync(new URL('../src/app/actions/match-report.ts', import.meta.url), 'utf8');
+  assert.match(action, /Promise\.all\(MATCH_REPORT_COLLECTIONS\.map/);
+  assert.match(action, /isCanonicalMatchReportCopy/);
+  assert.match(action, /Number\(isMatchReportFinished\(right\.match\)\) - Number\(isMatchReportFinished\(left\.match\)\)/);
+  assert.match(action, /Number\(isCanonicalMatchReportCopy\(right\.collectionName, right\.match\)\)/);
 });

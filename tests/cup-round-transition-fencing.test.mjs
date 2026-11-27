@@ -60,3 +60,14 @@ test('existing next-round cup fixtures must match the complete immutable match c
   assert.match(transition, /isCupRoundFixtureCompatible\(existing, entry\.expectedFixture\)/);
   assert.match(transition, /CUP_STAGE_FIXTURE_CONFLICT/);
 });
+
+
+test('Cup progression rejects foreign winners and requires the final result before prize settlement', () => {
+  const cycle = source.slice(source.indexOf('export async function runPyramidCupCycle'));
+  assert.match(cycle, /isValidPyramidCupWinner\(match, homeId, awayId\)/);
+  assert.match(cycle, /throw new Error\('CUP_MATCH_WINNER_INVALID'\)/);
+  assert.match(cycle, /throw new Error\('CUP_FINAL_RESULT_INVALID'\)/);
+  assert.ok(cycle.indexOf('CUP_FINAL_RESULT_INVALID') < cycle.indexOf("payCupPrize(db, season, winnerTeam, 'champion')"));
+  assert.match(cycle, /expectedCompetition: 'pyramid-cup'/);
+  assert.match(source, /if \(!id \|\| !name \|\| typeof value\.isBot !== 'boolean'/);
+});

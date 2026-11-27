@@ -161,7 +161,7 @@ async function readActiveSeasonCupIntegrity(db: any, season: number) {
   }
   const fixtureCount = Object.keys(fixtureById).length;
   const currentRound = Number(cup?.currentRound || 0);
-  const progressionValid = isPyramidCupRoundProgressionValid(rounds, currentRound, restTeams);
+  const progressionValid = isPyramidCupRoundProgressionValid(rounds, currentRound, restTeams, participants);
   const expectedPairings = [56, 32, 16, 8, 4, 2, 1];
   const expectedParticipants = [112, 64, 32, 16, 8, 4, 2];
   let roundsValid = Number.isInteger(currentRound) && currentRound >= 1 && currentRound <= 7;

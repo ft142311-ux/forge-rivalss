@@ -36,9 +36,10 @@ function makeCupFixture(patch = {}) {
 }
 
 test('Cup Match Core validates the canonical match contract and both frozen rosters before terminal handling', () => {
-  const contractGuard = resolver.indexOf('isCanonicalPyramidCupMatchContract(match, matchId)');
+  const contractGuard = resolver.indexOf('if (isPyramidCupMatch)');
   const terminalFastPath = resolver.indexOf('if (isMatchReportFinished(match))');
   assert.ok(contractGuard >= 0 && terminalFastPath > contractGuard);
+  assert.match(resolver, /options\?\.expectedCompetition === 'pyramid-cup'/);
   assert.match(resolver, /isValidCupParticipantMatchSnapshot\(match\.homeTeamSnapshot, cupHomeId\)/);
   assert.match(resolver, /isValidCupParticipantMatchSnapshot\(match\.awayTeamSnapshot, cupAwayId\)/);
   assert.match(resolver, /throw new Error\('CUP_MATCH_CONTRACT_INVALID'\)/);
@@ -89,9 +90,9 @@ test('Cup frozen roster validation requires five unique player identities', () =
   }, 'club-home'), false);
 });
 
-test('Cup Match Core always simulates from frozen snapshots while other modes use live profiles', () => {
-  assert.match(resolver, /const frozenCupHome = collectionName === 'cup_matches' \? match\.homeTeamSnapshot : null/);
-  assert.match(resolver, /const frozenCupAway = collectionName === 'cup_matches' \? match\.awayTeamSnapshot : null/);
+test('Cup Match Core always simulates from frozen snapshots in dedicated and legacy collections', () => {
+  assert.match(resolver, /const frozenCupHome = isPyramidCupMatch \? match\.homeTeamSnapshot : null/);
+  assert.match(resolver, /const frozenCupAway = isPyramidCupMatch \? match\.awayTeamSnapshot : null/);
   assert.match(resolver, /const homeTeamSnapshot = frozenCupHome \|\| buildMatchTeamSnapshot\(homeData/);
   assert.match(resolver, /const awayTeamSnapshot = frozenCupAway \|\| buildMatchTeamSnapshot\(awayData/);
   assert.match(resolver, /teamA: homeTeamSnapshot/);

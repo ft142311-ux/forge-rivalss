@@ -33,7 +33,7 @@ export type UniversalMatchResult = {
  */
 export async function resolveUniversalMatchDocument(
   matchId: string,
-  options?: { requireDue?: boolean; collectionName?: 'matches_v2' | 'cup_matches'; rolloverLock?: { ownerId: string; token: string } }
+  options?: { requireDue?: boolean; collectionName?: 'matches_v2' | 'cup_matches'; expectedCompetition?: 'pyramid-cup'; rolloverLock?: { ownerId: string; token: string } }
 ): Promise<UniversalMatchResult> {
   assertMatchDocumentId(matchId, { rejectBackslash: true });
 
@@ -51,7 +51,11 @@ export async function resolveUniversalMatchDocument(
     const snap = await t.get(ref);
     if (!snap.exists) throw new Error('MATCH_NOT_FOUND');
     const match: any = snap.data() || {};
-    if (collectionName === 'cup_matches') {
+    const isPyramidCupMatch = options?.expectedCompetition === 'pyramid-cup' ||
+      collectionName === 'cup_matches' ||
+      match.source === 'pyramid-cup' ||
+      (match.type === 'cup' && match.matchType === 'cup');
+    if (isPyramidCupMatch) {
       const cupHomeId = String(match.homeId ?? '');
       const cupAwayId = String(match.awayId ?? '');
       if (!isCanonicalPyramidCupMatchContract(match, matchId) ||
@@ -141,8 +145,8 @@ export async function resolveUniversalMatchDocument(
     const awayData: any = awaySnap.exists ? awaySnap.data() || {} : {};
     // The Cup contract was validated before the terminal fast path; never fall back
     // to mutable live rosters for a Cup fixture.
-    const frozenCupHome = collectionName === 'cup_matches' ? match.homeTeamSnapshot : null;
-    const frozenCupAway = collectionName === 'cup_matches' ? match.awayTeamSnapshot : null;
+    const frozenCupHome = isPyramidCupMatch ? match.homeTeamSnapshot : null;
+    const frozenCupAway = isPyramidCupMatch ? match.awayTeamSnapshot : null;
     if ((!homeSnap.exists && !frozenCupHome) || (!awaySnap.exists && !frozenCupAway)) {
       throw new Error('PLAYER_NOT_FOUND');
     }

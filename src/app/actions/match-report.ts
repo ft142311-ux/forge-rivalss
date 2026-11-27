@@ -17,6 +17,17 @@ function isMatchReportParticipant(match: any, uid: string): boolean {
   ].some(value => String(value || '').trim() === managerId);
 }
 
+function isCanonicalMatchReportCopy(collectionName: string, match: any): boolean {
+  const mode = String(match?.matchType || match?.type || 'league').toLowerCase();
+  const expectedCollection = mode === 'cup' ? MATCH_COLLECTIONS.cup
+    : mode === 'friendly' ? MATCH_COLLECTIONS.friendly
+    : mode === 'association' || mode === 'cw-basket' ? MATCH_COLLECTIONS.association
+    : mode === 'tournament' ? MATCH_COLLECTIONS.tournament
+    : mode === 'trial' || mode === 'training' ? MATCH_COLLECTIONS.trial
+    : MATCH_COLLECTIONS.league;
+  return collectionName === expectedCollection;
+}
+
 /**
  * Legacy league fixtures may identify participants by their league rank rather
  * than UID. Rank alone is not an identity: it repeats across every group.
@@ -66,24 +77,45 @@ export async function getMatchReportAction(idToken: string, matchId: string) {
 
   const profileSnap = await db.collection('players_v14').doc(uid).get();
   const profile = profileSnap.exists ? profileSnap.data() || {} : null;
+  const copies = await Promise.all(MATCH_REPORT_COLLECTIONS.map(async (collectionName, index) => ({
+    collectionName,
+    index,
+    snap: await db.collection(collectionName).doc(id).get(),
+  })));
   let found = false;
+  const authorized: Array<{ collectionName: string; index: number; match: any }> = [];
 
-  for (const collectionName of MATCH_REPORT_COLLECTIONS) {
-    const snap = await db.collection(collectionName).doc(id).get();
-    if (!snap.exists) continue;
+  for (const copy of copies) {
+    if (!copy.snap.exists) continue;
     found = true;
-    const match: any = snap.data() || {};
+    const match: any = copy.snap.data() || {};
     if (!profile || !isMatchWithinClubLifetime(match, profile.createdAt)) continue;
 
     const participant = isMatchReportParticipant(match, uid);
     const rankParticipant = !participant
-      ? await isRankBasedLeagueParticipant(db, uid, match, collectionName, profile)
+      ? await isRankBasedLeagueParticipant(db, uid, match, copy.collectionName, profile)
       : false;
     if (!participant && !rankParticipant) continue;
-
-    return { success: true, match: serializeMatchReport({ ...match, id: snap.id }), collection: collectionName };
+    authorized.push({
+      collectionName: copy.collectionName,
+      index: copy.index,
+      match: { ...match, id: copy.snap.id },
+    });
   }
-  return { success: false, error: found ? 'MATCH_ACCESS_DENIED' : 'MATCH_NOT_FOUND' };
+
+  if (!authorized.length) return { success: false, error: found ? 'MATCH_ACCESS_DENIED' : 'MATCH_NOT_FOUND' };
+  authorized.sort((left, right) =>
+    Number(isMatchReportFinished(right.match)) - Number(isMatchReportFinished(left.match)) ||
+    Number(isCanonicalMatchReportCopy(right.collectionName, right.match)) -
+      Number(isCanonicalMatchReportCopy(left.collectionName, left.match)) ||
+    left.index - right.index
+  );
+  const selected = authorized[0];
+  return {
+    success: true,
+    match: serializeMatchReport(selected.match),
+    collection: selected.collectionName,
+  };
 }
 
 /**

@@ -9,7 +9,7 @@ import { buildMatchTeamSnapshot, type MatchTeamSnapshot } from '@/app/lib/match-
 import { MATCH_COLLECTIONS } from '@/app/lib/match-storage';
 import { resolveSeasonLifecycleWindow } from './season-boundary';
 import { isMatchReportFinished } from '@/app/lib/match-report-utils';
-import { isCanonicalPyramidCupMatchContract, isCanonicalPyramidCupOpeningField, isPyramidCupRoundProgressionValid, isCupParticipantMatchSnapshotCompatible, isValidCupParticipantMatchSnapshot } from '@/app/lib/cup-participant-integrity';
+import { isCanonicalPyramidCupMatchContract, isCanonicalPyramidCupOpeningField, isPyramidCupRoundProgressionValid, isCupParticipantMatchSnapshotCompatible, isValidCupParticipantMatchSnapshot, isValidPyramidCupWinner } from '@/app/lib/cup-participant-integrity';
 import { resolveCupPrizeReplayAmount } from '@/app/lib/cup-prize-ledger';
 
 const LEAGUE_ID = 'ALPHA';
@@ -200,8 +200,19 @@ function createPreliminary(teams: Team[]): Pairing[] {
   return pairs;
 }
 function teamFromPublic(value: any): Team | null {
-  if (!value?.id) return null;
-  return { id: String(value.id), name: String(value.name || value.id), level: Number(value.level || 4), group: Number(value.group || 1), rank: Number(value.rank || 8), isBot: Boolean(value.isBot), seed: Number(value.seed || 0), matchSnapshot: Array.isArray(value.matchSnapshot?.players) ? value.matchSnapshot : undefined };
+  if (!value || typeof value !== 'object') return null;
+  const id = String(value.id || '').trim();
+  const name = String(value.name || '').trim();
+  const level = Number(value.level);
+  const group = Number(value.group);
+  const rank = Number(value.rank);
+  const seed = Number(value.seed);
+  if (!id || !name || typeof value.isBot !== 'boolean' ||
+      !Number.isInteger(level) || level < 1 || level > 4 ||
+      !Number.isInteger(group) || group < 1 || group > Math.pow(2, level - 1) ||
+      !Number.isInteger(rank) || rank < 1 || rank > TEAMS_PER_GROUP ||
+      !Number.isInteger(seed) || seed < 1 || seed > TOTAL_TEAMS) return null;
+  return { id, name, level, group, rank, isBot: value.isBot, seed, matchSnapshot: Array.isArray(value.matchSnapshot?.players) ? value.matchSnapshot : undefined };
 }
 function buildRoundPairings(round: number, input: Team[]): Pairing[] {
   const teams = [...input].sort(compareStrength);
@@ -1014,6 +1025,7 @@ export async function runPyramidCupCycle() {
         storedRounds,
         currentRoundBeforeRepair,
         cup.data.openingRoundRestTeams,
+        cup.data.participants,
       )) {
     console.error('[PYRAMID CUP] Bracket integrity check failed', {
       cupId: cup.data.id,
@@ -1051,31 +1063,69 @@ export async function runPyramidCupCycle() {
   let resolved = 0;
 
   for (const pairing of pairings) {
-    if (!pairing?.matchId || pairing.status !== 'scheduled') continue;
+    if (!pairing?.matchId) throw new Error('CUP_MATCH_ID_MISSING');
+    if (!['scheduled', 'finished'].includes(String(pairing.status || '').toLowerCase())) {
+      throw new Error('CUP_PAIRING_STATUS_INVALID');
+    }
     const dedicatedRef = db.collection(MATCH_COLLECTIONS.cup).doc(String(pairing.matchId));
     const dedicatedSnap = await dedicatedRef.get();
     const legacyRef = dedicatedSnap.exists ? null : db.collection('matches_v2').doc(String(pairing.matchId));
     const legacySnap = legacyRef ? await legacyRef.get() : null;
     const matchRef = dedicatedSnap.exists ? dedicatedRef : legacyRef;
     const matchSnap = dedicatedSnap.exists ? dedicatedSnap : legacySnap;
-    if (!matchRef || !matchSnap?.exists) continue;
+    if (!matchRef || !matchSnap?.exists) {
+      if (pairing.status === 'finished') throw new Error('CUP_MATCH_DOCUMENT_MISSING');
+      continue;
+    }
     let match: any = matchSnap.data() || {};
+    const matchCollection = dedicatedSnap.exists ? 'cup_matches' : 'matches_v2';
+    const homeId = String(pairing.home?.id || '').trim();
+    const awayId = String(pairing.away?.id || '').trim();
+    if (!isCanonicalPyramidCupMatchContract(match, String(pairing.matchId)) ||
+        !isValidCupParticipantMatchSnapshot(match.homeTeamSnapshot, homeId) ||
+        !isValidCupParticipantMatchSnapshot(match.awayTeamSnapshot, awayId)) {
+      throw new Error('CUP_MATCH_CONTRACT_INVALID');
+    }
+    if (pairing.status === 'finished') {
+      if (!isMatchReportFinished(match) ||
+          !isValidPyramidCupWinner(match, homeId, awayId) ||
+          String(match.winnerId).trim() !== String(pairing.winnerId || '').trim()) {
+        throw new Error('CUP_BRACKET_RESULT_CONFLICT');
+      }
+      continue;
+    }
     const startMs = match.startTime?.toMillis?.() ?? Date.parse(String(match.startTime || match.scheduledAt || ''));
     if (Number.isFinite(startMs) && startMs > now) continue;
     if (!isMatchReportFinished(match)) {
-      try { await resolveUniversalMatchDocument(String(pairing.matchId), { requireDue: true, collectionName: dedicatedSnap.exists ? 'cup_matches' : 'matches_v2' }); resolved++; }
-      catch (error) { console.error('[PYRAMID CUP] Match Core resolution failed', pairing.matchId, error); }
+      try {
+        await resolveUniversalMatchDocument(String(pairing.matchId), {
+          requireDue: true,
+          collectionName: matchCollection,
+          expectedCompetition: 'pyramid-cup',
+        });
+        resolved++;
+      } catch (error: any) {
+        if (['CUP_MATCH_CONTRACT_INVALID', 'STAGING_SEASON_ONE_RESET_IN_PROGRESS'].includes(String(error?.message || ''))) {
+          throw error;
+        }
+        console.error('[PYRAMID CUP] Match Core resolution failed', pairing.matchId, error);
+      }
     }
     const fresh = await matchRef.get();
     match = fresh.data() || {};
     if ((!isMatchReportFinished(match) || !match.winnerId) && now >= nextRoundDeadline) {
-      await finishTechnically(db, season, round, pairing, dedicatedSnap.exists ? 'cup_matches' : 'matches_v2');
+      await finishTechnically(db, season, round, pairing, matchCollection);
       const technical = await matchRef.get();
       match = technical.data() || {};
     }
     if (isMatchReportFinished(match) && match.winnerId) {
-      pairing.status = 'finished'; pairing.winnerId = String(match.winnerId);
-      pairing.scoreA = Number(match.scoreA ?? match.homeScore ?? 0); pairing.scoreB = Number(match.scoreB ?? match.awayScore ?? 0);
+      if (!isValidPyramidCupWinner(match, homeId, awayId)) {
+        throw new Error('CUP_MATCH_WINNER_INVALID');
+      }
+      pairing.status = 'finished';
+      pairing.winnerId = String(match.winnerId).trim();
+      pairing.scoreA = Number(match.scoreA ?? match.homeScore ?? 0);
+      pairing.scoreB = Number(match.scoreB ?? match.awayScore ?? 0);
       pairing.technicalDecision = Boolean(match.technicalDecision);
     }
   }
@@ -1085,13 +1135,20 @@ export async function runPyramidCupCycle() {
     return { generated: false, resolved, advanced: 0, waitingForMatches: true, stale: !committed };
   }
   if (round >= ROUND_COUNT) {
-    const finalPair = pairings.find(p => p?.home && p?.away && p.winnerId);
-    const winnerId = finalPair?.winnerId || null;
-    const winner = finalPair?.home?.id === winnerId ? finalPair.home : finalPair?.away?.id === winnerId ? finalPair.away : null;
-    const finalist = finalPair?.home?.id === winnerId ? finalPair?.away : finalPair?.away?.id === winnerId ? finalPair?.home : null;
+    const finalPair = pairings.length === 1 ? pairings[0] : null;
+    if (!finalPair || finalPair.status !== 'finished' ||
+        !isValidPyramidCupWinner({ winnerId: finalPair.winnerId }, String(finalPair.home?.id || ''), String(finalPair.away?.id || ''))) {
+      throw new Error('CUP_FINAL_RESULT_INVALID');
+    }
+    const winnerId = String(finalPair.winnerId).trim();
+    const winner = String(finalPair.home.id) === winnerId ? finalPair.home : finalPair.away;
+    const finalist = String(finalPair.home.id) === winnerId ? finalPair.away : finalPair.home;
+    const winnerTeam = teamFromPublic(winner);
+    const finalistTeam = teamFromPublic(finalist);
+    if (!winnerTeam || !finalistTeam) throw new Error('CUP_FINAL_PARTICIPANT_INVALID');
     const [championPrize, finalistPrize] = await Promise.all([
-      payCupPrize(db, season, winner ? teamFromPublic(winner) : null, 'champion'),
-      payCupPrize(db, season, finalist ? teamFromPublic(finalist) : null, 'finalist'),
+      payCupPrize(db, season, winnerTeam, 'champion'),
+      payCupPrize(db, season, finalistTeam, 'finalist'),
     ]);
     const committed = await commitCupRoundState(db, cup.ref, round, pairings, {
       completion: {
@@ -1110,10 +1167,13 @@ export async function runPyramidCupCycle() {
 
   const winners: Team[] = [];
   for (const pairing of pairings) {
-    if (pairing.winnerId) {
-      const source = pairing.home?.id === pairing.winnerId ? pairing.home : pairing.away?.id === pairing.winnerId ? pairing.away : null;
-      const team = teamFromPublic(source); if (team) winners.push(team);
+    if (!isValidPyramidCupWinner({ winnerId: pairing.winnerId }, String(pairing.home?.id || ''), String(pairing.away?.id || ''))) {
+      throw new Error('CUP_MATCH_WINNER_INVALID');
     }
+    const source = String(pairing.home.id) === String(pairing.winnerId).trim() ? pairing.home : pairing.away;
+    const team = teamFromPublic(source);
+    if (!team) throw new Error('CUP_ADVANCING_PARTICIPANT_INVALID');
+    winners.push(team);
   }
   // D1's eight teams were explicitly rested in round one. They join the 56
   // opening-round winners now, creating a complete 64-team round-two field.
