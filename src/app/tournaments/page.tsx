@@ -127,22 +127,22 @@ export default function TournamentsPage() {
   };
 
   return (
-    <div className="max-w-md mx-auto px-4 pt-8 pb-32">
-      <header className="mb-8 flex items-center gap-4">
+    <div className="mx-auto w-full max-w-3xl px-3 pb-28 pt-6 sm:px-5">
+      <header className="mb-6 flex items-center gap-4 rounded-2xl border border-amber-300/15 bg-gradient-to-r from-[#201707] via-[#11131c] to-[#0a1420] p-4 shadow-[0_14px_40px_rgba(0,0,0,.3)]">
         <Link href="/">
           <Button variant="ghost" size="icon" className="rounded-full bg-secondary/50 border border-white/5">
             <ChevronLeft className="w-6 h-6" />
           </Button>
         </Link>
         <div>
-          <h1 className="text-2xl font-headline font-bold uppercase tracking-tighter text-white">
+          <h1 className="flex items-center gap-2 text-xl font-headline font-black uppercase tracking-tight text-white sm:text-2xl">\n            <Trophy className="h-6 w-6 text-amber-300" />
             {t.title}
           </h1>
           <p className="text-muted-foreground text-[10px] uppercase tracking-widest font-black opacity-50">{t.subtitle}</p>
         </div>
       </header>
 
-      <div className="space-y-2">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         {t.menu.map((item) => {
           const isClickAction = item.id === 'schedule' || item.id === 'trial';
           const clickHandler = item.id === 'schedule' ? handleToggleLobby : (item.id === 'trial' ? handleStartTrial : undefined);
@@ -152,19 +152,19 @@ export default function TournamentsPage() {
               key={item.id}
               onClick={clickHandler}
               className={cn(
-                "glass-card border-white/5 transition-all group overflow-hidden cursor-pointer hover:bg-white/5",
+                "glass-card min-h-[94px] border-white/10 bg-gradient-to-br from-[#111d2b]/95 to-[#090f19]/95 transition-all duration-200 group overflow-hidden cursor-pointer hover:-translate-y-0.5 hover:border-cyan-300/35 hover:shadow-[0_12px_32px_rgba(0,0,0,.3)]",
                 item.id === 'schedule' && myLobby?.status === 'accepted' && "border-primary/30 bg-primary/5",
                 item.id === 'schedule' && myLobby?.status === 'searching' && "border-red-500/30 bg-red-500/5"
               )}
             >
-              <CardContent className="p-4 flex items-center justify-between">
+              <CardContent className="relative p-4 flex items-center justify-between">
                 <div className="flex items-center gap-4">
-                  <div className={cn("p-2.5 rounded-xl bg-secondary/50 border border-white/5 group-hover:bg-primary/10 transition-colors shadow-inner", item.color)}>
+                  <div className={cn("p-3 rounded-xl bg-secondary/50 border border-white/10 group-hover:bg-primary/10 transition-colors shadow-inner", item.color)}>
                     {isActionLoading && (item.id === 'schedule' || item.id === 'trial') ? <Loader2 className="w-5 h-5 animate-spin" /> : <item.icon className="w-5 h-5" />}
                   </div>
                   <div>
-                    <h3 className="text-sm font-bold uppercase group-hover:text-white transition-colors">{item.label}</h3>
-                    <p className="text-[10px] text-muted-foreground font-medium leading-tight">{item.desc}</p>
+                    <h3 className="text-[13px] font-black uppercase tracking-wide group-hover:text-white transition-colors">{item.label}</h3>
+                    <p className="mt-1 text-[11px] text-muted-foreground font-medium leading-snug">{item.desc}</p>
                   </div>
                 </div>
                 <ChevronRight className="w-4 h-4 text-muted-foreground group-hover:text-primary transition-all" />
