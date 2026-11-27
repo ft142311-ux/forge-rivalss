@@ -291,8 +291,8 @@ export default function Home() {
   const cardTitle = showOffseason ? (language === 'ru' ? 'МЕЖСЕЗОНЬЕ' : 'OFFSEASON') : (language === 'ru' ? 'СЛЕДУЮЩИЙ СОПЕРНИК' : 'NEXT OPPONENT');
 
   return (
-    <div className="relative min-h-[calc(100dvh-4rem-3.5rem)] h-[calc(100dvh-4rem-3.5rem)] flex flex-col overflow-hidden">
-      <div className="flex-1 w-full max-w-md mx-auto px-4 pt-4 flex flex-col z-10 overflow-hidden">
+    <div className="relative min-h-[calc(100dvh-4rem-3.5rem)] h-[calc(100dvh-4rem-3.5rem)] flex flex-col overflow-y-auto overflow-x-hidden overscroll-contain">
+      <div className="flex-none w-full max-w-md mx-auto px-4 pt-4 pb-4 flex flex-col z-10 overflow-visible">
         
         {/* NEXT MATCH TACTICAL CARD */}
         <Card className="relative overflow-hidden mb-4 border-white/20 bg-[#1a2b45] rounded-2xl shadow-[0_10px_30px_rgba(0,0,0,0.5)] shrink-0 min-h-[110px]">
@@ -349,7 +349,7 @@ export default function Home() {
         </Card>
 
         {/* MAIN MENU GRID */}
-        <div className="grid grid-cols-4 gap-2 flex-1 mb-2">
+        <div className="grid grid-cols-4 gap-2 flex-none mb-2">
           {menuItems.map((item) => (
             <a key={item.id} href={item.href} className="block">
               <Card className="aspect-square glass-card border-white/5 hover:border-primary/40 hover:bg-primary/5 transition-all group flex flex-col items-center justify-center p-1 relative rounded-[1.25rem] overflow-hidden">
@@ -361,6 +361,9 @@ export default function Home() {
                         className="w-full h-full object-contain"
                      />
                   </div>
+                  <span className="text-[7px] font-black uppercase text-center text-muted-foreground group-hover:text-white mt-1.5 leading-none tracking-tighter">
+                    {item.label}
+                  </span>
                 ) : (
                   <>
                     <div className={cn("transition-transform duration-300 group-hover:scale-110", item.color)}>
