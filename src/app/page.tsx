@@ -99,7 +99,7 @@ export default function Home() {
       opponentName: (isHome ? myNext.awayName : myNext.homeName) || getBotName(leagueLevel, groupId, oppRank),
       opponentLogo: (isHome ? myNext.awayLogo : myNext.homeLogo) || null
     };
-  }, [officialLeagueMatches, allSeasonMatches, rank, nameMap, leagueLevel, groupId, now]);
+  }, [officialLeagueMatches, allSeasonMatches, rank, leagueLevel, groupId, now]);
 
   const getCountdown = (targetTimeIso: any) => {
     const targetMs = toMillis(targetTimeIso);
