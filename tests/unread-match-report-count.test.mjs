@@ -76,3 +76,28 @@ test('locally acknowledged report IDs suppress stale server badge entries across
   ];
   assert.equal(countUnreadMatchReportRecords(records, uid, createdAt, league, ['local-viewed']), 1);
 });
+
+test('unread badge recognizes a manager UID even when legacy club identity fields differ', () => {
+  const records = [
+    record(MATCH_COLLECTIONS.cup, 'uid-fallback', {
+      homeId: 'legacy-club-id',
+      homeUid: ' manager-1 ',
+    }),
+  ];
+  assert.equal(countUnreadMatchReportRecords(records, uid, createdAt, league), 1);
+});
+
+test('unread badge rejects blank manager identities and normalizes legacy league coordinates', () => {
+  const records = [
+    record(MATCH_COLLECTIONS.league, 'rank-with-padding', {
+      leagueId: ' ALPHA ',
+      level: 2,
+      groupId: ' G1 ',
+      homeRank: 3,
+      awayRank: 4,
+    }),
+    record(MATCH_COLLECTIONS.cup, 'foreign-to-blank', { homeId: uid }),
+  ];
+  assert.equal(countUnreadMatchReportRecords(records, '   ', createdAt, league), 0);
+  assert.equal(countUnreadMatchReportRecords(records, uid, createdAt, league), 1);
+});
