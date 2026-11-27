@@ -146,3 +146,10 @@ docs/ROADMAP.json still describes an older project phase model (version 1.0.61, 
 - No live Beta reset, restore, seed, or season activation was run.
 - No deployment was initiated manually.
 - PR #5 remains Draft and unmerged.
+
+## Follow-up hardening — 2026-11-27
+
+- Added a Firestore Emulator integration test to `tests/season-activation-emulator.integration.test.mjs`.
+- The test performs the real atomic Season 1 -> Season 2 activation commit against disposable Emulator documents and asserts the human club profile, all ten owned-player identities, credits, occupied Season 1 slot ownership/generation, and a finished source-season fixture remain byte-for-byte unchanged.
+- The test is included in the existing `test:registration:emulator` workflow command, so it runs in the main staging-validation job without touching shared Beta or Production data.
+- The latest source CI run before this addition had passed TypeScript, core regression, full test suite, and registration Emulator tests; the Cup Emulator scenario was still running at the time of inspection. The follow-up commit must receive its own complete CI result before it is considered validated.
