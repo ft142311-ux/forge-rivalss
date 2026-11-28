@@ -7,6 +7,7 @@ import { getMoscowDateString } from '@/app/lib/time-utils';
 import { getDailyRewardForDay, getNextDailyRewardDay, getPremiumDailyCrystalBonus } from '@/app/lib/daily-reward';
 import { requireServerActor } from '@/lib/server-auth';
 import { assertStagingSeasonOneResetNotInProgress } from '@/app/lib/staging-season-one-write-fence';
+import { createManagerXpAward, MANAGER_XP_REWARDS } from '@/app/lib/manager-progression';
 
 /**
  * @fileOverview Защищенный слой экономики.
@@ -54,16 +55,24 @@ export async function claimDailyRewardAction(idToken: string) {
       const crystalsBefore = readCurrencyBalance(p.crystals);
       const creditsAfter = creditsBefore + credits;
       const crystalsAfter = crystalsBefore + crystals;
+      const managerXpAward = createManagerXpAward(p, MANAGER_XP_REWARDS.dailyReward, 'daily_reward');
+      const managerXpResult = {
+        amount: managerXpAward.receipt.amount,
+        levelsGained: managerXpAward.receipt.levelsGained,
+        managerLevel: managerXpAward.profilePatch.managerLevel,
+        experiencePoints: managerXpAward.profilePatch.experiencePoints,
+      };
       if (!Number.isSafeInteger(creditsAfter) || !Number.isSafeInteger(crystalsAfter)) {
         throw new Error('INVALID_BALANCE');
       }
-      const result = { success: true, alreadyClaimed: false, rewardDay, claimedDate: today, credits, crystals, premiumBonus };
+      const result = { success: true, alreadyClaimed: false, rewardDay, claimedDate: today, credits, crystals, premiumBonus, managerXp: managerXpResult };
 
       t.update(playerRef, {
         credits: creditsAfter,
         crystals: crystalsAfter,
         lastRewardClaimDate: today,
         rewardDay,
+        ...managerXpAward.profilePatch,
         updatedAt: FieldValue.serverTimestamp()
       });
 
@@ -93,6 +102,7 @@ export async function claimDailyRewardAction(idToken: string) {
         userId,
         date: today,
         rewardDay,
+        managerXp: managerXpAward.receipt,
         result,
         createdAt: FieldValue.serverTimestamp()
       });

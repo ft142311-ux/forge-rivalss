@@ -14,6 +14,7 @@ import { isTournamentMatchLeaseExpired, TOURNAMENT_MATCH_LEASE_MS } from '@/app/
 import { isTournamentStageMatchSetComplete, resolveTournamentGroupOutcome } from '@/app/lib/tournament-stage-utils';
 import { getTournamentRegistrationCapacity, getTournamentRegistrationWindow, normalizeTournamentRegisteredIds } from '@/app/lib/tournament-registration-window';
 import { isTournamentStageFixtureCompatible } from '@/app/lib/tournament-stage-transition';
+import { createManagerXpAward, getManagerMatchXp, isEligibleManagerProfile } from '@/app/lib/manager-progression';
 
 
 const TOURNAMENTS = [
@@ -594,6 +595,22 @@ async function resolveTournamentMatch(db: any, tournamentId: string, matchId: st
         throw new Error('TOURNAMENT_GROUP_STANDINGS_INTEGRITY_FAILED');
       }
 
+      // Read human manager profiles before the first write so XP and the match result commit atomically.
+      const humanTeams = [home, away].filter(team => !team.isBot && isEligibleManagerProfile(team.id, team));
+      const humanProfileSnaps = await Promise.all(humanTeams.map(team => t.get(db.collection('players_v14').doc(team.id))));
+      const managerXpPlans = humanTeams.flatMap((team, index) => {
+        const profileSnap = humanProfileSnaps[index];
+        if (!profileSnap.exists) return [];
+        const profileData = profileSnap.data() || {};
+        if (!isEligibleManagerProfile(team.id, profileData)) return [];
+        return [{
+          team,
+          profileRef: profileSnap.ref,
+          award: createManagerXpAward(profileData, getManagerMatchXp('tournament', winnerId === team.id), 'tournament_match'),
+        }];
+      });
+      const managerXpAwards = managerXpPlans.map(({ team, award }) => ({ userId: team.id, ...award.receipt }));
+
       const finishedAt = FieldValue.serverTimestamp();
       const winnerName = winnerId === home.id ? home.name : winnerId === away.id ? away.name : null;
       t.update(matchRef, {
@@ -606,6 +623,10 @@ async function resolveTournamentMatch(db: any, tournamentId: string, matchId: st
         seriesScore: simulation.seriesScore,
         homeScore,
         awayScore,
+        managerXpAwards,
+      });
+      managerXpPlans.forEach(({ profileRef, award }) => {
+        t.update(profileRef, { ...award.profilePatch, updatedAt: FieldValue.serverTimestamp() });
       });
 
       // Tournament reports are stored separately from league and cup matches.
@@ -632,6 +653,7 @@ async function resolveTournamentMatch(db: any, tournamentId: string, matchId: st
         winnerId,
         winnerSide: resolvedWinnerSide,
         winner: winnerName,
+        managerXpAwards,
         simulation,
         games: simulation.games,
         isFinished: true,

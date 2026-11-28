@@ -1,6 +1,6 @@
 'use client';
 
-import { useGameState } from './lib/store';
+import { getLevelThreshold, useGameState } from './lib/store';
 import {
   Users, ShoppingCart, CalendarDays, Medal, ArrowRightLeft,
   Shield, Newspaper, User as UserIcon, Swords, Timer, Activity, ChevronRight
@@ -182,6 +182,11 @@ export default function Home() {
   const mainOpponent = resolvedNextMatch?.opponentName || (language === 'ru' ? 'СОПЕРНИК НЕ ОПРЕДЕЛЁН' : 'OPPONENT TBD');
   const xp = Math.max(0, Number(experiencePoints || 0));
   const managerLevelValue = Math.max(1, Number(managerLevel || 1));
+  const managerXpThreshold = getLevelThreshold(managerLevelValue);
+  const managerXpProgress = Number.isFinite(managerXpThreshold) && managerXpThreshold > 0
+    ? Math.max(0, Math.min(100, (xp / managerXpThreshold) * 100))
+    : 0;
+  const managerXpRemaining = Math.max(0, managerXpThreshold - xp);
   const menuCards = [
     { id: 'team', title: language === 'ru' ? 'КОМАНДА' : 'TEAM', subtitle: language === 'ru' ? 'Управляй своим клубом' : 'Manage your club', href: '/roster', image: PlaceHolderImages.find(img => img.id === 'hero-tank')?.imageUrl, icon: Users, tone: 'text-primary' },
     { id: 'matches', title: language === 'ru' ? 'МАТЧИ' : 'MATCHES', subtitle: language === 'ru' ? 'Просмотр и участие в играх' : 'View and play matches', href: '/matches', image: PlaceHolderImages.find(img => img.id === 'arena-starter')?.imageUrl, icon: CalendarDays, tone: 'text-primary' },
@@ -263,10 +268,13 @@ export default function Home() {
           <div className="absolute -right-4 -top-12 h-48 w-48 rounded-full bg-violet-500/20 blur-3xl" />
           <div className="relative flex items-center gap-3">
             <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-violet-400/15 text-violet-200"><Medal className="h-10 w-10" /></div>
-            <div>
+            <div className="min-w-0 flex-1">
               <p className="text-base font-black uppercase">{language === 'ru' ? 'ПРОФИЛЬ МЕНЕДЖЕРА' : 'MANAGER PROFILE'}</p>
-              <p className="mt-1 text-xs text-violet-100/80">{language === 'ru' ? `Уровень ${managerLevelValue} · ${xp.toLocaleString()} XP` : `Level ${managerLevelValue} · ${xp.toLocaleString()} XP`}</p>
-              
+              <p className="mt-1 text-xs text-violet-100/80">{language === 'ru' ? `Уровень ${managerLevelValue}` : `Level ${managerLevelValue}`}</p>
+              <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-black/35">
+                <div className="h-full rounded-full bg-violet-300 transition-all duration-700" style={{ width: `${managerXpProgress}%` }} />
+              </div>
+              <p className="mt-1 text-[10px] text-violet-100/75">{xp.toLocaleString()} / {managerXpThreshold.toLocaleString()} XP · {language === 'ru' ? `ещё ${managerXpRemaining.toLocaleString()} до уровня` : `${managerXpRemaining.toLocaleString()} to next level`}</p>
             </div>
           </div>
           <ChevronRight className="relative h-6 w-6 text-violet-100" />

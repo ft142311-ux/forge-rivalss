@@ -6,7 +6,7 @@
  * РџСЂСЏРјС‹Рµ Р·Р°РїРёСЃРё updateDoc СѓРґР°Р»РµРЅС‹ Рё Р·Р°РјРµРЅРµРЅС‹ РЅР° Server Actions.
  */
 
-import React, { createContext, useContext, useState, useEffect, useCallback, ReactNode, useMemo } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, ReactNode, useMemo, useRef } from 'react';
 import { Player, StaffMember, StaffRole, generateScoutedPlayer, getRandomStartingSquad } from './moba-data';
 import { getMoscowTime, getGlobalSeasonInfo, getMoscowDateString, getLevelThreshold } from './time-utils';
 import { useUser, initializeFirebase } from '@/firebase';
@@ -198,6 +198,7 @@ export function GameStateProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<GameState>(DEFAULT_STATE);
   const { user, isUserLoading } = useUser();
   const { toast } = useToast();
+  const managerLevelSnapshotRef = useRef<{ uid: string; level: number } | null>(null);
   const staticSeasonInfo = useMemo(() => getGlobalSeasonInfo(), []);
 
   const saveToLocal = useCallback((updates: Partial<GameState>) => {
@@ -239,6 +240,7 @@ export function GameStateProvider({ children }: { children: ReactNode }) {
   // РЎРРќРҐР РћРќРР—РђР¦РРЇ РЎ FIRESTORE
   useEffect(() => {
     if (!user?.uid || !state.isLoaded) {
+      if (!user?.uid) managerLevelSnapshotRef.current = null;
       if (state.isLoaded && !user) setState(prev => ({ ...prev, isInitialSyncDone: true }));
       return;
     }
@@ -252,6 +254,18 @@ export function GameStateProvider({ children }: { children: ReactNode }) {
     const unsubscribe = onSnapshot(playerRef, (snapshot) => {
       if (snapshot.exists()) {
         const d = snapshot.data();
+        const incomingManagerLevel = Number(d.managerLevel ?? 1);
+        const previousManagerLevel = managerLevelSnapshotRef.current;
+        if (previousManagerLevel?.uid === user.uid && Number.isSafeInteger(incomingManagerLevel) && incomingManagerLevel > previousManagerLevel.level) {
+          toast({
+            title: state.language === 'ru' ? 'НОВЫЙ УРОВЕНЬ МЕНЕДЖЕРА' : 'MANAGER LEVEL UP',
+            description: state.language === 'ru' ? `Теперь ваш уровень: ${incomingManagerLevel}` : `You reached manager level ${incomingManagerLevel}`,
+          });
+        }
+        managerLevelSnapshotRef.current = {
+          uid: user.uid,
+          level: Number.isSafeInteger(incomingManagerLevel) && incomingManagerLevel >= 1 ? incomingManagerLevel : 1,
+        };
         console.info('[PLAYER SYNC] profile snapshot received', {
           uid: user.uid,
           projectId: db.app.options.projectId || 'unknown',
@@ -307,7 +321,7 @@ export function GameStateProvider({ children }: { children: ReactNode }) {
       });
     });
     return () => unsubscribe();
-  }, [user?.uid, state.isLoaded, saveToLocal]);
+  }, [user?.uid, state.isLoaded, state.language, saveToLocal, toast]);
 
   // Р—РђР©РР©Р•РќРќР«Р• Р”Р•Р™РЎРўР’РРЇ (SERVER ACTIONS)
   
@@ -316,8 +330,16 @@ export function GameStateProvider({ children }: { children: ReactNode }) {
     try {
       const res = await claimDailyRewardAction(await user.getIdToken());
       if (res.success) {
-        saveToLocal({ lastRewardClaimDate: res.claimedDate || getMoscowDateString(), rewardDay: Number(res.rewardDay || state.rewardDay) });
-        toast({ title: res.alreadyClaimed ? (state.language === 'ru' ? "Награда уже получена сегодня" : "Reward already claimed today") : (state.language === 'ru' ? "Награда получена!" : "Reward Claimed!") });
+        const managerXp = res.managerXp;
+        saveToLocal({
+          lastRewardClaimDate: res.claimedDate || getMoscowDateString(),
+          rewardDay: Number(res.rewardDay || state.rewardDay),
+          ...(managerXp ? { managerLevel: Number(managerXp.managerLevel), experiencePoints: Number(managerXp.experiencePoints) } : {}),
+        });
+        toast({
+          title: res.alreadyClaimed ? (state.language === 'ru' ? "Награда уже получена сегодня" : "Reward already claimed today") : (state.language === 'ru' ? "Награда получена!" : "Reward Claimed!"),
+          description: managerXp?.amount ? `+${Number(managerXp.amount).toLocaleString()} XP` : undefined,
+        });
         return true;
       }
       toast({ variant: "destructive", title: ('error' in res ? String(res.error) : 'REWARD_CLAIM_FAILED') });

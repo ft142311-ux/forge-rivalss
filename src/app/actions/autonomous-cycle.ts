@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { clampNumber } from '@/app/lib/numeric-utils';
 import { isPlayerSkillKey } from '@/game/player-skills';
 import { getMatchWinnerId } from '@/app/lib/match-winner';
+import { createManagerXpAward, getManagerMatchXp, isEligibleManagerProfile } from '@/app/lib/manager-progression';
 import { isMatchReportFinished } from '@/app/lib/match-report-utils';
 import { aggregatePlayerCombatStats } from '@/app/lib/player-combat-stats';
 import { resolveSeasonLifecycleWindow } from './season-boundary';
@@ -786,6 +787,18 @@ export async function resolveDailyMatches() {
         }
         const winnerId = getMatchWinnerId(simulation.winnerSide, homeId || null, awayId || null);
         const homeEconomy = await calculateMatchEconomy(homePlayerData, m, scoreA, scoreB);
+        // Manager XP is awarded atomically with the official fixture result.
+        // Friendly and trial matches are intentionally excluded from manager progression.
+        const homeManagerXp = homeSnap?.exists && isEligibleManagerProfile(homeId, homePlayerData)
+          ? createManagerXpAward(homePlayerData, getManagerMatchXp('league', winnerId === homeId), 'league_match')
+          : null;
+        const awayManagerXp = awaySnap?.exists && isEligibleManagerProfile(awayId, awayPlayerData)
+          ? createManagerXpAward(awayPlayerData, getManagerMatchXp('league', winnerId === awayId), 'league_match')
+          : null;
+        const managerXpAwards = [
+          homeManagerXp ? { userId: homeId, ...homeManagerXp.receipt } : null,
+          awayManagerXp ? { userId: awayId, ...awayManagerXp.receipt } : null,
+        ].filter(Boolean);
         const officialClub = true;
 
         const updatePostMatchPlayers = (clubData: any, side: 'home' | 'away') => {
@@ -864,6 +877,8 @@ export async function resolveDailyMatches() {
         // to the same Firestore document.
         const homeUpdate: Record<string, any> = { updatedAt: FieldValue.serverTimestamp() };
         const awayUpdate: Record<string, any> = { updatedAt: FieldValue.serverTimestamp() };
+        if (homeManagerXp) Object.assign(homeUpdate, homeManagerXp.profilePatch);
+        if (awayManagerXp) Object.assign(awayUpdate, awayManagerXp.profilePatch);
         if (homeRef && homeSnap?.exists && !homeEffectSnap?.exists) {
           homeUpdate.ownedPlayers = updatePostMatchPlayers(homePlayerData, 'home');
           tx.set(homeEffectRef!, { matchId: matchDoc.id, userId: homeId, effect: 'PLAYER_PROGRESSION', appliedAt: FieldValue.serverTimestamp() });
@@ -925,6 +940,7 @@ export async function resolveDailyMatches() {
           processingStartedAt: FieldValue.delete(),
           processingToken: FieldValue.delete(),
           matchEconomy: homeEconomy,
+          managerXpAwards,
           sportingEngine: simulation.engineVersion,
           sportingStrength: {
             home: simulation.homeStrength,

@@ -1,6 +1,6 @@
 'use client';
 
-import { useGameState } from '@/app/lib/store';
+import { getLevelThreshold, useGameState } from '@/app/lib/store';
 import { useUser } from '@/firebase';
 import { useEffect, useState } from 'react';
 import { getMyUnreadMatchReportsCountAction } from '@/app/actions/match-report';
@@ -14,6 +14,12 @@ export function TopBar() {
   const { user } = useUser();
   const [unreadReportsCount, setUnreadReportsCount] = useState(0);
   const { credits, crystals, language, managerLevel, experiencePoints, displayName, clubName, clubLogo, rank, leagueLevel, groupId } = useGameState();
+  const currentManagerLevel = Math.max(1, Number(managerLevel || 1));
+  const currentManagerXp = Math.max(0, Number(experiencePoints || 0));
+  const managerXpThreshold = getLevelThreshold(currentManagerLevel);
+  const managerXpProgress = Number.isFinite(managerXpThreshold) && managerXpThreshold > 0
+    ? Math.max(0, Math.min(100, (currentManagerXp / managerXpThreshold) * 100))
+    : 0;
   useEffect(() => {
     if (!user || !rank) {
       setUnreadReportsCount(0);
@@ -73,7 +79,10 @@ export function TopBar() {
             <div className="min-w-0">
               <p className="truncate text-xs font-black text-white sm:text-sm">{clubName || displayName || 'Manager'}</p>
               <p className="truncate text-[10px] font-semibold text-slate-400">{rank ? (language === 'ru' ? `Дивизион ${leagueLevel} · Группа ${groupId} · #${rank}` : `Division ${leagueLevel} · Group ${groupId} · #${rank}`) : (language === 'ru' ? 'Менеджер клуба' : 'Club manager')}</p>
-              <p className="text-[9px] text-slate-500">{Number(experiencePoints || 0).toLocaleString()} XP</p>
+              <p className="text-[9px] text-slate-500">{currentManagerXp.toLocaleString()} XP</p>
+              <div className="mt-1 h-1 w-full overflow-hidden rounded-full bg-white/10">
+                <div className="h-full rounded-full bg-cyan-300 transition-all duration-700" style={{ width: `${managerXpProgress}%` }} />
+              </div>
             </div>
           </Link>
           <div className="flex shrink-0 flex-col gap-1">

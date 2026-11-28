@@ -13,6 +13,7 @@ import { assertMatchDocumentId } from '@/app/lib/match-id';
 import { getMatchWinnerId } from '@/app/lib/match-winner';
 import { isCanonicalPyramidCupMatchContract, isValidCupParticipantMatchSnapshot } from '@/app/lib/cup-participant-integrity';
 import { getGlobalSeasonInfo } from '@/app/lib/time-utils';
+import { createManagerXpAward, getManagerMatchXp, isEligibleManagerProfile } from '@/app/lib/manager-progression';
 import { resolveSeasonLifecycleWindow } from './season-boundary';
 
 export type UniversalMatchResult = {
@@ -136,6 +137,7 @@ export async function resolveUniversalMatchDocument(
     const homeId = match.homeId ?? match.hostId ?? match.teamAId;
     const awayId = match.awayId ?? match.challengerId ?? match.teamBId;
     if (!homeId || !awayId) throw new Error('MATCH_PARTICIPANTS_MISSING');
+    if (String(homeId) === String(awayId)) throw new Error('MATCH_SELF_PLAY_INVALID');
 
     const [homeSnap, awaySnap] = await Promise.all([
       t.get(db.collection('players_v14').doc(String(homeId))),
@@ -213,6 +215,23 @@ export async function resolveUniversalMatchDocument(
       createdAt: match.createdAt || now,
       updatedAt: now,
     };
+
+    const xpCompetition = isPyramidCupMatch || matchType === 'cup'
+      ? 'pyramid_cup'
+      : matchType === 'league' ? 'league' : null;
+    const homeManagerXp = xpCompetition && homeSnap.exists && isEligibleManagerProfile(String(homeId), homeData)
+      ? createManagerXpAward(homeData, getManagerMatchXp(xpCompetition, winnerId === String(homeId)), xpCompetition === 'league' ? 'league_match' : 'pyramid_cup_match')
+      : null;
+    const awayManagerXp = xpCompetition && awaySnap.exists && isEligibleManagerProfile(String(awayId), awayData)
+      ? createManagerXpAward(awayData, getManagerMatchXp(xpCompetition, winnerId === String(awayId)), xpCompetition === 'league' ? 'league_match' : 'pyramid_cup_match')
+      : null;
+    const managerXpAwards = [
+      homeManagerXp ? { userId: String(homeId), ...homeManagerXp.receipt } : null,
+      awayManagerXp ? { userId: String(awayId), ...awayManagerXp.receipt } : null,
+    ].filter(Boolean);
+    report.managerXpAwards = managerXpAwards;
+    if (homeManagerXp) t.update(db.collection('players_v14').doc(String(homeId)), homeManagerXp.profilePatch);
+    if (awayManagerXp) t.update(db.collection('players_v14').doc(String(awayId)), awayManagerXp.profilePatch);
 
     // This document is the canonical Match Overview / Match Center report.
     // Never create a second report collection per match type. The optional rollover
