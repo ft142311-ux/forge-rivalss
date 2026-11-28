@@ -23,11 +23,11 @@ test('manager progress normalization protects the UI from corrupt legacy values'
 });
 
 test('manager XP consumes the current level threshold and advances exactly at the boundary', () => {
-  assert.deepEqual(calculateManagerProgress({ managerLevel: 1, experiencePoints: 699 }, 1), {
-    levelBefore: 1, experienceBefore: 699, managerLevel: 2, experiencePoints: 0, levelsGained: 1, amount: 1,
+  assert.deepEqual(calculateManagerProgress({ managerLevel: 1, experiencePoints: 349 }, 1), {
+    levelBefore: 1, experienceBefore: 349, managerLevel: 2, experiencePoints: 0, levelsGained: 1, amount: 1,
   });
-  assert.deepEqual(calculateManagerProgress({ managerLevel: 1, experiencePoints: 698 }, 1), {
-    levelBefore: 1, experienceBefore: 698, managerLevel: 1, experiencePoints: 699, levelsGained: 0, amount: 1,
+  assert.deepEqual(calculateManagerProgress({ managerLevel: 1, experiencePoints: 348 }, 1), {
+    levelBefore: 1, experienceBefore: 348, managerLevel: 1, experiencePoints: 349, levelsGained: 0, amount: 1,
   });
 });
 
