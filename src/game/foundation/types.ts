@@ -40,6 +40,8 @@ export interface FoundationPlayerState {
   lineupMatches?: number;
   trainingFocus?: TrainingSkill | null;
   dailyTrainingFocus?: TrainingSkill | null;
+  dailyTrainingBonus?: number;
+  dailyTrainingBonusDate?: string;
   trainingProgress?: Partial<Record<TrainingSkill, number>>;
   skillCaps?: Partial<Record<TrainingSkill, number>>;
   skillInclinations?: Partial<Record<TrainingSkill, number>>;

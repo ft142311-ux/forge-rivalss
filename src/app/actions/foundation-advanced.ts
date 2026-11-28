@@ -7,6 +7,7 @@ import { assertStagingSeasonOneResetNotInProgress } from '@/app/lib/staging-seas
 import { getFoundationManagerRef } from './foundation-manager-ref';
 import { FOUNDATION_COLLECTIONS } from '@/game/foundation/config';
 import { readFoundationRoster } from '@/game/foundation/guards';
+import { applyFoundationDailyTrainingBonus } from '@/game/foundation/training';
 import { assertFoundationDailyEventRecord } from '@/game/foundation/daily-cycle-integrity';
 import { expectedAttendance } from '@/game/foundation/fans';
 import { chooseGoldenPlayer, scoreGoldenPlayer } from '@/game/foundation/awards';
@@ -57,12 +58,18 @@ export async function resolveFoundationEventAction(idToken: string, eventId: str
       const effects = choice === 'accept' ? eventData.event.effects : {};
       const managerData = freshManager.data() || {};
       const players = readFoundationRoster(managerData.ownedPlayers);
-      const next = players.map((p: any) => ({
-        ...p,
-        form: Math.max(0, Math.min(100, Number(p.form ?? 100) + Number(effects.form || 0))),
-        fatigue: Math.max(0, Math.min(100, Number(p.fatigue ?? 100) + Number(effects.fatigue || 0))),
-        tilt: Math.max(0, Math.min(100, Number(p.tilt ?? 0) + Number(effects.tilt || 0))),
-      }));
+      const trainingBonus = effects.trainingBonus ?? 0;
+      const next = players.map((p: any) => {
+        const updated = {
+          ...p,
+          form: Math.max(0, Math.min(100, Number(p.form ?? 100) + Number(effects.form || 0))),
+          fatigue: Math.max(0, Math.min(100, Number(p.fatigue ?? 100) + Number(effects.fatigue || 0))),
+          tilt: Math.max(0, Math.min(100, Number(p.tilt ?? 0) + Number(effects.tilt || 0))),
+        };
+        return trainingBonus > 0
+          ? applyFoundationDailyTrainingBonus(updated, trainingBonus, period)
+          : updated;
+      });
       t.update(managerRef, { ownedPlayers: next, updatedAt: FieldValue.serverTimestamp() });
       t.update(ref, { resolved: choice, resolvedAt: FieldValue.serverTimestamp(), applied: choice === 'accept' });
       return { alreadyResolved: false };

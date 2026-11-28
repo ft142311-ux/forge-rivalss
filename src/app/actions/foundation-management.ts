@@ -4,7 +4,8 @@ import { FieldValue } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { requireServerActor } from '@/lib/server-auth';
 import { getFoundationManagerRef } from './foundation-manager-ref';
-import { applyTraining } from '@/game/foundation/training';
+import { applyTraining, readFoundationDailyTrainingBonus } from '@/game/foundation/training';
+import { salaryPeriodKey } from '@/game/foundation/economy';
 import { calculateTeamSynergy } from '@/game/foundation/synergy';
 import { associationExperienceGain, validateSingleAssociation, qualifiesForAssociationCup } from '@/game/foundation/associations';
 import { getTournamentRuleSet, canEnterTournament, buildOlympicPairs } from '@/game/foundation/tournaments';
@@ -69,8 +70,17 @@ export async function completePlayerTrainingAction(idToken: string, playerId: st
       if (!isFoundationSkill(focus)) throw new Error('INVALID_TRAINING_SKILL');
       const staff = readFoundationStaff(data.staff);
       const staffBonus = staff.coach ? 1.08 : 1;
-      const result = applyTraining(player, focus, Math.round(90 * staffBonus));
-      players[index] = { ...result.player, dailyTrainingFinishTime: null, lastTrainingCompletedAt: new Date().toISOString() };
+      const periodKey = salaryPeriodKey();
+      const eventBonus = readFoundationDailyTrainingBonus(player, periodKey);
+      const trainingMinutes = Math.round(90 * staffBonus * (1 + eventBonus));
+      const result = applyTraining(player, focus, trainingMinutes);
+      players[index] = {
+        ...result.player,
+        dailyTrainingBonus: 0,
+        dailyTrainingBonusDate: periodKey,
+        dailyTrainingFinishTime: null,
+        lastTrainingCompletedAt: new Date().toISOString(),
+      };
       const synergy = calculateTeamSynergy(players.filter(p => Object.values(data.lineup || {}).includes(p.id)).slice(0, 5));
       t.update(ref, { ownedPlayers: players, teamSynergy: synergy, updatedAt: FieldValue.serverTimestamp() });
       return { success: true, result: result.result, teamSynergy: synergy };

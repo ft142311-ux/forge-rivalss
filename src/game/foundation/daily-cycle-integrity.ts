@@ -75,8 +75,23 @@ export function assertFoundationDailyEventRecord(
     return invalidEvent();
   }
 
-  for (const effect of Object.values(event.effects)) {
-    if (typeof effect !== 'number' || !Number.isFinite(effect)) return invalidEvent();
+  const effectRanges: Record<string, { min: number; max: number }> = {
+    form: { min: -100, max: 100 },
+    fatigue: { min: -100, max: 100 },
+    tilt: { min: -100, max: 100 },
+    trainingBonus: { min: 0, max: 0.25 },
+  };
+  for (const [name, effect] of Object.entries(event.effects)) {
+    const range = effectRanges[name];
+    if (
+      !range ||
+      typeof effect !== 'number' ||
+      !Number.isFinite(effect) ||
+      effect < range.min ||
+      effect > range.max
+    ) {
+      return invalidEvent();
+    }
   }
 
   const hasResolvedAt = value.resolvedAt !== undefined && value.resolvedAt !== null;

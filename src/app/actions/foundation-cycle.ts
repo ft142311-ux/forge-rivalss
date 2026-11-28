@@ -5,8 +5,8 @@ import { getAdminDb } from '@/lib/firebase-admin';
 import { assertCronSecret } from '@/lib/server-cron-auth';
 import { getFoundationManagerRef } from './foundation-manager-ref';
 import { FOUNDATION_COLLECTIONS, DEFAULT_TACTICS } from '@/game/foundation/config';
-import { calculateDailyPlayerSalary, salaryPeriodKey } from '@/game/foundation/economy';
-import { calculateMarketValue, calculateSalary } from '@/game/foundation/player-system';
+import { calculateDailyPlayerSalary, resolveFoundationPlayerSalary, salaryPeriodKey } from '@/game/foundation/economy';
+import { calculateMarketValue } from '@/game/foundation/player-system';
 import { deterministicDailyEvent } from '@/game/foundation/events';
 import { clamp } from '@/game/foundation/player-system';
 import { assertStagingSeasonOneResetNotInProgress } from '@/app/lib/staging-season-one-write-fence';
@@ -36,8 +36,7 @@ function normalizePlayers(players: any[]) {
       physical: Number.isFinite(Number(player.physical)) ? Number(player.physical) : 50,
       resilience: Number.isFinite(Number(player.resilience)) ? Number(player.resilience) : 50,
     };
-    const salary = typeof player.salary === 'number' ? player.salary : NaN;
-    normalized.salary = Number.isSafeInteger(salary) && salary > 0 ? salary : calculateSalary(normalized);
+    normalized.salary = resolveFoundationPlayerSalary(normalized as any);
     normalized.marketValue = calculateMarketValue(normalized);
     normalized.price = normalized.marketValue;
     return normalized;
