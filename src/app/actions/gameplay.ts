@@ -12,6 +12,7 @@ import { isMatchReportFinished } from '@/app/lib/match-report-utils';
 import { placeStandardMarketBidWithDb } from '@/app/lib/auction-bid';
 import { createStandardMarketListingWithDb } from '@/app/lib/market-listing';
 import { assertStagingSeasonOneResetNotInProgress } from '@/app/lib/staging-season-one-write-fence';
+import { startDailyTrainingWithDb } from '@/app/lib/youth-academy';
 
 /**
  * @fileOverview Защищенный слой игровых действий.
@@ -179,40 +180,14 @@ export async function setTrainingFocusAction(idToken: string, playerId: string, 
  * Тренировка игрока.
  */
 export async function startDailyTrainingAction(idToken: string, playerId: string, focus: string) {
-  const { uid: userId } = await requireServerActor(idToken);
-  const db = getAdminDb();
-  const playerRef = db.collection('players_v14').doc(userId);
-  const allowedFocuses = new Set(['lastHitting', 'mapAwareness', 'positioning', 'reflexes', 'manaManagement', 'objectiveControl', 'communication', 'tiltResistance', 'versatility', 'ganking']);
-
   try {
-    if (!allowedFocuses.has(String(focus))) throw new Error('TRAINING_FOCUS_INVALID');
-    await db.runTransaction(async t => {
-      await assertStagingSeasonOneResetNotInProgress(t, db);
-      const pSnap = await t.get(playerRef);
-      if (!pSnap.exists) throw new Error("PLAYER_NOT_FOUND");
-      const pData = pSnap.data()!;
-      const youthPlayers: Player[] = Array.isArray(pData.youthAcademyPlayers) ? [...pData.youthAcademyPlayers] : [];
-      const seniorPlayers: Player[] = Array.isArray(pData.ownedPlayers) ? [...pData.ownedPlayers] : [];
-      const youthIndex = youthPlayers.findIndex(p => p.id === playerId);
-      const seniorIndex = seniorPlayers.findIndex(p => p.id === playerId);
-      const isYouth = youthIndex >= 0;
-      if (!isYouth && seniorIndex < 0) throw new Error("UNIT_NOT_FOUND");
-      const players = isYouth ? youthPlayers : seniorPlayers;
-      const index = isYouth ? youthIndex : seniorIndex;
-      const player = players[index];
-      if (player.dailyTrainingFinishTime) throw new Error("TRAINING_ALREADY_IN_PROGRESS");
-      const finishTime = new Date(Date.now() + 24 * 3600000).toISOString();
-      players[index] = { ...player, dailyTrainingFocus: focus, dailyTrainingFinishTime: finishTime };
-      t.update(playerRef, {
-        [isYouth ? 'youthAcademyPlayers' : 'ownedPlayers']: players,
-        updatedAt: FieldValue.serverTimestamp()
-      });
-    });
-    return { success: true };
-  } catch (e: any) {
-    return { success: false, error: e.message || 'TRAINING_START_FAILED' };
+    const { uid } = await requireServerActor(idToken);
+    return await startDailyTrainingWithDb(getAdminDb(), uid, playerId, focus);
+  } catch (error: any) {
+    return { success: false, error: error?.message || 'TRAINING_START_FAILED' };
   }
 }
+
 /**
  * Инициализация выставления на трансфер.
  */

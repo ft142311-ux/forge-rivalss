@@ -119,7 +119,7 @@ export default function YouthSquadPage() {
   if (!isLoaded || isUserLoading) return <LoadingScreen />;
 
   if (selectedPlayer) {
-    const liveAge = calculateLiveAge(selectedPlayer.baseAge, selectedPlayer.hiredAt);
+    const liveAge = calculateLiveAge(selectedPlayer.baseAge, selectedPlayer.hiredAt, selectedPlayer.birthDate);
     const talentsValues = Object.values(selectedPlayer.proTalents || {}).map(v => normTalent(v));
     const maxTalentValue = Math.max(...talentsValues);
 

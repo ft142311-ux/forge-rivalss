@@ -230,7 +230,7 @@ export function generateVtunePlayer(seed?: string): Player {
   };
 }
 
-export function generateUniquePlayer(role: Role, index: number, isStarter: boolean = false, seed?: string, isPro: boolean = false): Player {
+export function generateUniquePlayer(role: Role, index: number, isStarter: boolean = false, seed?: string, isPro: boolean = false, nowMs: number = Date.now()): Player {
   const rng = seed ? new SeededRandom(seed) : undefined;
   const codes = Object.keys(COUNTRY_PHOTOS);
   const codeIdx = rng ? rng.range(0, codes.length - 1) : Math.floor(Math.random() * codes.length);
@@ -257,8 +257,8 @@ export function generateUniquePlayer(role: Role, index: number, isStarter: boole
     description: `Уникальный талант из страны: ${country.name}.`,
     price: 0,
     baseAge: startAge.numeric,
-    hiredAt: new Date().toISOString(),
-    birthDate: birthDateForGameAge(startAge.years, startAge.month),
+    hiredAt: new Date(nowMs).toISOString(),
+    birthDate: birthDateForGameAge(startAge.years, startAge.month, nowMs),
     age: startAge.numeric,
     ageDisplay: startAge.display,
     ageSystemVersion: 5,
@@ -294,17 +294,19 @@ export function generateUniquePlayer(role: Role, index: number, isStarter: boole
   };
 }
 
-export function generateScoutedPlayer(index: number, scoutLevel: number, seed?: string): Player {
-  const rng = new SeededRandom(seed || `scout_v7_${Date.now()}_${index}`);
+export function generateScoutedPlayer(index: number, scoutLevel: number, seed?: string, nowMs: number = Date.now()): Player {
+  const candidateSeed = seed || `scout_v7_${nowMs}_${index}`;
+  const rng = new SeededRandom(candidateSeed);
   const roles: Role[] = ['Tank', 'Carry', 'Midlaner', 'Jungler', 'Support'];
   const role = roles[rng.range(0, roles.length - 1)];
-  const player = generateUniquePlayer(role, index, false, seed);
+  const player = generateUniquePlayer(role, index, false, candidateSeed, false, nowMs);
   const startAge = randomGameAge(14, 16, rng);
   player.baseAge = startAge.numeric;
   player.age = startAge.numeric;
   player.ageDisplay = startAge.display;
   player.ageSystemVersion = 5;
-  player.birthDate = birthDateForGameAge(startAge.years, startAge.month);
+  player.hiredAt = new Date(nowMs).toISOString();
+  player.birthDate = birthDateForGameAge(startAge.years, startAge.month, nowMs);
   player.isYouth = true;
   return player;
 }

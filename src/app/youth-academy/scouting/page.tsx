@@ -45,7 +45,8 @@ export default function ScoutingPage() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [selectedPlayer, setSelectedPlayer] = useState<Player | null>(null);
 
-  const scoutLevel = Number(academy?.scoutsLevel || 0);
+  const rawScoutLevel = Number(academy?.scoutsLevel ?? 0);
+  const scoutLevel = Number.isSafeInteger(rawScoutLevel) && rawScoutLevel >= 0 ? Math.min(20, rawScoutLevel) : 0;
 
   const rolesRu: Record<string, string> = {
     'Carry': 'Керри',
@@ -124,7 +125,8 @@ export default function ScoutingPage() {
     }
   }[language as 'en' | 'ru'];
 
-  const academyLimit = 10 + (academy.youthBootcampLevel || 0);
+  const rawYouthBootcampLevel = Number(academy?.youthBootcampLevel ?? 0);
+  const academyLimit = 10 + (Number.isSafeInteger(rawYouthBootcampLevel) && rawYouthBootcampLevel >= 0 && rawYouthBootcampLevel <= 1000 ? rawYouthBootcampLevel : 0);
 
   const handleScout = async () => {
     if (isProcessing) return;

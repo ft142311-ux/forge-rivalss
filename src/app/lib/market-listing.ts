@@ -1,6 +1,8 @@
 import { FieldValue } from 'firebase-admin/firestore';
 import { calculatePlayerMarketValue } from './moba-data';
+import { resolveMarketBidExpiryMs } from './market-bid-guards';
 import { assertStagingSeasonOneResetNotInProgress } from '@/app/lib/staging-season-one-write-fence';
+import { readFoundationRoster } from '@/game/foundation/guards';
 
 export function resolveMarketListingPrice(value: unknown): number {
   if (typeof value !== 'number' || !Number.isSafeInteger(value) || value <= 0) {
@@ -125,18 +127,26 @@ export async function createYouthMarketListingWithDb(
     if (!profileSnap.exists) throw new Error('PLAYER_NOT_FOUND');
 
     const profile = profileSnap.data() || {};
-    if (profile.youthAcademyPlayers !== undefined && profile.youthAcademyPlayers !== null &&
-        !Array.isArray(profile.youthAcademyPlayers)) {
+    if (profile.youthAcademyPlayers !== undefined && profile.youthAcademyPlayers !== null && !Array.isArray(profile.youthAcademyPlayers)) {
       throw new Error('YOUTH_ROSTER_INVALID');
     }
-    const players: any[] = Array.isArray(profile.youthAcademyPlayers) ? [...profile.youthAcademyPlayers] : [];
+    const players: any[] = readFoundationRoster(profile.youthAcademyPlayers ?? []);
+    const ownedPlayers: any[] = readFoundationRoster(profile.ownedPlayers ?? []);
+    if (ownedPlayers.some((player: any) => String(player?.id || '') === playerId)) {
+      throw new Error('PLAYER_OWNERSHIP_AMBIGUOUS');
+    }
     const matches = players.filter((player: any) => String(player?.id || '') === playerId);
     if (matches.length === 0) throw new Error('YOUTH_PLAYER_NOT_OWNED');
     if (matches.length !== 1) throw new Error('YOUTH_PLAYER_DUPLICATE');
 
     const playerIndex = players.findIndex((player: any) => String(player?.id || '') === playerId);
     const player = players[playerIndex];
-    if (player.onTransferUntil) throw new Error('PLAYER_ALREADY_ON_MARKET');
+    const lockExpiryMs = resolveMarketBidExpiryMs(player.onTransferUntil);
+    if (player.transferMarketId || (player.onTransferUntil && (lockExpiryMs === null || lockExpiryMs > now))) {
+      throw new Error('PLAYER_ALREADY_ON_MARKET');
+    }
+    if (player.dailyTrainingFinishTime) throw new Error('YOUTH_TRAINING_IN_PROGRESS');
+    if (player.isYouth === false) throw new Error('YOUTH_PLAYER_INVALID');
     const startingPrice = resolveYouthMarketStartingPrice(player.overallRating);
     const listedPlayer = { ...player, onTransferUntil: expiresAt, transferMarketId: marketId };
 

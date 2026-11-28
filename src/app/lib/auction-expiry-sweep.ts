@@ -2,6 +2,12 @@ import { randomUUID } from 'node:crypto';
 import { FieldPath, FieldValue } from 'firebase-admin/firestore';
 import { isSystemAuctionSeller, normalizeAuctionBalance, resolveAuctionCurrency, resolveAuctionEscrow, resolveAuctionPrice, normalizeAuctionUserId, resolveAuctionBidderId } from './auction-settlement';
 import { resolveMarketBidExpiryMs } from './market-bid-guards';
+import { readFoundationRoster } from '@/game/foundation/guards';
+import {
+  canAcceptYouthAuctionPurchase,
+  isYouthMarketLockOwnedByLot,
+  isYouthMarketLockValidForLot,
+} from './youth-academy-rules';
 
 /**
  * Finalizes expired transfer-market listings from the server only.
@@ -52,26 +58,47 @@ async function settleCandidate(candidate: any, db: any, nowMs = Date.now()) {
         if (buyerSnap?.exists && rawBuyerPlayers !== undefined && rawBuyerPlayers !== null && !Array.isArray(rawBuyerPlayers)) {
           throw new Error('AUCTION_BUYER_ROSTER_INVALID');
         }
-        const sellerPlayers: any[] = Array.isArray(rawSellerPlayers) ? [...rawSellerPlayers] : [];
+        const sellerPlayers: any[] = lot.isYouth === true
+          ? readFoundationRoster(rawSellerPlayers ?? [])
+          : Array.isArray(rawSellerPlayers) ? [...rawSellerPlayers] : [];
         const sellerMatches = sellerPlayers.filter((player: any) => String(player?.id) === playerId).length;
         if (sellerMatches > 1) throw new Error('AUCTION_SELLER_PLAYER_DUPLICATE');
+        const sellerOwnedPlayers: any[] = lot.isYouth === true && sellerSnap?.exists
+          ? readFoundationRoster(seller.ownedPlayers ?? [])
+          : [];
+        const sellerHasCrossRosterDuplicate = lot.isYouth === true &&
+          sellerOwnedPlayers.some((player: any) => String(player?.id) === playerId);
         const sellerIndex = sellerPlayers.findIndex((player: any) => String(player?.id) === playerId);
         const sellerPlayerLockId = sellerIndex >= 0
           ? String(sellerPlayers[sellerIndex]?.transferMarketId || '').trim()
           : '';
         // A stale lot must not sell or unlock a player already reserved by a
-        // newer listing. Missing lock IDs remain compatible with legacy lots.
-        const sellerPlayerLockIdMatchesLot = !sellerPlayerLockId || sellerPlayerLockId === candidate.id;
+        // newer listing. Only non-youth legacy lots may omit their lock ID.
+        const sellerPlayerLockIdMatchesLot = lot.isYouth === true
+          ? isYouthMarketLockOwnedByLot(sellerIndex >= 0 ? sellerPlayers[sellerIndex] : null, candidate.id)
+          : !sellerPlayerLockId || sellerPlayerLockId === candidate.id;
         const sellerLockUntilMs = sellerIndex >= 0
           ? resolveMarketBidExpiryMs(sellerPlayers[sellerIndex]?.onTransferUntil)
           : null;
-        // Youth listings reserve a real academy player. Their lock must cover
-        // the lot's full current expiry, including any anti-sniping extension.
-        const sellerPlayerLockCoversLot = lot.isYouth !== true || !sellerPlayerLockId ||
-          (sellerLockUntilMs !== null && sellerLockUntilMs >= expiryMs);
+        const sellerPlayerLockCoversLot = lot.isYouth !== true ||
+          isYouthMarketLockValidForLot(
+            sellerIndex >= 0 ? sellerPlayers[sellerIndex] : null,
+            candidate.id,
+            expiryMs,
+            sellerLockUntilMs,
+          );
         const sellerPlayerLockMatchesLot = sellerPlayerLockIdMatchesLot && sellerPlayerLockCoversLot;
         const systemPlayer: any = isSystemSeller && lot.heroData?.id === playerId ? lot.heroData : null;
-        const buyerPlayers: any[] = Array.isArray(rawBuyerPlayers) ? [...rawBuyerPlayers] : [];
+        const buyerPlayers: any[] = lot.isYouth === true
+          ? readFoundationRoster(rawBuyerPlayers ?? [])
+          : Array.isArray(rawBuyerPlayers) ? [...rawBuyerPlayers] : [];
+        const buyerYouthCapacityAvailable = lot.isYouth !== true ||
+          canAcceptYouthAuctionPurchase(buyerPlayers, buyer.academy, playerId);
+        const buyerOwnedPlayers: any[] = lot.isYouth === true && buyerSnap?.exists
+          ? readFoundationRoster(buyer.ownedPlayers ?? [])
+          : [];
+        const buyerDoesNotAlreadyOwnYouth = lot.isYouth !== true ||
+          !buyerOwnedPlayers.some((player: any) => String(player?.id) === playerId);
         const buyerBalance = normalizeAuctionBalance(buyer[currency]);
         const escrow = resolveAuctionEscrow({
           currency,
@@ -84,12 +111,10 @@ async function settleCandidate(candidate: any, db: any, nowMs = Date.now()) {
         const escrowedAmount = escrow.amount;
         const hasRecordedEscrow = escrow.hasRecordedEscrow;
         const hasValidEscrow = escrow.hasValidEscrow;
-        const sellerExists = isSystemSeller ? Boolean(systemPlayer) : Boolean(sellerSnap?.exists && sellerMatches === 1 && sellerPlayerLockMatchesLot);
-        const buyerYouthCapacity = 10 + Math.max(0, Math.floor(Number(buyer.academy?.youthBootcampLevel) || 0));
-        const buyerHasYouthCapacity = lot.isYouth !== true || buyerPlayers.length < buyerYouthCapacity;
+        const sellerExists = isSystemSeller ? Boolean(systemPlayer) : Boolean(sellerSnap?.exists && sellerMatches === 1 && sellerPlayerLockMatchesLot && !sellerHasCrossRosterDuplicate);
         const validSale = Boolean(
           sellerExists && buyerSnap?.exists && buyerRef && bidderId !== sellerId && price > 0 &&
-          (hasValidEscrow || buyerBalance >= price) && buyerHasYouthCapacity &&
+          (hasValidEscrow || buyerBalance >= price) && buyerYouthCapacityAvailable && buyerDoesNotAlreadyOwnYouth &&
           !buyerPlayers.some((player: any) => String(player?.id) === playerId)
         );
 

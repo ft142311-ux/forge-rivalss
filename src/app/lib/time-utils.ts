@@ -118,8 +118,7 @@ export const PLAYER_GAME_MONTH_MS = PLAYER_GAME_YEAR_MS / PLAYER_GAME_MONTHS;
  * 1 real week = 1 game year.
  * Display format is 18.0 ... 18.12, then 19.0.
  */
-export function calculateLiveAge(baseAge: number, hiredAtIso: string, birthDateIso?: string | null) {
-  const now = getMoscowTime();
+export function calculateLiveAge(baseAge: number, hiredAtIso: string, birthDateIso?: string | null, now: Date = getMoscowTime()) {
   const yearMs = PLAYER_GAME_YEAR_MS;
   const monthMs = PLAYER_GAME_MONTH_MS;
   const birthMs = birthDateIso ? new Date(birthDateIso).getTime() : NaN;
