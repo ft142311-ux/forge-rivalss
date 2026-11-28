@@ -68,10 +68,16 @@ test('Foundation staff reader requires canonical identities, matching roles and 
     { coach: { id: 'staff-1', role: 'analyst', salary: 1200 } },
     { unknown: { id: 'staff-1', role: 'unknown', salary: 1200 } },
     { coach: { id: ' staff-1', role: 'coach', salary: 1200 } },
-    { coach: { id: 'staff-1', role: 'coach', salary: ' ' } },
   ]) {
     assert.throws(() => readFoundationStaff(value), /FOUNDATION_STAFF_INVALID/);
   }
+
+  // The aggregate reader preserves the more specific payroll error so callers
+  // can distinguish corrupt salary data from an invalid staff shape.
+  assert.throws(
+    () => readFoundationStaff({ coach: { id: 'staff-1', role: 'coach', salary: ' ' } }),
+    /FOUNDATION_SALARY_INVALID/,
+  );
 
   const recruiterCandidate = { id: 'candidate-1', role: 'recruiter', salary: 5000 };
   assert.equal(readFoundationStaffMember(recruiterCandidate, 'recruiter'), recruiterCandidate);
@@ -126,4 +132,24 @@ test('Foundation staff and association debits share the strict persisted-balance
   assert.match(staff, /readFoundationNonNegativeInteger\(data\.credits, 'INVALID_BALANCE'\)/);
   assert.match(management, /readFoundationNonNegativeInteger\(data\.credits, 'INVALID_BALANCE'\)/);
   assert.match(management, /readFoundationNonNegativeInteger\(assoc\.treasury, 'INVALID_TREASURY_BALANCE'\)/);
+});
+
+test('daily cycle preserves an existing resolved event and never overwrites payroll receipts on a delayed retry', () => {
+  const processStart = cycle.indexOf('async function processManager');
+  const processEnd = cycle.indexOf('\nexport async function runFoundationDailyCycle', processStart);
+  const process = cycle.slice(processStart, processEnd);
+  const eventRead = process.indexOf('t.get(eventRef as any)');
+  const firstWrite = process.indexOf('t.update(ref, updates)');
+
+  assert.ok(eventRead >= 0 && eventRead < firstWrite, 'existing event must be read before any writes');
+  assert.match(process, /const event = existingEventRecord\?\.event \|\| generatedEvent/);
+  assert.match(process, /if \(event && !eventSnap\.exists\)\s*\{\s*t\.create\(eventRef/);
+  assert.match(process, /t\.create\(cycleRef/);
+  assert.match(process, /t\.create\(txRef/);
+  assert.doesNotMatch(process, /t\.set\((?:cycleRef|txRef|eventRef)/);
+  assert.doesNotMatch(process, /t\.set\(eventRef/);
+
+  const resolver = actionBlock(advanced, 'resolveFoundationEventAction');
+  assert.match(resolver, /if \(eventData\.resolvedAt\) return \{ alreadyResolved: true \}/);
+  assert.match(resolver, /resolvedAt: FieldValue\.serverTimestamp\(\), applied: choice === 'accept'/);
 });
