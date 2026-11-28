@@ -10,6 +10,7 @@ import { calculateMarketValue, calculateSalary } from '@/game/foundation/player-
 import { deterministicDailyEvent } from '@/game/foundation/events';
 import { clamp } from '@/game/foundation/player-system';
 import { assertStagingSeasonOneResetNotInProgress } from '@/app/lib/staging-season-one-write-fence';
+import { readFoundationNonNegativeInteger, readFoundationRoster, readFoundationStaff, readFoundationStaffSalary } from '@/game/foundation/guards';
 
 const CYCLE_VERSION = 1;
 const STAFF_SALARY_SHARE = 1;
@@ -53,30 +54,23 @@ async function processManager(db: any, ref: DocumentReference, now: Date) {
     const cycleSnap: any = await t.get(cycleRef as any);
     if (cycleSnap.exists) return { processed: false };
 
-    const players = normalizePlayers(Array.isArray(data.ownedPlayers) ? data.ownedPlayers : []);
+    const players = normalizePlayers(readFoundationRoster(data.ownedPlayers));
     const grossPlayerSalary = calculateDailyPlayerSalary(players);
-    const staff = data.staff && typeof data.staff === 'object' ? data.staff : {};
+    const staff = readFoundationStaff(data.staff);
     const staffSalary = Object.values(staff).reduce((sum: number, member: any) => {
       if (!member) return sum;
-      const rawSalary = member.salary;
-      const salary = rawSalary === undefined || rawSalary === null || rawSalary === ''
-        ? 0
-        : (typeof rawSalary === 'number' || typeof rawSalary === 'string') ? Number(rawSalary) : NaN;
-      if (!Number.isSafeInteger(salary) || salary < 0) throw new Error('FOUNDATION_SALARY_INVALID');
+      const salary = readFoundationStaffSalary(member.salary);
       const next = sum + salary;
       if (!Number.isSafeInteger(next)) throw new Error('FOUNDATION_SALARY_INVALID');
       return next;
     }, 0) * STAFF_SALARY_SHARE;
     const totalDue = grossPlayerSalary + staffSalary;
     if (!Number.isSafeInteger(totalDue) || totalDue < 0) throw new Error('FOUNDATION_SALARY_INVALID');
-    const rawCredits = data.credits;
-    const before = rawCredits === undefined || rawCredits === null || rawCredits === ''
-      ? 0
-      : (typeof rawCredits === 'number' || typeof rawCredits === 'string') ? Number(rawCredits) : NaN;
-    if (!Number.isSafeInteger(before) || before < 0) throw new Error('FOUNDATION_BALANCE_INVALID');
+    const before = readFoundationNonNegativeInteger(data.credits, 'FOUNDATION_BALANCE_INVALID');
+    const crystals = readFoundationNonNegativeInteger(data.crystals, 'FOUNDATION_BALANCE_INVALID');
     const paid = Math.min(before, totalDue);
     const unpaid = totalDue - paid;
-    const event = deterministicDailyEvent({ ...data, id: ref.id, ownedPlayers: players, credits: before, crystals: Number(data.crystals || 0) }, periodKey);
+    const event = deterministicDailyEvent({ ...data, id: ref.id, ownedPlayers: players, credits: before, crystals }, periodKey);
     // The daily event is generated at the 00:00 cycle but is NOT applied here.
     // The manager must resolve it once through the server action; this prevents
     // the same event from being applied twice (cycle + UI choice).
@@ -219,7 +213,7 @@ export async function syncFoundationForManager(idToken: string) {
     const snap = await t.get(ref);
     if (!snap.exists) return { success: false, error: 'PLAYER_NOT_FOUND' };
     const data = snap.data() || {};
-    const players = normalizePlayers(Array.isArray(data.ownedPlayers) ? data.ownedPlayers : []);
+    const players = normalizePlayers(readFoundationRoster(data.ownedPlayers));
     t.update(ref, {
       ownedPlayers: players,
       foundationVersion: CYCLE_VERSION,

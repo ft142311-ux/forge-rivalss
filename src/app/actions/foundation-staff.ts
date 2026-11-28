@@ -7,6 +7,7 @@ import { requireServerActor } from '@/lib/server-auth';
 import { generateStaffMember } from '@/app/lib/moba-data';
 import { FOUNDATION_COLLECTIONS } from '@/game/foundation/config';
 import { assertStagingSeasonOneResetNotInProgress } from '@/app/lib/staging-season-one-write-fence';
+import { readFoundationNonNegativeInteger } from '@/game/foundation/guards';
 
 const STAFF_ROLES = ['recruiter', 'coach', 'analyst', 'scout', 'doctor', 'financier'] as const;
 type StaffRole = typeof STAFF_ROLES[number];
@@ -59,14 +60,6 @@ function buildingAvailable(data: any, building: string) {
   if (building === 'medical') return Number(data.medical?.massageLevel || 0) > 0;
   if (building === 'hq') return Number(data.hq?.hrLevel || 0) > 0;
   return false;
-}
-
-function readCreditsBalance(value: unknown) {
-  const balance = value === undefined || value === null
-    ? 0
-    : (typeof value === 'number' || typeof value === 'string') ? Number(value) : NaN;
-  if (!Number.isSafeInteger(balance) || balance < 0) throw new Error('INVALID_BALANCE');
-  return balance;
 }
 
 function errorOf(e: any) {
@@ -148,7 +141,7 @@ export async function hireFoundationStaffAction(idToken: string, roleValue: stri
       if (!candidate) throw new Error('CANDIDATE_DATA_MISSING');
 
       const cost = 50000;
-      const balance = readCreditsBalance(data.credits);
+      const balance = readFoundationNonNegativeInteger(data.credits, 'INVALID_BALANCE');
       if (balance < cost) throw new Error('INSUFFICIENT_FUNDS');
 
       const hired = {

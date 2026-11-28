@@ -13,22 +13,7 @@ import { deterministicDailyEvent } from '@/game/foundation/events';
 import { isFoundationSkill } from '@/game/foundation/skills';
 import { resolveTrainingFinishTimeMs } from '@/app/lib/player-training-guards';
 import { assertStagingSeasonOneResetNotInProgress } from '@/app/lib/staging-season-one-write-fence';
-
-function readCreditsBalance(value: unknown) {
-  const balance = value === undefined || value === null
-    ? 0
-    : (typeof value === 'number' || typeof value === 'string') ? Number(value) : NaN;
-  if (!Number.isSafeInteger(balance) || balance < 0) throw new Error('INVALID_BALANCE');
-  return balance;
-}
-
-function readTreasuryBalance(value: unknown) {
-  const balance = value === undefined || value === null
-    ? 0
-    : (typeof value === 'number' || typeof value === 'string') ? Number(value) : NaN;
-  if (!Number.isSafeInteger(balance) || balance < 0) throw new Error('INVALID_TREASURY_BALANCE');
-  return balance;
-}
+import { readFoundationNonNegativeInteger, readFoundationRoster } from '@/game/foundation/guards';
 
 function errorOf(e: any) { return e?.message || 'FOUNDATION_ACTION_FAILED'; }
 
@@ -43,7 +28,7 @@ export async function setFoundationTrainingFocusAction(idToken: string, playerId
       const snap = await t.get(ref);
       if (!snap.exists) throw new Error('PLAYER_NOT_FOUND');
       const data = snap.data() || {};
-      const players = Array.isArray(data.ownedPlayers) ? [...data.ownedPlayers] : [];
+      const players = [...readFoundationRoster(data.ownedPlayers)];
       const idx = players.findIndex((p: any) => String(p.id) === String(playerId));
       if (idx < 0) throw new Error('UNIT_NOT_FOUND');
       const p = players[idx] || {};
@@ -70,7 +55,7 @@ export async function completePlayerTrainingAction(idToken: string, playerId: st
       const snap = await t.get(ref);
       if (!snap.exists) throw new Error('PLAYER_NOT_FOUND');
       const data = snap.data() || {};
-      const players: any[] = Array.isArray(data.ownedPlayers) ? [...data.ownedPlayers] : [];
+      const players: any[] = [...readFoundationRoster(data.ownedPlayers)];
       const index = players.findIndex(p => p.id === playerId);
       if (index < 0) throw new Error('UNIT_NOT_FOUND');
       const player = players[index];
@@ -101,7 +86,7 @@ export async function recalculateTeamSynergyAction(idToken: string) {
       if (!snap.exists) throw new Error('PLAYER_NOT_FOUND');
       const data = snap.data() || {};
       const lineup = data.lineup || {};
-      const players = (Array.isArray(data.ownedPlayers) ? data.ownedPlayers : []).filter((p: any) => Object.values(lineup).includes(p.id)).slice(0, 5);
+      const players = readFoundationRoster(data.ownedPlayers).filter((p: any) => Object.values(lineup).includes(p.id)).slice(0, 5);
       const synergy = calculateTeamSynergy(players);
       t.update(ref, { teamSynergy: synergy, updatedAt: FieldValue.serverTimestamp() });
       return { success: true, synergy };
@@ -278,7 +263,7 @@ export async function changePlayerRoleAction(idToken: string, playerId: string, 
       const snap = await t.get(ref);
       if (!snap.exists) throw new Error('PLAYER_NOT_FOUND');
       const data = snap.data() || {};
-      const players = Array.isArray(data.ownedPlayers) ? [...data.ownedPlayers] : [];
+      const players = [...readFoundationRoster(data.ownedPlayers)];
       const idx = players.findIndex((p:any) => String(p.id) === String(playerId));
       if (idx < 0) throw new Error('UNIT_NOT_OWNED');
       const lineup = { ...(data.lineup || {}) };
@@ -323,7 +308,7 @@ export async function getFoundationPlayerStatsAction(idToken: string) {
     const db = getAdminDb();
     const snap = await getFoundationManagerRef(db, uid).get();
     if (!snap.exists) throw new Error('PLAYER_NOT_FOUND');
-    const players = Array.isArray(snap.data()?.ownedPlayers) ? snap.data()!.ownedPlayers : [];
+    const players = readFoundationRoster(snap.data()?.ownedPlayers);
     return { success: true, players: players.map((p:any) => ({
       id: String(p.id), name: p.name, role: p.currentRole || p.role, overallRating: Number(p.overallRating || 0),
       matches: Number(p.seasonStats?.matches ?? p.totalMatchesPlayed ?? 0), wins: Number(p.seasonStats?.wins ?? 0),
@@ -359,13 +344,13 @@ export async function associationTreasuryPaymentAction(idToken: string, amount: 
       if (!associationId) throw new Error('NO_ASSOCIATION');
       if (typeof amount !== 'number' || !Number.isSafeInteger(amount) || amount <= 0) throw new Error('INVALID_AMOUNT');
       const payment = amount;
-      const balance = readCreditsBalance(data.credits);
+      const balance = readFoundationNonNegativeInteger(data.credits, 'INVALID_BALANCE');
       if (balance < payment) throw new Error('INSUFFICIENT_FUNDS');
       const assocRef = db.collection(FOUNDATION_COLLECTIONS.associations).doc(associationId);
       const assocSnap = await t.get(assocRef);
       if (!assocSnap.exists) throw new Error('ASSOCIATION_NOT_FOUND');
       const assoc = assocSnap.data() || {};
-      const treasuryBefore = readTreasuryBalance(assoc.treasury);
+      const treasuryBefore = readFoundationNonNegativeInteger(assoc.treasury, 'INVALID_TREASURY_BALANCE');
       const treasuryAfter = treasuryBefore + payment;
       if (!Number.isSafeInteger(treasuryAfter)) throw new Error('INVALID_TREASURY_BALANCE');
       t.update(managerRef, { credits: balance-payment, updatedAt: FieldValue.serverTimestamp() });

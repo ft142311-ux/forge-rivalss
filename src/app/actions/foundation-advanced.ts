@@ -6,6 +6,7 @@ import { requireServerActor, requireAdminActor } from '@/lib/server-auth';
 import { assertStagingSeasonOneResetNotInProgress } from '@/app/lib/staging-season-one-write-fence';
 import { getFoundationManagerRef } from './foundation-manager-ref';
 import { FOUNDATION_COLLECTIONS } from '@/game/foundation/config';
+import { readFoundationRoster } from '@/game/foundation/guards';
 import { expectedAttendance } from '@/game/foundation/fans';
 import { chooseGoldenPlayer, scoreGoldenPlayer } from '@/game/foundation/awards';
 import { setFoundationTrainingFocusAction as setFoundationTrainingFocusActionCanonical } from './foundation-management';
@@ -53,7 +54,8 @@ export async function resolveFoundationEventAction(idToken: string, eventId: str
       if (String(eventData.event?.id || '') !== normalizedEventId) throw new Error('EVENT_MISMATCH');
       if (!freshManager.exists) throw new Error('PLAYER_NOT_FOUND');
       const effects = choice === 'accept' ? (eventData.event?.effects || {}) : {};
-      const players = Array.isArray(freshManager.data()?.ownedPlayers) ? freshManager.data()!.ownedPlayers : [];
+      const managerData = freshManager.data() || {};
+      const players = readFoundationRoster(managerData.ownedPlayers);
       const next = players.map((p: any) => ({
         ...p,
         form: Math.max(0, Math.min(100, Number(p.form ?? 100) + Number(effects.form || 0))),
@@ -149,7 +151,7 @@ export async function resolveGoldenPlayerAwardAction(idToken: string, seasonId: 
     const managers = await db.collection(FOUNDATION_COLLECTIONS.managers).get();
     const candidates = managers.docs.flatMap(managerDoc => {
       const managerData = managerDoc.data() || {};
-      const players = Array.isArray(managerData.ownedPlayers) ? managerData.ownedPlayers : [];
+      const players = readFoundationRoster(managerData.ownedPlayers);
       return players.map((player: any) => {
         const stats = player.seasonStats || player.stats || {
           matches: player.totalMatchesPlayed || 0,

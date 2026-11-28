@@ -1,0 +1,108 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import {
+  readFoundationRoster,
+  readFoundationNonNegativeInteger,
+  readFoundationStaff,
+  readFoundationStaffSalary,
+} from '../src/game/foundation/guards.ts';
+
+const root = new URL('../', import.meta.url);
+const cycle = readFileSync(new URL('src/app/actions/foundation-cycle.ts', root), 'utf8');
+const advanced = readFileSync(new URL('src/app/actions/foundation-advanced.ts', root), 'utf8');
+const management = readFileSync(new URL('src/app/actions/foundation-management.ts', root), 'utf8');
+const staff = readFileSync(new URL('src/app/actions/foundation-staff.ts', root), 'utf8');
+
+function actionBlock(source, name) {
+  const start = source.indexOf('export async function ' + name);
+  assert.ok(start >= 0, 'missing action ' + name);
+  const next = source.indexOf('\nexport async function ', start + 1);
+  return source.slice(start, next < 0 ? source.length : next);
+}
+
+test('Foundation roster reader accepts empty, starter and bot rosters without rewriting them', () => {
+  const empty = [];
+  const starter = Array.from({ length: 10 }, (_, index) => ({ id: 'player-' + index }));
+  const bots = Array.from({ length: 5 }, (_, index) => ({ id: 'bot-player-' + index }));
+  assert.equal(readFoundationRoster(empty), empty);
+  assert.equal(readFoundationRoster(starter), starter);
+  assert.equal(readFoundationRoster(bots), bots);
+});
+
+test('Foundation roster reader rejects missing, malformed, duplicate and non-canonical player IDs', () => {
+  for (const value of [undefined, null, {}, 'not-a-roster', [null], [[]], [{}],
+    [{ id: '' }], [{ id: '   ' }], [{ id: ' player-1' }], [{ id: 'player-1 ' }],
+    [{ id: 'player-1' }, { id: 'player-1' }], [{ id: 'player-1' }, { id: 2 }]]) {
+    assert.throws(() => readFoundationRoster(value), /FOUNDATION_ROSTER_INVALID/);
+  }
+});
+
+test('Foundation balance parser defaults only missing legacy values and rejects blank or unsafe balances', () => {
+  assert.equal(readFoundationNonNegativeInteger(undefined, 'INVALID_BALANCE'), 0);
+  assert.equal(readFoundationNonNegativeInteger(null, 'INVALID_BALANCE'), 0);
+  assert.equal(readFoundationNonNegativeInteger(0, 'INVALID_BALANCE'), 0);
+  assert.equal(readFoundationNonNegativeInteger('1250', 'INVALID_BALANCE'), 1250);
+  for (const value of ['', ' ', '\t', true, {}, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+    assert.throws(() => readFoundationNonNegativeInteger(value, 'INVALID_BALANCE'), /INVALID_BALANCE/);
+  }
+});
+
+test('Foundation staff container and salaries reject malformed records before daily payroll', () => {
+  assert.deepEqual(readFoundationStaff(undefined), {});
+  assert.deepEqual(readFoundationStaff(null), {});
+  assert.deepEqual(readFoundationStaff({ coach: null, analyst: { salary: 1200 } }), {
+    coach: null, analyst: { salary: 1200 },
+  });
+  for (const value of ['corrupt', [], { coach: 'not-a-staff-record' }, { coach: [] }]) {
+    assert.throws(() => readFoundationStaff(value), /FOUNDATION_STAFF_INVALID/);
+  }
+  assert.equal(readFoundationStaffSalary(undefined), 0);
+  assert.equal(readFoundationStaffSalary(null), 0);
+  assert.equal(readFoundationStaffSalary(1500), 1500);
+  assert.equal(readFoundationStaffSalary('1500'), 1500);
+  for (const value of ['', ' ', false, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+    assert.throws(() => readFoundationStaffSalary(value), /FOUNDATION_SALARY_INVALID/);
+  }
+});
+
+test('daily cycle and manual sync fail closed instead of replacing a corrupt roster with an empty array', () => {
+  const processStart = cycle.indexOf('async function processManager');
+  const processEnd = cycle.indexOf('\nexport async function runFoundationDailyCycle', processStart);
+  const process = cycle.slice(processStart, processEnd);
+  assert.match(process, /readFoundationRoster\(data\.ownedPlayers\)/);
+  assert.ok(process.indexOf('readFoundationRoster(data.ownedPlayers)') < process.indexOf('t.update(ref, updates)'));
+  const sync = actionBlock(cycle, 'syncFoundationForManager');
+  assert.match(sync, /readFoundationRoster\(data\.ownedPlayers\)/);
+  assert.ok(sync.indexOf('readFoundationRoster(data.ownedPlayers)') < sync.indexOf('t.update(ref'));
+  assert.doesNotMatch(cycle, /Array\.isArray\(data\.ownedPlayers\)\s*\?\s*data\.ownedPlayers\s*:\s*\[\]/);
+});
+
+test('Foundation training, synergy, role and stats paths all use the canonical roster reader', () => {
+  for (const name of [
+    'setFoundationTrainingFocusAction',
+    'completePlayerTrainingAction',
+    'recalculateTeamSynergyAction',
+    'changePlayerRoleAction',
+    'getFoundationPlayerStatsAction',
+  ]) {
+    const action = actionBlock(management, name);
+    assert.match(action, /readFoundationRoster\(/, name);
+  }
+  assert.doesNotMatch(management, /Array\.isArray\([^\n]*ownedPlayers[^\n]*\?[^\n]*\[\]/);
+});
+
+test('Foundation events and award scoring reject malformed rosters instead of silently skipping them', () => {
+  const event = actionBlock(advanced, 'resolveFoundationEventAction');
+  const award = actionBlock(advanced, 'resolveGoldenPlayerAwardAction');
+  assert.match(event, /readFoundationRoster\(managerData\.ownedPlayers\)/);
+  assert.ok(event.indexOf('readFoundationRoster(managerData.ownedPlayers)') < event.indexOf('t.update(managerRef'));
+  assert.match(award, /readFoundationRoster\(managerData\.ownedPlayers\)/);
+  assert.doesNotMatch(advanced, /Array\.isArray\([^\n]*ownedPlayers[^\n]*\?[^\n]*\[\]/);
+});
+
+test('Foundation staff and association debits share the strict persisted-balance parser', () => {
+  assert.match(staff, /readFoundationNonNegativeInteger\(data\.credits, 'INVALID_BALANCE'\)/);
+  assert.match(management, /readFoundationNonNegativeInteger\(data\.credits, 'INVALID_BALANCE'\)/);
+  assert.match(management, /readFoundationNonNegativeInteger\(assoc\.treasury, 'INVALID_TREASURY_BALANCE'\)/);
+});
