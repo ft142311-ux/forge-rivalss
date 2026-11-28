@@ -35,23 +35,23 @@ export default function ChatsPage() {
     en: {
       title: "COMMUNICATIONS",
       subtitle: "Tactical Messaging Network",
-      locked: "Locked",
+      locked: "Unavailable",
       menu: [
         { label: 'Global Chat', desc: 'Real-time communication with all managers', icon: MessageSquare, active: true, href: '/chats/global' },
         { label: 'Private Messages', desc: 'Direct encrypted transmissions', icon: Mail, active: true, href: '/chats/private' },
-        { label: 'Help for Newbies', desc: 'Training support and field guides', icon: HelpCircle, active: false },
-        { label: 'Announcements', desc: 'Official league broadcasts and updates', icon: Megaphone, active: false },
+        { label: 'Help for Newbies', desc: 'Training support and field guides', icon: HelpCircle, active: true, href: '/chats/help' },
+        { label: 'Announcements', desc: 'Official league broadcasts and updates', icon: Megaphone, active: true, href: '/news' },
       ]
     },
     ru: {
       title: "ТЕРМИНАЛ СВЯЗИ",
       subtitle: "Сеть тактических сообщений",
-      locked: "Закрыто",
+      locked: "Недоступно",
       menu: [
         { label: 'Общий чат', desc: 'Общение со всеми менеджерами лиги', icon: MessageSquare, active: true, href: '/chats/global' },
         { label: 'Личные сообщения', desc: 'Прямая зашифрованная связь', icon: Mail, active: true, href: '/chats/private' },
-        { label: 'Помощь новичкам', desc: 'Поддержка и руководства для кадетов', icon: HelpCircle, active: false },
-        { label: 'Объявления', desc: 'Официальные сводки и новости лиги', icon: Megaphone, active: false },
+        { label: 'Помощь новичкам', desc: 'Поддержка и руководства для кадетов', icon: HelpCircle, active: true, href: '/chats/help' },
+        { label: 'Объявления', desc: 'Официальные сводки и новости лиги', icon: Megaphone, active: true, href: '/news' },
       ]
     }
   };
