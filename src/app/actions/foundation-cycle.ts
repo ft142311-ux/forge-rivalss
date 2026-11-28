@@ -1,6 +1,6 @@
 'use server';
 
-import { FieldPath, FieldValue, type Transaction, type DocumentReference } from 'firebase-admin/firestore';
+import { FieldPath, FieldValue, type Firestore, type Transaction, type DocumentReference } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { assertCronSecret } from '@/lib/server-cron-auth';
 import { getFoundationManagerRef } from './foundation-manager-ref';
@@ -43,7 +43,7 @@ function normalizePlayers(players: any[]) {
   });
 }
 
-async function processManager(db: any, ref: DocumentReference, now: Date) {
+async function processManager(db: Firestore, ref: DocumentReference, now: Date) {
   const periodKey = moscowDateKey(now);
   return db.runTransaction(async (t: Transaction) => {
     await assertStagingSeasonOneResetNotInProgress(t, db);
