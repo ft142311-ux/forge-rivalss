@@ -13,6 +13,7 @@ import { isMatchReportFinished } from '@/app/lib/match-report-utils';
 import { getMatchWinnerId } from '@/app/lib/match-winner';
 import { isProcessingLeaseStale } from '@/app/lib/match-processing-lease';
 import { assertStagingSeasonOneResetNotInProgress } from '@/app/lib/staging-season-one-write-fence';
+import { tryCreateManagerXpAward, getManagerMatchXp, isEligibleManagerProfile } from '@/app/lib/manager-progression';
 
 function startTimeMs(match: any): number {
   const raw = match?.startTime || match?.scheduledStartAt || match?.scheduledAt;
@@ -68,7 +69,7 @@ export async function createTrialMatchAction(idToken: string) {
     const [scoreA, scoreB] = simulation.seriesScore.split('-').map(Number);
     if (!Number.isFinite(scoreA) || !Number.isFinite(scoreB)) throw new Error('INVALID_TRIAL_MATCH_SCORE');
     const playedAt = new Date().toISOString();
-    const report = {
+    const report: Record<string, any> = {
       id: matchId,
       type: 'trial',
       matchType: 'trial',
@@ -121,6 +122,15 @@ export async function createTrialMatchAction(idToken: string) {
         throw new Error('TRIAL_PROFILE_CHANGED_RETRY');
       }
       if (existing.exists) throw new Error('TRIAL_MATCH_ID_COLLISION');
+      const managerXpAttempt = isEligibleManagerProfile(uid, currentProfile)
+        ? tryCreateManagerXpAward(currentProfile, getManagerMatchXp('trial', report.winnerId === uid), 'trial_match')
+        : null;
+      const managerXpAward = managerXpAttempt?.award ?? null;
+      report.managerXpAwards = managerXpAward ? [{ userId: uid, ...managerXpAward.receipt }] : [];
+      report.managerXpSkipped = managerXpAttempt?.skippedReason
+        ? [{ userId: uid, reason: managerXpAttempt.skippedReason }]
+        : [];
+      if (managerXpAward) tx.update(profileRef, managerXpAward.profilePatch);
       tx.create(matchRef, { ...report, createdAt: FieldValue.serverTimestamp() });
     });
 
@@ -200,11 +210,22 @@ export async function resolveDueTrialMatchesForUserAction(idToken: string) {
         if (!fresh.exists || data?.homeId !== uid || data?.isTrial !== true) throw new Error('TRIAL_MATCH_OWNERSHIP_CHANGED');
         if (isTrialMatchTerminal(data)) return false;
         if (data?.isProcessing !== true || data?.processingToken !== processingToken) throw new Error('TRIAL_MATCH_LOCK_LOST');
+        const profileRef = db.collection('players_v14').doc(uid);
+        const profileSnap = await transaction.get(profileRef);
+        const profileData = profileSnap.exists ? profileSnap.data() || {} : null;
+        const winnerId = getMatchWinnerId(simulation.winnerSide, data.homeId, data.awayId);
+        const managerXpAttempt = profileData && isEligibleManagerProfile(uid, profileData)
+          ? tryCreateManagerXpAward(profileData, getManagerMatchXp('trial', winnerId === uid), 'trial_match')
+          : null;
+        const managerXpAward = managerXpAttempt?.award ?? null;
+        if (managerXpAward) transaction.update(profileRef, managerXpAward.profilePatch);
         transaction.update(matchRef, {
           scoreA, scoreB, homeScore: scoreA, awayScore: scoreB,
           seriesScore: `${scoreA}-${scoreB}`, score: `${scoreA}-${scoreB}`,
           winner: simulation.winner,
-          winnerId: getMatchWinnerId(simulation.winnerSide, data.homeId, data.awayId),
+          winnerId,
+          managerXpAwards: managerXpAward ? [{ userId: uid, ...managerXpAward.receipt }] : [],
+          managerXpSkipped: managerXpAttempt?.skippedReason ? [{ userId: uid, reason: managerXpAttempt.skippedReason }] : [],
           status: 'finished', isFinished: true, isProcessing: false,
           processingToken: FieldValue.delete(), processingStartedAt: FieldValue.delete(),
           simulation, games: simulation.games, homeStrength: simulation.homeStrength,

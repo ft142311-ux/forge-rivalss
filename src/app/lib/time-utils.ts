@@ -45,8 +45,8 @@ export function toMskDate(date: Date): Date {
 }
 
 export function getLevelThreshold(level: number): number {
-  if (!Number.isSafeInteger(level) || level < 1) return 350;
-  return 350 * Math.pow(2, level - 1);
+  if (!Number.isSafeInteger(level) || level < 1) return 700;
+  return 700 * Math.pow(2, level - 1);
 }
 
 export function getMoscowDateString(now: Date = getMoscowTime()): string {

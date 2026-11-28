@@ -334,15 +334,12 @@ export function GameStateProvider({ children }: { children: ReactNode }) {
     try {
       const res = await claimDailyRewardAction(await user.getIdToken());
       if (res.success) {
-        const managerXp = res.managerXp;
         saveToLocal({
           lastRewardClaimDate: res.claimedDate || getMoscowDateString(),
           rewardDay: Number(res.rewardDay || state.rewardDay),
-          ...(managerXp ? { managerLevel: Number(managerXp.managerLevel), experiencePoints: Number(managerXp.experiencePoints) } : {}),
         });
         toast({
           title: res.alreadyClaimed ? (state.language === 'ru' ? "Награда уже получена сегодня" : "Reward already claimed today") : (state.language === 'ru' ? "Награда получена!" : "Reward Claimed!"),
-          description: managerXp?.amount ? `+${Number(managerXp.amount).toLocaleString()} XP` : undefined,
         });
         return true;
       }

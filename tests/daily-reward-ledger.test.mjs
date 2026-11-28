@@ -34,7 +34,6 @@ test('client reward claim immediately synchronizes local claim date to prevent r
   const end = store.indexOf('const purchasePremium = useCallback', start);
   const claim = store.slice(start, end);
   assert.match(claim, /saveToLocal\(\{[\s\S]*lastRewardClaimDate: res\.claimedDate \|\| getMoscowDateString\(\),[\s\S]*rewardDay:/);
-  assert.match(claim, /managerLevel: Number\(managerXp\.managerLevel\)/);
-  assert.match(claim, /experiencePoints: Number\(managerXp\.experiencePoints\)/);
+  assert.doesNotMatch(claim, /managerXp|managerLevel|experiencePoints/);
   assert.match(claim, /res\.alreadyClaimed/);
 });

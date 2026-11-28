@@ -23,18 +23,18 @@ test('manager progress normalization protects the UI from corrupt legacy values'
 });
 
 test('manager XP consumes the current level threshold and advances exactly at the boundary', () => {
-  assert.deepEqual(calculateManagerProgress({ managerLevel: 1, experiencePoints: 349 }, 1), {
-    levelBefore: 1, experienceBefore: 349, managerLevel: 2, experiencePoints: 0, levelsGained: 1, amount: 1,
+  assert.deepEqual(calculateManagerProgress({ managerLevel: 1, experiencePoints: 699 }, 1), {
+    levelBefore: 1, experienceBefore: 699, managerLevel: 2, experiencePoints: 0, levelsGained: 1, amount: 1,
   });
-  assert.deepEqual(calculateManagerProgress({ managerLevel: 1, experiencePoints: 348 }, 1), {
-    levelBefore: 1, experienceBefore: 348, managerLevel: 1, experiencePoints: 349, levelsGained: 0, amount: 1,
+  assert.deepEqual(calculateManagerProgress({ managerLevel: 1, experiencePoints: 698 }, 1), {
+    levelBefore: 1, experienceBefore: 698, managerLevel: 1, experiencePoints: 699, levelsGained: 0, amount: 1,
   });
 });
 
 test('manager XP can advance multiple levels without losing overflow XP', () => {
   const result = calculateManagerProgress({ managerLevel: 1, experiencePoints: 0 }, 2200);
   assert.equal(result.managerLevel, 3);
-  assert.equal(result.experiencePoints, 1150);
+  assert.equal(result.experiencePoints, 100);
   assert.equal(result.levelsGained, 2);
 });
 
@@ -52,14 +52,14 @@ test('manager XP rejects malformed, negative, fractional and overflowing progres
 });
 
 test('manager XP awards retain a complete audit receipt and profile patch', () => {
-  const award = createManagerXpAward({ managerLevel: 2, experiencePoints: 690 }, 20, 'league_match');
+  const award = createManagerXpAward({ managerLevel: 2, experiencePoints: 1390 }, 20, 'league_match');
   assert.deepEqual(award.profilePatch, { managerLevel: 3, experiencePoints: 10 });
   assert.deepEqual(award.receipt, {
     source: 'league_match',
     amount: 20,
     levelBefore: 2,
     levelAfter: 3,
-    xpBefore: 690,
+    xpBefore: 1390,
     xpAfter: 10,
     levelsGained: 1,
   });
@@ -67,7 +67,7 @@ test('manager XP awards retain a complete audit receipt and profile patch', () =
 
 test('safe manager XP awards skip corrupt legacy progress without overwriting it', () => {
   assert.deepEqual(
-    tryCreateManagerXpAward({ managerLevel: 0, experiencePoints: 100 }, 25, 'daily_reward'),
+    tryCreateManagerXpAward({ managerLevel: 0, experiencePoints: 100 }, 25, 'league_match'),
     { award: null, skippedReason: 'MANAGER_PROGRESS_INVALID' },
   );
   assert.deepEqual(
@@ -77,36 +77,38 @@ test('safe manager XP awards skip corrupt legacy progress without overwriting it
 });
 
 test('safe manager XP awards preserve valid receipts and reject invalid reward configuration', () => {
-  const profile = { managerLevel: 2, experiencePoints: 690 };
+  const profile = { managerLevel: 2, experiencePoints: 1390 };
   const safe = tryCreateManagerXpAward(profile, 20, 'league_match');
   assert.equal(safe.skippedReason, null);
   assert.deepEqual(safe.award, createManagerXpAward(profile, 20, 'league_match'));
   assert.throws(
-    () => tryCreateManagerXpAward({ managerLevel: 1, experiencePoints: 0 }, 0, 'daily_reward'),
+    () => tryCreateManagerXpAward({ managerLevel: 1, experiencePoints: 0 }, 0, 'league_match'),
     /MANAGER_XP_AMOUNT_INVALID/,
   );
 });
 
-test('manager XP reward table differentiates daily, league, cup and tournament activity', () => {
-  assert.equal(MANAGER_XP_REWARDS.dailyReward, 25);
-  assert.equal(getManagerMatchXp('league', false), 100);
-  assert.equal(getManagerMatchXp('league', true), 150);
-  assert.equal(getManagerMatchXp('pyramid_cup', false), 120);
-  assert.equal(getManagerMatchXp('pyramid_cup', true), 180);
-  assert.equal(getManagerMatchXp('tournament', false), 75);
-  assert.equal(getManagerMatchXp('tournament', true), 115);
+test('manager XP reward table follows match-only rewards for league, Cup, tournaments and trials', () => {
+  assert.equal('dailyReward' in MANAGER_XP_REWARDS, false);
+  assert.equal(getManagerMatchXp('league', false), 50);
+  assert.equal(getManagerMatchXp('league', true), 60);
+  assert.equal(getManagerMatchXp('pyramid_cup', false), 50);
+  assert.equal(getManagerMatchXp('pyramid_cup', true), 60);
+  assert.equal(getManagerMatchXp('tournament', false), 20);
+  assert.equal(getManagerMatchXp('tournament', true), 30);
+  assert.equal(getManagerMatchXp('trial', false), 5);
+  assert.equal(getManagerMatchXp('trial', true), 10);
 });
 
-test('manager level thresholds start at 350 XP and double at every level', () => {
+test('manager level thresholds start at 700 XP and double at every level', () => {
   assert.deepEqual(
     [1, 2, 3, 4, 5, 6].map((level) => getManagerProgressDisplay(level, 0).threshold),
-    [350, 700, 1400, 2800, 5600, 11200],
+    [700, 1400, 2800, 5600, 11200, 22400],
   );
 });
 
 test('manager progress display reports current threshold and remaining XP', () => {
   assert.deepEqual(getManagerProgressDisplay(1, 175), {
-    managerLevel: 1, experiencePoints: 175, threshold: 350, remaining: 175, percent: 50,
+    managerLevel: 1, experiencePoints: 175, threshold: 700, remaining: 525, percent: 25,
   });
 });
 

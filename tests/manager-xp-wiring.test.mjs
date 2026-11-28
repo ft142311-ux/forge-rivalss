@@ -7,16 +7,17 @@ const economy = read('../src/app/actions/economy.ts');
 const league = read('../src/app/actions/autonomous-cycle.ts');
 const universal = read('../src/app/actions/universal-match-resolver.ts');
 const tournaments = read('../src/app/actions/tournament-system.ts');
+const trial = read('../src/app/actions/trial-match-resolver.ts');
 const store = read('../src/app/lib/store.tsx');
 const home = read('../src/app/page.tsx');
 const topBar = read('../src/components/game/TopBar.tsx');
 
-test('daily reward XP is committed atomically with its existing idempotency receipt', () => {
-  assert.match(economy, /tryCreateManagerXpAward\(p, MANAGER_XP_REWARDS\.dailyReward, 'daily_reward'\)/);
-  assert.match(economy, /\.\.\.\(managerXpAward \? managerXpAward\.profilePatch : \{\}\)/);
-  assert.match(economy, /managerXp: managerXpAward\?\.receipt \?\? null/);
-  assert.match(economy, /managerXpSkippedReason/);
-  assert.match(economy, /t\.create\(receiptRef/);
+test('daily reward claims never award manager XP', () => {
+  assert.doesNotMatch(economy, /tryCreateManagerXpAward|managerXp/);
+  const start = store.indexOf('const claimReward = useCallback');
+  const end = store.indexOf('const purchasePremium = useCallback', start);
+  const claim = store.slice(start, end);
+  assert.doesNotMatch(claim, /managerXp|managerLevel|experiencePoints/);
 });
 
 test('official league settlement awards both eligible managers in the match transaction', () => {
@@ -48,11 +49,19 @@ test('tournament XP is awarded only after the processing token and profile are v
   assert.match(finalize, /managerXpSkipped/);
 });
 
-test('corrupt manager XP cannot block primary daily, league, Cup or tournament transactions', () => {
-  for (const source of [economy, league, universal, tournaments]) {
+test('corrupt manager XP cannot block official match settlement transactions', () => {
+  for (const source of [league, universal, tournaments, trial]) {
     assert.doesNotMatch(source, /createManagerXpAward\(/);
     assert.match(source, /tryCreateManagerXpAward/);
   }
+});
+
+test('trial match XP is committed with the terminal match report exactly once', () => {
+  assert.match(trial, /tryCreateManagerXpAward\(currentProfile, getManagerMatchXp\('trial'/);
+  assert.match(trial, /tryCreateManagerXpAward\(profileData, getManagerMatchXp\('trial'/);
+  assert.match(trial, /if \(managerXpAward\) tx\.update\(profileRef, managerXpAward\.profilePatch\)/);
+  assert.match(trial, /if \(managerXpAward\) transaction\.update\(profileRef, managerXpAward\.profilePatch\)/);
+  assert.match(trial, /managerXpAwards/);
 });
 
 test('manager level changes are announced and progress is visible in home and top bar', () => {
