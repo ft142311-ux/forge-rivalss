@@ -90,6 +90,32 @@ export function createManagerXpAward(
   };
 }
 
+export type ManagerXpAwardAttempt =
+  | { award: ReturnType<typeof createManagerXpAward>; skippedReason: null }
+  | { award: null; skippedReason: 'MANAGER_PROGRESS_INVALID' | 'MANAGER_XP_OVERFLOW' };
+
+/**
+ * XP is secondary to the operation that triggered it. Invalid legacy progress
+ * must not block a daily claim or an already-played match from being finalized.
+ * Only known profile-data failures are skipped; invalid reward configuration
+ * still throws so programming errors are not hidden.
+ */
+export function tryCreateManagerXpAward(
+  profile: ManagerProfileProgress,
+  amount: number,
+  source: ManagerXpSource,
+): ManagerXpAwardAttempt {
+  try {
+    return { award: createManagerXpAward(profile, amount, source), skippedReason: null };
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : '';
+    if (reason === 'MANAGER_PROGRESS_INVALID' || reason === 'MANAGER_XP_OVERFLOW') {
+      return { award: null, skippedReason: reason };
+    }
+    throw error;
+  }
+}
+
 export function getManagerMatchXp(competition: ManagerCompetition, won: boolean): number {
   switch (competition) {
     case 'league':

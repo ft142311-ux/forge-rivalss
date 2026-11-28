@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { clampNumber } from '@/app/lib/numeric-utils';
 import { isPlayerSkillKey } from '@/game/player-skills';
 import { getMatchWinnerId } from '@/app/lib/match-winner';
-import { createManagerXpAward, getManagerMatchXp, isEligibleManagerProfile } from '@/app/lib/manager-progression';
+import { tryCreateManagerXpAward, getManagerMatchXp, isEligibleManagerProfile } from '@/app/lib/manager-progression';
 import { isMatchReportFinished } from '@/app/lib/match-report-utils';
 import { aggregatePlayerCombatStats } from '@/app/lib/player-combat-stats';
 import { resolveSeasonLifecycleWindow } from './season-boundary';
@@ -789,15 +789,21 @@ export async function resolveDailyMatches() {
         const homeEconomy = await calculateMatchEconomy(homePlayerData, m, scoreA, scoreB);
         // Manager XP is awarded atomically with the official fixture result.
         // Friendly and trial matches are intentionally excluded from manager progression.
-        const homeManagerXp = homeSnap?.exists && isEligibleManagerProfile(homeId, homePlayerData)
-          ? createManagerXpAward(homePlayerData, getManagerMatchXp('league', winnerId === homeId), 'league_match')
+        const homeManagerXpAttempt = homeSnap?.exists && isEligibleManagerProfile(homeId, homePlayerData)
+          ? tryCreateManagerXpAward(homePlayerData, getManagerMatchXp('league', winnerId === homeId), 'league_match')
           : null;
-        const awayManagerXp = awaySnap?.exists && isEligibleManagerProfile(awayId, awayPlayerData)
-          ? createManagerXpAward(awayPlayerData, getManagerMatchXp('league', winnerId === awayId), 'league_match')
+        const awayManagerXpAttempt = awaySnap?.exists && isEligibleManagerProfile(awayId, awayPlayerData)
+          ? tryCreateManagerXpAward(awayPlayerData, getManagerMatchXp('league', winnerId === awayId), 'league_match')
           : null;
+        const homeManagerXp = homeManagerXpAttempt?.award ?? null;
+        const awayManagerXp = awayManagerXpAttempt?.award ?? null;
         const managerXpAwards = [
           homeManagerXp ? { userId: homeId, ...homeManagerXp.receipt } : null,
           awayManagerXp ? { userId: awayId, ...awayManagerXp.receipt } : null,
+        ].filter(Boolean);
+        const managerXpSkipped = [
+          homeManagerXpAttempt?.skippedReason ? { userId: homeId, reason: homeManagerXpAttempt.skippedReason } : null,
+          awayManagerXpAttempt?.skippedReason ? { userId: awayId, reason: awayManagerXpAttempt.skippedReason } : null,
         ].filter(Boolean);
         const officialClub = true;
 
@@ -941,6 +947,7 @@ export async function resolveDailyMatches() {
           processingToken: FieldValue.delete(),
           matchEconomy: homeEconomy,
           managerXpAwards,
+          managerXpSkipped,
           sportingEngine: simulation.engineVersion,
           sportingStrength: {
             home: simulation.homeStrength,

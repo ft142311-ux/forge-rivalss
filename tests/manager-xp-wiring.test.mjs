@@ -12,23 +12,26 @@ const home = read('../src/app/page.tsx');
 const topBar = read('../src/components/game/TopBar.tsx');
 
 test('daily reward XP is committed atomically with its existing idempotency receipt', () => {
-  assert.match(economy, /createManagerXpAward\(p, MANAGER_XP_REWARDS\.dailyReward, 'daily_reward'\)/);
-  assert.match(economy, /\.\.\.managerXpAward\.profilePatch/);
-  assert.match(economy, /managerXp: managerXpAward\.receipt/);
+  assert.match(economy, /tryCreateManagerXpAward\(p, MANAGER_XP_REWARDS\.dailyReward, 'daily_reward'\)/);
+  assert.match(economy, /\.\.\.\(managerXpAward \? managerXpAward\.profilePatch : \{\}\)/);
+  assert.match(economy, /managerXp: managerXpAward\?\.receipt \?\? null/);
+  assert.match(economy, /managerXpSkippedReason/);
   assert.match(economy, /t\.create\(receiptRef/);
 });
 
 test('official league settlement awards both eligible managers in the match transaction', () => {
-  assert.match(league, /createManagerXpAward\(homePlayerData, getManagerMatchXp\('league'/);
-  assert.match(league, /createManagerXpAward\(awayPlayerData, getManagerMatchXp\('league'/);
+  assert.match(league, /tryCreateManagerXpAward\(homePlayerData, getManagerMatchXp\('league'/);
+  assert.match(league, /tryCreateManagerXpAward\(awayPlayerData, getManagerMatchXp\('league'/);
   assert.match(league, /managerXpAwards/);
+  assert.match(league, /managerXpSkipped/);
   assert.match(league, /Object\.assign\(homeUpdate, homeManagerXp\.profilePatch\)/);
   assert.match(league, /Object\.assign\(awayUpdate, awayManagerXp\.profilePatch\)/);
 });
 
 test('universal match resolution awards Cup XP in the same match transaction', () => {
-  assert.match(universal, /createManagerXpAward\(homeData, getManagerMatchXp\(xpCompetition/);
+  assert.match(universal, /tryCreateManagerXpAward\(homeData, getManagerMatchXp\(xpCompetition/);
   assert.match(universal, /managerXpAwards/);
+  assert.match(universal, /managerXpSkipped/);
   assert.match(universal, /if \(homeManagerXp\) t\.update/);
   assert.match(universal, /if \(awayManagerXp\) t\.update/);
 });
@@ -40,8 +43,16 @@ test('tournament XP is awarded only after the processing token and profile are v
   const reads = finalize.indexOf('const humanProfileSnaps = await Promise.all');
   const firstWrite = finalize.search(/\bt\.(?:update|set|create|delete)\s*\(/);
   assert.ok(reads >= 0 && firstWrite > reads);
-  assert.match(finalize, /createManagerXpAward\(profileData, getManagerMatchXp\('tournament'/);
+  assert.match(finalize, /tryCreateManagerXpAward\(profileData, getManagerMatchXp\('tournament'/);
   assert.match(finalize, /managerXpAwards/);
+  assert.match(finalize, /managerXpSkipped/);
+});
+
+test('corrupt manager XP cannot block primary daily, league, Cup or tournament transactions', () => {
+  for (const source of [economy, league, universal, tournaments]) {
+    assert.doesNotMatch(source, /createManagerXpAward\\(/);
+    assert.match(source, /tryCreateManagerXpAward/);
+  }
 });
 
 test('manager level changes are announced and progress is visible in home and top bar', () => {

@@ -14,7 +14,7 @@ import { isTournamentMatchLeaseExpired, TOURNAMENT_MATCH_LEASE_MS } from '@/app/
 import { isTournamentStageMatchSetComplete, resolveTournamentGroupOutcome } from '@/app/lib/tournament-stage-utils';
 import { getTournamentRegistrationCapacity, getTournamentRegistrationWindow, normalizeTournamentRegisteredIds } from '@/app/lib/tournament-registration-window';
 import { isTournamentStageFixtureCompatible } from '@/app/lib/tournament-stage-transition';
-import { createManagerXpAward, getManagerMatchXp, isEligibleManagerProfile } from '@/app/lib/manager-progression';
+import { tryCreateManagerXpAward, getManagerMatchXp, isEligibleManagerProfile } from '@/app/lib/manager-progression';
 
 
 const TOURNAMENTS = [
@@ -598,15 +598,21 @@ async function resolveTournamentMatch(db: any, tournamentId: string, matchId: st
       // Read human manager profiles before the first write so XP and the match result commit atomically.
       const humanTeams = [home, away].filter(team => !team.isBot && isEligibleManagerProfile(team.id, team));
       const humanProfileSnaps = await Promise.all(humanTeams.map(team => t.get(db.collection('players_v14').doc(team.id))));
+      const managerXpSkipped: Array<{ userId: string; reason: string }> = [];
       const managerXpPlans = humanTeams.flatMap((team, index) => {
         const profileSnap = humanProfileSnaps[index];
         if (!profileSnap.exists) return [];
         const profileData = profileSnap.data() || {};
         if (!isEligibleManagerProfile(team.id, profileData)) return [];
+        const attempt = tryCreateManagerXpAward(profileData, getManagerMatchXp('tournament', winnerId === team.id), 'tournament_match');
+        if (!attempt.award) {
+          if (attempt.skippedReason) managerXpSkipped.push({ userId: team.id, reason: attempt.skippedReason });
+          return [];
+        }
         return [{
           team,
           profileRef: profileSnap.ref,
-          award: createManagerXpAward(profileData, getManagerMatchXp('tournament', winnerId === team.id), 'tournament_match'),
+          award: attempt.award,
         }];
       });
       const managerXpAwards = managerXpPlans.map(({ team, award }) => ({ userId: team.id, ...award.receipt }));
@@ -624,6 +630,7 @@ async function resolveTournamentMatch(db: any, tournamentId: string, matchId: st
         homeScore,
         awayScore,
         managerXpAwards,
+        managerXpSkipped,
       });
       managerXpPlans.forEach(({ profileRef, award }) => {
         t.update(profileRef, { ...award.profilePatch, updatedAt: FieldValue.serverTimestamp() });
@@ -654,6 +661,7 @@ async function resolveTournamentMatch(db: any, tournamentId: string, matchId: st
         winnerSide: resolvedWinnerSide,
         winner: winnerName,
         managerXpAwards,
+        managerXpSkipped,
         simulation,
         games: simulation.games,
         isFinished: true,

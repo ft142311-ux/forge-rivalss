@@ -4,6 +4,7 @@ import {
   MANAGER_XP_REWARDS,
   calculateManagerProgress,
   createManagerXpAward,
+  tryCreateManagerXpAward,
   getManagerMatchXp,
   getManagerProgressDisplay,
   isEligibleManagerProfile,
@@ -50,6 +51,28 @@ test('manager XP awards retain a complete audit receipt and profile patch', () =
     xpAfter: 10,
     levelsGained: 1,
   });
+});
+
+test('safe manager XP awards skip corrupt legacy progress without overwriting it', () => {
+  assert.deepEqual(
+    tryCreateManagerXpAward({ managerLevel: 0, experiencePoints: 100 }, 25, 'daily_reward'),
+    { award: null, skippedReason: 'MANAGER_PROGRESS_INVALID' },
+  );
+  assert.deepEqual(
+    tryCreateManagerXpAward({ managerLevel: 1, experiencePoints: Number.MAX_SAFE_INTEGER }, 25, 'daily_reward'),
+    { award: null, skippedReason: 'MANAGER_XP_OVERFLOW' },
+  );
+});
+
+test('safe manager XP awards preserve valid receipts and reject invalid reward configuration', () => {
+  const profile = { managerLevel: 2, experiencePoints: 1390 };
+  const safe = tryCreateManagerXpAward(profile, 20, 'league_match');
+  assert.equal(safe.skippedReason, null);
+  assert.deepEqual(safe.award, createManagerXpAward(profile, 20, 'league_match'));
+  assert.throws(
+    () => tryCreateManagerXpAward({ managerLevel: 1, experiencePoints: 0 }, 0, 'daily_reward'),
+    /MANAGER_XP_AMOUNT_INVALID/,
+  );
 });
 
 test('manager XP reward table differentiates daily, league, cup and tournament activity', () => {
