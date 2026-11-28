@@ -14,6 +14,7 @@ import { isFoundationSkill } from '@/game/foundation/skills';
 import { resolveTrainingFinishTimeMs } from '@/app/lib/player-training-guards';
 import { assertStagingSeasonOneResetNotInProgress } from '@/app/lib/staging-season-one-write-fence';
 import { readFoundationNonNegativeInteger, readFoundationRoster } from '@/game/foundation/guards';
+import type { FoundationRole } from '@/game/foundation/types';
 
 function errorOf(e: any) { return e?.message || 'FOUNDATION_ACTION_FAILED'; }
 
@@ -251,12 +252,27 @@ export async function joinAssociationFoundationAction(idToken: string, associati
 }
 
 /** Server-authoritative role assignment. It never changes the player's base OVR. */
+const FOUNDATION_ROLES = new Set<FoundationRole>(['Carry', 'Midlaner', 'Tank', 'Jungler', 'Support']);
+const STARTER_SLOT_ROLES: Record<string, FoundationRole> = {
+  carry: 'Carry',
+  mid: 'Midlaner',
+  offlane: 'Tank',
+  support: 'Jungler',
+  full_support: 'Support',
+};
+
+function parseFoundationRole(value: unknown): FoundationRole {
+  if (typeof value !== 'string' || !FOUNDATION_ROLES.has(value as FoundationRole)) {
+    throw new Error('INVALID_ROLE');
+  }
+  return value as FoundationRole;
+}
+
 export async function changePlayerRoleAction(idToken: string, playerId: string, roleValue: string) {
   try {
     const { uid } = await requireServerActor(idToken);
+    const role = parseFoundationRole(roleValue);
     const db = getAdminDb();
-    const allowed = ['Carry','Midlaner','Tank','Jungler','Support'];
-    if (!allowed.includes(roleValue)) throw new Error('INVALID_ROLE');
     const ref = getFoundationManagerRef(db, uid);
     await db.runTransaction(async t => {
       await assertStagingSeasonOneResetNotInProgress(t, db);
@@ -264,19 +280,25 @@ export async function changePlayerRoleAction(idToken: string, playerId: string, 
       if (!snap.exists) throw new Error('PLAYER_NOT_FOUND');
       const data = snap.data() || {};
       const players = [...readFoundationRoster(data.ownedPlayers)];
-      const idx = players.findIndex((p:any) => String(p.id) === String(playerId));
+      const idx = players.findIndex((p: any) => String(p.id) === String(playerId));
       if (idx < 0) throw new Error('UNIT_NOT_OWNED');
       const lineup = { ...(data.lineup || {}) };
-      const starterSlots = ['carry','mid','offlane','support','full_support'];
-      const duplicate = starterSlots.some(slot => lineup[slot] === playerId && ({carry:'Carry',mid:'Midlaner',offlane:'Tank',support:'Jungler',full_support:'Support'} as any)[slot] === roleValue);
+      const starterSlots = Object.keys(STARTER_SLOT_ROLES);
+      const duplicate = starterSlots.some(slot =>
+        lineup[slot] === playerId && STARTER_SLOT_ROLES[slot] === role
+      );
       if (!duplicate) {
-        const occupied = starterSlots.some(slot => lineup[slot] && String(lineup[slot]) !== String(playerId) && players.find((p:any)=>String(p.id)===String(lineup[slot]))?.currentRole === roleValue);
+        const occupied = starterSlots.some(slot =>
+          lineup[slot] &&
+          String(lineup[slot]) !== String(playerId) &&
+          players.find((p: any) => String(p.id) === String(lineup[slot]))?.currentRole === role
+        );
         if (occupied) throw new Error('ROLE_ALREADY_ASSIGNED');
       }
-      players[idx] = { ...players[idx], currentRole: roleValue };
+      players[idx] = { ...players[idx], currentRole: role };
       t.update(ref, { ownedPlayers: players, updatedAt: FieldValue.serverTimestamp() });
     });
-    return { success: true, role: roleValue };
+    return { success: true, role };
   } catch (e) { return { success: false, error: errorOf(e) }; }
 }
 

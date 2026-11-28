@@ -7,7 +7,7 @@ import { requireServerActor } from '@/lib/server-auth';
 import { generateStaffMember } from '@/app/lib/moba-data';
 import { FOUNDATION_COLLECTIONS } from '@/game/foundation/config';
 import { assertStagingSeasonOneResetNotInProgress } from '@/app/lib/staging-season-one-write-fence';
-import { readFoundationNonNegativeInteger } from '@/game/foundation/guards';
+import { readFoundationNonNegativeInteger, readFoundationStaff } from '@/game/foundation/guards';
 
 const STAFF_ROLES = ['recruiter', 'coach', 'analyst', 'scout', 'doctor', 'financier'] as const;
 type StaffRole = typeof STAFF_ROLES[number];
@@ -83,7 +83,7 @@ export async function getFoundationStaffCandidatesAction(idToken: string, roleVa
       const [managerSnap, candidateSnap] = await Promise.all([t.get(managerRef), t.get(candidateRef)]);
       if (!managerSnap.exists) throw new Error('PLAYER_NOT_FOUND');
       const data = managerSnap.data() || {};
-      const staff = (data.staff || {}) as Record<string, any>;
+      const staff = readFoundationStaff(data.staff);
 
       if (role !== 'recruiter' && !staff.recruiter) throw new Error('RECRUITER_REQUIRED');
       if (staff[role]) throw new Error('STAFF_ROLE_OCCUPIED');
@@ -127,7 +127,7 @@ export async function hireFoundationStaffAction(idToken: string, roleValue: stri
       if (!candidateSnap.exists) throw new Error('CANDIDATE_NOT_FOUND');
 
       const data = managerSnap.data() || {};
-      const staff = { ...(data.staff || {}) } as Record<string, any>;
+      const staff = { ...readFoundationStaff(data.staff) } as Record<string, any>;
       if (role !== 'recruiter' && !staff.recruiter) throw new Error('RECRUITER_REQUIRED');
       if (staff[role]) throw new Error('STAFF_ROLE_OCCUPIED');
       if (staffCount(staff) >= staffCapacity(data.hq)) throw new Error('HR_CAPACITY_REACHED');

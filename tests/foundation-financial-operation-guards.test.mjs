@@ -34,3 +34,26 @@ test('generic financial operation rejects boolean, fractional and unsafe stored 
   assert.match(finances, /!Number\.isSafeInteger\(balance\) \|\| balance < 0/);
   assert.match(finances, /readFinancialBalance\(player\[type\]\)/);
 });
+
+
+test('staff candidate and hiring actions reject malformed persisted staff before writes', () => {
+  const candidateStart = staff.indexOf('export async function getFoundationStaffCandidatesAction');
+  const candidateEnd = staff.indexOf('export async function hireFoundationStaffAction', candidateStart);
+  const candidateAction = staff.slice(candidateStart, candidateEnd);
+  assert.match(candidateAction, /readFoundationStaff\\(data\\.staff\\)/);
+  assert.ok(candidateAction.indexOf('readFoundationStaff(data.staff)') < candidateAction.indexOf('t.create(candidateRef'));
+
+  const hireStart = staff.indexOf('export async function hireFoundationStaffAction');
+  const hireAction = staff.slice(hireStart);
+  assert.match(hireAction, /readFoundationStaff\\(data\\.staff\\)/);
+  assert.ok(hireAction.indexOf('readFoundationStaff(data.staff)') < hireAction.indexOf('t.update(managerRef'));
+});
+
+test('Foundation role changes narrow external role strings to the canonical role union', () => {
+  const start = management.indexOf('export async function changePlayerRoleAction');
+  const end = management.indexOf('export async function getFoundationDailyEventAction', start);
+  const action = management.slice(start, end);
+  assert.match(management, /function parseFoundationRole\\(value: unknown\\): FoundationRole/);
+  assert.match(action, /const role = parseFoundationRole\\(roleValue\\)/);
+  assert.match(action, /currentRole: role/);
+});
