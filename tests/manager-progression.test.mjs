@@ -52,14 +52,14 @@ test('manager XP rejects malformed, negative, fractional and overflowing progres
 });
 
 test('manager XP awards retain a complete audit receipt and profile patch', () => {
-  const award = createManagerXpAward({ managerLevel: 2, experiencePoints: 1390 }, 20, 'league_match');
+  const award = createManagerXpAward({ managerLevel: 2, experiencePoints: 690 }, 20, 'league_match');
   assert.deepEqual(award.profilePatch, { managerLevel: 3, experiencePoints: 10 });
   assert.deepEqual(award.receipt, {
     source: 'league_match',
     amount: 20,
     levelBefore: 2,
     levelAfter: 3,
-    xpBefore: 1390,
+    xpBefore: 690,
     xpAfter: 10,
     levelsGained: 1,
   });
@@ -77,7 +77,7 @@ test('safe manager XP awards skip corrupt legacy progress without overwriting it
 });
 
 test('safe manager XP awards preserve valid receipts and reject invalid reward configuration', () => {
-  const profile = { managerLevel: 2, experiencePoints: 1390 };
+  const profile = { managerLevel: 2, experiencePoints: 690 };
   const safe = tryCreateManagerXpAward(profile, 20, 'league_match');
   assert.equal(safe.skippedReason, null);
   assert.deepEqual(safe.award, createManagerXpAward(profile, 20, 'league_match'));
