@@ -66,17 +66,16 @@ test('trial match XP is committed with the terminal match report exactly once', 
 });
 
 test('association matches award 20/30 XP and friendly challenges award 10/15 XP to both managers', () => {
-  assert.match(friendly, /const isAssociationMatch = collectionName === MATCH_COLLECTIONS\\.association \\|\\| matchType === 'basket'/);
-  assert.match(friendly, /getManagerMatchXp\\(competition, report\\.winnerId === String\\(match\\.hostId\\)\\)/);
-  assert.match(friendly, /getManagerMatchXp\\(competition, report\\.winnerId === String\\(match\\.challengerId\\)\\)/);
-  assert.match(friendly, /tryCreateManagerXpAward\\(homeData/);
-  assert.match(friendly, /tryCreateManagerXpAward\\(awayData/);
-  assert.match(friendly, /if \\(homeXpAward\\) t\\.update\\(homeSnap\\.ref/);
-  assert.match(friendly, /if \\(awayXpAward\\) t\\.update\\(awaySnap\\.ref/);
-  assert.match(friendly, /managerXpAwards/);
-  assert.match(friendly, /managerXpSkipped/);
+  assert.ok(friendly.includes("const isAssociationMatch = collectionName === MATCH_COLLECTIONS.association || matchType === 'basket'"));
+  assert.ok(friendly.includes('getManagerMatchXp(competition, report.winnerId === String(match.hostId))'));
+  assert.ok(friendly.includes('getManagerMatchXp(competition, report.winnerId === String(match.challengerId))'));
+  assert.ok(friendly.includes('tryCreateManagerXpAward(homeData'));
+  assert.ok(friendly.includes('tryCreateManagerXpAward(awayData'));
+  assert.ok(friendly.includes('if (homeXpAward) t.update(homeSnap.ref'));
+  assert.ok(friendly.includes('if (awayXpAward) t.update(awaySnap.ref'));
+  assert.ok(friendly.includes('managerXpAwards'));
+  assert.ok(friendly.includes('managerXpSkipped'));
 });
-
 test('manager level changes are announced and progress is visible in home and top bar', () => {
   assert.match(store, /normalizeManagerProgress\(d\)/);
   assert.match(store, /managerLevel: normalizedManagerProgress\.managerLevel/);
