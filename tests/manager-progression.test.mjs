@@ -34,7 +34,7 @@ test('manager XP consumes the current level threshold and advances exactly at th
 test('manager XP can advance multiple levels without losing overflow XP', () => {
   const result = calculateManagerProgress({ managerLevel: 1, experiencePoints: 0 }, 2200);
   assert.equal(result.managerLevel, 3);
-  assert.equal(result.experiencePoints, 100);
+  assert.equal(result.experiencePoints, 1150);
   assert.equal(result.levelsGained, 2);
 });
 
@@ -97,9 +97,16 @@ test('manager XP reward table differentiates daily, league, cup and tournament a
   assert.equal(getManagerMatchXp('tournament', true), 115);
 });
 
+test('manager level thresholds start at 350 XP and double at every level', () => {
+  assert.deepEqual(
+    [1, 2, 3, 4, 5, 6].map((level) => getManagerProgressDisplay(level, 0).threshold),
+    [350, 700, 1400, 2800, 5600, 11200],
+  );
+});
+
 test('manager progress display reports current threshold and remaining XP', () => {
-  assert.deepEqual(getManagerProgressDisplay(1, 350), {
-    managerLevel: 1, experiencePoints: 350, threshold: 700, remaining: 350, percent: 50,
+  assert.deepEqual(getManagerProgressDisplay(1, 175), {
+    managerLevel: 1, experiencePoints: 175, threshold: 350, remaining: 175, percent: 50,
   });
 });
 
