@@ -51,8 +51,25 @@ async function processManager(db: any, ref: DocumentReference, now: Date) {
     if (!snap.exists) return { processed: false };
     const data = snap.data() || {};
     const cycleRef = db.collection(FOUNDATION_COLLECTIONS.cycles).doc(`${ref.id}_${periodKey}`);
-    const cycleSnap: any = await t.get(cycleRef as any);
+    const eventRef = db.collection(FOUNDATION_COLLECTIONS.events).doc(`${ref.id}_${periodKey}`);
+    const [cycleSnap, eventSnap] = await Promise.all([
+      t.get(cycleRef as any),
+      t.get(eventRef as any),
+    ]);
     if (cycleSnap.exists) return { processed: false };
+
+    // A daily event may already have been created and resolved by the player
+    // before a delayed/retried cron reaches this manager. Never reset that
+    // resolution while processing payroll.
+    const existingEventRecord = eventSnap.exists ? eventSnap.data() || {} : null;
+    if (existingEventRecord && (
+      (existingEventRecord.userId !== undefined && existingEventRecord.userId !== ref.id) ||
+      (existingEventRecord.date !== undefined && existingEventRecord.date !== periodKey) ||
+      !existingEventRecord.event ||
+      typeof existingEventRecord.event.id !== 'string'
+    )) {
+      throw new Error('FOUNDATION_EVENT_RECORD_INVALID');
+    }
 
     const players = normalizePlayers(readFoundationRoster(data.ownedPlayers));
     const grossPlayerSalary = calculateDailyPlayerSalary(players);
@@ -70,11 +87,10 @@ async function processManager(db: any, ref: DocumentReference, now: Date) {
     const crystals = readFoundationNonNegativeInteger(data.crystals, 'FOUNDATION_BALANCE_INVALID');
     const paid = Math.min(before, totalDue);
     const unpaid = totalDue - paid;
-    const event = deterministicDailyEvent({ ...data, id: ref.id, ownedPlayers: players, credits: before, crystals }, periodKey);
-    // The daily event is generated at the 00:00 cycle but is NOT applied here.
-    // The manager must resolve it once through the server action; this prevents
-    // the same event from being applied twice (cycle + UI choice).
-    const eventApplied = false;
+    const generatedEvent = deterministicDailyEvent({ ...data, id: ref.id, ownedPlayers: players, credits: before, crystals }, periodKey);
+    // Prefer the persisted event: a player may have resolved it before a
+    // delayed cron retry. The cycle records its ID but never reopens it.
+    const event = existingEventRecord?.event || generatedEvent;
     const eventPlayers = players;
 
     const updates: any = {
@@ -96,9 +112,11 @@ async function processManager(db: any, ref: DocumentReference, now: Date) {
       updatedAt: FieldValue.serverTimestamp(),
     };
     t.update(ref, updates);
-    t.set(cycleRef, { userId: ref.id, date: periodKey, paid, playerSalary: grossPlayerSalary, staffSalary, eventId: event?.id || null, createdAt: FieldValue.serverTimestamp() });
+    // Create-only markers make a partially missing cycle marker or receipt
+    // fail closed instead of overwriting a prior payroll transaction.
+    t.create(cycleRef, { userId: ref.id, date: periodKey, paid, playerSalary: grossPlayerSalary, staffSalary, eventId: event?.id || null, createdAt: FieldValue.serverTimestamp() });
     const txRef = db.collection(FOUNDATION_COLLECTIONS.economy).doc(`foundation_salary_${ref.id}_${periodKey}`);
-    t.set(txRef, {
+    t.create(txRef, {
       userId: ref.id,
       amount: -paid,
       currency: 'credits',
@@ -114,9 +132,8 @@ async function processManager(db: any, ref: DocumentReference, now: Date) {
       balanceAfter: before - paid,
       timestamp: FieldValue.serverTimestamp(),
     });
-    if (event) {
-      const eventRef = db.collection(FOUNDATION_COLLECTIONS.events).doc(`${ref.id}_${periodKey}`);
-      t.set(eventRef, { userId: ref.id, date: periodKey, event, applied: eventApplied, resolvedAt: null, createdAt: FieldValue.serverTimestamp() });
+    if (event && !eventSnap.exists) {
+      t.create(eventRef, { userId: ref.id, date: periodKey, event, applied: false, resolvedAt: null, createdAt: FieldValue.serverTimestamp() });
     }
     return { processed: true, paid, unpaid, playerSalary: grossPlayerSalary, staffSalary, eventId: event?.id || null };
   });
