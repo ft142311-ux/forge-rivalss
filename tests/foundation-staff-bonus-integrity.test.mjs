@@ -79,30 +79,31 @@ test('staff capacity rejects malformed, fractional, negative and unsafe HR level
 const staffActionSource = readFileSync(new URL('../src/app/actions/foundation-staff.ts', import.meta.url), 'utf8');
 const dailyCycleSource = readFileSync(new URL('../src/app/actions/foundation-cycle.ts', import.meta.url), 'utf8');
 
-test('dismissal atomically vacates a validated staff slot and writes an audit record without refunding credits', () => {
+test('dismissal is identity-bound, transactional and idempotent without refunding credits', () => {
   const start = staffActionSource.indexOf('export async function dismissFoundationStaffAction');
   assert.ok(start >= 0, 'dismissal server action exists');
   const action = staffActionSource.slice(start);
-  const fence = action.indexOf('assertStagingSeasonOneResetNotInProgress(t, db)');
-  const managerRead = action.indexOf('t.get(managerRef)');
-  const staffValidation = action.indexOf('readFoundationStaff(data.staff)');
-  const memberValidation = action.indexOf('readFoundationStaffMember(current, role)');
-  const vacancy = action.indexOf('staff[role] = null');
-  const managerWrite = action.indexOf('t.update(managerRef');
-  const historyWrite = action.indexOf('t.create(historyRef');
-
-  assert.ok(fence >= 0 && fence < managerRead);
-  assert.ok(managerRead < staffValidation);
-  assert.ok(staffValidation < memberValidation);
-  assert.ok(memberValidation < vacancy);
-  assert.ok(vacancy < managerWrite);
-  assert.ok(managerWrite < historyWrite);
+  assert.match(action, /expectedStaffIdValue: string/);
+  assert.match(action, /encodeURIComponent\(expectedStaffId\)/);
+  assert.match(action, /history\.staffId !== expectedStaffId/);
+  assert.match(action, /member\.id !== expectedStaffId\) throw new Error\('STAFF_CHANGED'\)/);
+  assert.match(action, /if \(!current\) throw new Error\('STAFF_NOT_FOUND'\)/);
   assert.match(action, /alreadyDismissed:\s*true/);
+  assert.match(action, /alreadyDismissed:\s*false/);
   assert.match(action, /salaryAtDismissal:\s*member\.salary/);
   assert.match(action, /event:\s*'dismissed'/);
+
+  const fence = action.indexOf('assertStagingSeasonOneResetNotInProgress(t, db)');
+  const managerRead = action.indexOf('t.get(managerRef)');
+  const historyRead = action.indexOf('t.get(historyRef)');
+  const historyWrite = action.indexOf('t.create(historyRef');
+  const managerWrite = action.indexOf('t.update(managerRef');
+  assert.ok(fence >= 0 && fence < managerRead);
+  assert.ok(managerRead < managerWrite);
+  assert.ok(historyRead < managerWrite, 'history is read before any write');
+  assert.ok(managerWrite < historyWrite);
   assert.equal(action.includes('credits:'), false, 'dismissal does not alter the club balance');
 });
-
 test('a dismissed staff slot stops contributing bonuses, payroll and HR occupancy', () => {
   const before = {
     recruiter: member('staff-recruiter', 'recruiter'),

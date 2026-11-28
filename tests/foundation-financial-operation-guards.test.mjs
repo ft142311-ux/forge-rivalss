@@ -6,6 +6,7 @@ const staff = readFileSync(new URL('../src/app/actions/foundation-staff.ts', imp
 const management = readFileSync(new URL('../src/app/actions/foundation-management.ts', import.meta.url), 'utf8');
 const finances = readFileSync(new URL('../src/app/actions/finances-server.ts', import.meta.url), 'utf8');
 const guards = readFileSync(new URL('../src/game/foundation/guards.ts', import.meta.url), 'utf8');
+const staffRules = readFileSync(new URL('../src/game/foundation/staff.ts', import.meta.url), 'utf8');
 
 test('foundation staff hiring validates stored credits before charging or writing staff', () => {
   const start = staff.indexOf('export async function hireFoundationStaffAction');
@@ -75,8 +76,10 @@ test('Foundation staff candidates are validated before being returned or hired',
   assert.match(hireAction, /t\.create\(txRef/);
 });
 
-test('Foundation staff capacity and building gates reject malformed stored levels', () => {
-  assert.match(staff, /readFoundationNonNegativeInteger\(rawLevel, 'FOUNDATION_HR_LEVEL_INVALID'\)/);
+test('Foundation staff capacity and building gates use the shared strict integer parser', () => {
+  assert.match(staff, /import \{ staffCapacity \} from '@\/game\/foundation\/staff'/);
+  assert.match(staffRules, /readFoundationNonNegativeInteger\(\s*hq\?\.hrLevel,\s*'FOUNDATION_HR_LEVEL_INVALID'/);
+  assert.match(staff, /readFoundationNonNegativeInteger\(data\.bootcamp\?\.bootcampLevel, 'FOUNDATION_BUILDING_LEVEL_INVALID'\)/);
   assert.match(staff, /FOUNDATION_BUILDING_LEVEL_INVALID/);
 });
 

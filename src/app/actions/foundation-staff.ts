@@ -195,36 +195,64 @@ export async function hireFoundationStaffAction(idToken: string, roleValue: stri
 }
 
 /**
- * Dismiss an active staff member without changing the club balance.
- * The slot is cleared atomically, so the next daily payroll and bonus
- * calculation stop including this employee. A separate staff-history record
- * preserves the identity and final salary for audit/history screens.
+ * Dismiss the exact active staff member shown by the client.
+ *
+ * The expected ID prevents a stale confirmation from dismissing a replacement
+ * hire in the same role. A deterministic history key makes retries idempotent.
  */
-export async function dismissFoundationStaffAction(idToken: string, roleValue: string) {
+export async function dismissFoundationStaffAction(
+  idToken: string,
+  roleValue: string,
+  expectedStaffIdValue: string,
+) {
   try {
     const { uid } = await requireServerActor(idToken);
     const role = cleanRole(roleValue);
+    const expectedStaffId = String(expectedStaffIdValue || '').trim();
+    if (!expectedStaffId || expectedStaffId.length > 128) throw new Error('INVALID_STAFF_ID');
+
     const db = getAdminDb();
     const managerRef = getFoundationManagerRef(db, uid);
-    const historyRef = db.collection(FOUNDATION_COLLECTIONS.staff).doc();
+    const historyRef = db.collection(FOUNDATION_COLLECTIONS.staff).doc(
+      `dismiss_${uid}_${role}_${encodeURIComponent(expectedStaffId)}`,
+    );
     const dismissedAt = new Date().toISOString();
 
     return await db.runTransaction(async t => {
       await assertStagingSeasonOneResetNotInProgress(t, db);
-      const managerSnap = await t.get(managerRef);
+      const [managerSnap, historySnap] = await Promise.all([
+        t.get(managerRef),
+        t.get(historyRef),
+      ]);
       if (!managerSnap.exists) throw new Error('PLAYER_NOT_FOUND');
 
       const data = managerSnap.data() || {};
       const staff = { ...readFoundationStaff(data.staff) } as Record<string, any>;
       const current = staff[role];
 
-      // Concurrent/retried requests are harmless: only the transaction that
-      // observes the occupied slot writes the history record.
-      if (!current) return { success: true, role, alreadyDismissed: true };
+      if (historySnap.exists) {
+        const history = historySnap.data() || {};
+        if (
+          history.kind !== 'staff_history' ||
+          history.event !== 'dismissed' ||
+          history.userId !== uid ||
+          history.role !== role ||
+          history.staffId !== expectedStaffId
+        ) {
+          throw new Error('STAFF_HISTORY_INVALID');
+        }
+        if (current) {
+          const currentMember = readFoundationStaffMember(current, role);
+          if (currentMember.id === expectedStaffId) throw new Error('STAFF_HISTORY_CONFLICT');
+        }
+        return { success: true, role, staffId: expectedStaffId, alreadyDismissed: true };
+      }
 
+      if (!current) throw new Error('STAFF_NOT_FOUND');
       const member = readFoundationStaffMember(current, role);
-      staff[role] = null;
+      if (member.id !== expectedStaffId) throw new Error('STAFF_CHANGED');
 
+      staff[role] = null;
       t.update(managerRef, {
         staff,
         updatedAt: FieldValue.serverTimestamp(),
@@ -247,10 +275,10 @@ export async function dismissFoundationStaffAction(idToken: string, roleValue: s
         staffId: member.id,
         salaryAtDismissal: member.salary,
         dismissedAt,
+        alreadyDismissed: false,
       };
     });
   } catch (e) {
     return { success: false, error: errorOf(e) };
   }
 }
-
