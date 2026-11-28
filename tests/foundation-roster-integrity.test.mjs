@@ -144,7 +144,9 @@ test('daily cycle preserves an existing resolved event and never overwrites payr
 
   assert.ok(cycleRead >= 0 && cycleRead < firstWrite, 'cycle marker must be read before any writes');
   assert.ok(eventRead >= 0 && eventRead < firstWrite, 'existing event must be read before any writes');
-  assert.doesNotMatch(process, /t\\.get\\((?:cycleRef|eventRef) as any\\)/, 'document references must retain DocumentSnapshot typing');
+  assert.match(cycle, /import \{[^}]*type Firestore[^}]*\} from 'firebase-admin\\/firestore'/, 'daily cycle must use the Admin Firestore type');
+  assert.match(process, /async function processManager\(db: Firestore, ref: DocumentReference, now: Date\)/, 'transaction database must be typed so get() selects the document overload');
+  assert.doesNotMatch(process, /t\.get\((?:cycleRef|eventRef) as any\)/, 'document references must retain DocumentSnapshot typing');
   assert.match(process, /const event = existingEventRecord\?\.event \|\| generatedEvent/);
   assert.match(process, /if \(event && !eventSnap\.exists\)\s*\{\s*t\.create\(eventRef/);
   assert.match(process, /t\.create\(cycleRef/);
