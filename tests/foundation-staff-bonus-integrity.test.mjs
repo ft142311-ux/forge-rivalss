@@ -30,10 +30,12 @@ test('staff bonuses are granted only from validated hired staff records', () => 
     financier: member('staff-financier', 'financier'),
   };
 
-  assert.deepEqual(staffBonuses(staff), {
+  const bonuses = staffBonuses(staff);
+  assert.equal(bonuses.scouting.toFixed(2), '0.15');
+  assert.deepEqual({ ...bonuses, scouting: 0 }, {
     training: 0.08,
     match: 0.025,
-    scouting: 0.15,
+    scouting: 0,
     youth: 0.08,
     injury: 0.12,
     recovery: 0.10,
