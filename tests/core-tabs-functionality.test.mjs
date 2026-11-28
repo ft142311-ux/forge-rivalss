@@ -29,3 +29,13 @@ test('search page filters real senior, youth and staff entries without fabricate
   assert.match(search, /No matches in your club data/);
   assert.doesNotMatch(search, /Manager_0492/);
 });
+
+const news = readFileSync(new URL('../src/app/news/page.tsx', import.meta.url), 'utf8');
+
+test('club news feed is generated from recorded match history and trophies', () => {
+  assert.match(news, /matchHistory/);
+  assert.match(news, /trophies/);
+  assert.match(news, /seriesScore \|\| match\.score/);
+  assert.match(news, /href: '\/awards'/);
+  assert.match(news, /No club news yet/);
+});
