@@ -65,6 +65,8 @@ const YouthTransferCard = memo(({
 
   const isLeading = agent.highestBidderId === user?.uid;
   const isOwner = agent.sellerId === user?.uid;
+  const academyCapacity = 10 + Math.max(0, Math.floor(Number(profile?.academy?.youthBootcampLevel) || 0));
+  const isAcademyFull = (Array.isArray(profile?.youthAcademyPlayers) ? profile.youthAcademyPlayers.length : 0) >= academyCapacity;
   const nextBidValue = Math.ceil(agent.currentBid * (1 + bidPercent / 100));
   const liveAge = calculateLiveAge(agent.heroData.baseAge, agent.heroData.hiredAt);
   const talentsValues = Object.values(agent.heroData.proTalents || {}).map(v => normTalent(v));
@@ -185,9 +187,9 @@ const YouthTransferCard = memo(({
                 (isOwner ? "bg-secondary/50 text-muted-foreground border border-white/5" : "hero-gradient shadow-xl active:scale-95")
               )} 
               onClick={(e) => { e.stopPropagation(); if (!isLeading && !isOwner) setShowBidModal(true); }} 
-              disabled={isOwner}
+              disabled={isOwner || (!isLeading && isAcademyFull)}
             >
-              {isOwner ? (language === 'ru' ? 'ВАШ ЮНИОР' : 'YOUR UNIT') : (language === 'ru' ? 'ПОСТАВИТЬ' : 'PLACE BID')}
+              {isOwner ? (language === 'ru' ? 'ВАШ ЮНИОР' : 'YOUR UNIT') : (isAcademyFull && !isLeading ? (language === 'ru' ? 'АКАДЕМИЯ ЗАПОЛНЕНА' : 'ACADEMY FULL') : (language === 'ru' ? 'ПОСТАВИТЬ' : 'PLACE BID'))}
             </Button>
           </div>
         </CardContent>
@@ -332,8 +334,8 @@ const YouthTransferCard = memo(({
           </div>
 
           <div className="p-4 bg-secondary/20 border-t border-white/5 shrink-0">
-             <Button className="w-full h-14 hero-gradient font-black text-xs uppercase tracking-widest shadow-xl active:scale-95 transition-all" onClick={() => { setShowDossier(false); if (!isLeading && !isOwner) setShowBidModal(true); }} disabled={isOwner}>
-               {language === 'ru' ? 'ПОСТАВИТЬ' : 'PLACE BID'}
+             <Button className="w-full h-14 hero-gradient font-black text-xs uppercase tracking-widest shadow-xl active:scale-95 transition-all" onClick={() => { setShowDossier(false); if (!isLeading && !isOwner) setShowBidModal(true); }} disabled={isOwner || isAcademyFull}>
+               {language === 'ru' ? (isAcademyFull ? 'АКАДЕМИЯ ЗАПОЛНЕНА' : 'ПОСТАВИТЬ') : (isAcademyFull ? 'ACADEMY FULL' : 'PLACE BID')}
              </Button>
           </div>
         </DialogContent>

@@ -85,9 +85,11 @@ async function settleCandidate(candidate: any, db: any, nowMs = Date.now()) {
         const hasRecordedEscrow = escrow.hasRecordedEscrow;
         const hasValidEscrow = escrow.hasValidEscrow;
         const sellerExists = isSystemSeller ? Boolean(systemPlayer) : Boolean(sellerSnap?.exists && sellerMatches === 1 && sellerPlayerLockMatchesLot);
+        const buyerYouthCapacity = 10 + Math.max(0, Math.floor(Number(buyer.academy?.youthBootcampLevel) || 0));
+        const buyerHasYouthCapacity = lot.isYouth !== true || buyerPlayers.length < buyerYouthCapacity;
         const validSale = Boolean(
           sellerExists && buyerSnap?.exists && buyerRef && bidderId !== sellerId && price > 0 &&
-          (hasValidEscrow || buyerBalance >= price) &&
+          (hasValidEscrow || buyerBalance >= price) && buyerHasYouthCapacity &&
           !buyerPlayers.some((player: any) => String(player?.id) === playerId)
         );
 

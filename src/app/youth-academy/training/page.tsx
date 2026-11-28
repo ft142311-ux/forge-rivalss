@@ -178,7 +178,7 @@ export default function YouthTrainingPage() {
                       variant={isFinished ? "default" : "outline"}
                       className={cn("w-full h-10 font-bold text-[10px] uppercase tracking-widest", isFinished ? "bg-green-600 shadow-lg" : "border-white/10 opacity-50")}
                       disabled={!isFinished}
-                      onClick={() => claimDailyPlayerTraining(player.id)}
+                      onClick={async () => { await claimDailyPlayerTraining(player.id); }}
                     >
                       {isFinished ? <><CheckCircle2 className="w-3 h-3 mr-2" /> {t.claim}</> : <><Loader2 className="w-3 h-3 mr-2 animate-spin" /> TRAINING...</>}
                     </Button>

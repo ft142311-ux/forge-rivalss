@@ -92,10 +92,12 @@ export default function YouthSquadPage() {
     tiltResistance: Brain, versatility: TrendingUp, ganking: Crosshair,
   };
 
-  const handlePromote = (playerId: string) => {
-    promoteYouthPlayer(playerId);
-    toast({ title: language === 'ru' ? "Игрок переведен!" : "Player Promoted!" });
-    setSelectedPlayer(null);
+  const handlePromote = async (playerId: string) => {
+    const success = await promoteYouthPlayer(playerId);
+    if (success) {
+      toast({ title: language === 'ru' ? "Игрок переведен!" : "Player Promoted!" });
+      setSelectedPlayer(null);
+    }
   };
 
   const handleTransfer = async () => {

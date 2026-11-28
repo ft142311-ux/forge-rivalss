@@ -18,6 +18,7 @@ import { createTrialMatchAction } from '@/app/actions/trial-match-resolver';
 import { startConstructionAction, startCapacityExpansionAction, accelerateConstructionAction, finalizeConstructionsAction } from '@/app/actions/infrastructure';
 import { updateLineupAction, startDailyTrainingAction, listPlayerOnMarketAction } from '@/app/actions/gameplay';
 import { setFoundationTrainingFocusAction } from '@/app/actions/foundation-management';
+import { scoutYouthCandidatesAction, recruitYouthCandidateAction, clearYouthScoutingReportAction, promoteYouthPlayerAction, completeDailyYouthTrainingAction } from '@/app/actions/youth-academy';
 import { useToast } from '@/hooks/use-toast';
 import { createDeterministicBotSquad, buildMatchTeamSnapshot } from './match-simulation';
 import { runMatchEngine } from './match-engine';
@@ -95,15 +96,15 @@ interface GameState {
   purchaseLicense: (tier: number, cost: number) => boolean;
   purchasePremium: () => boolean;
   setTrainingFocus: (playerId: string, focus: string | null) => void;
-  startDailyPlayerTraining: (playerId: string, focus: string) => void;
-  claimDailyPlayerTraining: (playerId: string) => void;
+  startDailyPlayerTraining: (playerId: string, focus: string) => Promise<boolean>;
+  claimDailyPlayerTraining: (playerId: string) => Promise<boolean>;
   recoverAllFatigue: (type: 'credits' | 'crystals') => boolean;
   hireStaffMember: (member: StaffMember) => void;
   trainStaffSkill: (role: StaffRole, skillKey: 'primary' | 'secondary', cost: number) => boolean;
   trainHeroSkill: (heroId: string, skillKey: string, amount: number) => Promise<boolean>;
   addPlayerDirectly: (player: Player) => void;
   addYouthPlayerDirectly: (player: Player) => void;
-  promoteYouthPlayer: (playerId: string) => void;
+  promoteYouthPlayer: (playerId: string) => Promise<boolean>;
   updateProfileName: (name: string) => void;
   updateProfileCountry: (country: string) => void;
   recordMatch: (winner: string, result: any, reward: number, opponentName: string, type: string, playedAt: string, matchId?: string, extraData?: any) => void;
@@ -119,9 +120,9 @@ interface GameState {
   startCapacityExpansion: (seats: number) => Promise<boolean>;
   accelerateConstruction: (type: string, id: string, multiplier: number, price: number) => Promise<boolean>;
   checkConstructions: () => void;
-  scoutCandidates: () => void;
-  recruitCandidate: (playerId: string) => void;
-  clearScoutingReport: () => void;
+  scoutCandidates: () => Promise<boolean>;
+  recruitCandidate: (playerId: string) => Promise<boolean>;
+  clearScoutingReport: () => Promise<boolean>;
   payStaffSalaries: () => Promise<void>;
   healPlayer: (playerId: string, type: 'credits' | 'crystals', cost: number) => void;
   launchFanCampaign: (type: 'open_day' | 'autograph' | 'ultras_trip', cost: number, fans: number, loyalty: number) => void;
@@ -176,16 +177,16 @@ const DEFAULT_STATE: GameState = {
   availableGiftsToSend: [], receivedGifts: [], lastGiftGenDate: null,
   addCrystals: () => {}, addCredits: () => {}, updatePlayer: () => {}, removePlayer: () => {}, assignToRole: () => {}, updateLineup: () => {}, updateTactics: () => {},
   claimReward: async () => false, setLanguage: () => {}, purchaseLicense: () => false, purchasePremium: () => false,
-  setTrainingFocus: () => {}, startDailyPlayerTraining: () => {}, claimDailyPlayerTraining: () => {},
+  setTrainingFocus: () => {}, startDailyPlayerTraining: async () => false, claimDailyPlayerTraining: async () => false,
   recoverAllFatigue: () => false, hireStaffMember: () => {}, trainStaffSkill: () => false, trainHeroSkill: async () => false,
-  addPlayerDirectly: () => {}, addYouthPlayerDirectly: () => {}, promoteYouthPlayer: () => {},
+  addPlayerDirectly: () => {}, addYouthPlayerDirectly: () => {}, promoteYouthPlayer: async () => false,
   updateProfileName: () => {}, updateProfileCountry: () => {}, recordMatch: () => {},
   markMatchIdAsSeen: async () => false, deleteMatchHistoryEntry: () => {}, clearMatchHistory: () => {},
   upgradeManagerSkill: () => {},
   startArenaConstruction: async () => false, startHQConstruction: async () => false, startBootcampConstruction: async () => false,
   startAcademyConstruction: async () => false, startMedicalConstruction: async () => false, startCapacityExpansion: async () => false,
   accelerateConstruction: async () => false, checkConstructions: () => {},
-  scoutCandidates: () => {}, recruitCandidate: () => {}, clearScoutingReport: () => {},
+  scoutCandidates: async () => false, recruitCandidate: async () => false, clearScoutingReport: async () => false,
   payStaffSalaries: async () => {}, healPlayer: () => {}, launchFanCampaign: () => {},
   addTrophy: () => {}, setWorldReady: () => {}, resetProfile: async () => {},
   sendGift: async () => false, claimGift: async () => false, generateDailyGifts: () => {},
@@ -374,10 +375,84 @@ export function GameStateProvider({ children }: { children: ReactNode }) {
     }
   }, [user?.uid, toast]);
 
-  const startDailyPlayerTraining = useCallback((pId: string, focus: string) => {
-    if (!user?.uid) return;
-    user.getIdToken().then((idToken) => startDailyTrainingAction(idToken, pId, focus));
-  }, [user?.uid]);
+  const startDailyPlayerTraining = useCallback(async (pId: string, focus: string): Promise<boolean> => {
+    if (!user?.uid) return false;
+    try {
+      const result = await startDailyTrainingAction(await user.getIdToken(true), pId, focus);
+      if (!result.success) {
+        toast({ variant: 'destructive', title: result.error || 'YOUTH_TRAINING_START_FAILED' });
+        return false;
+      }
+      return true;
+    } catch (error: any) {
+      toast({ variant: 'destructive', title: error?.message || 'YOUTH_TRAINING_START_FAILED' });
+      return false;
+    }
+  }, [user?.uid, user, toast]);
+
+  const claimDailyPlayerTraining = useCallback(async (pId: string): Promise<boolean> => {
+    if (!user?.uid) return false;
+    try {
+      const result = await completeDailyYouthTrainingAction(await user.getIdToken(true), pId);
+      if (!result.success) {
+        toast({ variant: 'destructive', title: result.error || 'YOUTH_TRAINING_COMPLETE_FAILED' });
+        return false;
+      }
+      toast({ title: state.language === 'ru' ? 'Тренировка завершена' : 'Training completed', description: result.gained > 0 ? (state.language === 'ru' ? 'Получено +' + result.gained + ' к навыку' : '+' + result.gained + ' skill points') : undefined });
+      return true;
+    } catch (error: any) {
+      toast({ variant: 'destructive', title: error?.message || 'YOUTH_TRAINING_COMPLETE_FAILED' });
+      return false;
+    }
+  }, [user?.uid, user, state.language, toast]);
+
+  const scoutCandidates = useCallback(async (): Promise<boolean> => {
+    if (!user?.uid) return false;
+    try {
+      const result = await scoutYouthCandidatesAction(await user.getIdToken(true));
+      if (!result.success) throw new Error(result.error || 'YOUTH_SCOUTING_FAILED');
+      return true;
+    } catch (error: any) {
+      toast({ variant: 'destructive', title: error?.message || 'YOUTH_SCOUTING_FAILED' });
+      return false;
+    }
+  }, [user?.uid, user, toast]);
+
+  const recruitCandidate = useCallback(async (playerId: string): Promise<boolean> => {
+    if (!user?.uid) return false;
+    try {
+      const result = await recruitYouthCandidateAction(await user.getIdToken(true), playerId);
+      if (!result.success) throw new Error(result.error || 'YOUTH_RECRUITMENT_FAILED');
+      return true;
+    } catch (error: any) {
+      toast({ variant: 'destructive', title: error?.message || 'YOUTH_RECRUITMENT_FAILED' });
+      return false;
+    }
+  }, [user?.uid, user, toast]);
+
+  const clearScoutingReport = useCallback(async (): Promise<boolean> => {
+    if (!user?.uid) return false;
+    try {
+      const result = await clearYouthScoutingReportAction(await user.getIdToken(true));
+      if (!result.success) throw new Error(result.error || 'YOUTH_SCOUTING_CLEAR_FAILED');
+      return true;
+    } catch (error: any) {
+      toast({ variant: 'destructive', title: error?.message || 'YOUTH_SCOUTING_CLEAR_FAILED' });
+      return false;
+    }
+  }, [user?.uid, user, toast]);
+
+  const promoteYouthPlayer = useCallback(async (playerId: string): Promise<boolean> => {
+    if (!user?.uid) return false;
+    try {
+      const result = await promoteYouthPlayerAction(await user.getIdToken(true), playerId);
+      if (!result.success) throw new Error(result.error || 'YOUTH_PROMOTION_FAILED');
+      return true;
+    } catch (error: any) {
+      toast({ variant: 'destructive', title: error?.message || 'YOUTH_PROMOTION_FAILED' });
+      return false;
+    }
+  }, [user?.uid, user, toast]);
 
   const startConstruction = useCallback(async (section: 'arena' | 'hq' | 'bootcamp' | 'academy' | 'medical', id: string): Promise<boolean> => {
     if (!user?.uid) return false;
@@ -607,7 +682,7 @@ export function GameStateProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo(() => ({
     ...state, 
-    recordMatch, runTrialMatch, markMatchIdAsSeen, claimReward, purchasePremium, updateLineup, setTrainingFocus, startDailyPlayerTraining, assignToRole,
+    recordMatch, runTrialMatch, markMatchIdAsSeen, claimReward, purchasePremium, updateLineup, setTrainingFocus, startDailyPlayerTraining, claimDailyPlayerTraining, scoutCandidates, recruitCandidate, clearScoutingReport, promoteYouthPlayer, assignToRole,
     startArenaConstruction, startCapacityExpansion, startHQConstruction, startBootcampConstruction, startAcademyConstruction,
     startMedicalConstruction, accelerateConstruction, checkConstructions,
     addCrystals: () => console.warn("Client-side state write blocked by security policy."),
@@ -617,7 +692,7 @@ export function GameStateProvider({ children }: { children: ReactNode }) {
     setWorldReady,
     saveToLocal,
     resetProfile: async () => { if (typeof window !== 'undefined') localStorage.removeItem(STORAGE_KEY); window.location.reload(); }
-  }), [state, claimReward, purchasePremium, updateLineup, setTrainingFocus, startDailyPlayerTraining, assignToRole,
+  }), [state, claimReward, purchasePremium, updateLineup, setTrainingFocus, startDailyPlayerTraining, claimDailyPlayerTraining, scoutCandidates, recruitCandidate, clearScoutingReport, promoteYouthPlayer, assignToRole,
     startArenaConstruction, startCapacityExpansion, startHQConstruction, startBootcampConstruction, startAcademyConstruction,
     startMedicalConstruction, accelerateConstruction, checkConstructions, setLanguage, setWorldReady, saveToLocal, recordMatch, runTrialMatch, markMatchIdAsSeen]);
 
