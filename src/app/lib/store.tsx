@@ -395,10 +395,11 @@ export function GameStateProvider({ children }: { children: ReactNode }) {
     try {
       const result = await completeDailyYouthTrainingAction(await user.getIdToken(true), pId);
       if (!result.success) {
-        toast({ variant: 'destructive', title: result.error || 'YOUTH_TRAINING_COMPLETE_FAILED' });
+        toast({ variant: 'destructive', title: ('error' in result ? result.error : 'YOUTH_TRAINING_COMPLETE_FAILED') || 'YOUTH_TRAINING_COMPLETE_FAILED' });
         return false;
       }
-      toast({ title: state.language === 'ru' ? 'Тренировка завершена' : 'Training completed', description: result.gained > 0 ? (state.language === 'ru' ? 'Получено +' + result.gained + ' к навыку' : '+' + result.gained + ' skill points') : undefined });
+      const gained = 'gained' in result ? result.gained : 0;
+      toast({ title: state.language === 'ru' ? 'Тренировка завершена' : 'Training completed', description: gained > 0 ? (state.language === 'ru' ? 'Получено +' + gained + ' к навыку' : '+' + gained + ' skill points') : undefined });
       return true;
     } catch (error: any) {
       toast({ variant: 'destructive', title: error?.message || 'YOUTH_TRAINING_COMPLETE_FAILED' });
@@ -410,7 +411,7 @@ export function GameStateProvider({ children }: { children: ReactNode }) {
     if (!user?.uid) return false;
     try {
       const result = await scoutYouthCandidatesAction(await user.getIdToken(true));
-      if (!result.success) throw new Error(result.error || 'YOUTH_SCOUTING_FAILED');
+      if (!result.success) throw new Error(('error' in result ? result.error : 'YOUTH_SCOUTING_FAILED') || 'YOUTH_SCOUTING_FAILED');
       return true;
     } catch (error: any) {
       toast({ variant: 'destructive', title: error?.message || 'YOUTH_SCOUTING_FAILED' });
@@ -422,7 +423,7 @@ export function GameStateProvider({ children }: { children: ReactNode }) {
     if (!user?.uid) return false;
     try {
       const result = await recruitYouthCandidateAction(await user.getIdToken(true), playerId);
-      if (!result.success) throw new Error(result.error || 'YOUTH_RECRUITMENT_FAILED');
+      if (!result.success) throw new Error(('error' in result ? result.error : 'YOUTH_RECRUITMENT_FAILED') || 'YOUTH_RECRUITMENT_FAILED');
       return true;
     } catch (error: any) {
       toast({ variant: 'destructive', title: error?.message || 'YOUTH_RECRUITMENT_FAILED' });
@@ -434,7 +435,7 @@ export function GameStateProvider({ children }: { children: ReactNode }) {
     if (!user?.uid) return false;
     try {
       const result = await clearYouthScoutingReportAction(await user.getIdToken(true));
-      if (!result.success) throw new Error(result.error || 'YOUTH_SCOUTING_CLEAR_FAILED');
+      if (!result.success) throw new Error(('error' in result ? result.error : 'YOUTH_SCOUTING_CLEAR_FAILED') || 'YOUTH_SCOUTING_CLEAR_FAILED');
       return true;
     } catch (error: any) {
       toast({ variant: 'destructive', title: error?.message || 'YOUTH_SCOUTING_CLEAR_FAILED' });
@@ -446,7 +447,7 @@ export function GameStateProvider({ children }: { children: ReactNode }) {
     if (!user?.uid) return false;
     try {
       const result = await promoteYouthPlayerAction(await user.getIdToken(true), playerId);
-      if (!result.success) throw new Error(result.error || 'YOUTH_PROMOTION_FAILED');
+      if (!result.success) throw new Error(('error' in result ? result.error : 'YOUTH_PROMOTION_FAILED') || 'YOUTH_PROMOTION_FAILED');
       return true;
     } catch (error: any) {
       toast({ variant: 'destructive', title: error?.message || 'YOUTH_PROMOTION_FAILED' });
