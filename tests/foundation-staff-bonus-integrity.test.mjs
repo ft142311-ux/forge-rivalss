@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { staffBonuses, staffCapacity } from '../src/game/foundation/staff.ts';
 
 const emptyBonuses = {
@@ -74,3 +75,54 @@ test('staff capacity rejects malformed, fractional, negative and unsafe HR level
     );
   }
 });
+
+const staffActionSource = readFileSync(new URL('../src/app/actions/foundation-staff.ts', import.meta.url), 'utf8');
+const dailyCycleSource = readFileSync(new URL('../src/app/actions/foundation-cycle.ts', import.meta.url), 'utf8');
+
+test('dismissal atomically vacates a validated staff slot and writes an audit record without refunding credits', () => {
+  const start = staffActionSource.indexOf('export async function dismissFoundationStaffAction');
+  assert.ok(start >= 0, 'dismissal server action exists');
+  const action = staffActionSource.slice(start);
+  const fence = action.indexOf('assertStagingSeasonOneResetNotInProgress(t, db)');
+  const managerRead = action.indexOf('t.get(managerRef)');
+  const staffValidation = action.indexOf('readFoundationStaff(data.staff)');
+  const memberValidation = action.indexOf('readFoundationStaffMember(current, role)');
+  const vacancy = action.indexOf('staff[role] = null');
+  const managerWrite = action.indexOf('t.update(managerRef');
+  const historyWrite = action.indexOf('t.create(historyRef');
+
+  assert.ok(fence >= 0 && fence < managerRead);
+  assert.ok(managerRead < staffValidation);
+  assert.ok(staffValidation < memberValidation);
+  assert.ok(memberValidation < vacancy);
+  assert.ok(vacancy < managerWrite);
+  assert.ok(managerWrite < historyWrite);
+  assert.match(action, /alreadyDismissed:\s*true/);
+  assert.match(action, /salaryAtDismissal:\s*member\.salary/);
+  assert.match(action, /event:\s*'dismissed'/);
+  assert.equal(action.includes('credits:'), false, 'dismissal does not alter the club balance');
+});
+
+test('a dismissed staff slot stops contributing bonuses, payroll and HR occupancy', () => {
+  const before = {
+    recruiter: member('staff-recruiter', 'recruiter'),
+    coach: member('staff-coach', 'coach', 2400),
+  };
+  const after = { ...before, coach: null };
+  const payroll = (value) => Object.values(value).reduce((sum, employee) => sum + (employee ? employee.salary : 0), 0);
+
+  assert.equal(staffBonuses(before).training, 0.08);
+  assert.equal(staffBonuses(after).training, 0);
+  assert.equal(payroll(before), 3600);
+  assert.equal(payroll(after), 1200);
+  assert.equal(Object.values(before).filter(Boolean).length, 2);
+  assert.equal(Object.values(after).filter(Boolean).length, 1);
+  assert.match(dailyCycleSource, /if\s*\(!member\)\s*return sum/);
+});
+
+test('staff hiring and dismissal share the same canonical HR capacity calculation', () => {
+  assert.match(staffActionSource, /import \{ staffCapacity \} from '@\/game\/foundation\/staff'/);
+  assert.equal(staffActionSource.includes('function staffCapacity('), false);
+  assert.match(staffActionSource, /staffCount\(staff\) >= staffCapacity\(data\.hq\)/);
+});
+
