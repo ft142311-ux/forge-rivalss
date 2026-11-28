@@ -172,7 +172,7 @@ export async function resolveUniversalMatchDocument(
     const [scoreA, scoreB] = String(simulation.seriesScore || '0-0').split('-').map(Number);
     const winnerId = getMatchWinnerId(simulation.winnerSide, String(homeId), String(awayId));
 
-    const report = {
+    const report: Record<string, any> = {
       id: matchId,
       type: matchType,
       matchType,
