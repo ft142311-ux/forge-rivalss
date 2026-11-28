@@ -57,3 +57,33 @@ test('Foundation role changes narrow external role strings to the canonical role
   assert.match(action, /const role = parseFoundationRole\(roleValue\)/);
   assert.match(action, /currentRole: role/);
 });
+
+
+test('Foundation staff candidates are validated before being returned or hired', () => {
+  const candidateStart = staff.indexOf('export async function getFoundationStaffCandidatesAction');
+  const candidateEnd = staff.indexOf('export async function hireFoundationStaffAction', candidateStart);
+  const candidateAction = staff.slice(candidateStart, candidateEnd);
+  assert.match(candidateAction, /readFoundationStaffMember\(\s*\{ \.\.\.generateStaffMember/);
+  assert.match(candidateAction, /readFoundationStaffMember\(existing\.candidate, role\)/);
+  assert.ok(candidateAction.indexOf('readFoundationStaffMember(existing.candidate, role)') < candidateAction.indexOf('return { success: true'));
+
+  const hireAction = staff.slice(candidateEnd);
+  assert.match(hireAction, /readFoundationStaffMember\(candidateData\.candidate, role\)/);
+  assert.ok(hireAction.indexOf('readFoundationStaffMember(candidateData.candidate, role)') < hireAction.indexOf('t.update(managerRef'));
+  assert.match(hireAction, /candidateData\.userId !== uid \|\| candidateData\.role !== role \|\| candidateData\.day !== today/);
+  assert.ok(hireAction.includes("doc('staff_hire_' + uid + '_' + today + '_' + role)"));
+  assert.match(hireAction, /t\.create\(txRef/);
+});
+
+test('Foundation staff capacity and building gates reject malformed stored levels', () => {
+  assert.match(staff, /readFoundationNonNegativeInteger\(rawLevel, 'FOUNDATION_HR_LEVEL_INVALID'\)/);
+  assert.match(staff, /FOUNDATION_BUILDING_LEVEL_INVALID/);
+});
+
+test('player training validates persisted staff before granting the coach bonus', () => {
+  const start = management.indexOf('export async function completePlayerTrainingAction');
+  const end = management.indexOf('\nexport async function recalculateTeamSynergyAction', start);
+  const action = management.slice(start, end);
+  assert.match(action, /const staff = readFoundationStaff\(data\.staff\)/);
+  assert.ok(action.indexOf('readFoundationStaff(data.staff)') < action.indexOf('const staffBonus = staff.coach'));
+});

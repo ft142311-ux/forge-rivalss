@@ -13,7 +13,7 @@ import { deterministicDailyEvent } from '@/game/foundation/events';
 import { isFoundationSkill } from '@/game/foundation/skills';
 import { resolveTrainingFinishTimeMs } from '@/app/lib/player-training-guards';
 import { assertStagingSeasonOneResetNotInProgress } from '@/app/lib/staging-season-one-write-fence';
-import { readFoundationNonNegativeInteger, readFoundationRoster } from '@/game/foundation/guards';
+import { readFoundationNonNegativeInteger, readFoundationRoster, readFoundationStaff } from '@/game/foundation/guards';
 import type { FoundationRole } from '@/game/foundation/types';
 
 function errorOf(e: any) { return e?.message || 'FOUNDATION_ACTION_FAILED'; }
@@ -66,7 +66,8 @@ export async function completePlayerTrainingAction(idToken: string, playerId: st
       const focus = player.dailyTrainingFocus || player.trainingFocus;
       if (!focus) throw new Error('TRAINING_FOCUS_MISSING');
       if (!isFoundationSkill(focus)) throw new Error('INVALID_TRAINING_SKILL');
-      const staffBonus = data.staff?.coach ? 1.08 : 1;
+      const staff = readFoundationStaff(data.staff);
+      const staffBonus = staff.coach ? 1.08 : 1;
       const result = applyTraining(player, focus, Math.round(90 * staffBonus));
       players[index] = { ...result.player, dailyTrainingFinishTime: null, lastTrainingCompletedAt: new Date().toISOString() };
       const synergy = calculateTeamSynergy(players.filter(p => Object.values(data.lineup || {}).includes(p.id)).slice(0, 5));

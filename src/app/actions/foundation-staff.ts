@@ -7,7 +7,11 @@ import { requireServerActor } from '@/lib/server-auth';
 import { generateStaffMember } from '@/app/lib/moba-data';
 import { FOUNDATION_COLLECTIONS } from '@/game/foundation/config';
 import { assertStagingSeasonOneResetNotInProgress } from '@/app/lib/staging-season-one-write-fence';
-import { readFoundationNonNegativeInteger, readFoundationStaff } from '@/game/foundation/guards';
+import {
+  readFoundationNonNegativeInteger,
+  readFoundationStaff,
+  readFoundationStaffMember,
+} from '@/game/foundation/guards';
 
 const STAFF_ROLES = ['recruiter', 'coach', 'analyst', 'scout', 'doctor', 'financier'] as const;
 type StaffRole = typeof STAFF_ROLES[number];
@@ -49,16 +53,20 @@ function staffCount(staff: Record<string, any>) {
 }
 
 function staffCapacity(hq: any) {
-  const level = Math.max(1, Number(hq?.hrLevel || 1));
+  const rawLevel = hq?.hrLevel;
+  const storedLevel = rawLevel === undefined || rawLevel === null
+    ? 1
+    : readFoundationNonNegativeInteger(rawLevel, 'FOUNDATION_HR_LEVEL_INVALID');
+  const level = Math.max(1, storedLevel);
   // HR level 1: recruiter + one specialist. Each further level adds one place.
   return level + 1;
 }
 
 function buildingAvailable(data: any, building: string) {
-  if (building === 'bootcamp') return Number(data.bootcamp?.bootcampLevel || 0) > 0;
-  if (building === 'academy') return Number(data.academy?.scoutsLevel || 0) > 0;
-  if (building === 'medical') return Number(data.medical?.massageLevel || 0) > 0;
-  if (building === 'hq') return Number(data.hq?.hrLevel || 0) > 0;
+  if (building === 'bootcamp') return readFoundationNonNegativeInteger(data.bootcamp?.bootcampLevel, 'FOUNDATION_BUILDING_LEVEL_INVALID') > 0;
+  if (building === 'academy') return readFoundationNonNegativeInteger(data.academy?.scoutsLevel, 'FOUNDATION_BUILDING_LEVEL_INVALID') > 0;
+  if (building === 'medical') return readFoundationNonNegativeInteger(data.medical?.massageLevel, 'FOUNDATION_BUILDING_LEVEL_INVALID') > 0;
+  if (building === 'hq') return readFoundationNonNegativeInteger(data.hq?.hrLevel, 'FOUNDATION_BUILDING_LEVEL_INVALID') > 0;
   return false;
 }
 
@@ -76,7 +84,10 @@ export async function getFoundationStaffCandidatesAction(idToken: string, roleVa
     const candidateRef = db.collection(FOUNDATION_COLLECTIONS.staff).doc(`candidate_${uid}_${today}_${role}`);
     // Generate outside the transaction so retries keep the persisted daily
     // candidate as the single source of truth.
-    const generatedCandidate = { ...generateStaffMember(role === 'recruiter' ? 'coach' : role), role };
+    const generatedCandidate = readFoundationStaffMember(
+      { ...generateStaffMember(role === 'recruiter' ? 'coach' : role), role },
+      role,
+    );
 
     return await db.runTransaction(async t => {
       await assertStagingSeasonOneResetNotInProgress(t, db);
@@ -93,7 +104,13 @@ export async function getFoundationStaffCandidatesAction(idToken: string, roleVa
       if (staffCount(staff) >= staffCapacity(data.hq)) throw new Error('HR_CAPACITY_REACHED');
 
       if (candidateSnap.exists) {
-        return { success: true, role, roleLabel: ROLE_LABELS[role], candidate: candidateSnap.data()?.candidate || null, generatedToday: true };
+        const existing = candidateSnap.data() || {};
+        if (existing.userId !== uid || existing.role !== role || existing.day !== today) {
+          throw new Error('CANDIDATE_DATA_MISMATCH');
+        }
+        if (existing.status !== 'available') throw new Error('CANDIDATE_UNAVAILABLE');
+        const candidate = readFoundationStaffMember(existing.candidate, role);
+        return { success: true, role, roleLabel: ROLE_LABELS[role], candidate, generatedToday: true };
       }
 
       t.create(candidateRef, {
@@ -118,7 +135,8 @@ export async function hireFoundationStaffAction(idToken: string, roleValue: stri
     const role = cleanRole(roleValue);
     const db = getAdminDb();
     const managerRef = getFoundationManagerRef(db, uid);
-    const candidateRef = db.collection(FOUNDATION_COLLECTIONS.staff).doc(`candidate_${uid}_${dayKey()}_${role}`);
+    const today = dayKey();
+    const candidateRef = db.collection(FOUNDATION_COLLECTIONS.staff).doc(`candidate_${uid}_${today}_${role}`);
 
     return await db.runTransaction(async t => {
       await assertStagingSeasonOneResetNotInProgress(t, db);
@@ -136,9 +154,11 @@ export async function hireFoundationStaffAction(idToken: string, roleValue: stri
       if (building && !buildingAvailable(data, building)) throw new Error('REQUIRED_BUILDING_MISSING');
 
       const candidateData = candidateSnap.data() || {};
+      if (candidateData.userId !== uid || candidateData.role !== role || candidateData.day !== today) {
+        throw new Error('CANDIDATE_DATA_MISMATCH');
+      }
       if (candidateData.status !== 'available') throw new Error('CANDIDATE_UNAVAILABLE');
-      const candidate = candidateData.candidate;
-      if (!candidate) throw new Error('CANDIDATE_DATA_MISSING');
+      const candidate = readFoundationStaffMember(candidateData.candidate, role);
 
       const cost = 50000;
       const balance = readFoundationNonNegativeInteger(data.credits, 'INVALID_BALANCE');
@@ -162,13 +182,14 @@ export async function hireFoundationStaffAction(idToken: string, roleValue: stri
         hiredAt: FieldValue.serverTimestamp(),
       });
 
-      const txRef = db.collection(FOUNDATION_COLLECTIONS.economy).doc();
-      t.set(txRef, {
+      const txRef = db.collection(FOUNDATION_COLLECTIONS.economy).doc('staff_hire_' + uid + '_' + today + '_' + role);
+      t.create(txRef, {
         userId: uid,
         amount: -cost,
         currency: 'credits',
         type: 'STAFF_HIRE',
         referenceId: hired.id,
+        periodKey: today,
         description: `Hire ${role}`,
         balanceBefore: balance,
         balanceAfter: balance - cost,

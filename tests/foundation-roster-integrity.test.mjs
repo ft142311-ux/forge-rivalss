@@ -5,6 +5,7 @@ import {
   readFoundationRoster,
   readFoundationNonNegativeInteger,
   readFoundationStaff,
+  readFoundationStaffMember,
   readFoundationStaffSalary,
 } from '../src/game/foundation/guards.ts';
 
@@ -48,15 +49,35 @@ test('Foundation balance parser defaults only missing legacy values and rejects 
   }
 });
 
-test('Foundation staff container and salaries reject malformed records before daily payroll', () => {
+test('Foundation staff reader requires canonical identities, matching roles and positive payroll', () => {
   assert.deepEqual(readFoundationStaff(undefined), {});
   assert.deepEqual(readFoundationStaff(null), {});
-  assert.deepEqual(readFoundationStaff({ coach: null, analyst: { salary: 1200 } }), {
-    coach: null, analyst: { salary: 1200 },
-  });
-  for (const value of ['corrupt', [], { coach: 'not-a-staff-record' }, { coach: [] }]) {
+  const analyst = { id: 'staff-analyst', role: 'analyst', salary: 1200 };
+  assert.deepEqual(readFoundationStaff({ coach: null, analyst }), { coach: null, analyst });
+  assert.deepEqual(readFoundationStaff({
+    coach: null, analyst: null, scout: null, doctor: null, financier: null,
+  }), { coach: null, analyst: null, scout: null, doctor: null, financier: null });
+
+  for (const value of [
+    'corrupt',
+    [],
+    { coach: 'not-a-staff-record' },
+    { coach: [] },
+    { coach: { id: 'staff-1', role: 'coach' } },
+    { coach: { id: 'staff-1', role: 'coach', salary: 0 } },
+    { coach: { id: 'staff-1', role: 'analyst', salary: 1200 } },
+    { unknown: { id: 'staff-1', role: 'unknown', salary: 1200 } },
+    { coach: { id: ' staff-1', role: 'coach', salary: 1200 } },
+    { coach: { id: 'staff-1', role: 'coach', salary: ' ' } },
+  ]) {
     assert.throws(() => readFoundationStaff(value), /FOUNDATION_STAFF_INVALID/);
   }
+
+  const recruiterCandidate = { id: 'candidate-1', role: 'recruiter', salary: 5000 };
+  assert.equal(readFoundationStaffMember(recruiterCandidate, 'recruiter'), recruiterCandidate);
+  assert.throws(() => readFoundationStaffMember({ id: 'candidate-2', role: 'coach', salary: 5000 }, 'recruiter'), /FOUNDATION_STAFF_INVALID/);
+  assert.throws(() => readFoundationStaffMember({ id: 'candidate-3', role: 'recruiter', salary: undefined }, 'recruiter'), /FOUNDATION_STAFF_INVALID/);
+
   assert.equal(readFoundationStaffSalary(undefined), 0);
   assert.equal(readFoundationStaffSalary(null), 0);
   assert.equal(readFoundationStaffSalary(1500), 1500);
