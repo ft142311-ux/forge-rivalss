@@ -28,7 +28,7 @@ export function BottomNav() {
     return { date: `${day}.${month}`, time: `${hours}:${minutes}:${seconds}` };
   };
 
-  if (pathname?.startsWith('/auth') || pathname === '/setup') return null;
+  if (pathname?.startsWith('/auth') || pathname === '/setup' || pathname === '/') return null;
 
   const current = formatDate(now);
 

@@ -9,8 +9,11 @@ import { runMatchEngine } from '@/app/lib/match-engine';
 import { MATCH_COLLECTIONS } from '@/app/lib/match-storage';
 import { hash32 } from '@/app/lib/hash-utils';
 import { timestampToMillis } from '@/app/lib/timestamp-utils';
+import { isMatchReportFinished } from '@/app/lib/match-report-utils';
 import { getMatchWinnerId } from '@/app/lib/match-winner';
 import { isProcessingLeaseStale } from '@/app/lib/match-processing-lease';
+import { assertStagingSeasonOneResetNotInProgress } from '@/app/lib/staging-season-one-write-fence';
+import { tryCreateManagerXpAward, getManagerMatchXp, isEligibleManagerProfile } from '@/app/lib/manager-progression';
 
 function startTimeMs(match: any): number {
   const raw = match?.startTime || match?.scheduledStartAt || match?.scheduledAt;
@@ -18,8 +21,7 @@ function startTimeMs(match: any): number {
 }
 
 function isTrialMatchTerminal(match: any): boolean {
-  return match?.isFinished === true ||
-    ['finished', 'completed'].includes(String(match?.status || '').toLowerCase());
+  return isMatchReportFinished(match);
 }
 
 const TRIAL_MATCH_PROCESSING_LEASE_MS = 5 * 60 * 1000;
@@ -67,7 +69,7 @@ export async function createTrialMatchAction(idToken: string) {
     const [scoreA, scoreB] = simulation.seriesScore.split('-').map(Number);
     if (!Number.isFinite(scoreA) || !Number.isFinite(scoreB)) throw new Error('INVALID_TRIAL_MATCH_SCORE');
     const playedAt = new Date().toISOString();
-    const report = {
+    const report: Record<string, any> = {
       id: matchId,
       type: 'trial',
       matchType: 'trial',
@@ -108,8 +110,27 @@ export async function createTrialMatchAction(idToken: string) {
 
     const matchRef = db.collection(MATCH_COLLECTIONS.trial).doc(matchId);
     await db.runTransaction(async (tx) => {
-      const existing = await tx.get(matchRef);
+      await assertStagingSeasonOneResetNotInProgress(tx, db);
+      const [existing, currentProfileSnap] = await Promise.all([
+        tx.get(matchRef),
+        tx.get(profileRef),
+      ]);
+      if (!currentProfileSnap.exists) throw new Error('PLAYER_NOT_FOUND');
+      const currentProfile: any = currentProfileSnap.data() || {};
+      if (JSON.stringify(currentProfile.lineup || {}) !== JSON.stringify(profile.lineup || {}) ||
+          JSON.stringify(currentProfile.ownedPlayers || []) !== JSON.stringify(profile.ownedPlayers || [])) {
+        throw new Error('TRIAL_PROFILE_CHANGED_RETRY');
+      }
       if (existing.exists) throw new Error('TRIAL_MATCH_ID_COLLISION');
+      const managerXpAttempt = isEligibleManagerProfile(uid, currentProfile)
+        ? tryCreateManagerXpAward(currentProfile, getManagerMatchXp('trial', report.winnerId === uid), 'trial_match')
+        : null;
+      const managerXpAward = managerXpAttempt?.award ?? null;
+      report.managerXpAwards = managerXpAward ? [{ userId: uid, ...managerXpAward.receipt }] : [];
+      report.managerXpSkipped = managerXpAttempt?.skippedReason
+        ? [{ userId: uid, reason: managerXpAttempt.skippedReason }]
+        : [];
+      if (managerXpAward) tx.update(profileRef, managerXpAward.profilePatch);
       tx.create(matchRef, { ...report, createdAt: FieldValue.serverTimestamp() });
     });
 
@@ -161,6 +182,7 @@ export async function resolveDueTrialMatchesForUserAction(idToken: string) {
     const processingToken = randomUUID();
     try {
       claimed = await db.runTransaction(async transaction => {
+        await assertStagingSeasonOneResetNotInProgress(transaction, db);
         const fresh = await transaction.get(matchRef);
         const data = fresh.data() as any;
         if (!fresh.exists || data?.homeId !== uid || data?.isTrial !== true || isTrialMatchTerminal(data) || (data?.isProcessing === true && !isTrialMatchProcessingLeaseStale(data, Date.now()))) return false;
@@ -182,16 +204,28 @@ export async function resolveDueTrialMatchesForUserAction(idToken: string) {
       const finishedAt = new Date().toISOString();
 
       const finalized = await db.runTransaction(async transaction => {
+        await assertStagingSeasonOneResetNotInProgress(transaction, db);
         const fresh = await transaction.get(matchRef);
         const data = fresh.data() as any;
         if (!fresh.exists || data?.homeId !== uid || data?.isTrial !== true) throw new Error('TRIAL_MATCH_OWNERSHIP_CHANGED');
         if (isTrialMatchTerminal(data)) return false;
         if (data?.isProcessing !== true || data?.processingToken !== processingToken) throw new Error('TRIAL_MATCH_LOCK_LOST');
+        const profileRef = db.collection('players_v14').doc(uid);
+        const profileSnap = await transaction.get(profileRef);
+        const profileData = profileSnap.exists ? profileSnap.data() || {} : null;
+        const winnerId = getMatchWinnerId(simulation.winnerSide, data.homeId, data.awayId);
+        const managerXpAttempt = profileData && isEligibleManagerProfile(uid, profileData)
+          ? tryCreateManagerXpAward(profileData, getManagerMatchXp('trial', winnerId === uid), 'trial_match')
+          : null;
+        const managerXpAward = managerXpAttempt?.award ?? null;
+        if (managerXpAward) transaction.update(profileRef, managerXpAward.profilePatch);
         transaction.update(matchRef, {
           scoreA, scoreB, homeScore: scoreA, awayScore: scoreB,
           seriesScore: `${scoreA}-${scoreB}`, score: `${scoreA}-${scoreB}`,
           winner: simulation.winner,
-          winnerId: getMatchWinnerId(simulation.winnerSide, data.homeId, data.awayId),
+          winnerId,
+          managerXpAwards: managerXpAward ? [{ userId: uid, ...managerXpAward.receipt }] : [],
+          managerXpSkipped: managerXpAttempt?.skippedReason ? [{ userId: uid, reason: managerXpAttempt.skippedReason }] : [],
           status: 'finished', isFinished: true, isProcessing: false,
           processingToken: FieldValue.delete(), processingStartedAt: FieldValue.delete(),
           simulation, games: simulation.games, homeStrength: simulation.homeStrength,
@@ -208,6 +242,7 @@ export async function resolveDueTrialMatchesForUserAction(idToken: string) {
       console.error('[TRIAL MATCH SERVER] Resolution failed:', matchId, error);
       if (claimed) {
         await db.runTransaction(async transaction => {
+          await assertStagingSeasonOneResetNotInProgress(transaction, db);
           const fresh = await transaction.get(matchRef);
           const data = fresh.data() as any;
           if (fresh.exists && data?.homeId === uid && data?.isTrial === true && !isTrialMatchTerminal(data) && data?.isProcessing === true && data?.processingToken === processingToken) {

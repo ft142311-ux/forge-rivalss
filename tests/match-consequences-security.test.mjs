@@ -44,3 +44,12 @@ test('match consequences are applied at most once per user and match', () => {
   assert.match(action, /t\.create\(receiptRef/);
   assert.match(action, /duplicate: transactionResult\.duplicate/);
 });
+
+
+test('match consequences accept every shared terminal status, including legacy resolved', () => {
+  const start = source.indexOf('export async function applyMatchConsequencesAction');
+  const action = source.slice(start);
+  assert.match(source, /import \{ isMatchReportFinished \} from '\@\/app\/lib\/match-report-utils'/);
+  assert.match(action, /if \(!isMatchReportFinished\(match\)\) \{/);
+  assert.doesNotMatch(action, /\['finished', 'completed'\]\.includes/);
+});

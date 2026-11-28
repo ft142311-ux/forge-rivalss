@@ -45,10 +45,8 @@ export function toMskDate(date: Date): Date {
 }
 
 export function getLevelThreshold(level: number): number {
-  if (level === 1) return 700;
-  if (level === 2) return 1400;
-  if (level === 3) return 3800;
-  return 3800 * Math.pow(2, level - 3);
+  if (!Number.isSafeInteger(level) || level < 1) return 700;
+  return 700 * Math.pow(2, level - 1);
 }
 
 export function getMoscowDateString(now: Date = getMoscowTime()): string {
@@ -120,8 +118,7 @@ export const PLAYER_GAME_MONTH_MS = PLAYER_GAME_YEAR_MS / PLAYER_GAME_MONTHS;
  * 1 real week = 1 game year.
  * Display format is 18.0 ... 18.12, then 19.0.
  */
-export function calculateLiveAge(baseAge: number, hiredAtIso: string, birthDateIso?: string | null) {
-  const now = getMoscowTime();
+export function calculateLiveAge(baseAge: number, hiredAtIso: string, birthDateIso?: string | null, now: Date = getMoscowTime()) {
   const yearMs = PLAYER_GAME_YEAR_MS;
   const monthMs = PLAYER_GAME_MONTH_MS;
   const birthMs = birthDateIso ? new Date(birthDateIso).getTime() : NaN;

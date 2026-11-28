@@ -27,10 +27,16 @@ export async function requireServerActor(idToken: string): Promise<ServerActor> 
   if (!idToken) throw new Error('AUTHENTICATION_REQUIRED');
 
   const db = getAdminDb();
+  const authStartedAt = Date.now();
 
   try {
+    console.info('[SERVER AUTH TRACE]', { stage: 'token_verification_started' });
     const decoded = await getAuth().verifyIdToken(idToken, true);
+    console.info('[SERVER AUTH TRACE]', { stage: 'token_verified', durationMs: Date.now() - authStartedAt });
+    const activityStartedAt = Date.now();
+    console.info('[SERVER AUTH TRACE]', { stage: 'activity_fence_started' });
     const activity = await recordUserActivityUnlessRetiring(db, decoded.uid);
+    console.info('[SERVER AUTH TRACE]', { stage: 'activity_fence_finished', durationMs: Date.now() - activityStartedAt, success: activity.success, error: activity.error || null });
     if (!activity.success) throw new Error(activity.error);
     return {
       uid: decoded.uid,
@@ -67,6 +73,7 @@ export async function requireServerActor(idToken: string): Promise<ServerActor> 
       throw new Error('AUTH_TOKEN_INVALID');
     }
 
+    console.error('[SERVER AUTH TRACE]', { stage: 'actor_verification_failed', durationMs: Date.now() - authStartedAt, code: code || 'UNKNOWN', message: message.slice(0, 120) });
     throw error;
   }
 }

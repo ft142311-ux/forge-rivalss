@@ -124,7 +124,11 @@ async function provisionClubComplete(userId: string, email: string, clubName: st
       // 2. Получаем текущий сезон
       const configRef = db.collection('system_v1').doc('season_config');
       const configSnap = await transaction.get(configRef);
-      const seasonNum = configSnap.exists ? (configSnap.data()?.activeSeasonNumber || 1) : 1;
+      const seasonConfig = configSnap.exists ? configSnap.data() || {} : {};
+      if (seasonConfig.stagingSeasonOneResetInProgress === true || seasonConfig.stagingFreshSeasonOneReset === true || seasonConfig.worldReady !== true) {
+        return { success: false, error: 'SEASON_ONE_RESET_IN_PROGRESS' };
+      }
+      const seasonNum = seasonConfig.activeSeasonNumber || 1;
 
       // 3. Поиск свободного слота (атомарно)
       let placement = null;
@@ -209,7 +213,14 @@ export async function releasePlayerSlot(idToken: string) {
 
   try {
     return await db.runTransaction(async (transaction) => {
-      const playerSnap = await transaction.get(playerRef);
+      const configRef = db.collection('system_v1').doc('season_config');
+      const [playerSnap, configSnap] = await Promise.all([
+        transaction.get(playerRef), transaction.get(configRef),
+      ]);
+      if (configSnap.exists && (configSnap.data()?.stagingSeasonOneResetInProgress === true ||
+          configSnap.data()?.stagingFreshSeasonOneReset === true)) {
+        throw new Error('STAGING_SEASON_ONE_RESET_IN_PROGRESS');
+      }
       if (!playerSnap.exists) return { success: true, alreadyReleased: true };
 
       const player = playerSnap.data()!;

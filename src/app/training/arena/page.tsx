@@ -19,7 +19,7 @@ import { useToast } from '@/hooks/use-toast';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 import { PlaceHolderImages } from '@/app/lib/placeholder-images';
-import { getArenaExpansionQuote } from '@/app/lib/arena-expansion';
+import { ARENA_BASE_CAPACITY, getArenaExpansionQuote } from '@/app/lib/arena-expansion';
 
 const ACCEL_CREWS = [
   { id: 1, multiplier: 2, price: 100, labelRu: 'Малая бригада (2x)', labelEn: 'Small Crew (2x)' },
@@ -40,7 +40,8 @@ export default function ArenaPage() {
   const [isExpanding, setIsExpanding] = useState(false);
   const [expansionSeats, setExpansionSeats] = useState([500]);
   const selectedExpansionSeats = expansionSeats[0] || 500;
-  const expansionQuote = useMemo(() => getArenaExpansionQuote(selectedExpansionSeats, Number(arena?.capacity || 3000)), [selectedExpansionSeats, arena?.capacity]);
+  const currentArenaCapacity = Number(arena?.capacity ?? ARENA_BASE_CAPACITY);
+  const expansionQuote = useMemo(() => getArenaExpansionQuote(selectedExpansionSeats, currentArenaCapacity), [selectedExpansionSeats, currentArenaCapacity]);
   const [now, setNow] = useState(Date.now());
 
   useEffect(() => {
@@ -240,7 +241,7 @@ export default function ArenaPage() {
               <div>
                 <p className="text-[7px] uppercase font-black text-muted-foreground tracking-[0.05em] mb-0.5 leading-none">{t.items.capacity.label}</p>
                 <div className="flex items-baseline gap-1.5">
-                  <p className="text-2xl font-headline font-bold text-white tracking-tighter leading-none">{arena.capacity.toLocaleString()}</p>
+                  <p className="text-2xl font-headline font-bold text-white tracking-tighter leading-none">{currentArenaCapacity.toLocaleString()}</p>
                   <span className="text-[8px] font-black text-primary/40 uppercase">{t.seats.toUpperCase()}</span>
                 </div>
               </div>

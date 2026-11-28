@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
+import { isMatchReportFinished } from '../src/app/lib/match-report-utils.ts';
+
 const source = readFileSync(new URL('../src/app/actions/autonomous-cycle.ts', import.meta.url), 'utf8');
 const start = source.indexOf('export async function resolveDailyMatches()');
 const end = source.indexOf('export async function ', start + 1);
@@ -11,7 +13,7 @@ test('league settlement claims a per-attempt processing token transactionally', 
   assert.ok(resolver.includes('const processingToken = randomUUID();'));
   assert.ok(resolver.includes('const claimed = await db.runTransaction'));
   assert.ok(resolver.includes('processingToken,'));
-  assert.ok(resolver.includes("['finished', 'completed'].includes(String(current.status || '').toLowerCase())"));
+  assert.ok(resolver.includes('if (isMatchReportFinished(current)) return false;'));
   assert.ok(resolver.includes('if (!stale) return false;'));
 });
 
@@ -32,7 +34,7 @@ test('match result, player progression and home revenue share one Firestore tran
   assert.ok(resolver.includes('balanceAfter: after'));
   assert.ok(resolver.includes('tx.set(homeEffectRef!'));
   assert.ok(resolver.includes('tx.set(awayEffectRef!'));
-  assert.ok(resolver.includes('tx.set(economyTxRef!'));
+  assert.ok(resolver.includes('tx.create(economyTxRef!'));
   assert.ok(resolver.includes('tx.update(matchDoc.ref, {'));
 });
 
@@ -43,7 +45,7 @@ test('league worker scans all active-season fixtures and rebuilds standings befo
   assert.ok(resolver.includes('const standingsSync = await rebuildLeagueTablesFromFinishedMatches(db, currentSeason)'));
 });
 test('league match claims and settlement are fenced against rollover and active-season changes', () => {
-  assert.ok(source.includes("import { isSeasonRolloverLockStale, SEASON_ROLLOVER_LOCK_ID } from './season-rollover-lock'")); 
+  assert.ok(source.includes("import { isSeasonRolloverLockStale, SEASON_ROLLOVER_LOCK_ID } from './season-rollover-lock'"));
   assert.ok(resolver.includes('tx.get(configRef)'));
   assert.ok(resolver.includes('tx.get(rolloverLockRef)'));
   assert.ok(resolver.includes("reason: 'SEASON_ROLLOVER_IN_PROGRESS'"));
@@ -54,9 +56,12 @@ test('league match claims and settlement are fenced against rollover and active-
   assert.ok(resolver.includes('settlementLifecycle.leagueMatchesPaused'));
 });
 test('completed matches are terminal and cannot be claimed, recovered, or settled again', () => {
-  assert.ok(source.includes("['finished', 'completed'].includes(String(m.status || '').toLowerCase())"));
-  assert.ok(source.includes("['finished', 'completed'].includes(String(current.status || '').toLowerCase())"));
-  assert.ok(source.includes("['finished', 'completed'].includes(String(latest.status || '').toLowerCase())"));
-  assert.ok(resolver.includes("['finished', 'completed'].includes(String(m.status || '').toLowerCase())"));
-  assert.ok(resolver.includes("['finished', 'completed'].includes(String(current.status || '').toLowerCase())"));
+  assert.ok(resolver.includes('isMatchReportFinished(m)'));
+  assert.ok(resolver.includes('isMatchReportFinished(current)'));
+  assert.ok(resolver.includes('isMatchReportFinished(latest)'));
+  assert.equal((resolver.match(/isMatchReportFinished\(/g) || []).length, 4);
+  assert.doesNotMatch(resolver, /\['finished', 'completed'\]\.includes/);
+  assert.equal(isMatchReportFinished({ isFinished: false, status: 'resolved' }), true);
+  assert.equal(isMatchReportFinished({ isFinished: false, status: 'completed' }), true);
+  assert.equal(isMatchReportFinished({ isFinished: false, status: 'scheduled' }), false);
 });

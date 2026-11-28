@@ -25,3 +25,9 @@ test('foundation staff hire ledger captures balances for the atomic debit', () =
 test('association treasury payment ledger captures balances for the atomic debit', () => {
   assert.match(management, /type: 'ASSOCIATION_PAYMENT',[\s\S]*balanceBefore: balance,[\s\S]*balanceAfter: balance - payment/);
 });
+
+
+test('client-callable generic financial operations cannot mint credits or crystals', () => {
+  assert.match(finance, /if \(amount >= 0\) return \{ success: false, error: 'FINANCIAL_DEBIT_REQUIRED' \}/);
+  assert.match(finance, /value\.trim\(\)\.length === 0/);
+});

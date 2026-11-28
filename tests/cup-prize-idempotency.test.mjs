@@ -4,22 +4,24 @@ import { readFileSync } from 'node:fs';
 
 const source = readFileSync(new URL('../src/app/actions/cup-engine.ts', import.meta.url), 'utf8');
 
-test('Pyramid Cup prize replay validates the existing deterministic receipt before no-op', () => {
+test('Pyramid Cup prize replay validates the deterministic receipt and preserves the original credited amount', () => {
   const start = source.indexOf('async function payCupPrize');
   const end = source.indexOf('async function finishTechnically', start);
   assert.ok(start >= 0 && end > start);
   const payout = source.slice(start, end);
-  const receiptGuard = payout.indexOf('if (ledgerSnap.exists)');
-  const noOp = payout.indexOf('return 0;', receiptGuard);
   const playerGuard = payout.indexOf('if (!playerSnap.exists)');
-  assert.ok(receiptGuard >= 0 && noOp > receiptGuard && playerGuard > receiptGuard);
-  assert.match(payout, /receipt\.userId === team\.id/);
-  assert.match(payout, /receipt\.amount === amount/);
-  assert.match(payout, /receipt\.currency === 'credits'/);
-  assert.match(payout, /receipt\.type === rewardType/);
-  assert.match(payout, /receipt\.referenceId === referenceId/);
-  assert.match(payout, /Number\(receipt\.division\) === Number\(team\.level\)/);
-  assert.match(payout, /CUP_PRIZE_RECEIPT_CONFLICT/);
+  const receiptGuard = payout.indexOf('if (ledgerSnap.exists)');
+  assert.ok(playerGuard >= 0 && receiptGuard > playerGuard);
+  const replayEnd = payout.indexOf('const balance = resolveCupPrizeBalance', receiptGuard);
+  assert.ok(replayEnd > receiptGuard);
+  const replay = payout.slice(receiptGuard, replayEnd);
+  assert.match(replay, /resolveCupPrizeReplayAmount\(receipt/);
+  assert.match(replay, /if \(replayAmount === null\) throw new Error\('CUP_PRIZE_RECEIPT_CONFLICT'\)/);
+  assert.match(replay, /if \(place === 'champion' && \(!trophyState\.hasChampionTrophy \|\| trophyState\.needsRepair\)\)/);
+  assert.match(replay, /tx\.update\(playerRef, \{[\s\S]*trophies:/);
+  assert.doesNotMatch(replay, /credits:/);
+  assert.match(replay, /return replayAmount/);
+  assert.doesNotMatch(replay, /return 0/);
 });
 
 test('Pyramid Cup reward balance and ledger are created in the same transaction', () => {
@@ -27,7 +29,7 @@ test('Pyramid Cup reward balance and ledger are created in the same transaction'
   const end = source.indexOf('async function finishTechnically', start);
   const payout = source.slice(start, end);
   assert.match(payout, /return db\.runTransaction\(async \(tx: any\) =>/);
-  assert.match(payout, /tx\.update\(playerRef, \{[\s\S]*credits: before \+ amount/);
+  assert.match(payout, /tx\.update\(playerRef, \{[\s\S]*credits: balance\.balanceAfter/);
   assert.match(payout, /tx\.create\(ledgerRef, \{/);
 });
 
@@ -51,10 +53,50 @@ test('Pyramid Cup champion receives one separate trophy in the same payout trans
   const end = source.indexOf('async function finishTechnically', start);
   const payout = source.slice(start, end);
   assert.match(payout, /const trophyId = `pyramid-cup-season-\$\{season\}`/);
-  assert.match(payout, /const shouldAddTrophy = place === 'champion' && !hasPyramidCupTrophy/);
+  assert.match(payout, /const shouldAddTrophy = place === 'champion' && !trophyState\.hasChampionTrophy/);
+  assert.match(payout, /const shouldRepairTrophy = place === 'champion' && trophyState\.needsRepair/);
   assert.match(payout, /type: 'pyramid_cup_champion'/);
-  assert.match(payout, /name: `Кубок Пирамиды — сезон \$\{season\}`/);
-  assert.match(payout, /trophies: \[\.\.\.existingTrophies/);
+  assert.match(payout, /name: `Кубок Пирамиды — сезон \$\{season}`/);
+  assert.match(payout, /trophies: championTrophies/);
   assert.match(payout, /tx\.update\(playerRef, \{/);
   assert.match(payout, /tx\.create\(ledgerRef, \{/);
+});
+
+
+test('Pyramid Cup uses the frozen bot flag and fails closed on invalid human reward data', () => {
+  const start = source.indexOf('async function payCupPrize');
+  const end = source.indexOf('async function finishTechnically', start);
+  const payout = source.slice(start, end);
+
+  assert.match(payout, /typeof team\.isBot !== 'boolean'/);
+  assert.match(payout, /if \(team\.isBot \|\| team\.id\.startsWith\('BOT_'\)\) return 0/);
+  assert.match(payout, /CUP_PRIZE_RECIPIENT_PROFILE_MISSING/);
+  assert.match(payout, /CUP_PRIZE_RECIPIENT_BALANCE_INVALID/);
+});
+
+test('Pyramid Cup completion is committed only after both recipient settlements resolve', () => {
+  const finalStart = source.indexOf('if (round >= ROUND_COUNT)');
+  const finalEnd = source.indexOf('const winners: Team[]', finalStart);
+  assert.ok(finalStart >= 0 && finalEnd > finalStart);
+
+  const finalization = source.slice(finalStart, finalEnd);
+  const payouts = finalization.indexOf('const [championPrize, finalistPrize] = await Promise.all');
+  const completionCommit = finalization.indexOf('commitCupRoundState', payouts);
+  assert.ok(payouts >= 0 && completionCommit > payouts);
+});
+
+
+test('Pyramid Cup requires the recipient profile before replay and repairs missing or malformed champion trophies', () => {
+  const start = source.indexOf('async function payCupPrize');
+  const end = source.indexOf('async function finishTechnically', start);
+  const payout = source.slice(start, end);
+  const playerGuard = payout.indexOf('if (!playerSnap.exists)');
+  const receiptGuard = payout.indexOf('if (ledgerSnap.exists)');
+  assert.ok(playerGuard >= 0 && receiptGuard > playerGuard);
+  const replayEnd = payout.indexOf('const balance = resolveCupPrizeBalance', receiptGuard);
+  const replay = payout.slice(receiptGuard, replayEnd);
+  assert.match(replay, /resolveCupPrizeReplayAmount\(receipt/);
+  assert.match(replay, /trophyState\.hasChampionTrophy/);
+  assert.match(replay, /tx\.update\(playerRef, \{[\s\S]*trophies:/);
+  assert.doesNotMatch(replay, /credits:/);
 });

@@ -8,6 +8,7 @@ import {
   isSamePlayerCareOperation,
   recoverAssignedSquadPlayers,
 } from '@/app/lib/player-care-utils';
+import { assertStagingSeasonOneResetNotInProgress } from '@/app/lib/staging-season-one-write-fence';
 
 type CareMode = 'energy' | 'form';
 type Currency = 'credits' | 'crystals';
@@ -36,6 +37,7 @@ async function commitCarePurchase(
   const ledgerRef = db.collection('economy_transactions').doc(`player_care_${uid}_${operationId}`);
 
   return db.runTransaction(async (tx) => {
+    await assertStagingSeasonOneResetNotInProgress(tx, db);
     const [profileSnap, ledgerSnap] = await Promise.all([tx.get(profileRef), tx.get(ledgerRef)]);
     if (!profileSnap.exists) throw new Error('PLAYER_NOT_FOUND');
     if (ledgerSnap.exists) {

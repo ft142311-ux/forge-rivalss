@@ -20,3 +20,13 @@ test('public club repair action derives its target UID from the verified actor',
   assert.match(action, /return repairRegisteredClubState\(actor\.uid\)/);
   assert.doesNotMatch(action, /repairRegisteredClubState\(userId\)/);
 });
+
+test('club repair is fenced by the active reset marker inside one atomic transaction', () => {
+  assert.match(source, /const configRef = db\.collection\('system_v1'\)\.doc\('season_config'\)/);
+  assert.match(source, /db\.runTransaction\(async \(t: any\) =>/);
+  assert.match(source, /const configSnap = await t\.get\(configRef\)/);
+  assert.match(source, /config\.stagingSeasonOneResetInProgress === true/);
+  assert.match(source, /config\.stagingFreshSeasonOneReset === true/);
+  assert.match(source, /if \(isCompletedMatch\(m\)\) continue/);
+  assert.doesNotMatch(source, /db\.batch\(\)/);
+});

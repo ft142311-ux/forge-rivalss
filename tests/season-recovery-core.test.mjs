@@ -57,3 +57,20 @@ test('preserves only confirmed final scores as results', () => {
   assert.equal(isValidSeasonTwoRecoveryResult({ status: 'processing', isFinished: false, scoreA: 2, scoreB: 0 }), false);
   assert.equal(isValidSeasonTwoRecoveryResult({ status: 'finished', isFinished: true, scoreA: 3, scoreB: 0 }), false);
 });
+
+test('builds a canonical S4 recovery schedule only from the validated S3→S4 placement plan', () => {
+  const plan = validS2Plan();
+  plan.sourceSeason = 3;
+  plan.targetSeason = 4;
+  const start = new Date('2026-11-06T15:00:00.000Z');
+  const built = buildSeasonRecoveryDocuments(plan, 3, 4, start);
+  assert.equal(built.readiness.ready, true);
+  assert.equal(built.tables.length, 15);
+  assert.equal(built.slots.length, 120);
+  assert.equal(built.matches.length, 840);
+  assert.equal(new Set(built.matches.map(item => item.id)).size, 840);
+  assert.equal(built.matches.every(item => item.data.season === 4 && item.id.includes('_S4_')), true);
+  assert.equal(Math.min(...built.matches.map(item => Date.parse(item.data.startTime))), start.getTime());
+  assert.equal(Math.max(...built.matches.map(item => Date.parse(item.data.startTime))), start.getTime() + 13 * 86400000);
+  assert.equal(built.tables.every(table => Object.keys(table.data.stats).length === 8), true);
+});

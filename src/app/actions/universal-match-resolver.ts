@@ -7,10 +7,13 @@ import { SEASON_ROLLOVER_LOCK_ID, SEASON_ROLLOVER_LOCK_TTL_MS } from './season-r
 import { buildMatchTeamSnapshot } from '@/app/lib/match-simulation';
 import { runMatchEngine } from '@/app/lib/match-engine';
 import { timestampToMillis } from '@/app/lib/timestamp-utils';
+import { isMatchReportFinished } from '@/app/lib/match-report-utils';
 import { normalizeName } from '@/app/lib/normalize-name';
 import { assertMatchDocumentId } from '@/app/lib/match-id';
 import { getMatchWinnerId } from '@/app/lib/match-winner';
+import { isCanonicalPyramidCupMatchContract, isValidCupParticipantMatchSnapshot } from '@/app/lib/cup-participant-integrity';
 import { getGlobalSeasonInfo } from '@/app/lib/time-utils';
+import { tryCreateManagerXpAward, getManagerMatchXp, isEligibleManagerProfile } from '@/app/lib/manager-progression';
 import { resolveSeasonLifecycleWindow } from './season-boundary';
 
 export type UniversalMatchResult = {
@@ -31,7 +34,7 @@ export type UniversalMatchResult = {
  */
 export async function resolveUniversalMatchDocument(
   matchId: string,
-  options?: { requireDue?: boolean; collectionName?: 'matches_v2' | 'cup_matches'; rolloverLock?: { ownerId: string; token: string } }
+  options?: { requireDue?: boolean; collectionName?: 'matches_v2' | 'cup_matches'; expectedCompetition?: 'pyramid-cup'; rolloverLock?: { ownerId: string; token: string } }
 ): Promise<UniversalMatchResult> {
   assertMatchDocumentId(matchId, { rejectBackslash: true });
 
@@ -41,9 +44,27 @@ export async function resolveUniversalMatchDocument(
   const now = Timestamp.now();
 
   return db.runTransaction(async (t: any) => {
+    const resetConfigSnap = await t.get(db.collection('system_v1').doc('season_config'));
+    const resetConfig = resetConfigSnap.exists ? resetConfigSnap.data() || {} : {};
+    if (resetConfig.stagingSeasonOneResetInProgress === true || resetConfig.stagingFreshSeasonOneReset === true) {
+      throw new Error('STAGING_SEASON_ONE_RESET_IN_PROGRESS');
+    }
     const snap = await t.get(ref);
     if (!snap.exists) throw new Error('MATCH_NOT_FOUND');
     const match: any = snap.data() || {};
+    const isPyramidCupMatch = options?.expectedCompetition === 'pyramid-cup' ||
+      collectionName === 'cup_matches' ||
+      match.source === 'pyramid-cup' ||
+      (match.type === 'cup' && match.matchType === 'cup');
+    if (isPyramidCupMatch) {
+      const cupHomeId = String(match.homeId ?? '');
+      const cupAwayId = String(match.awayId ?? '');
+      if (!isCanonicalPyramidCupMatchContract(match, matchId) ||
+          !isValidCupParticipantMatchSnapshot(match.homeTeamSnapshot, cupHomeId) ||
+          !isValidCupParticipantMatchSnapshot(match.awayTeamSnapshot, cupAwayId)) {
+        throw new Error('CUP_MATCH_CONTRACT_INVALID');
+      }
+    }
     const rolloverLockRef = options?.rolloverLock
       ? db.collection('system_v1').doc(SEASON_ROLLOVER_LOCK_ID)
       : null;
@@ -64,8 +85,7 @@ export async function resolveUniversalMatchDocument(
       }
     };
 
-    if (match.isFinished === true ||
-        ['finished', 'completed'].includes(String(match.status || '').toLowerCase())) {
+    if (isMatchReportFinished(match)) {
       renewRolloverLock();
       // Repair the notification/report flags without re-simulating an already
       // finished match. This is intentionally idempotent.
@@ -86,8 +106,7 @@ export async function resolveUniversalMatchDocument(
     // boundary inside this transaction before any league simulation or writes.
     const matchType = String(match.matchType || match.type || 'league').toLowerCase();
     if (collectionName === 'matches_v2' && matchType === 'league') {
-      const configSnap = await t.get(db.collection('system_v1').doc('season_config'));
-      const config = configSnap.exists ? configSnap.data() || {} : {};
+      const config = resetConfig;
       const info = getGlobalSeasonInfo(new Date());
       let lifecycle: ReturnType<typeof resolveSeasonLifecycleWindow>;
       try {
@@ -118,6 +137,7 @@ export async function resolveUniversalMatchDocument(
     const homeId = match.homeId ?? match.hostId ?? match.teamAId;
     const awayId = match.awayId ?? match.challengerId ?? match.teamBId;
     if (!homeId || !awayId) throw new Error('MATCH_PARTICIPANTS_MISSING');
+    if (String(homeId) === String(awayId)) throw new Error('MATCH_SELF_PLAY_INVALID');
 
     const [homeSnap, awaySnap] = await Promise.all([
       t.get(db.collection('players_v14').doc(String(homeId))),
@@ -125,18 +145,10 @@ export async function resolveUniversalMatchDocument(
     ]);
     const homeData: any = homeSnap.exists ? homeSnap.data() || {} : {};
     const awayData: any = awaySnap.exists ? awaySnap.data() || {} : {};
-    const frozenCupHome = collectionName === 'cup_matches' &&
-      match.homeTeamSnapshot?.id === String(homeId) &&
-      Array.isArray(match.homeTeamSnapshot?.players) &&
-      match.homeTeamSnapshot.players.length === 5
-        ? match.homeTeamSnapshot
-        : null;
-    const frozenCupAway = collectionName === 'cup_matches' &&
-      match.awayTeamSnapshot?.id === String(awayId) &&
-      Array.isArray(match.awayTeamSnapshot?.players) &&
-      match.awayTeamSnapshot.players.length === 5
-        ? match.awayTeamSnapshot
-        : null;
+    // The Cup contract was validated before the terminal fast path; never fall back
+    // to mutable live rosters for a Cup fixture.
+    const frozenCupHome = isPyramidCupMatch ? match.homeTeamSnapshot : null;
+    const frozenCupAway = isPyramidCupMatch ? match.awayTeamSnapshot : null;
     if ((!homeSnap.exists && !frozenCupHome) || (!awaySnap.exists && !frozenCupAway)) {
       throw new Error('PLAYER_NOT_FOUND');
     }
@@ -160,7 +172,7 @@ export async function resolveUniversalMatchDocument(
     const [scoreA, scoreB] = String(simulation.seriesScore || '0-0').split('-').map(Number);
     const winnerId = getMatchWinnerId(simulation.winnerSide, String(homeId), String(awayId));
 
-    const report = {
+    const report: Record<string, any> = {
       id: matchId,
       type: matchType,
       matchType,
@@ -203,6 +215,30 @@ export async function resolveUniversalMatchDocument(
       createdAt: match.createdAt || now,
       updatedAt: now,
     };
+
+    const xpCompetition = isPyramidCupMatch || matchType === 'cup'
+      ? 'pyramid_cup'
+      : matchType === 'league' ? 'league' : null;
+    const homeManagerXpAttempt = xpCompetition && homeSnap.exists && isEligibleManagerProfile(String(homeId), homeData)
+      ? tryCreateManagerXpAward(homeData, getManagerMatchXp(xpCompetition, winnerId === String(homeId)), xpCompetition === 'league' ? 'league_match' : 'pyramid_cup_match')
+      : null;
+    const awayManagerXpAttempt = xpCompetition && awaySnap.exists && isEligibleManagerProfile(String(awayId), awayData)
+      ? tryCreateManagerXpAward(awayData, getManagerMatchXp(xpCompetition, winnerId === String(awayId)), xpCompetition === 'league' ? 'league_match' : 'pyramid_cup_match')
+      : null;
+    const homeManagerXp = homeManagerXpAttempt?.award ?? null;
+    const awayManagerXp = awayManagerXpAttempt?.award ?? null;
+    const managerXpAwards = [
+      homeManagerXp ? { userId: String(homeId), ...homeManagerXp.receipt } : null,
+      awayManagerXp ? { userId: String(awayId), ...awayManagerXp.receipt } : null,
+    ].filter(Boolean);
+    const managerXpSkipped = [
+      homeManagerXpAttempt?.skippedReason ? { userId: String(homeId), reason: homeManagerXpAttempt.skippedReason } : null,
+      awayManagerXpAttempt?.skippedReason ? { userId: String(awayId), reason: awayManagerXpAttempt.skippedReason } : null,
+    ].filter(Boolean);
+    report.managerXpAwards = managerXpAwards;
+    report.managerXpSkipped = managerXpSkipped;
+    if (homeManagerXp) t.update(db.collection('players_v14').doc(String(homeId)), homeManagerXp.profilePatch);
+    if (awayManagerXp) t.update(db.collection('players_v14').doc(String(awayId)), awayManagerXp.profilePatch);
 
     // This document is the canonical Match Overview / Match Center report.
     // Never create a second report collection per match type. The optional rollover

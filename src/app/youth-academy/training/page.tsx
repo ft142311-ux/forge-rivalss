@@ -12,6 +12,7 @@ import {
 import { cn } from '@/lib/utils';
 import Link from 'next/link';
 import { LoadingScreen } from '@/components/game/LoadingScreen';
+import { resolveTrainingFinishTimeMs } from '@/app/lib/player-training-guards';
 import { Badge } from '@/components/ui/badge';
 import {
   Select,
@@ -59,7 +60,9 @@ export default function YouthTrainingPage() {
   };
 
   const formatCountdown = (finishTime: string) => {
-    const diff = new Date(finishTime).getTime() - now;
+    const finishAtMs = resolveTrainingFinishTimeMs(finishTime);
+    if (finishAtMs === null) return "--:--:--";
+    const diff = finishAtMs - now;
     if (diff <= 0) return "00:00:00";
     const h = Math.floor(diff / 3600000);
     const m = Math.floor((diff % 3600000) / 60000);
@@ -67,9 +70,9 @@ export default function YouthTrainingPage() {
     return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
   };
 
-  const calculateProgress = (finishTime: string) => {
+  const calculateProgress = (finishAtMs: number) => {
     const total = 24 * 3600000;
-    const start = new Date(finishTime).getTime() - total;
+    const start = finishAtMs - total;
     const elapsed = now - start;
     return Math.min(Math.max((elapsed / total) * 100, 0), 100);
   };
@@ -102,8 +105,9 @@ export default function YouthTrainingPage() {
         <div className="space-y-3">
           {youthAcademyPlayers.map((player) => {
             const isConstructing = !!player.dailyTrainingFinishTime;
-            const isFinished = isConstructing && now >= new Date(player.dailyTrainingFinishTime!).getTime();
-            const progress = isConstructing ? calculateProgress(player.dailyTrainingFinishTime!) : 0;
+            const finishAtMs = resolveTrainingFinishTimeMs(player.dailyTrainingFinishTime);
+            const isFinished = isConstructing && finishAtMs !== null && now >= finishAtMs;
+            const progress = finishAtMs !== null ? calculateProgress(finishAtMs) : 0;
             
             return (
               <Card key={player.id} className={cn(
@@ -178,7 +182,7 @@ export default function YouthTrainingPage() {
                       variant={isFinished ? "default" : "outline"}
                       className={cn("w-full h-10 font-bold text-[10px] uppercase tracking-widest", isFinished ? "bg-green-600 shadow-lg" : "border-white/10 opacity-50")}
                       disabled={!isFinished}
-                      onClick={() => claimDailyPlayerTraining(player.id)}
+                      onClick={async () => { await claimDailyPlayerTraining(player.id); }}
                     >
                       {isFinished ? <><CheckCircle2 className="w-3 h-3 mr-2" /> {t.claim}</> : <><Loader2 className="w-3 h-3 mr-2 animate-spin" /> TRAINING...</>}
                     </Button>

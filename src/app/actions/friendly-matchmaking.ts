@@ -3,6 +3,7 @@
 import { FieldPath, FieldValue, Timestamp } from 'firebase-admin/firestore';
 import type { Firestore } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
+import { assertStagingSeasonOneResetNotInProgress } from '@/app/lib/staging-season-one-write-fence';
 import { requireServerActor } from '@/lib/server-auth';
 import { buildMatchTeamSnapshot } from '@/app/lib/match-simulation';
 import { runMatchEngine } from '@/app/lib/match-engine';
@@ -11,13 +12,14 @@ import { normalizeName } from '@/app/lib/normalize-name';
 import { assertMatchDocumentId } from '@/app/lib/match-id';
 import { assertCronSecret } from '@/lib/server-cron-auth';
 import { timestampToMillis } from '@/app/lib/timestamp-utils';
+import { isMatchReportFinished } from '@/app/lib/match-report-utils';
+import { getManagerMatchXp, isEligibleManagerProfile, tryCreateManagerXpAward } from '@/app/lib/manager-progression';
 
 const LOBBY_TTL_MS = 5 * 60 * 1000;
 const MATCH_DELAY_MS = 5 * 60 * 1000;
 
 function isFriendlyMatchTerminal(match: any): boolean {
-  return match?.isFinished === true ||
-    ['finished', 'completed'].includes(String(match?.status || '').toLowerCase());
+  return isMatchReportFinished(match);
 }
 
 /** Server-side availability guard: never rely on client-only busy checks. */
@@ -62,6 +64,7 @@ export async function createFriendlyLobbyAction(idToken: string) {
   const expiresAt = Timestamp.fromMillis(now + LOBBY_TTL_MS);
 
   await db.runTransaction(async (t) => {
+    await assertStagingSeasonOneResetNotInProgress(t, db);
     const current = await t.get(lobbyRef);
     await assertFriendlyAvailabilityInTransaction(t, db, uid);
     if (current.exists) {
@@ -104,6 +107,7 @@ export async function cancelFriendlyLobbyAction(idToken: string) {
   const lobbyRef = db.collection('friendly_lobbies_v3').doc(uid);
 
   await db.runTransaction(async (t) => {
+    await assertStagingSeasonOneResetNotInProgress(t, db);
     const snap = await t.get(lobbyRef);
     if (!snap.exists) return;
     const data = snap.data() || {};
@@ -121,6 +125,7 @@ export async function expireFriendlyLobbyAction(idToken: string) {
   const lobbyRef = db.collection('friendly_lobbies_v3').doc(uid);
 
   await db.runTransaction(async (t) => {
+    await assertStagingSeasonOneResetNotInProgress(t, db);
     const snap = await t.get(lobbyRef);
     if (!snap.exists) return;
     const data = snap.data() || {};
@@ -141,6 +146,7 @@ export async function challengeFriendlyLobbyAction(idToken: string, lobbyId: str
   const now = Date.now();
 
   const transactionResult = await db.runTransaction(async (t) => {
+    await assertStagingSeasonOneResetNotInProgress(t, db);
     const snap = await t.get(lobbyRef);
     if (!snap.exists) throw new Error('FRIENDLY_LOBBY_NOT_FOUND');
     const data = snap.data() || {};
@@ -187,6 +193,7 @@ export async function respondFriendlyChallengeAction(
   const now = Date.now();
 
   const result = await db.runTransaction(async (t) => {
+    await assertStagingSeasonOneResetNotInProgress(t, db);
     const lobbySnap = await t.get(lobbyRef);
     if (!lobbySnap.exists) throw new Error('FRIENDLY_LOBBY_NOT_FOUND');
     const lobby = lobbySnap.data() || {};
@@ -266,6 +273,7 @@ async function resolveFriendlyMatchDocument(matchId: string, collectionName: 'fr
   const now = Timestamp.now();
 
   return db.runTransaction(async (t) => {
+    await assertStagingSeasonOneResetNotInProgress(t, db);
     const matchSnap = await t.get(matchRef);
     if (!matchSnap.exists) throw new Error('FRIENDLY_MATCH_NOT_FOUND');
     const match = matchSnap.data() || {};
@@ -313,7 +321,7 @@ async function resolveFriendlyMatchDocument(matchId: string, collectionName: 'fr
     });
 
     const [scoreA, scoreB] = simulation.seriesScore.split('-').map(Number);
-    const report = {
+    const report: Record<string, any> = {
       id: matchId,
       type: matchType,
       matchType,
@@ -355,6 +363,26 @@ async function resolveFriendlyMatchDocument(matchId: string, collectionName: 'fr
       updatedAt: now,
     };
 
+    const isAssociationMatch = collectionName === MATCH_COLLECTIONS.association || matchType === 'basket';
+    const competition = isAssociationMatch ? 'association' : 'friendly';
+    const xpSource = isAssociationMatch ? 'association_match' : 'friendly_match';
+    const homeXpAttempt = isEligibleManagerProfile(String(match.hostId), homeData)
+      ? tryCreateManagerXpAward(homeData, getManagerMatchXp(competition, report.winnerId === String(match.hostId)), xpSource)
+      : null;
+    const awayXpAttempt = isEligibleManagerProfile(String(match.challengerId), awayData)
+      ? tryCreateManagerXpAward(awayData, getManagerMatchXp(competition, report.winnerId === String(match.challengerId)), xpSource)
+      : null;
+    const homeXpAward = homeXpAttempt?.award ?? null;
+    const awayXpAward = awayXpAttempt?.award ?? null;
+    report.managerXpAwards = [
+      ...(homeXpAward ? [{ userId: String(match.hostId), ...homeXpAward.receipt }] : []),
+      ...(awayXpAward ? [{ userId: String(match.challengerId), ...awayXpAward.receipt }] : []),
+    ];
+    report.managerXpSkipped = [
+      ...(homeXpAttempt?.skippedReason ? [{ userId: String(match.hostId), reason: homeXpAttempt.skippedReason }] : []),
+      ...(awayXpAttempt?.skippedReason ? [{ userId: String(match.challengerId), reason: awayXpAttempt.skippedReason }] : []),
+    ];
+
     // Read both CW queue records before any transaction writes. The queue is
     // the cross-mode availability lock; release it only after the canonical
     // report and friendly match have been committed as finished.
@@ -367,6 +395,8 @@ async function resolveFriendlyMatchDocument(matchId: string, collectionName: 'fr
 
     // The mode-specific match document is also its report. Do not mirror
     // friendly/CW records into the league collection.
+    if (homeXpAward) t.update(homeSnap.ref, homeXpAward.profilePatch);
+    if (awayXpAward) t.update(awaySnap.ref, awayXpAward.profilePatch);
     t.set(matchRef, {
       ...report,
       hostId: String(match.hostId),

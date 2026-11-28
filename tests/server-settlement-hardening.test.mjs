@@ -43,11 +43,9 @@ test('league match result and its player/economy effects are committed in one tr
   assert.match(source, /match_player_effects_v1/);
   assert.match(source, /MATCH_SELF_PLAY_INVALID/);
   assert.match(source, /economyTxRef/);
-  assert.match(source, /receiptMatchesOperation/);
-  assert.match(source, /receipt\.userId === homeId/);
-  assert.match(source, /receipt\.referenceId === matchDoc\.id/);
-  assert.match(source, /receipt\.type === 'MATCH_REVENUE'/);
-  assert.match(source, /Number\(receipt\.amount\) === homeEconomy\.totalRevenue/);
+  assert.match(source, /isValidMatchEconomyReceipt/);
+  assert.match(source, /isValidMatchEconomyReceipt\(economyTxSnap\.data\(\),/);
+  assert.match(source, /tx\.create\(economyTxRef!,/);
   assert.match(source, /MATCH_ECONOMY_RECEIPT_CONFLICT/);
   assert.match(source, /settlementVersion: 1/);
 });

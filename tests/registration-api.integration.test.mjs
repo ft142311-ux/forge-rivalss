@@ -11,6 +11,58 @@ const authHost = process.env.FIREBASE_AUTH_EMULATOR_HOST;
 const require = createRequire(import.meta.url);
 const { retireInactiveClub } = require('../functions/club-inactivity-sweep.js');
 
+function createRegistrationCup(season) {
+  const participants = [];
+  for (let level = 1; level <= 4; level += 1) {
+    for (let group = 1; group <= Math.pow(2, level - 1); group += 1) {
+      for (let rank = 1; rank <= 8; rank += 1) {
+        participants.push({
+          id: 'api-cup-d' + level + '-g' + group + '-r' + rank,
+          name: 'D' + level + ' G' + group + ' R' + rank,
+          level,
+          group,
+          rank,
+          seed: participants.length + 1,
+        });
+      }
+    }
+  }
+  const eligible = participants.filter(team => team.level !== 1);
+  const roundsOne = Array.from({ length: 56 }, (_, index) => {
+    const stronger = eligible[eligible.length - 2 - index * 2];
+    const weaker = eligible[eligible.length - 1 - index * 2];
+    const pairingIndex = index + 1;
+    return {
+      id: 'r1_m' + pairingIndex,
+      index: pairingIndex,
+      matchId: 'cup_S' + season + '_R1_M' + String(pairingIndex).padStart(2, '0'),
+      status: 'scheduled',
+      home: weaker,
+      away: stronger,
+    };
+  });
+  return {
+    id: 'cup_s' + season + '_lALPHA',
+    season,
+    leagueId: 'ALPHA',
+    name: 'Кубок Пирамиды',
+    status: 'active',
+    currentRound: 1,
+    formatVersion: 4,
+    format: 'D1_REST_OPENING_ROUND',
+    totalRounds: 7,
+    totalParticipants: 120,
+    totalMatches: 119,
+    preliminaryMatches: 56,
+    openingRoundRestCount: 8,
+    openingRoundRestTeams: participants.filter(team => team.level === 1),
+    byeCount: 0,
+    participants,
+    rounds: { r1: roundsOne, r2: [], r3: [], r4: [], r5: [], r6: [], r7: [] },
+  };
+}
+
+
 test('registration HTTP API enforces its boundary and safely initializes a club', {
   skip: !firestoreHost || !authHost,
 }, async (t) => {
@@ -24,6 +76,7 @@ test('registration HTTP API enforces its boundary and safely initializes a club'
   const auth = getAuth(app);
   const db = getFirestore(app);
   const { POST } = await import('../src/app/api/registration/initialize/route.ts');
+  const { repairRegisteredClubStateAction } = await import('../src/app/actions/repair-registered-club-state.ts');
 
   await t.test('rejects unsupported content types before authentication', async () => {
     const response = await POST(new Request('http://localhost/api/registration/initialize', {
@@ -89,6 +142,7 @@ test('registration HTTP API enforces its boundary and safely initializes a club'
     const tableRef = db.collection('league_tables_v2')
       .doc(`table_v140_S${season}_LALPHA_V${division}_G${group}`);
     const configRef = db.collection('system_v1').doc('season_config');
+    const cupRef = db.collection('cup_pyramid_v1').doc('cup_s' + season + '_lALPHA');
     const statsRef = db.collection('system_v1').doc('global_stats');
     const playerRef = db.collection('players_v14').doc(uid);
     const activityRef = db.collection('user_activity_v1').doc(uid);
@@ -113,6 +167,7 @@ test('registration HTTP API enforces its boundary and safely initializes a club'
         ...auditSnapshot.docs.map((doc) => doc.ref),
         tableRef,
         configRef,
+        cupRef,
         statsRef,
         playerRef,
         activityRef,
@@ -151,6 +206,9 @@ test('registration HTTP API enforces its boundary and safely initializes a club'
       activeSeasonNumber: season,
       phase: 'REGULAR_SEASON',
       worldReady: true,
+      pyramidCupRequired: true,
+      pyramidCupReady: false,
+      pyramidCupReadySeasonNumber: season,
     });
     await statsRef.set({ totalPlayers: 1000 });
     const targetSlotId = `${runId}-slot-${division}-${group}-8`;
@@ -265,6 +323,74 @@ test('registration HTTP API enforces its boundary and safely initializes a club'
       body: JSON.stringify({ clubName: 'Forge Test Club' }),
     }));
 
+    // The reset executor temporarily sets worldReady=true before clearing its
+    // marker. New registration must remain blocked throughout that window.
+    const preResetConfig = (await configRef.get()).data() || {};
+    await configRef.set({
+      ...preResetConfig,
+      stagingSeasonOneResetInProgress: true,
+      stagingFreshSeasonOneReset: true,
+    }, { merge: true });
+    const resetBlockedResponse = await request();
+    const resetBlockedBody = await resetBlockedResponse.json();
+    assert.equal(resetBlockedResponse.status, 503);
+    assert.equal(resetBlockedBody.error, 'WORLD_INITIALIZING');
+    assert.equal((await playerRef.get()).exists, false);
+    assert.equal((await db.collection('league_slots_v1').doc(targetSlotId).get()).get('status'), 'FREE');
+    await configRef.set({
+      ...preResetConfig,
+      stagingSeasonOneResetInProgress: false,
+      stagingFreshSeasonOneReset: false,
+    }, { merge: true });
+
+    // A worldReady flag alone is not enough. Both the Cup readiness marker
+    // and the actual active-season root must be valid before a slot is claimed.
+    const pendingCupResponse = await request();
+    const pendingCupBody = await pendingCupResponse.json();
+    assert.equal(pendingCupResponse.status, 503);
+    assert.equal(pendingCupBody.error, 'WORLD_INITIALIZING');
+    assert.equal((await playerRef.get()).exists, false);
+    assert.equal((await db.collection('league_slots_v1').doc(targetSlotId).get()).get('status'), 'FREE');
+
+    await configRef.set({ pyramidCupReady: true }, { merge: true });
+    const missingCupResponse = await request();
+    const missingCupBody = await missingCupResponse.json();
+    assert.equal(missingCupResponse.status, 503);
+    assert.equal(missingCupBody.error, 'WORLD_INITIALIZING');
+    assert.equal((await playerRef.get()).exists, false);
+
+    const validCup = createRegistrationCup(season);
+    const malformedCup = {
+      ...validCup,
+      rounds: {
+        ...validCup.rounds,
+        r1: validCup.rounds.r1.map((pairing, index) =>
+          index === 0 ? { ...pairing, away: null } : pairing
+        ),
+      },
+    };
+    await cupRef.set(malformedCup);
+    const malformedCupResponse = await request();
+    const malformedCupBody = await malformedCupResponse.json();
+    assert.equal(malformedCupResponse.status, 503);
+    assert.equal(malformedCupBody.error, 'WORLD_INITIALIZING');
+    assert.equal((await playerRef.get()).exists, false);
+    assert.equal((await db.collection('league_slots_v1').doc(targetSlotId).get()).get('status'), 'FREE');
+
+    const duplicateSlotCup = {
+      ...validCup,
+      participants: validCup.participants.map((team, index) => index === 1 ? { ...team, rank: 1 } : team),
+    };
+    await cupRef.set(duplicateSlotCup);
+    const duplicateSlotCupResponse = await request();
+    const duplicateSlotCupBody = await duplicateSlotCupResponse.json();
+    assert.equal(duplicateSlotCupResponse.status, 503);
+    assert.equal(duplicateSlotCupBody.error, 'WORLD_INITIALIZING');
+    assert.equal((await playerRef.get()).exists, false);
+    assert.equal((await db.collection('league_slots_v1').doc(targetSlotId).get()).get('status'), 'FREE');
+
+    await cupRef.set(validCup);
+
     // A standings row alone is not enough to replace a bot. The backing
     // player document must exist and be a valid five-player bot profile.
     const validBotProfile = (await botPlayerRef.get()).data();
@@ -304,6 +430,47 @@ test('registration HTTP API enforces its boundary and safely initializes a club'
     assert.equal(responseBody.group, group);
     assert.equal(responseBody.rank, 8);
 
+    // Existing-account idempotency and club repair must also respect the reset
+    // fence. This simulates the reset executor's final verification window.
+    const configBeforeRepairFence = (await configRef.get()).data() || {};
+    const profileBeforeRepairFence = (await playerRef.get()).data() || {};
+    const tableBeforeRepairFence = (await tableRef.get()).data() || {};
+    const sampleMatchRef = matchRefs[0];
+    const matchBeforeRepairFence = (await sampleMatchRef.get()).data() || {};
+    await configRef.set({
+      ...configBeforeRepairFence,
+      stagingSeasonOneResetInProgress: true,
+      stagingFreshSeasonOneReset: true,
+    }, { merge: true });
+
+    const existingRegistrationBlocked = await request();
+    const existingRegistrationBody = await existingRegistrationBlocked.json();
+    assert.equal(existingRegistrationBlocked.status, 503);
+    assert.equal(existingRegistrationBody.error, 'WORLD_INITIALIZING');
+
+    const repairResult = await repairRegisteredClubStateAction(idToken);
+    assert.deepEqual(repairResult, {
+      success: false,
+      repaired: false,
+      reason: 'WORLD_INITIALIZING',
+    });
+    const profileAfterRepairFence = (await playerRef.get()).data() || {};
+    assert.deepEqual(profileAfterRepairFence.matchHistory || [], profileBeforeRepairFence.matchHistory || []);
+    assert.deepEqual(profileAfterRepairFence.lastMatchResult || null, profileBeforeRepairFence.lastMatchResult || null);
+    assert.deepEqual((await tableRef.get()).get('stats'), tableBeforeRepairFence.stats);
+    const matchAfterRepairFence = (await sampleMatchRef.get()).data() || {};
+    const matchIdentityFields = ['homeId', 'awayId', 'homeName', 'awayName', 'scoreA', 'scoreB', 'status', 'isFinished'];
+    assert.deepEqual(
+      Object.fromEntries(matchIdentityFields.map(field => [field, matchAfterRepairFence[field] ?? null])),
+      Object.fromEntries(matchIdentityFields.map(field => [field, matchBeforeRepairFence[field] ?? null])),
+    );
+
+    await configRef.set({
+      ...configBeforeRepairFence,
+      stagingSeasonOneResetInProgress: false,
+      stagingFreshSeasonOneReset: false,
+    }, { merge: true });
+
     const [player, botPlayer, table, slotQuery, matches, stats, audit] = await Promise.all([
       playerRef.get(),
       botPlayerRef.get(),
@@ -315,6 +482,7 @@ test('registration HTTP API enforces its boundary and safely initializes a club'
     ]);
 
     assert.equal(player.exists, true);
+    assert.equal(player.get('arena.capacity'), 5000);
     assert.equal(player.get('ownedPlayers').length, 10);
     assert.equal(botPlayer.exists, false);
     assert.equal(table.get(`stats.${uid}.rank`), 8);

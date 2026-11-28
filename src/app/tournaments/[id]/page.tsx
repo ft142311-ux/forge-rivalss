@@ -13,6 +13,7 @@ import { ChevronLeft, Loader2, Trophy, Users, Clock, Swords } from 'lucide-react
 import { LoadingScreen } from '@/components/game/LoadingScreen';
 import { useToast } from '@/hooks/use-toast';
 import { cn } from '@/lib/utils';
+import { isTournamentRegistrationOpen } from '@/app/lib/tournament-registration-window';
 
 function time(ms: number) { return new Date(ms).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Moscow' }); }
 const stageLabel: Record<string,string> = { groups:'Групповой этап', round_of_16:'1/8 финала', quarterfinal:'1/4 финала', semifinal:'1/2 финала', final:'Финал', completed:'Завершен' };
@@ -35,7 +36,7 @@ export default function TournamentDetailPage() {
 
   const tournament=state?.tournament;
   const registered=!!tournament&&Array.isArray(tournament.registeredIds)&&tournament.registeredIds.includes(user?.uid);
-  const registrationOpen=tournament?.status==='registration'&&Date.now()<Number(tournament.registrationCloseAt);
+  const registrationOpen=isTournamentRegistrationOpen(tournament);
   const groups=useMemo(()=>[...(state?.groups||[])].sort((a:any,b:any)=>a.groupId.localeCompare(b.groupId)),[state]);
   const matches=useMemo(()=>[...(state?.matches||[])].sort((a:any,b:any)=>Number(a.scheduledAt)-Number(b.scheduledAt)),[state]);
 

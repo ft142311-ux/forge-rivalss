@@ -3,6 +3,8 @@ import 'server-only';
 import { FieldValue } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { assertMatchDocumentId } from '@/app/lib/match-id';
+import { ARENA_BASE_CAPACITY } from '@/app/lib/arena-expansion';
+import { isValidMatchEconomyReceipt } from '@/app/lib/match-economy-ledger';
 
 export type MatchEconomy = {
   attendance: number;
@@ -27,7 +29,7 @@ function n(value: unknown, fallback = 0) {
  * The bonus is intentionally small at low levels and scales continuously.
  */
 export async function calculateMatchEconomy(home: any, match: any, scoreA: number, scoreB: number): Promise<MatchEconomy> {
-  const capacity = Math.max(0, Math.floor(n(home?.arena?.capacity, 5000)));
+  const capacity = Math.max(0, Math.floor(n(home?.arena?.capacity, ARENA_BASE_CAPACITY)));
   const arena = home?.arena || {};
 
   const press = Math.max(0, n(arena.pressCenterLevel));
@@ -91,17 +93,19 @@ export async function recordMatchEconomy(
   const txRef = db.collection('economy_transactions').doc(`match_${matchId}_${uid}`);
 
   await db.runTransaction(async (t) => {
-    const [playerSnap, txSnap] = await Promise.all([t.get(playerRef), t.get(txRef)]);
+    const configRef = db.collection('system_v1').doc('season_config');
+    const [playerSnap, txSnap, configSnap] = await Promise.all([
+      t.get(playerRef), t.get(txRef), t.get(configRef),
+    ]);
+    if (configSnap.exists && (configSnap.data()?.stagingSeasonOneResetInProgress === true ||
+        configSnap.data()?.stagingFreshSeasonOneReset === true)) {
+      throw new Error('STAGING_SEASON_ONE_RESET_IN_PROGRESS');
+    }
     if (!playerSnap.exists) throw new Error('PLAYER_NOT_FOUND');
     if (txSnap.exists) {
-      const receipt = txSnap.data() || {};
-      const receiptMatchesOperation =
-        receipt.userId === uid &&
-        receipt.referenceId === matchId &&
-        receipt.currency === 'credits' &&
-        receipt.type === 'MATCH_REVENUE' &&
-        Number(receipt.amount) === amount;
-      if (!receiptMatchesOperation) throw new Error('IDEMPOTENCY_KEY_REUSED');
+      if (!isValidMatchEconomyReceipt(txSnap.data(), { userId: uid, matchId, amount })) {
+        throw new Error('IDEMPOTENCY_KEY_REUSED');
+      }
       return;
     }
 
@@ -125,10 +129,11 @@ export async function recordMatchEconomy(
       credits: after,
       updatedAt: FieldValue.serverTimestamp(),
       lastMatchEconomy: economy,
+      lastMatchId: matchId,
       [`matchEconomy.${matchId}`]: economy,
     });
 
-    t.set(txRef, {
+    t.create(txRef, {
       userId: uid,
       amount,
       currency: 'credits',

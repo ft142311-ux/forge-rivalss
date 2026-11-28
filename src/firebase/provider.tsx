@@ -5,7 +5,6 @@ import React, { createContext, useContext, ReactNode, useMemo, useState, useEffe
 import { FirebaseApp } from 'firebase/app';
 import { Firestore } from 'firebase/firestore';
 import { Auth, onIdTokenChanged, User, signOut } from 'firebase/auth';
-import { recordUserActivityAction } from '@/app/actions/user-activity';
 import { recordManagerPresenceAction } from '@/app/actions/manager-presence';
 
 /**
@@ -65,29 +64,17 @@ export const FirebaseProvider: React.FC<{ children: ReactNode; firebaseApp: Fire
           // forcing here would recursively trigger this listener.
           // Each verified token event also refreshes the server-side activity
           // heartbeat, so a long-lived active tab is not mistaken for inactivity.
-          const idToken = await user.getIdToken();
+          await user.getIdToken();
           if (sequence !== authChangeSequence || auth.currentUser?.uid !== user.uid) return;
 
-          // A persistent Firebase session can open the game without a new
-          // password login. Record each verified app entry, not just Auth's
-          // lastSignInTime, so active managers are never retired by mistake.
-          const activity = await recordUserActivityAction(idToken);
-          if (sequence !== authChangeSequence || auth.currentUser?.uid !== user.uid) return;
-          const terminalActivityError = [
-            'ACCOUNT_DISABLED',
-            'ACCOUNT_RETIRING',
-            'ACCOUNT_RETIRED',
-            'AUTH_TOKEN_REVOKED',
-            'AUTH_TOKEN_INVALID',
-          ].includes(String(activity?.error || ''));
-          if (terminalActivityError) {
-            try { await signOut(auth); } catch { /* Auth listener settles state. */ }
-            return;
-          }
-          if (!activity?.success) {
-            console.warn('[AUTH ACTIVITY] Session activity was not acknowledged:', activity?.error || 'UNKNOWN');
-          }
-          setUserAuthState({ user, isUserLoading: false, userError: activity?.success ? null : new Error('USER_ACTIVITY_NOT_RECORDED') });
+          // Publish the verified Firebase session immediately. Activity
+          // recording is auxiliary and must never hold the login/register UI
+          // behind a Firestore/server-action round trip.
+          setUserAuthState({ user, isUserLoading: false, userError: null });
+
+          // The manager-presence heartbeat below performs the same server-side
+          // lifecycle fence. Do not issue a second transaction on every token
+          // refresh; this avoids duplicate Firestore reads during sign-in.
         } catch (error: any) {
           if (sequence !== authChangeSequence) return;
           const code = String(error?.code || '').toLowerCase();
@@ -153,8 +140,11 @@ export const FirebaseProvider: React.FC<{ children: ReactNode; firebaseApp: Fire
       }
     };
 
-    void heartbeat();
-    const interval = window.setInterval(() => { void heartbeat(); }, 45_000);
+    // Do not start a second Activity Fence transaction immediately after
+    // sign-in. Registration/setup may be running its own protected transaction
+    // at exactly this moment. Presence is non-critical, so the first heartbeat
+    // is deferred until the normal interval; visibility changes still refresh it.
+    const interval = window.setInterval(() => { void heartbeat(); }, 60_000);
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') void heartbeat();
     };

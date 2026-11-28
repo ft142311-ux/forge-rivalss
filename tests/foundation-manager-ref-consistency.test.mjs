@@ -17,7 +17,7 @@ test('foundation manager references use the canonical collection helper', () => 
 
   const modules = [
     ['src/app/actions/foundation-management.ts', 12],
-    ['src/app/actions/foundation-staff.ts', 2],
+    ['src/app/actions/foundation-staff.ts', 3],
     ['src/app/actions/foundation-cycle.ts', 1],
   ];
 

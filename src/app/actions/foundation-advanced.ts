@@ -2,9 +2,13 @@
 
 import { FieldValue } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
-import { requireServerActor } from '@/lib/server-auth';
+import { requireServerActor, requireAdminActor } from '@/lib/server-auth';
+import { assertStagingSeasonOneResetNotInProgress } from '@/app/lib/staging-season-one-write-fence';
 import { getFoundationManagerRef } from './foundation-manager-ref';
 import { FOUNDATION_COLLECTIONS } from '@/game/foundation/config';
+import { readFoundationRoster } from '@/game/foundation/guards';
+import { applyFoundationDailyTrainingBonus } from '@/game/foundation/training';
+import { assertFoundationDailyEventRecord } from '@/game/foundation/daily-cycle-integrity';
 import { expectedAttendance } from '@/game/foundation/fans';
 import { chooseGoldenPlayer, scoreGoldenPlayer } from '@/game/foundation/awards';
 import { setFoundationTrainingFocusAction as setFoundationTrainingFocusActionCanonical } from './foundation-management';
@@ -13,6 +17,12 @@ function fail(e: any) { return { success: false, error: e?.message || 'FOUNDATIO
 
 function moscowDayKey(date = new Date()) {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Moscow', year: 'numeric', month: '2-digit', day: '2-digit' }).format(date);
+}
+
+function normalizeSeasonId(value: unknown) {
+  const seasonId = String(value ?? '').trim();
+  if (!/^(?:current|S?[1-9]\d*)$/.test(seasonId)) throw new Error('INVALID_SEASON_ID');
+  return seasonId;
 }
 
 
@@ -30,36 +40,45 @@ export async function setFoundationTrainingFocusAction(idToken: string, playerId
 export async function resolveFoundationEventAction(idToken: string, eventId: string, choice: 'accept' | 'decline' = 'accept') {
   try {
     const { uid } = await requireServerActor(idToken);
+    if (choice !== 'accept' && choice !== 'decline') throw new Error('INVALID_EVENT_CHOICE');
+    const normalizedEventId = String(eventId || '').trim();
+    if (!normalizedEventId || normalizedEventId.length > 128) throw new Error('INVALID_EVENT_ID');
     const db = getAdminDb();
     const period = moscowDayKey();
     const ref = db.collection(FOUNDATION_COLLECTIONS.events).doc(`${uid}_${period}`);
-    const snap = await ref.get();
-    if (!snap.exists) throw new Error('EVENT_NOT_FOUND');
-    const event = snap.data() || {};
-    if (event.resolvedAt) return { success: true, alreadyResolved: true };
-    if (String(event.event?.id || eventId) !== String(eventId)) throw new Error('EVENT_MISMATCH');
     const managerRef = getFoundationManagerRef(db, uid);
-    if (!(await managerRef.get()).exists) throw new Error('PLAYER_NOT_FOUND');
-    const effects = choice === 'accept' ? (event.event?.effects || {}) : {};
-    await db.runTransaction(async t => {
-      const freshEvent = await t.get(ref);
-      const freshManager = await t.get(managerRef);
-      if (!freshEvent.exists || freshEvent.data()?.resolvedAt) return;
+    const result = await db.runTransaction(async t => {
+      await assertStagingSeasonOneResetNotInProgress(t, db);
+      const [freshEvent, freshManager] = await Promise.all([t.get(ref), t.get(managerRef)]);
+      if (!freshEvent.exists) throw new Error('EVENT_NOT_FOUND');
+      const eventData = assertFoundationDailyEventRecord(freshEvent.data() || {}, uid, period);
+      // Authenticate the requested event identity before returning an
+      // idempotent result; a stale or foreign ID must not be accepted.
+      if (eventData.event.id !== normalizedEventId) throw new Error('EVENT_MISMATCH');
+      if (eventData.resolvedAt !== undefined && eventData.resolvedAt !== null) return { alreadyResolved: true };
       if (!freshManager.exists) throw new Error('PLAYER_NOT_FOUND');
-      const players = Array.isArray(freshManager.data()?.ownedPlayers) ? freshManager.data()!.ownedPlayers : [];
-      const next = players.map((p: any) => ({
-        ...p,
-        form: Math.max(0, Math.min(100, Number(p.form ?? 100) + Number(effects.form || 0))),
-        fatigue: Math.max(0, Math.min(100, Number(p.fatigue ?? 100) + Number(effects.fatigue || 0))),
-        tilt: Math.max(0, Math.min(100, Number(p.tilt ?? 0) + Number(effects.tilt || 0))),
-      }));
+      const effects = choice === 'accept' ? eventData.event.effects : {};
+      const managerData = freshManager.data() || {};
+      const players = readFoundationRoster(managerData.ownedPlayers);
+      const trainingBonus = effects.trainingBonus ?? 0;
+      const next = players.map((p: any) => {
+        const updated = {
+          ...p,
+          form: Math.max(0, Math.min(100, Number(p.form ?? 100) + Number(effects.form || 0))),
+          fatigue: Math.max(0, Math.min(100, Number(p.fatigue ?? 100) + Number(effects.fatigue || 0))),
+          tilt: Math.max(0, Math.min(100, Number(p.tilt ?? 0) + Number(effects.tilt || 0))),
+        };
+        return trainingBonus > 0
+          ? applyFoundationDailyTrainingBonus(updated, trainingBonus, period)
+          : updated;
+      });
       t.update(managerRef, { ownedPlayers: next, updatedAt: FieldValue.serverTimestamp() });
       t.update(ref, { resolved: choice, resolvedAt: FieldValue.serverTimestamp(), applied: choice === 'accept' });
+      return { alreadyResolved: false };
     });
-    return { success: true, choice };
+    return { success: true, choice, ...result };
   } catch (e) { return fail(e); }
 }
-
 export async function foundationFanAction(idToken: string, action: 'free_entry' | 'away_trip' | 'autograph' | 'fan_groups') {
   try {
     const { uid } = await requireServerActor(idToken);
@@ -70,6 +89,7 @@ export async function foundationFanAction(idToken: string, action: 'free_entry' 
     const today = moscowDayKey();
     const actionRef = db.collection(FOUNDATION_COLLECTIONS.fanSnapshots).doc(`${uid}_${today}_${action}`);
     const result = await db.runTransaction(async t => {
+      await assertStagingSeasonOneResetNotInProgress(t, db);
       const [freshAction, managerSnap] = await Promise.all([t.get(actionRef), t.get(ref)]);
       if (freshAction.exists) throw new Error('FAN_ACTION_ALREADY_USED');
       if (!managerSnap.exists) throw new Error('PLAYER_NOT_FOUND');
@@ -97,49 +117,83 @@ export async function foundationFanAction(idToken: string, action: 'free_entry' 
     return { success: true, ...result };
   } catch (e) { return fail(e); }
 }
-
 export async function castGoldenPlayerVoteAction(idToken: string, seasonId: string, playerId: string, playerName: string, managerName: string) {
   try {
     const { uid } = await requireServerActor(idToken);
+    const normalizedSeasonId = normalizeSeasonId(seasonId);
+    const normalizedPlayerId = String(playerId || '').trim();
+    if (!normalizedPlayerId || normalizedPlayerId.length > 128) throw new Error('INVALID_PLAYER_ID');
+    const normalizedPlayerName = String(playerName || 'Player').trim().slice(0, 80) || 'Player';
     const db = getAdminDb();
     const managerRef = getFoundationManagerRef(db, uid);
-    const managerSnap = await managerRef.get();
-    if (!managerSnap.exists) throw new Error('PLAYER_NOT_FOUND');
-    const manager = managerSnap.data() || {};
-    const level = Number(manager.level || manager.managerLevel || 0);
-    const hasLicense = Boolean(manager.licenses?.coaching || manager.coachingLicense || manager.licenses?.tier);
-    if (level < 10 && !hasLicense) throw new Error('AWARD_VOTE_LOCKED');
-    const isVip = Boolean(manager.isPremium || manager.vip || manager.premium);
-    const voteRef = db.collection(FOUNDATION_COLLECTIONS.awards).doc(`${seasonId}_golden_player_votes_${uid}`);
-    const vote = await voteRef.get();
-    if (vote.exists) throw new Error('ALREADY_VOTED');
-    await voteRef.set({ seasonId, voterId: uid, voterName: managerName, playerId, playerName, weight: isVip ? 2 : 1, createdAt: FieldValue.serverTimestamp() });
-    return { success: true, weight: isVip ? 2 : 1 };
+    const voteRef = db.collection(FOUNDATION_COLLECTIONS.awards).doc(`${normalizedSeasonId}_golden_player_votes_${uid}`);
+    const weight = await db.runTransaction(async t => {
+      await assertStagingSeasonOneResetNotInProgress(t, db);
+      const [managerSnap, voteSnap] = await Promise.all([t.get(managerRef), t.get(voteRef)]);
+      if (!managerSnap.exists) throw new Error('PLAYER_NOT_FOUND');
+      if (voteSnap.exists) throw new Error('ALREADY_VOTED');
+      const manager = managerSnap.data() || {};
+      const level = Number(manager.level || manager.managerLevel || 0);
+      const hasLicense = Boolean(manager.licenses?.coaching || manager.coachingLicense || manager.licenses?.tier);
+      if (level < 10 && !hasLicense) throw new Error('AWARD_VOTE_LOCKED');
+      const isVip = Boolean(manager.isPremium || manager.vip || manager.premium);
+      const voterName = String(manager.displayName || manager.managerName || manager.clubName || managerName || 'Manager').trim().slice(0, 80) || 'Manager';
+      const voteWeight = isVip ? 2 : 1;
+      t.create(voteRef, {
+        seasonId: normalizedSeasonId,
+        voterId: uid,
+        voterName,
+        playerId: normalizedPlayerId,
+        playerName: normalizedPlayerName,
+        weight: voteWeight,
+        createdAt: FieldValue.serverTimestamp(),
+      });
+      return voteWeight;
+    });
+    return { success: true, weight };
   } catch (e) { return fail(e); }
 }
-
 export async function resolveGoldenPlayerAwardAction(idToken: string, seasonId: string) {
   try {
-    const { uid } = await requireServerActor(idToken);
+    const { uid } = await requireAdminActor(idToken);
+    const normalizedSeasonId = normalizeSeasonId(seasonId);
     const db = getAdminDb();
-    const manager = await getFoundationManagerRef(db, uid).get();
-    if (!manager.exists) throw new Error('PLAYER_NOT_FOUND');
-    const data = manager.data() || {};
-    const players = Array.isArray(data.ownedPlayers) ? data.ownedPlayers : [];
-    const candidates = players.map((p: any) => ({
-      playerId: String(p.id),
-      playerName: String(p.name || 'Player'),
-      score: scoreGoldenPlayer(p.seasonStats || p.stats || { matches: p.totalMatchesPlayed || 0, successfulActions: p.successfulActions || 0 }),
-      reason: 'Сезонная эффективность',
-    }));
+    const managers = await db.collection(FOUNDATION_COLLECTIONS.managers).get();
+    const candidates = managers.docs.flatMap(managerDoc => {
+      const managerData = managerDoc.data() || {};
+      const players = readFoundationRoster(managerData.ownedPlayers);
+      return players.map((player: any) => {
+        const stats = player.seasonStats || player.stats || {
+          matches: player.totalMatchesPlayed || 0,
+          successfulActions: player.successfulActions || 0,
+        };
+        return {
+          playerId: String(player.id || ''),
+          playerName: String(player.name || 'Player').trim().slice(0, 80) || 'Player',
+          score: scoreGoldenPlayer(stats),
+          reason: 'Сезонная эффективность',
+        };
+      }).filter((candidate: any) => candidate.playerId && Number.isFinite(candidate.score) && candidate.score > 0);
+    });
     const winner = chooseGoldenPlayer(candidates);
     if (!winner) throw new Error('NO_AWARD_CANDIDATES');
-    const ref = db.collection(FOUNDATION_COLLECTIONS.awards).doc(`${seasonId}_golden_player`);
-    await ref.set({ seasonId, type: 'golden_player', winner, resolvedAt: FieldValue.serverTimestamp(), resolvedBy: uid }, { merge: true });
-    return { success: true, winner };
+    const ref = db.collection(FOUNDATION_COLLECTIONS.awards).doc(`${normalizedSeasonId}_golden_player`);
+    const result = await db.runTransaction(async t => {
+      await assertStagingSeasonOneResetNotInProgress(t, db);
+      const existing = await t.get(ref);
+      if (existing.exists) return { winner: existing.data()?.winner || winner, alreadyResolved: true };
+      t.create(ref, {
+        seasonId: normalizedSeasonId,
+        type: 'golden_player',
+        winner,
+        resolvedAt: FieldValue.serverTimestamp(),
+        resolvedBy: uid,
+      });
+      return { winner, alreadyResolved: false };
+    });
+    return { success: true, ...result };
   } catch (e) { return fail(e); }
 }
-
 export async function calculateFoundationPostMatchRatings(idToken: string, matchId: string) {
   try {
     const { uid } = await requireServerActor(idToken);
@@ -174,17 +228,35 @@ export async function calculateFoundationPostMatchRatings(idToken: string, match
 export async function castGoldenJacketVoteAction(idToken: string, seasonId: string, managerId: string, managerName: string) {
   try {
     const { uid } = await requireServerActor(idToken);
+    const normalizedSeasonId = normalizeSeasonId(seasonId);
+    const normalizedManagerId = String(managerId || '').trim();
+    if (!normalizedManagerId || normalizedManagerId.length > 128) throw new Error('INVALID_MANAGER_ID');
     const db = getAdminDb();
-    const voter = await getFoundationManagerRef(db, uid).get();
-    if (!voter.exists) throw new Error('PLAYER_NOT_FOUND');
-    const vd = voter.data() || {};
-    const level = Number(vd.level || vd.managerLevel || 0);
-    const licensed = Boolean(vd.licenses?.coaching || vd.coachingLicense || vd.licenses?.tier);
-    if (level < 10 && !licensed) throw new Error('AWARD_VOTE_LOCKED');
-    const weight = (vd.isPremium || vd.vip || vd.premium) ? 2 : 1;
-    const ref = db.collection(FOUNDATION_COLLECTIONS.awards).doc(`${seasonId}_golden_jacket_votes_${uid}`);
-    if ((await ref.get()).exists) throw new Error('ALREADY_VOTED');
-    await ref.set({seasonId,voterId:uid,managerId,managerName,weight,type:'golden_jacket',createdAt:FieldValue.serverTimestamp()});
-    return {success:true,weight};
-  } catch(e){return {success:false,error:fail(e).error};}
+    const voterRef = getFoundationManagerRef(db, uid);
+    const voteRef = db.collection(FOUNDATION_COLLECTIONS.awards).doc(`${normalizedSeasonId}_golden_jacket_votes_${uid}`);
+    const weight = await db.runTransaction(async t => {
+      await assertStagingSeasonOneResetNotInProgress(t, db);
+      const [voterSnap, voteSnap] = await Promise.all([t.get(voterRef), t.get(voteRef)]);
+      if (!voterSnap.exists) throw new Error('PLAYER_NOT_FOUND');
+      if (voteSnap.exists) throw new Error('ALREADY_VOTED');
+      const voter = voterSnap.data() || {};
+      const level = Number(voter.level || voter.managerLevel || 0);
+      const licensed = Boolean(voter.licenses?.coaching || voter.coachingLicense || voter.licenses?.tier);
+      if (level < 10 && !licensed) throw new Error('AWARD_VOTE_LOCKED');
+      const voteWeight = (voter.isPremium || voter.vip || voter.premium) ? 2 : 1;
+      const voterName = String(voter.displayName || voter.managerName || voter.clubName || managerName || 'Manager').trim().slice(0, 80) || 'Manager';
+      t.create(voteRef, {
+        seasonId: normalizedSeasonId,
+        voterId: uid,
+        managerId: normalizedManagerId,
+        managerName: String(managerName || 'Manager').trim().slice(0, 80) || 'Manager',
+        voterName,
+        weight: voteWeight,
+        type: 'golden_jacket',
+        createdAt: FieldValue.serverTimestamp(),
+      });
+      return voteWeight;
+    });
+    return { success: true, weight };
+  } catch (e) { return { success: false, error: fail(e).error }; }
 }

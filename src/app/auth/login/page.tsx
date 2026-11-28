@@ -60,15 +60,31 @@ export default function LoginPage() {
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!auth) return;
+    if (!auth) {
+      toast({ variant: "destructive", title: language === 'ru' ? "Сервис авторизации недоступен" : "Authentication service unavailable" });
+      return;
+    }
 
-    if (!email.trim() || password.length < 6) return;
+    if (!email.trim() || password.length < 6) {
+      toast({ variant: "destructive", title: language === 'ru' ? "Проверьте Email и пароль" : "Check your email and password" });
+      return;
+    }
 
     setIsProcessing(true);
     try {
-      await initiateEmailSignIn(auth, email.trim(), password);
+      await initiateEmailSignIn(auth, email.trim().toLowerCase(), password);
     } catch (error: any) {
-      toast({ variant: "destructive", title: t.error });
+      const code = String(error?.code || '');
+      const message = code === 'auth/invalid-credential' || code === 'auth/wrong-password' || code === 'auth/user-not-found'
+        ? (language === 'ru' ? "Неверный Email или пароль" : "Incorrect email or password")
+        : code === 'auth/too-many-requests'
+          ? (language === 'ru' ? "Слишком много попыток. Попробуйте позже" : "Too many attempts. Try again later")
+          : code === 'auth/network-request-failed'
+            ? (language === 'ru' ? "Нет соединения с сервером авторизации" : "Could not reach authentication server")
+            : code === 'auth/invalid-email'
+              ? (language === 'ru' ? "Некорректный Email" : "Invalid email")
+              : (error?.message || t.error);
+      toast({ variant: "destructive", title: t.error, description: message });
     } finally {
       setIsProcessing(false);
     }

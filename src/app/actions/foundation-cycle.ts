@@ -1,14 +1,17 @@
 'use server';
 
-import { FieldPath, FieldValue, type Transaction, type DocumentReference } from 'firebase-admin/firestore';
+import { FieldPath, FieldValue, type Firestore, type Transaction, type DocumentReference } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { assertCronSecret } from '@/lib/server-cron-auth';
 import { getFoundationManagerRef } from './foundation-manager-ref';
 import { FOUNDATION_COLLECTIONS, DEFAULT_TACTICS } from '@/game/foundation/config';
-import { calculateDailyPlayerSalary, salaryPeriodKey } from '@/game/foundation/economy';
-import { calculateMarketValue, calculateSalary } from '@/game/foundation/player-system';
+import { calculateDailyPlayerSalary, resolveFoundationPlayerSalary, salaryPeriodKey } from '@/game/foundation/economy';
+import { calculateMarketValue } from '@/game/foundation/player-system';
 import { deterministicDailyEvent } from '@/game/foundation/events';
 import { clamp } from '@/game/foundation/player-system';
+import { assertStagingSeasonOneResetNotInProgress } from '@/app/lib/staging-season-one-write-fence';
+import { readFoundationNonNegativeInteger, readFoundationRoster, readFoundationStaff, readFoundationStaffSalary } from '@/game/foundation/guards';
+import { assertFoundationDailyEventRecord, assertFoundationDailyPayrollLedger } from '@/game/foundation/daily-cycle-integrity';
 
 const CYCLE_VERSION = 1;
 const STAFF_SALARY_SHARE = 1;
@@ -33,52 +36,75 @@ function normalizePlayers(players: any[]) {
       physical: Number.isFinite(Number(player.physical)) ? Number(player.physical) : 50,
       resilience: Number.isFinite(Number(player.resilience)) ? Number(player.resilience) : 50,
     };
-    const salary = typeof player.salary === 'number' ? player.salary : NaN;
-    normalized.salary = Number.isSafeInteger(salary) && salary > 0 ? salary : calculateSalary(normalized);
+    normalized.salary = resolveFoundationPlayerSalary(normalized as any);
     normalized.marketValue = calculateMarketValue(normalized);
     normalized.price = normalized.marketValue;
     return normalized;
   });
 }
 
-async function processManager(db: any, ref: DocumentReference, now: Date) {
+async function processManager(db: Firestore, ref: DocumentReference, now: Date) {
   const periodKey = moscowDateKey(now);
   return db.runTransaction(async (t: Transaction) => {
+    await assertStagingSeasonOneResetNotInProgress(t, db);
     const snap = await t.get(ref);
     if (!snap.exists) return { processed: false };
     const data = snap.data() || {};
     const cycleRef = db.collection(FOUNDATION_COLLECTIONS.cycles).doc(`${ref.id}_${periodKey}`);
-    const cycleSnap: any = await t.get(cycleRef as any);
-    if (cycleSnap.exists) return { processed: false };
+    const eventRef = db.collection(FOUNDATION_COLLECTIONS.events).doc(`${ref.id}_${periodKey}`);
+    const txRef = db.collection(FOUNDATION_COLLECTIONS.economy).doc(`foundation_salary_${ref.id}_${periodKey}`);
+    const [cycleSnap, eventSnap, txSnap] = await Promise.all([
+      t.get(cycleRef),
+      t.get(eventRef),
+      t.get(txRef),
+    ]);
 
-    const players = normalizePlayers(Array.isArray(data.ownedPlayers) ? data.ownedPlayers : []);
+    // Validate persisted event state even when the event was created before
+    // the delayed cron. A partially resolved event must never be applied again.
+    const existingEventRecord = eventSnap.exists
+      ? assertFoundationDailyEventRecord(eventSnap.data() || {}, ref.id, periodKey)
+      : null;
+
+    // The marker and its receipt are committed atomically. If only one exists,
+    // or their financial snapshots disagree, do not silently treat the day as
+    // complete and do not debit the manager a second time.
+    if (cycleSnap.exists || txSnap.exists) {
+      if (!cycleSnap.exists || !txSnap.exists) {
+        throw new Error('FOUNDATION_PAYROLL_LEDGER_MISMATCH');
+      }
+      const cycleRecord = cycleSnap.data() || {};
+      const payrollRecord = txSnap.data() || {};
+      assertFoundationDailyPayrollLedger(cycleRecord, payrollRecord, ref.id, periodKey);
+      if (
+        typeof cycleRecord.eventId === 'string' &&
+        cycleRecord.eventId.length > 0 &&
+        (!existingEventRecord || existingEventRecord.event.id !== cycleRecord.eventId)
+      ) {
+        throw new Error('FOUNDATION_DAILY_EVENT_LEDGER_MISMATCH');
+      }
+      return { processed: false };
+    }
+
+    const players = normalizePlayers(readFoundationRoster(data.ownedPlayers));
     const grossPlayerSalary = calculateDailyPlayerSalary(players);
-    const staff = data.staff && typeof data.staff === 'object' ? data.staff : {};
+    const staff = readFoundationStaff(data.staff);
     const staffSalary = Object.values(staff).reduce((sum: number, member: any) => {
       if (!member) return sum;
-      const rawSalary = member.salary;
-      const salary = rawSalary === undefined || rawSalary === null || rawSalary === ''
-        ? 0
-        : (typeof rawSalary === 'number' || typeof rawSalary === 'string') ? Number(rawSalary) : NaN;
-      if (!Number.isSafeInteger(salary) || salary < 0) throw new Error('FOUNDATION_SALARY_INVALID');
+      const salary = readFoundationStaffSalary(member.salary);
       const next = sum + salary;
       if (!Number.isSafeInteger(next)) throw new Error('FOUNDATION_SALARY_INVALID');
       return next;
     }, 0) * STAFF_SALARY_SHARE;
     const totalDue = grossPlayerSalary + staffSalary;
     if (!Number.isSafeInteger(totalDue) || totalDue < 0) throw new Error('FOUNDATION_SALARY_INVALID');
-    const rawCredits = data.credits;
-    const before = rawCredits === undefined || rawCredits === null || rawCredits === ''
-      ? 0
-      : (typeof rawCredits === 'number' || typeof rawCredits === 'string') ? Number(rawCredits) : NaN;
-    if (!Number.isSafeInteger(before) || before < 0) throw new Error('FOUNDATION_BALANCE_INVALID');
+    const before = readFoundationNonNegativeInteger(data.credits, 'FOUNDATION_BALANCE_INVALID');
+    const crystals = readFoundationNonNegativeInteger(data.crystals, 'FOUNDATION_BALANCE_INVALID');
     const paid = Math.min(before, totalDue);
     const unpaid = totalDue - paid;
-    const event = deterministicDailyEvent({ ...data, id: ref.id, ownedPlayers: players, credits: before, crystals: Number(data.crystals || 0) }, periodKey);
-    // The daily event is generated at the 00:00 cycle but is NOT applied here.
-    // The manager must resolve it once through the server action; this prevents
-    // the same event from being applied twice (cycle + UI choice).
-    const eventApplied = false;
+    const generatedEvent = deterministicDailyEvent({ ...data, id: ref.id, ownedPlayers: players, credits: before, crystals }, periodKey);
+    // Prefer the persisted event: a player may have resolved it before a
+    // delayed cron retry. The cycle records its ID but never reopens it.
+    const event = existingEventRecord?.event || generatedEvent;
     const eventPlayers = players;
 
     const updates: any = {
@@ -100,9 +126,10 @@ async function processManager(db: any, ref: DocumentReference, now: Date) {
       updatedAt: FieldValue.serverTimestamp(),
     };
     t.update(ref, updates);
-    t.set(cycleRef, { userId: ref.id, date: periodKey, paid, playerSalary: grossPlayerSalary, staffSalary, eventId: event?.id || null, createdAt: FieldValue.serverTimestamp() });
-    const txRef = db.collection(FOUNDATION_COLLECTIONS.economy).doc(`foundation_salary_${ref.id}_${periodKey}`);
-    t.set(txRef, {
+    // Create-only markers make a partially missing cycle marker or receipt
+    // fail closed instead of overwriting a prior payroll transaction.
+    t.create(cycleRef, { userId: ref.id, date: periodKey, paid, unpaid, playerSalary: grossPlayerSalary, staffSalary, amountDue: totalDue, eventId: event?.id || null, createdAt: FieldValue.serverTimestamp() });
+    t.create(txRef, {
       userId: ref.id,
       amount: -paid,
       currency: 'credits',
@@ -114,13 +141,13 @@ async function processManager(db: any, ref: DocumentReference, now: Date) {
       paid,
       unpaid,
       periodKey,
+      eventId: event?.id || null,
       balanceBefore: before,
       balanceAfter: before - paid,
       timestamp: FieldValue.serverTimestamp(),
     });
-    if (event) {
-      const eventRef = db.collection(FOUNDATION_COLLECTIONS.events).doc(`${ref.id}_${periodKey}`);
-      t.set(eventRef, { userId: ref.id, date: periodKey, event, applied: eventApplied, resolvedAt: null, createdAt: FieldValue.serverTimestamp() });
+    if (event && !eventSnap.exists) {
+      t.create(eventRef, { userId: ref.id, date: periodKey, event, applied: false, resolvedAt: null, createdAt: FieldValue.serverTimestamp() });
     }
     return { processed: true, paid, unpaid, playerSalary: grossPlayerSalary, staffSalary, eventId: event?.id || null };
   });
@@ -130,6 +157,23 @@ export async function runFoundationDailyCycle(cronSecret: string) {
   assertCronSecret(cronSecret);
   const db = getAdminDb();
   const now = new Date();
+  const resetConfigSnap = await db.collection('system_v1').doc('season_config').get();
+  const resetConfig = resetConfigSnap.exists ? resetConfigSnap.data() || {} : {};
+  if (resetConfig.stagingSeasonOneResetInProgress === true || resetConfig.stagingFreshSeasonOneReset === true) {
+    return {
+      success: false,
+      error: 'STAGING_SEASON_ONE_RESET_IN_PROGRESS',
+      date: moscowDateKey(now),
+      scanned: 0,
+      pages: 0,
+      processed: 0,
+      paid: 0,
+      unpaid: 0,
+      failed: 0,
+      errors: [],
+      version: CYCLE_VERSION,
+    };
+  }
   const managers = db.collection(FOUNDATION_COLLECTIONS.managers);
   const pageSize = 200;
   let cursor: any = null;
@@ -139,6 +183,7 @@ export async function runFoundationDailyCycle(cronSecret: string) {
   let paid = 0;
   let unpaid = 0;
   const errors: Array<{ managerId: string; error: string }> = [];
+  let resetBlocked = false;
 
   // Stable document-ID pagination prevents managers after the first 500 from
   // being silently skipped. Each manager transaction remains independently
@@ -161,16 +206,22 @@ export async function runFoundationDailyCycle(cronSecret: string) {
         }
       } catch (error: any) {
         const message = String(error?.message || 'FOUNDATION_MANAGER_CYCLE_FAILED');
+        if (message === 'STAGING_SEASON_ONE_RESET_IN_PROGRESS') {
+          resetBlocked = true;
+          break;
+        }
         errors.push({ managerId: doc.id, error: message.slice(0, 240) });
         console.warn(`[FOUNDATION] cycle failed for ${doc.id}`, error);
       }
     }
+    if (resetBlocked) break;
     cursor = page.docs[page.docs.length - 1];
     if (page.size < pageSize) break;
   }
 
   return {
-    success: errors.length === 0,
+    success: errors.length === 0 && !resetBlocked,
+    error: resetBlocked ? 'STAGING_SEASON_ONE_RESET_IN_PROGRESS' : undefined,
     date: moscowDateKey(now),
     scanned,
     pages,
@@ -188,15 +239,18 @@ export async function syncFoundationForManager(idToken: string) {
   const { uid } = await requireServerActor(idToken);
   const db = getAdminDb();
   const ref = getFoundationManagerRef(db, uid);
-  const snap = await ref.get();
-  if (!snap.exists) return { success: false, error: 'PLAYER_NOT_FOUND' };
-  const data = snap.data() || {};
-  const players = normalizePlayers(Array.isArray(data.ownedPlayers) ? data.ownedPlayers : []);
-  await ref.update({
-    ownedPlayers: players,
-    foundationVersion: CYCLE_VERSION,
-    tactics: { ...DEFAULT_TACTICS, ...(data.tactics || {}) },
-    updatedAt: FieldValue.serverTimestamp(),
+  return db.runTransaction(async (t: Transaction) => {
+    await assertStagingSeasonOneResetNotInProgress(t, db);
+    const snap = await t.get(ref);
+    if (!snap.exists) return { success: false, error: 'PLAYER_NOT_FOUND' };
+    const data = snap.data() || {};
+    const players = normalizePlayers(readFoundationRoster(data.ownedPlayers));
+    t.update(ref, {
+      ownedPlayers: players,
+      foundationVersion: CYCLE_VERSION,
+      tactics: { ...DEFAULT_TACTICS, ...(data.tactics || {}) },
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+    return { success: true, migrated: true };
   });
-  return { success: true, migrated: true };
 }

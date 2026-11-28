@@ -2,6 +2,55 @@ import { ROLE_SKILL_WEIGHTS, TRAINING_RULES } from './config';
 import { clamp, playerTalent, playerSkill } from './player-system';
 import type { FoundationPlayerState, TrainingResult, TrainingSkill } from './types';
 
+const MAX_DAILY_TRAINING_BONUS = 0.25;
+const DAY_KEY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
+/** Return only a valid bonus that belongs to the requested Moscow day. */
+export function readFoundationDailyTrainingBonus(player: FoundationPlayerState, dayKey: string): number {
+  const record = player as unknown as {
+    dailyTrainingBonus?: unknown;
+    dailyTrainingBonusDate?: unknown;
+  };
+  const bonus = record.dailyTrainingBonus;
+  const bonusDate = record.dailyTrainingBonusDate;
+
+  if (bonus === undefined && bonusDate === undefined) return 0;
+  if (
+    typeof bonusDate !== 'string' ||
+    !DAY_KEY_PATTERN.test(bonusDate) ||
+    typeof bonus !== 'number' ||
+    !Number.isFinite(bonus) ||
+    bonus < 0 ||
+    bonus > MAX_DAILY_TRAINING_BONUS
+  ) {
+    throw new Error('FOUNDATION_TRAINING_BONUS_INVALID');
+  }
+  if (!DAY_KEY_PATTERN.test(dayKey)) throw new Error('FOUNDATION_TRAINING_BONUS_INVALID');
+  return bonusDate === dayKey ? bonus : 0;
+}
+
+/** Add an event bonus to one player, capped to prevent stacking exploits. */
+export function applyFoundationDailyTrainingBonus(
+  player: FoundationPlayerState,
+  bonus: number,
+  dayKey: string,
+): FoundationPlayerState {
+  if (
+    !Number.isFinite(bonus) ||
+    bonus <= 0 ||
+    bonus > MAX_DAILY_TRAINING_BONUS ||
+    !DAY_KEY_PATTERN.test(dayKey)
+  ) {
+    throw new Error('FOUNDATION_TRAINING_BONUS_INVALID');
+  }
+  const current = readFoundationDailyTrainingBonus(player, dayKey);
+  const next = current + bonus;
+  if (!Number.isFinite(next) || next > MAX_DAILY_TRAINING_BONUS) {
+    throw new Error('FOUNDATION_TRAINING_BONUS_INVALID');
+  }
+  return { ...player, dailyTrainingBonus: next, dailyTrainingBonusDate: dayKey };
+}
+
 export function trainingCap(player: FoundationPlayerState, skill: TrainingSkill) {
   const stored = Number(player.skillCaps?.[skill]);
   if (Number.isFinite(stored) && stored > 0) return clamp(stored);

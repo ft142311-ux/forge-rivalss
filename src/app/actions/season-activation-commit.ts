@@ -35,8 +35,16 @@ export async function commitSeasonActivation(
     if (!configSnap.exists) return { success: false, reason: 'SEASON_CONFIG_MISSING' };
 
     const current = configSnap.data() || {};
+    if (current.stagingSeasonOneResetInProgress === true) {
+      return { success: false, reason: 'STAGING_SEASON_ONE_RESET_IN_PROGRESS' };
+    }
     const plan = planSnap.exists ? planSnap.data() || {} : null;
+    // Activation is strictly one season at a time. No caller may use the
+    // recovery flag to activate a later season without activating its predecessor.
     const stateMatches =
+      expected.targetSeason === expected.sourceSeason + 1 &&
+      expected.multiSeasonRecovery !== true &&
+      expected.recoveryMode !== true &&
       Number(current.activeSeasonNumber || 1) === expected.sourceSeason &&
       Number(current.preparedSeasonNumber || 0) === expected.targetSeason &&
       Number(current.nextSeasonNumber || 0) === expected.targetSeason &&

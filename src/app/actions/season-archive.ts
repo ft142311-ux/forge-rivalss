@@ -219,10 +219,12 @@ function getUniqueSeasonArchives(
 }
 
 export function getVisibleSeasonArchives(archives: any[]): any[] {
+  // The archive UI represents the immediately preceding season only. Historical
+  // lifetime records remain in their dedicated collections, not as a season list.
   return getUniqueSeasonArchives(
     archives,
     archive => isCompletedSeasonArchive(archive) || isRecoveredSeasonArchive(archive),
-  );
+  ).slice(0, 1);
 }
 
 export function getCompletedSeasonArchives(archives: any[]): any[] {
@@ -231,9 +233,11 @@ export function getCompletedSeasonArchives(archives: any[]): any[] {
 
 
 /**
- * Validate the complete archive-retention set before deleting anything.
- * A PRUNING marker is written only after this function has approved the set;
- * it makes interrupted subcollection deletion safely resumable.
+ * Validate every existing season archive before rolling-window cleanup.
+ * The newest verified completed archive is retained as the sole runtime season
+ * archive; older verified archives and their match snapshots may be pruned only
+ * after the next season has activated. Lifetime club/player history is stored
+ * outside this archive collection and is not part of this deletion plan.
  */
 export function resolveArchivePrunePlan(
   archives: Array<{ id: string; archive: any; matches: any[]; historyStatus?: string | null }>,
@@ -277,6 +281,9 @@ export function resolveArchivePrunePlan(
             Number(archive.prunePolicyVersion) !== 1) {
           return { ready: false as const, reason: 'ARCHIVE_PRUNE_MARKER_CONFLICT', archiveId: item.id, pruneIds: [] as string[] };
         }
+        // The durable intent is written only after the complete archive and all
+        // matches have passed preflight. Once deletion starts, a retry must not
+        // require the original 840 matches to still exist.
       } else {
         const validation = validateSeasonArchiveSnapshot(archive, item.matches || []);
         if (!validation.valid) {

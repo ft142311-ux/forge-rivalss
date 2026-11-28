@@ -1,0 +1,233 @@
+name: Beta Season 1 read-only preflight
+
+on:
+  workflow_dispatch:
+    inputs:
+      deployment_url:
+        description: "Exact immutable READY Preview URL for this commit SHA (not a branch alias)"
+        required: true
+        type: string
+  deployment_status:
+
+permissions:
+  contents: read
+  deployments: read
+
+concurrency:
+  group: beta-season-one-readonly-preflight
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    if: >-
+      ${{  (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/feature/beta-fresh-season-one') ||
+          (github.event_name == 'deployment_status' &&
+           github.event.deployment_status.state == 'success' &&
+           github.event.deployment.sha == github.sha &&
+           (github.event.deployment.ref == 'feature/beta-fresh-season-one' ||
+            github.event.deployment.ref == 'refs/heads/feature/beta-fresh-season-one')) }}
+    name: Authenticated read-only Beta preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Resolve exact Preview deployment
+        id: resolve
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_DEPLOYMENT_URL: ${{ github.event.deployment_status.target_url }}
+          MANUAL_DEPLOYMENT_URL: ${{ inputs.deployment_url }}
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          GITHUB_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "deployment_status" ]; then
+            candidate_url="$EVENT_DEPLOYMENT_URL"
+          elif [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            candidate_url="$MANUAL_DEPLOYMENT_URL"
+          else
+            echo "::error::Unsupported event for Beta Preview preflight."
+            exit 1
+          fi
+          if [ -z "$candidate_url" ]; then
+            echo "::error::An exact immutable Preview deployment URL is required."
+            exit 1
+          fi
+          if [ -z "${VERCEL_TOKEN:-}" ]; then
+            echo "::error::Repository secret VERCEL_TOKEN is not configured; exact deployment verification is unavailable."
+            exit 1
+          fi
+
+          candidate_host="$(node - "$candidate_url" <<'NODE'
+          const raw = process.argv[2];
+          const url = new URL(raw.startsWith('https://') ? raw : `https://${raw}`);
+          if (url.protocol !== 'https:' || url.username || url.password ||
+              url.hostname.startsWith('forge-rivalss-git-') ||
+              !/^forge-rivalss-[a-z0-9]+-forge-rivals\.vercel\.app$/.test(url.hostname)) {
+            throw new Error('Only an immutable Forge-Rivals Preview deployment URL is allowed');
+          }
+          process.stdout.write(url.hostname);
+          NODE
+          )"
+
+          # Resolve the supplied host against Vercel's READY Preview inventory
+          # filtered to this exact Git SHA. Missing SHA metadata is a hard failure;
+          # a mutable branch alias or a previous deployment must never pass.
+          for attempt in $(seq 1 24); do
+            deployments_file="$(mktemp)"
+            if npx --yes vercel@latest list forge-rivalss \
+              --meta "githubCommitSha=$GITHUB_SHA" --environment preview --status READY \
+              --json --scope forge-rivals > "$deployments_file"; then
+              deployment_url="$(node - "$deployments_file" "$candidate_host" "$GITHUB_SHA" <<'NODE'
+          const fs = require('node:fs');
+          let value;
+          try { value = JSON.parse(fs.readFileSync(process.argv[2], 'utf8')); }
+          catch { process.exit(2); }
+          const deployments = Array.isArray(value) ? value : value.deployments;
+          if (!Array.isArray(deployments)) process.exit(2);
+          const candidateHost = process.argv[3];
+          const expectedSha = process.argv[4];
+          const match = deployments.find(item => {
+            if (!item || !['READY'].includes(String(item.readyState || item.state || item.status || '').toUpperCase())) {
+              return false;
+            }
+            if (item.target === 'production') return false;
+            if (item.meta?.githubCommitSha !== expectedSha) return false;
+            if (item.meta?.githubCommitRef !== 'feature/beta-fresh-season-one') return false;
+            if (typeof item.url !== 'string' || !item.url) return false;
+            let host;
+            try {
+              host = new URL(item.url.startsWith('https://') ? item.url : `https://${item.url}`).hostname;
+            } catch {
+              return false;
+            }
+            return host === candidateHost;
+          });
+          if (match) process.stdout.write(match.url);
+          NODE
+              )" || true
+              rm -f "$deployments_file"
+              if [ -n "$deployment_url" ]; then
+                printf 'deployment_url=%s\n' "$deployment_url" >> "$GITHUB_OUTPUT"
+                printf 'deployment_sha=%s\n' "$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+            else
+              rm -f "$deployments_file"
+            fi
+            echo "Waiting for the READY Preview for exact commit $GITHUB_SHA ($attempt/24)..."
+            sleep 15
+          done
+          echo "::error::No READY Preview for exact commit $GITHUB_SHA matched the supplied immutable deployment URL."
+          exit 1
+
+      - name: Validate Preview URL
+        id: target
+        env:
+          DEPLOYMENT_URL: ${{ steps.resolve.outputs.deployment_url }}
+          DEPLOYMENT_SHA: ${{ steps.resolve.outputs.deployment_sha }}
+          EXPECTED_SHA: ${{ github.sha }}
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          if (!process.env.DEPLOYMENT_SHA || process.env.DEPLOYMENT_SHA !== process.env.EXPECTED_SHA) {
+            throw new Error('Preview deployment commit does not match this workflow commit');
+          }
+          const raw = process.env.DEPLOYMENT_URL;
+          const url = new URL(raw.startsWith('https://') ? raw : `https://${raw}`);
+          if (url.protocol !== 'https:' || url.username || url.password ||
+              url.hostname.startsWith('forge-rivalss-git-') ||
+              !/^forge-rivalss-[a-z0-9]+-forge-rivals\.vercel\.app$/.test(url.hostname)) {
+            throw new Error('Only an immutable Forge-Rivals Preview host for the exact commit is allowed');
+          }
+          url.pathname = '';
+          url.search = '';
+          url.hash = '';
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `BASE_URL=${url.origin}\n`);
+          NODE
+
+      - name: Call read-only preflight (GET only)
+        env:
+          BASE_URL: ${{ steps.target.outputs.BASE_URL }}
+          CRON_SECRET: ${{ secrets.BETA_RESET_CRON_SECRET }}
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CRON_SECRET:-}" ]; then
+            echo "::error::Repository secret BETA_RESET_CRON_SECRET is not configured."
+            exit 1
+          fi
+          if [ -z "${VERCEL_TOKEN:-}" ]; then
+            echo "::error::Repository secret VERCEL_TOKEN is not configured. Use Vercel CLI authenticated access; do not create a protection bypass."
+            exit 1
+          fi
+          response_file="$(mktemp)"
+          status_file="$(mktemp)"
+          summary_file="$(mktemp)"
+          trap 'rm -f "$response_file" "$status_file" "$summary_file"' EXIT
+          npx --yes vercel@latest curl "${BASE_URL}/api/admin/staging-cup-diagnostics" -- \
+            --silent --show-error --max-time 120 --request GET \
+            --output "$response_file" \
+            --write-out '%{http_code}' > "$status_file" \
+            --header "Authorization: Bearer ${CRON_SECRET}"
+          unset CRON_SECRET VERCEL_TOKEN
+          node - "$response_file" "$status_file" "$summary_file" <<'NODE'
+          const fs = require('node:fs');
+          const file = process.argv[2];
+          const statusFile = process.argv[3];
+          const summaryFile = process.argv[4];
+          const raw = fs.readFileSync(file, 'utf8');
+          const status = Number(fs.readFileSync(statusFile, 'utf8').trim());
+          let result;
+          try { result = JSON.parse(raw); }
+          catch { throw new Error('Preflight returned non-JSON response (HTTP ' + status + ').'); }
+          const failures = [];
+          if (status !== 200) failures.push('HTTP_STATUS_' + status);
+          if (result.readOnly !== true) failures.push('READ_ONLY_FLAG_MISSING');
+          if (result.projectId !== 'forge-rivals-beta') failures.push('BETA_PROJECT_MISMATCH');
+          if (result.success !== true) failures.push('DIAGNOSTICS_UNSUCCESSFUL');
+          if (result.cupExists !== true || !result.cup) failures.push('SEASON_ONE_CUP_MISSING');
+          const cup = result.cup || {};
+          const integrity = result.cupIntegrity || {};
+          if (integrity.ready !== true) failures.push('SEASON_ONE_CUP_INTEGRITY_FAILED');
+          if (cup.status !== 'active' && cup.status !== 'completed') failures.push('SEASON_ONE_CUP_STATUS_INVALID');
+          if (cup.format !== 'D1_REST_OPENING_ROUND' || cup.formatVersion !== 4) failures.push('SEASON_ONE_CUP_FORMAT_INVALID');
+          if (cup.participants !== 120 || cup.totalParticipants !== 120) failures.push('SEASON_ONE_CUP_PARTICIPANT_COUNT_INVALID');
+          if (cup.totalMatches !== 119 || cup.preliminaryMatches !== 56) failures.push('SEASON_ONE_CUP_MATCH_COUNT_INVALID');
+          if (cup.openingRoundRestTeams !== 8) failures.push('SEASON_ONE_CUP_D1_ENTRY_INVALID');
+          if (integrity.participantSnapshots !== 120 || result.participantSnapshots !== 120) failures.push('SEASON_ONE_CUP_SNAPSHOT_COUNT_INVALID');
+          if (integrity.noByes !== true || integrity.openingRoundParticipants !== 112) failures.push('SEASON_ONE_CUP_OPENING_ROUND_INVALID');
+          if (integrity.openingFieldValid !== true) failures.push('SEASON_ONE_CUP_PARTICIPANT_FIELD_INVALID');
+          if (integrity.snapshotsValid !== true) failures.push('SEASON_ONE_CUP_PARTICIPANT_SNAPSHOTS_INVALID');
+          const season = result.season || {};
+          if (season.worldReady !== true) failures.push('ACTIVE_SEASON_WORLD_NOT_READY');
+          if (season.activeCup?.required === true && season.activeCup?.ready !== true) failures.push('ACTIVE_SEASON_PYRAMID_CUP_INVALID');
+          if (season.seasonTimelineValid !== true) failures.push('SEASON_TIMELINE_INVALID');
+          if (season.league?.tables !== 15 || season.league?.slots !== 120 || season.league?.fixtures !== 840) failures.push('ACTIVE_SEASON_LEAGUE_COUNTS_INVALID');
+          if (season.league?.structureReady !== true) failures.push('ACTIVE_SEASON_LEAGUE_STRUCTURE_INVALID');
+          if (season.resetInProgress === true) failures.push('SEASON_RESET_IN_PROGRESS');
+          if (season.historyCleanupPending === true) failures.push('SEASON_HISTORY_CLEANUP_PENDING');
+          if (season.archiveRetention?.matchesPolicy !== true) failures.push('SEASON_ARCHIVE_RETENTION_INVALID');
+          if (season.transitionStatus === 'TRANSITION_BLOCKED_OR_INCOMPLETE') failures.push('SEASON_SUCCESSOR_TRANSITION_BLOCKED');
+          if (season.transitionStatus === 'ACTIVATED_CLEANUP_PENDING') failures.push('SEASON_SUCCESSOR_CLEANUP_PENDING');
+
+          const report = {
+            httpStatus: status,
+            success: failures.length === 0,
+            readOnly: result.readOnly,
+            projectId: result.projectId,
+            activeSeason: result.activeSeason,
+            phase: result.phase,
+            cup: result.cup,
+            cupIntegrity: result.cupIntegrity,
+            season: result.season,
+            failures
+          };
+          fs.writeFileSync(summaryFile, JSON.stringify(report, null, 2));
+          console.log(JSON.stringify(report, null, 2));
+          if (failures.length) process.exit(1);
+          console.log('Read-only Beta Season 1 and season-lifecycle preflight passed. No writes were executed.');
+          NODE
+          {
+            echo "## Beta read-only preflight"
+            cat "$summary_file"
+          } >> "$GITHUB_STEP_SUMMARY"

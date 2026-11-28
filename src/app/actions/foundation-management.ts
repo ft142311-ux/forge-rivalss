@@ -4,7 +4,8 @@ import { FieldValue } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { requireServerActor } from '@/lib/server-auth';
 import { getFoundationManagerRef } from './foundation-manager-ref';
-import { applyTraining } from '@/game/foundation/training';
+import { applyTraining, readFoundationDailyTrainingBonus } from '@/game/foundation/training';
+import { salaryPeriodKey } from '@/game/foundation/economy';
 import { calculateTeamSynergy } from '@/game/foundation/synergy';
 import { associationExperienceGain, validateSingleAssociation, qualifiesForAssociationCup } from '@/game/foundation/associations';
 import { getTournamentRuleSet, canEnterTournament, buildOlympicPairs } from '@/game/foundation/tournaments';
@@ -12,22 +13,10 @@ import { FOUNDATION_COLLECTIONS } from '@/game/foundation/config';
 import { deterministicDailyEvent } from '@/game/foundation/events';
 import { isFoundationSkill } from '@/game/foundation/skills';
 import { resolveTrainingFinishTimeMs } from '@/app/lib/player-training-guards';
-
-function readCreditsBalance(value: unknown) {
-  const balance = value === undefined || value === null
-    ? 0
-    : (typeof value === 'number' || typeof value === 'string') ? Number(value) : NaN;
-  if (!Number.isSafeInteger(balance) || balance < 0) throw new Error('INVALID_BALANCE');
-  return balance;
-}
-
-function readTreasuryBalance(value: unknown) {
-  const balance = value === undefined || value === null
-    ? 0
-    : (typeof value === 'number' || typeof value === 'string') ? Number(value) : NaN;
-  if (!Number.isSafeInteger(balance) || balance < 0) throw new Error('INVALID_TREASURY_BALANCE');
-  return balance;
-}
+import { assertStagingSeasonOneResetNotInProgress } from '@/app/lib/staging-season-one-write-fence';
+import { readFoundationNonNegativeInteger, readFoundationRoster, readFoundationStaff } from '@/game/foundation/guards';
+import { assertFoundationDailyEventRecord } from '@/game/foundation/daily-cycle-integrity';
+import type { FoundationRole } from '@/game/foundation/types';
 
 function errorOf(e: any) { return e?.message || 'FOUNDATION_ACTION_FAILED'; }
 
@@ -38,10 +27,11 @@ export async function setFoundationTrainingFocusAction(idToken: string, playerId
     const ref = getFoundationManagerRef(db, uid);
     if (skill !== null && !isFoundationSkill(skill)) throw new Error('INVALID_TRAINING_SKILL');
     await db.runTransaction(async t => {
+      await assertStagingSeasonOneResetNotInProgress(t, db);
       const snap = await t.get(ref);
       if (!snap.exists) throw new Error('PLAYER_NOT_FOUND');
       const data = snap.data() || {};
-      const players = Array.isArray(data.ownedPlayers) ? [...data.ownedPlayers] : [];
+      const players = [...readFoundationRoster(data.ownedPlayers)];
       const idx = players.findIndex((p: any) => String(p.id) === String(playerId));
       if (idx < 0) throw new Error('UNIT_NOT_FOUND');
       const p = players[idx] || {};
@@ -63,11 +53,12 @@ export async function completePlayerTrainingAction(idToken: string, playerId: st
     const { uid } = await requireServerActor(idToken);
     const db = getAdminDb();
     return await db.runTransaction(async t => {
+      await assertStagingSeasonOneResetNotInProgress(t, db);
       const ref = getFoundationManagerRef(db, uid);
       const snap = await t.get(ref);
       if (!snap.exists) throw new Error('PLAYER_NOT_FOUND');
       const data = snap.data() || {};
-      const players: any[] = Array.isArray(data.ownedPlayers) ? [...data.ownedPlayers] : [];
+      const players: any[] = [...readFoundationRoster(data.ownedPlayers)];
       const index = players.findIndex(p => p.id === playerId);
       if (index < 0) throw new Error('UNIT_NOT_FOUND');
       const player = players[index];
@@ -77,9 +68,19 @@ export async function completePlayerTrainingAction(idToken: string, playerId: st
       const focus = player.dailyTrainingFocus || player.trainingFocus;
       if (!focus) throw new Error('TRAINING_FOCUS_MISSING');
       if (!isFoundationSkill(focus)) throw new Error('INVALID_TRAINING_SKILL');
-      const staffBonus = data.staff?.coach ? 1.08 : 1;
-      const result = applyTraining(player, focus, Math.round(90 * staffBonus));
-      players[index] = { ...result.player, dailyTrainingFinishTime: null, lastTrainingCompletedAt: new Date().toISOString() };
+      const staff = readFoundationStaff(data.staff);
+      const staffBonus = staff.coach ? 1.08 : 1;
+      const periodKey = salaryPeriodKey();
+      const eventBonus = readFoundationDailyTrainingBonus(player, periodKey);
+      const trainingMinutes = Math.round(90 * staffBonus * (1 + eventBonus));
+      const result = applyTraining(player, focus, trainingMinutes);
+      players[index] = {
+        ...result.player,
+        dailyTrainingBonus: 0,
+        dailyTrainingBonusDate: periodKey,
+        dailyTrainingFinishTime: null,
+        lastTrainingCompletedAt: new Date().toISOString(),
+      };
       const synergy = calculateTeamSynergy(players.filter(p => Object.values(data.lineup || {}).includes(p.id)).slice(0, 5));
       t.update(ref, { ownedPlayers: players, teamSynergy: synergy, updatedAt: FieldValue.serverTimestamp() });
       return { success: true, result: result.result, teamSynergy: synergy };
@@ -92,14 +93,17 @@ export async function recalculateTeamSynergyAction(idToken: string) {
     const { uid } = await requireServerActor(idToken);
     const db = getAdminDb();
     const ref = getFoundationManagerRef(db, uid);
-    const snap = await ref.get();
-    if (!snap.exists) throw new Error('PLAYER_NOT_FOUND');
-    const data = snap.data() || {};
-    const lineup = data.lineup || {};
-    const players = (Array.isArray(data.ownedPlayers) ? data.ownedPlayers : []).filter((p: any) => Object.values(lineup).includes(p.id)).slice(0, 5);
-    const synergy = calculateTeamSynergy(players);
-    await ref.update({ teamSynergy: synergy, updatedAt: FieldValue.serverTimestamp() });
-    return { success: true, synergy };
+    return await db.runTransaction(async t => {
+      await assertStagingSeasonOneResetNotInProgress(t, db);
+      const snap = await t.get(ref);
+      if (!snap.exists) throw new Error('PLAYER_NOT_FOUND');
+      const data = snap.data() || {};
+      const lineup = data.lineup || {};
+      const players = readFoundationRoster(data.ownedPlayers).filter((p: any) => Object.values(lineup).includes(p.id)).slice(0, 5);
+      const synergy = calculateTeamSynergy(players);
+      t.update(ref, { teamSynergy: synergy, updatedAt: FieldValue.serverTimestamp() });
+      return { success: true, synergy };
+    });
   } catch (e) { return { success: false, error: errorOf(e) }; }
 }
 
@@ -123,18 +127,25 @@ export async function createFoundationTournamentAction(idToken: string, ruleId: 
     const { uid } = await requireServerActor(idToken);
     const rule = getTournamentRuleSet(ruleId);
     const db = getAdminDb();
-    const manager = await getFoundationManagerRef(db, uid).get();
-    const managerData = manager.data() || {};
-    let associationId = managerData.associationId || null;
-    if (rule.id === 'association-cup' || rule.id === 'open-olympic') {
-      if (!associationId) throw new Error('NO_ASSOCIATION');
-      const assoc = await db.collection(FOUNDATION_COLLECTIONS.associations).doc(associationId).get();
-      if (!assoc.exists) throw new Error('ASSOCIATION_NOT_FOUND');
-      if (rule.id === 'association-cup' && !qualifiesForAssociationCup(Array.isArray(assoc.data()?.memberIds) ? assoc.data()!.memberIds.length : 0)) throw new Error('ASSOCIATION_CUP_MIN_25');
-      if (rule.id === 'open-olympic' && assoc.data()?.ownerId && assoc.data()?.ownerId !== uid) throw new Error('ASSOCIATION_LEADER_ONLY');
-    }
+    const managerRef = getFoundationManagerRef(db, uid);
     const ref = db.collection(FOUNDATION_COLLECTIONS.tournaments).doc();
-    await ref.set({ id: ref.id, name: name || rule.name, ruleId: rule.id, rule, status: 'registration', participants: [uid], associationId, createdBy: uid, createdAt: FieldValue.serverTimestamp() });
+    await db.runTransaction(async t => {
+      await assertStagingSeasonOneResetNotInProgress(t, db);
+      const manager = await t.get(managerRef);
+      if (!manager.exists) throw new Error('PLAYER_NOT_FOUND');
+      const managerData = manager.data() || {};
+      const associationId = managerData.associationId || null;
+      if (rule.id === 'association-cup' || rule.id === 'open-olympic') {
+        if (!associationId) throw new Error('NO_ASSOCIATION');
+        const assocRef = db.collection(FOUNDATION_COLLECTIONS.associations).doc(associationId);
+        const assoc = await t.get(assocRef);
+        if (!assoc.exists) throw new Error('ASSOCIATION_NOT_FOUND');
+        const assocData = assoc.data() || {};
+        if (rule.id === 'association-cup' && !qualifiesForAssociationCup(Array.isArray(assocData.memberIds) ? assocData.memberIds.length : 0)) throw new Error('ASSOCIATION_CUP_MIN_25');
+        if (rule.id === 'open-olympic' && assocData.ownerId && assocData.ownerId !== uid) throw new Error('ASSOCIATION_LEADER_ONLY');
+      }
+      t.create(ref, { id: ref.id, name: name || rule.name, ruleId: rule.id, rule, status: 'registration', participants: [uid], associationId, createdBy: uid, createdAt: FieldValue.serverTimestamp() });
+    });
     return { success: true, tournamentId: ref.id };
   } catch (e) { return { success: false, error: errorOf(e) }; }
 }
@@ -145,11 +156,13 @@ export async function registerFoundationTournamentAction(idToken: string, tourna
     const db = getAdminDb();
     const ref = db.collection(FOUNDATION_COLLECTIONS.tournaments).doc(tournamentId);
     await db.runTransaction(async t => {
-      const snap = await t.get(ref);
+      await assertStagingSeasonOneResetNotInProgress(t, db);
+      const managerRef = getFoundationManagerRef(db, uid);
+      const [snap, manager] = await Promise.all([t.get(ref), t.get(managerRef)]);
       if (!snap.exists) throw new Error('TOURNAMENT_NOT_FOUND');
+      if (!manager.exists) throw new Error('PLAYER_NOT_FOUND');
       const data = snap.data() || {};
       if (data.status !== 'registration') throw new Error('TOURNAMENT_NOT_OPEN');
-      const manager = await getFoundationManagerRef(db, uid).get();
       const managerData = manager.data() || {};
       if (data.associationId && managerData.associationId !== data.associationId) throw new Error('ASSOCIATION_MISMATCH');
       const participants: string[] = Array.isArray(data.participants) ? data.participants : [];
@@ -181,6 +194,7 @@ export async function recordFoundationTournamentResultAction(idToken: string, to
     const tournamentRef = db.collection(FOUNDATION_COLLECTIONS.tournaments).doc(tournamentId);
     const matchRef = db.collection(FOUNDATION_COLLECTIONS.tournamentMatches).doc(matchId);
     const result = await db.runTransaction(async t => {
+      await assertStagingSeasonOneResetNotInProgress(t, db);
       const [tournament, match] = await Promise.all([t.get(tournamentRef), t.get(matchRef)]);
       if (!tournament.exists) throw new Error('TOURNAMENT_NOT_FOUND');
       if (!match.exists) throw new Error('TOURNAMENT_MATCH_NOT_FOUND');
@@ -231,6 +245,7 @@ export async function joinAssociationFoundationAction(idToken: string, associati
     const db = getAdminDb();
     const ref = getFoundationManagerRef(db, uid);
     await db.runTransaction(async t => {
+      await assertStagingSeasonOneResetNotInProgress(t, db);
       const snap = await t.get(ref);
       if (!snap.exists) throw new Error('PLAYER_NOT_FOUND');
       const data = snap.data() || {};
@@ -249,55 +264,79 @@ export async function joinAssociationFoundationAction(idToken: string, associati
 }
 
 /** Server-authoritative role assignment. It never changes the player's base OVR. */
+const FOUNDATION_ROLES = new Set<FoundationRole>(['Carry', 'Midlaner', 'Tank', 'Jungler', 'Support']);
+const STARTER_SLOT_ROLES: Record<string, FoundationRole> = {
+  carry: 'Carry',
+  mid: 'Midlaner',
+  offlane: 'Tank',
+  support: 'Jungler',
+  full_support: 'Support',
+};
+
+function parseFoundationRole(value: unknown): FoundationRole {
+  if (typeof value !== 'string' || !FOUNDATION_ROLES.has(value as FoundationRole)) {
+    throw new Error('INVALID_ROLE');
+  }
+  return value as FoundationRole;
+}
+
 export async function changePlayerRoleAction(idToken: string, playerId: string, roleValue: string) {
   try {
     const { uid } = await requireServerActor(idToken);
+    const role = parseFoundationRole(roleValue);
     const db = getAdminDb();
-    const allowed = ['Carry','Midlaner','Tank','Jungler','Support'];
-    if (!allowed.includes(roleValue)) throw new Error('INVALID_ROLE');
     const ref = getFoundationManagerRef(db, uid);
     await db.runTransaction(async t => {
+      await assertStagingSeasonOneResetNotInProgress(t, db);
       const snap = await t.get(ref);
       if (!snap.exists) throw new Error('PLAYER_NOT_FOUND');
       const data = snap.data() || {};
-      const players = Array.isArray(data.ownedPlayers) ? [...data.ownedPlayers] : [];
-      const idx = players.findIndex((p:any) => String(p.id) === String(playerId));
+      const players = [...readFoundationRoster(data.ownedPlayers)];
+      const idx = players.findIndex((p: any) => String(p.id) === String(playerId));
       if (idx < 0) throw new Error('UNIT_NOT_OWNED');
       const lineup = { ...(data.lineup || {}) };
-      const starterSlots = ['carry','mid','offlane','support','full_support'];
-      const duplicate = starterSlots.some(slot => lineup[slot] === playerId && ({carry:'Carry',mid:'Midlaner',offlane:'Tank',support:'Jungler',full_support:'Support'} as any)[slot] === roleValue);
+      const starterSlots = Object.keys(STARTER_SLOT_ROLES);
+      const duplicate = starterSlots.some(slot =>
+        lineup[slot] === playerId && STARTER_SLOT_ROLES[slot] === role
+      );
       if (!duplicate) {
-        const occupied = starterSlots.some(slot => lineup[slot] && String(lineup[slot]) !== String(playerId) && players.find((p:any)=>String(p.id)===String(lineup[slot]))?.currentRole === roleValue);
+        const occupied = starterSlots.some(slot =>
+          lineup[slot] &&
+          String(lineup[slot]) !== String(playerId) &&
+          players.find((p: any) => String(p.id) === String(lineup[slot]))?.currentRole === role
+        );
         if (occupied) throw new Error('ROLE_ALREADY_ASSIGNED');
       }
-      players[idx] = { ...players[idx], currentRole: roleValue };
+      players[idx] = { ...players[idx], currentRole: role };
       t.update(ref, { ownedPlayers: players, updatedAt: FieldValue.serverTimestamp() });
     });
-    return { success: true, role: roleValue };
+    return { success: true, role };
   } catch (e) { return { success: false, error: errorOf(e) }; }
 }
 
 export async function getFoundationDailyEventAction(idToken: string) {
+  const period = new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Moscow',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
   try {
     const { uid } = await requireServerActor(idToken);
     const db = getAdminDb();
-    const period = new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Moscow',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
     const ref = db.collection(FOUNDATION_COLLECTIONS.events).doc(`${uid}_${period}`);
-    let snap = await ref.get();
-    if (!snap.exists) {
-      const managerRef = getFoundationManagerRef(db, uid);
-      const managerSnap = await managerRef.get();
-      if (managerSnap.exists) {
-        const data = managerSnap.data() || {};
-        const event = deterministicDailyEvent({ ...data, id: uid } as any, period);
-        if (event) {
-          await ref.create({ userId: uid, date: period, event, applied: false, resolvedAt: null, createdAt: FieldValue.serverTimestamp() });
-          snap = await ref.get();
-        }
+    const managerRef = getFoundationManagerRef(db, uid);
+    return await db.runTransaction(async t => {
+      await assertStagingSeasonOneResetNotInProgress(t, db);
+      const [snap, managerSnap] = await Promise.all([t.get(ref), t.get(managerRef)]);
+      if (snap.exists) {
+        const event = assertFoundationDailyEventRecord(snap.data() || {}, uid, period);
+        return { success: true, date: period, event };
       }
-    }
-    return { success: true, date: period, event: snap.exists ? snap.data() : null };
-  } catch (e) { return { success: false, error: errorOf(e) }; }
+      if (!managerSnap.exists) return { success: true, date: period, event: null };
+      const data = managerSnap.data() || {};
+      const event = deterministicDailyEvent({ ...data, id: uid } as any, period);
+      if (!event) return { success: true, date: period, event: null };
+      const record = { userId: uid, date: period, event, applied: false, resolvedAt: null };
+      t.create(ref, { ...record, createdAt: FieldValue.serverTimestamp() });
+      return { success: true, date: period, event: record };
+    });
+  } catch (e) { return { success: false, date: period, event: null, error: errorOf(e) }; }
 }
 
 export async function getFoundationPlayerStatsAction(idToken: string) {
@@ -306,7 +345,7 @@ export async function getFoundationPlayerStatsAction(idToken: string) {
     const db = getAdminDb();
     const snap = await getFoundationManagerRef(db, uid).get();
     if (!snap.exists) throw new Error('PLAYER_NOT_FOUND');
-    const players = Array.isArray(snap.data()?.ownedPlayers) ? snap.data()!.ownedPlayers : [];
+    const players = readFoundationRoster(snap.data()?.ownedPlayers);
     return { success: true, players: players.map((p:any) => ({
       id: String(p.id), name: p.name, role: p.currentRole || p.role, overallRating: Number(p.overallRating || 0),
       matches: Number(p.seasonStats?.matches ?? p.totalMatchesPlayed ?? 0), wins: Number(p.seasonStats?.wins ?? 0),
@@ -334,6 +373,7 @@ export async function associationTreasuryPaymentAction(idToken: string, amount: 
     const db = getAdminDb();
     const managerRef = getFoundationManagerRef(db, uid);
     await db.runTransaction(async t => {
+      await assertStagingSeasonOneResetNotInProgress(t, db);
       const snap = await t.get(managerRef);
       if (!snap.exists) throw new Error('PLAYER_NOT_FOUND');
       const data = snap.data() || {};
@@ -341,13 +381,13 @@ export async function associationTreasuryPaymentAction(idToken: string, amount: 
       if (!associationId) throw new Error('NO_ASSOCIATION');
       if (typeof amount !== 'number' || !Number.isSafeInteger(amount) || amount <= 0) throw new Error('INVALID_AMOUNT');
       const payment = amount;
-      const balance = readCreditsBalance(data.credits);
+      const balance = readFoundationNonNegativeInteger(data.credits, 'INVALID_BALANCE');
       if (balance < payment) throw new Error('INSUFFICIENT_FUNDS');
       const assocRef = db.collection(FOUNDATION_COLLECTIONS.associations).doc(associationId);
       const assocSnap = await t.get(assocRef);
       if (!assocSnap.exists) throw new Error('ASSOCIATION_NOT_FOUND');
       const assoc = assocSnap.data() || {};
-      const treasuryBefore = readTreasuryBalance(assoc.treasury);
+      const treasuryBefore = readFoundationNonNegativeInteger(assoc.treasury, 'INVALID_TREASURY_BALANCE');
       const treasuryAfter = treasuryBefore + payment;
       if (!Number.isSafeInteger(treasuryAfter)) throw new Error('INVALID_TREASURY_BALANCE');
       t.update(managerRef, { credits: balance-payment, updatedAt: FieldValue.serverTimestamp() });
@@ -385,6 +425,7 @@ export async function startFoundationTournamentAction(idToken: string, tournamen
     const db = getAdminDb();
     const ref = db.collection(FOUNDATION_COLLECTIONS.tournaments).doc(tournamentId);
     const result = await db.runTransaction(async t => {
+      await assertStagingSeasonOneResetNotInProgress(t, db);
       const snap = await t.get(ref);
       if (!snap.exists) throw new Error('TOURNAMENT_NOT_FOUND');
       const data = snap.data() || {};

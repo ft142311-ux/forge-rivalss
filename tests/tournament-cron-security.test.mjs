@@ -46,3 +46,31 @@ test('Pyramid Cup cycle remains a server-only worker rather than an exposed Serv
   assert.match(cupEngineSource, /^import ['"]server-only['"]/);
   assert.doesNotMatch(cupEngineSource, /^['"]use server['"]/);
 });
+
+test('tournament unregistration validates and respects the registration deadline', () => {
+  const unregister = actionBody('unregisterFromTournamentAction');
+  assert.ok(unregister.includes('getTournamentRegistrationWindow(data)'));
+  assert.ok(unregister.includes('Date.now() >= registrationWindow.closesAt'));
+  assert.ok(
+    unregister.indexOf('registrationWindow.closesAt') < unregister.indexOf('t.update(ref'),
+    'the deadline must be checked before participant state is changed',
+  );
+});
+test('daily tournament generation is atomic and reset-fenced for cron and direct player actions', () => {
+  const generatorStart = source.indexOf('async function generateDailyTournamentsInternal');
+  const generatorEnd = source.indexOf('export async function generateDailyTournaments', generatorStart);
+  assert.ok(generatorStart >= 0 && generatorEnd > generatorStart);
+  const generator = source.slice(generatorStart, generatorEnd);
+  assert.ok(generator.includes('db.runTransaction(async (tx: any) =>'));
+  assert.ok(generator.includes('const resetConfigSnap = await tx.get(configRef)'));
+  assert.ok(generator.includes('resetState.stagingSeasonOneResetInProgress === true ||\n            resetState.stagingFreshSeasonOneReset === true'));
+  assert.ok(generator.includes('Promise.all(entries.map(entry => tx.get(entry.ref)))'));
+  assert.ok(generator.includes('tx.create(entry.ref, entry.data)'));
+  assert.ok(generator.includes('for (let attempt = 0; attempt < 3; attempt += 1)'));
+  assert.ok(generator.includes("code === 6 ||\n        code === 'already-exists' ||\n        code === 'ALREADY_EXISTS'"));
+
+  const directAction = actionBody('ensureDailyTournamentsAction');
+  assert.match(directAction, /generateDailyTournamentsInternal\(\)/);
+  const cycle = actionBody('runTournamentCycle');
+  assert.match(cycle, /STAGING_SEASON_ONE_RESET_IN_PROGRESS/);
+});

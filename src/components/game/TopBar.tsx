@@ -1,70 +1,125 @@
 'use client';
 
-import { useGameState } from '@/app/lib/store';
-import { Gem, Mail, Home, Bell, Rocket } from 'lucide-react';
+import { getLevelThreshold, useGameState } from '@/app/lib/store';
+import { useUser } from '@/firebase';
+import { useEffect, useState } from 'react';
+import { getMyUnreadMatchReportsCountAction } from '@/app/actions/match-report';
+import { Bell, Coins, Gem, Mail, Settings, Shield, Plus } from 'lucide-react';
 import { usePathname } from 'next/navigation';
-import { cn, formatCurrency } from '@/lib/utils';
+import { formatCurrency } from '@/lib/utils';
 import Link from 'next/link';
 
 export function TopBar() {
   const pathname = usePathname();
-  const { credits, crystals, language, isPremium, clubName, displayName, clubLogo } = useGameState();
+  const { user } = useUser();
+  const [unreadReportsCount, setUnreadReportsCount] = useState(0);
+  const { credits, crystals, language, managerLevel, experiencePoints, displayName, clubName, clubLogo, rank, leagueLevel, groupId } = useGameState();
+  const currentManagerLevel = Math.max(1, Number(managerLevel || 1));
+  const currentManagerXp = Math.max(0, Number(experiencePoints || 0));
+  const managerXpThreshold = getLevelThreshold(currentManagerLevel);
+  const managerXpProgress = Number.isFinite(managerXpThreshold) && managerXpThreshold > 0
+    ? Math.max(0, Math.min(100, (currentManagerXp / managerXpThreshold) * 100))
+    : 0;
+  useEffect(() => {
+    if (!user || !rank) {
+      setUnreadReportsCount(0);
+      return;
+    }
+    let cancelled = false;
+    let inFlight = false;
+    const refresh = async () => {
+      if (cancelled || inFlight) return;
+      inFlight = true;
+      try {
+        let viewedIds: string[] = [];
+        try {
+          const raw = JSON.parse(localStorage.getItem('lote_game_state_v245:viewed-match-ids') || '[]');
+          if (Array.isArray(raw)) viewedIds = raw.filter((value): value is string => typeof value === 'string' && value.length > 0 && value.length <= 180).slice(-2000);
+        } catch { /* Ignore malformed local view history. */ }
+        const result = await getMyUnreadMatchReportsCountAction(await user.getIdToken(), viewedIds);
+        if (!cancelled) setUnreadReportsCount(result?.success ? Math.max(0, Number(result.count || 0)) : 0);
+      } catch (error) {
+        console.error('[REPORT BADGE] unread report count failed', error);
+        if (!cancelled) setUnreadReportsCount(0);
+      } finally {
+        inFlight = false;
+      }
+    };
+    const handleFocus = () => { void refresh(); };
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') void refresh();
+    };
+    void refresh();
+    window.addEventListener('focus', handleFocus);
+    document.addEventListener('visibilitychange', handleVisibility);
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === 'visible') void refresh();
+    }, 300000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+      window.removeEventListener('focus', handleFocus);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, [pathname, user, rank]);
 
-  const navBtnClass = "w-9 h-9 rounded-full flex items-center justify-center bg-secondary/40 border border-white/5 hover:bg-white/10 transition-all shadow-lg";
+  if (pathname === '/') {
+    return (
+      <header className="fixed left-0 right-0 top-0 z-50 border-b border-white/10 bg-[#030811]/95 shadow-[0_8px_28px_rgba(0,0,0,.35)] backdrop-blur-xl">
+        <div className="mx-auto flex h-16 w-full max-w-3xl items-center gap-1.5 px-2.5 sm:h-[76px] sm:gap-3 sm:px-5">
+          <Link href="/" className="shrink-0 leading-[.78]">
+            <span className="block text-[17px] font-black italic tracking-[-.08em] text-white sm:text-[22px]">FORGE</span>
+            <span className="block pl-2 text-[17px] font-black italic tracking-[-.07em] text-cyan-300 sm:text-[22px]">RIVALS</span>
+          </Link>
+          <Link href="/profile" className="flex min-w-0 flex-1 items-center gap-2 rounded-xl px-1.5 py-1 transition hover:bg-white/5">
+            <div className="relative flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-cyan-200/25 bg-slate-900">
+              {clubLogo ? <img src={clubLogo} alt="" className="h-full w-full object-contain" /> : <Shield className="h-6 w-6 text-slate-300" />}
+              <span className="absolute -bottom-0.5 right-0 rounded bg-slate-950 px-1 text-[9px] font-black text-white">{managerLevel || 1}</span>
+            </div>
+            <div className="min-w-0">
+              <p className="truncate text-xs font-black text-white sm:text-sm">{clubName || displayName || 'Manager'}</p>
+              <p className="truncate text-[10px] font-semibold text-slate-400">{rank ? (language === 'ru' ? `Дивизион ${leagueLevel} · Группа ${groupId} · #${rank}` : `Division ${leagueLevel} · Group ${groupId} · #${rank}`) : (language === 'ru' ? 'Менеджер клуба' : 'Club manager')}</p>
+              <p className="text-[9px] text-slate-500">{currentManagerXp.toLocaleString()} XP</p>
+              <div className="mt-1 h-1 w-full overflow-hidden rounded-full bg-white/10">
+                <div className="h-full rounded-full bg-cyan-300 transition-all duration-700" style={{ width: `${managerXpProgress}%` }} />
+              </div>
+            </div>
+          </Link>
+          <div className="flex shrink-0 flex-col gap-1">
+            <Link href="/shop" className="flex h-7 min-w-[68px] items-center justify-between gap-0.5 rounded-lg border border-amber-300/20 bg-amber-300/5 px-1.5 text-[10px] font-bold text-amber-200 sm:min-w-[92px]">
+              <span className="flex items-center gap-1"><Coins className="h-4 w-4" />{formatCurrency(credits)}</span><Plus className="h-3 w-3 text-cyan-300" />
+            </Link>
+            <Link href="/shop" className="flex h-7 min-w-[68px] items-center justify-between gap-0.5 rounded-lg border border-violet-300/20 bg-violet-300/5 px-1.5 text-[10px] font-bold text-violet-200 sm:min-w-[92px]">
+              <span className="flex items-center gap-1"><Gem className="h-4 w-4" />{formatCurrency(crystals || 0)}</span><Plus className="h-3 w-3 text-cyan-300" />
+            </Link>
+          </div>
+          <div className="flex shrink-0 items-center gap-0.5">
+            <Link href="/notifications" aria-label={language === 'ru' ? 'Уведомления' : 'Notifications'} className="flex h-8 w-8 items-center justify-center rounded-xl text-slate-300 transition hover:bg-white/10 hover:text-white">
+              <Bell className="h-5 w-5" />
+            </Link>
+            <Link href="/reports" aria-label={language === 'ru' ? 'Отчёты' : 'Reports'} className="relative flex h-8 w-8 items-center justify-center rounded-xl text-white transition hover:bg-white/10">
+              <Mail className="h-6 w-6" />
+              {unreadReportsCount > 0 && <span className="absolute -right-0.5 -top-0.5 flex h-[18px] min-w-[18px] items-center justify-center rounded-full border-2 border-[#030811] bg-rose-500 px-1 text-[9px] font-black leading-none text-white">{unreadReportsCount > 99 ? '99+' : unreadReportsCount}</span>}
+            </Link>
+            <Link href="/system" aria-label={language === 'ru' ? 'Настройки' : 'Settings'} className="flex h-8 w-8 items-center justify-center rounded-xl text-slate-300 transition hover:bg-white/10 hover:text-white">
+              <Settings className="h-6 w-6" />
+            </Link>
+          </div>
+        </div>
+      </header>
+    );
+  }
 
   return (
-    <header className="fixed top-0 left-0 right-0 z-50 bg-[#0a0d14]/60 backdrop-blur-md h-16 flex items-center border-b border-white/5">
-      <div className="w-full max-w-md mx-auto px-4 flex items-center justify-between">
-        
-        {/* LEFT: COMMANDER BOX */}
-        <div className="flex items-center gap-2">
-          <div className="h-10 px-2.5 flex items-center gap-2 rounded-lg bg-secondary/30 border border-primary/20 shadow-[inset_0_0_10px_rgba(56,189,248,0.1)]">
-            {clubLogo ? (
-              <div className="w-6 h-6 rounded bg-black/20 p-0.5 border border-white/5 flex items-center justify-center overflow-hidden">
-                <img src={clubLogo} alt="" className="w-full h-full object-contain" />
-              </div>
-            ) : (
-              <Rocket className="w-4 h-4 text-primary" />
-            )}
-            <span className="text-[10px] font-black uppercase tracking-widest text-white/90 truncate max-w-[80px]">
-              {clubName || displayName || 'COMMANDER'}
-            </span>
-          </div>
+    <header className="fixed top-0 left-0 right-0 z-50 h-16 border-b border-white/5 bg-[#0a0d14]/90 backdrop-blur-xl">
+      <div className="mx-auto flex h-full w-full max-w-md items-center justify-between px-4">
+        <Link href="/" className="text-sm font-black italic tracking-tight text-white">FORGE <span className="text-cyan-300">RIVALS</span></Link>
+        <div className="flex items-center gap-2 text-xs font-bold">
+          <span className="flex items-center gap-1 rounded-lg border border-amber-300/20 bg-amber-300/5 px-2 py-1 text-amber-200"><Coins className="h-3.5 w-3.5" />{formatCurrency(credits)}</span>
+          <span className="flex items-center gap-1 rounded-lg border border-violet-300/20 bg-violet-300/5 px-2 py-1 text-violet-200"><Gem className="h-3.5 w-3.5" />{formatCurrency(crystals || 0)}</span>
+          <Link href="/notifications" aria-label={language === 'ru' ? 'Уведомления' : 'Notifications'} className="rounded-lg p-1.5 text-slate-300 hover:bg-white/10"><Bell className="h-5 w-5" /></Link>
+          <Link href="/reports" aria-label={language === 'ru' ? 'Отчёты' : 'Reports'} className="relative rounded-lg p-1.5 text-slate-300 hover:bg-white/10"><Mail className="h-5 w-5" />{unreadReportsCount > 0 && <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-rose-500 px-1 text-[8px] font-black text-white">{unreadReportsCount > 99 ? '99+' : unreadReportsCount}</span>}</Link>
         </div>
-
-        {/* CENTER: NAV ICONS */}
-        <div className="flex items-center gap-1.5">
-          <Link href="/">
-            <div className={cn(navBtnClass, pathname === '/' && "border-primary/40 bg-primary/10 text-primary")}>
-              <Home className="w-4 h-4" />
-            </div>
-          </Link>
-          <Link href="/chats/private">
-            <div className={navBtnClass}>
-              <Mail className="w-4 h-4 text-muted-foreground" />
-            </div>
-          </Link>
-          <Link href="/notifications">
-            <div className={navBtnClass}>
-              <Bell className="w-4 h-4 text-muted-foreground" />
-            </div>
-          </Link>
-        </div>
-
-        {/* RIGHT: CURRENCIES */}
-        <div className="flex items-center gap-1.5">
-          <div className="h-8 px-2 rounded-full bg-yellow-500/10 border border-yellow-500/20 flex items-center gap-1.5 shadow-[0_0_15px_rgba(234,179,8,0.1)]">
-            <div className="w-4 h-4 rounded-full bg-yellow-500/20 flex items-center justify-center">
-              <span className="text-yellow-500 text-[8px] font-black italic">€</span>
-            </div>
-            <span className="text-[10px] font-headline font-bold text-yellow-500">{formatCurrency(credits)}</span>
-          </div>
-          <div className="h-8 px-2 rounded-full bg-accent/10 border border-accent/20 flex items-center gap-1.5 shadow-[0_0_15px_rgba(var(--accent),0.1)]">
-            <Gem className="w-4 h-4 text-accent" />
-            <span className="text-[10px] font-headline font-bold text-accent">{formatCurrency(crystals || 0)}</span>
-          </div>
-        </div>
-
       </div>
     </header>
   );

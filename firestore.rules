@@ -35,7 +35,9 @@ service cloud.firestore {
 
     // Mode-specific match/report collections. Every write is server-side.
     match /cup_matches/{matchId} {
-      allow read: if signedIn();
+      // Cup fixtures are public competition records. An authenticated manager
+      // may read them even if their club is inactive or retired.
+      allow read: if request.auth != null;
       allow write: if false;
     }
 
@@ -79,7 +81,9 @@ service cloud.firestore {
 
     // Pyramid Cup bracket is public read-only game state. All mutations are server-side.
     match /cup_pyramid_v1/{cupId} {
-      allow read: if signedIn();
+      // The bracket is global read-only tournament data, not private club data.
+      // Keep it visible to authenticated users independently of club activity.
+      allow read: if request.auth != null;
       allow write: if false;
     }
 
@@ -90,7 +94,11 @@ service cloud.firestore {
     }
 
     match /system_v1/{docId} {
-      allow read: if signedIn();
+      // The reset journal contains operational state (lease, progress, errors)
+      // and is exposed only through the authenticated, sanitized diagnostics API.
+      // Keep the existing client-readable world documents explicit; new system
+      // documents are private by default instead of inheriting collection-wide access.
+      allow read: if signedIn() && docId in ['season_config', 'global_stats'];
       allow write: if false;
     }
 

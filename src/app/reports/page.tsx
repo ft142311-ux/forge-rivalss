@@ -8,7 +8,7 @@
 import { useGameState } from '@/app/lib/store';
 import { useUser, useFirestore, useCollection, useMemoFirebase, useDoc } from '@/firebase';
 import { useRouter } from 'next/navigation';
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { LoadingScreen } from '@/components/game/LoadingScreen';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -17,6 +17,8 @@ import { ChevronLeft, Tv, ChevronRight, FileText, Shield } from 'lucide-react';
 import Link from 'next/link';
 import { cn } from '@/lib/utils';
 import { collection, query, where, doc } from 'firebase/firestore';
+import { getMyLeagueMatchReportsAction } from '@/app/actions/match-report';
+import { isMatchReportFinished, isMatchWithinClubLifetime } from '@/app/lib/match-report-utils';
 
 export default function ReportsPage() {
   const { user, isUserLoading } = useUser();
@@ -39,6 +41,26 @@ export default function ReportsPage() {
 
   const userProfileRef = useMemoFirebase(() => user?.uid && db ? doc(db, 'players_v14', user.uid) : null, [db, user?.uid]);
   const { data: profile } = useDoc(userProfileRef);
+
+  const [officialLeagueReports, setOfficialLeagueReports] = useState<any[]>([]);
+  useEffect(() => {
+    if (!user || !isLoaded || !selectedLeagueId || !rank) {
+      setOfficialLeagueReports([]);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const result = await getMyLeagueMatchReportsAction(await user.getIdToken());
+        if (!cancelled) setOfficialLeagueReports(result.success && Array.isArray(result.matches) ? result.matches : []);
+      } catch (error) {
+        console.error('[REPORTS] authenticated league report lookup failed', error);
+        if (!cancelled) setOfficialLeagueReports([]);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [user, isLoaded, selectedLeagueId, rank, leagueLevel, groupId]);
+
 
   // Очередь обзора агрегирует отдельные коллекции игровых режимов.
   // Каждый режим остаётся в собственном хранилище, без копирования в matches_v2.
@@ -86,8 +108,7 @@ export default function ReportsPage() {
   }, [groupPlayers]);
 
   const unreadReports = useMemo(() => {
-    if (!user || !rank) return [];
-    const regTime = profile?.createdAt?.toMillis ? profile.createdAt.toMillis() : (profile?.createdAt ? new Date(profile.createdAt).getTime() : 0);
+    if (!user || !rank || !profile) return [];
     let locallyViewed = new Set<string>();
     if (typeof window !== 'undefined') {
       try {
@@ -98,38 +119,39 @@ export default function ReportsPage() {
     const isLocallyViewed = (m: any) => m?.id ? locallyViewed.has(String(m.id)) : false;
 
     const history = (matchHistory || [])
-      .filter((m: any) => m?.isFinished !== false && m?.seen !== true && m?.reportStatus !== 'viewed' && !isLocallyViewed(m))
+      .filter((m: any) => isMatchWithinClubLifetime(m, profile.createdAt) && isMatchReportFinished(m) && m?.seen !== true && m?.reportStatus !== 'viewed' && !isLocallyViewed(m))
       .map((m: any) => ({ ...m, source: 'history', isUnread: true }));
 
-    const personal = [...(personalHomeMatches || []), ...(personalAwayMatches || []), ...(cupHomeMatches || []), ...(cupAwayMatches || []), ...(tournamentHomeMatches || []), ...(tournamentAwayMatches || []), ...(trainingHomeMatches || []), ...(trainingAwayMatches || [])];
+    const personal = [...officialLeagueReports, ...(personalHomeMatches || []), ...(personalAwayMatches || []), ...(cupHomeMatches || []), ...(cupAwayMatches || []), ...(tournamentHomeMatches || []), ...(tournamentAwayMatches || []), ...(trainingHomeMatches || []), ...(trainingAwayMatches || [])];
+    const currentClubPersonal = personal.filter((m: any) => isMatchWithinClubLifetime(m, profile.createdAt));
 
-    const league = personal
-      .filter((m: any) => m?.type === 'league' && m?.isFinished === true)
-      .filter((m: any) => {
-        const resolved = m.resolvedAt?.toMillis ? m.resolvedAt.toMillis() : (m.resolvedAt ? new Date(m.resolvedAt).getTime() : 0);
-        return m.seen !== true && m.reportStatus !== 'viewed' && !isLocallyViewed(m) && (!regTime || resolved > regTime);
-      })
+    const league = currentClubPersonal
+      .filter((m: any) => m?.type === 'league' && isMatchReportFinished(m))
+      // currentClubPersonal already applies the shared club-lifetime cutoff.
+      // Do not require resolvedAt: older canonical results may only have
+      // playedAt or startTime, which the server also accepts as timestamps.
+      .filter((m: any) => m.seen !== true && m.reportStatus !== 'viewed' && !isLocallyViewed(m))
       .map((m: any) => ({ ...m, source: 'league', isUnread: true }));
 
-    const cup = personal
-      .filter((m: any) => m?.type === 'cup' && m?.source === 'pyramid-cup' && m?.isFinished === true)
+    const cup = currentClubPersonal
+      .filter((m: any) => m?.type === 'cup' && m?.source === 'pyramid-cup' && isMatchReportFinished(m))
       .filter((m: any) => m.seen !== true && m.reportStatus !== 'viewed' && !isLocallyViewed(m))
       .map((m: any) => ({ ...m, source: 'cup', isUnread: true }));
 
-    const friendly = [...personal.filter((m: any) => m?.type === 'friendly' || m?.matchType === 'friendly'), ...(friendlyHostReports || []), ...(friendlyAwayReports || [])]
-      .filter((m: any) => (m?.type === 'friendly' || m?.matchType === 'friendly') && m?.isFinished === true && m?.seen !== true && m?.reportStatus !== 'viewed' && !isLocallyViewed(m))
+    const friendly = [...currentClubPersonal.filter((m: any) => m?.type === 'friendly' || m?.matchType === 'friendly'), ...(friendlyHostReports || []), ...(friendlyAwayReports || [])]
+      .filter((m: any) => isMatchWithinClubLifetime(m, profile.createdAt) && (m?.type === 'friendly' || m?.matchType === 'friendly') && isMatchReportFinished(m) && m?.seen !== true && m?.reportStatus !== 'viewed' && !isLocallyViewed(m))
       .map((m: any) => ({ ...m, source: 'friendly', isUnread: true }));
 
     const association = [...(associationHostMatches || []), ...(associationChallengerMatches || [])]
-      .filter((m: any) => (m?.type === 'basket' || m?.matchType === 'basket' || m?.matchType === 'cw-basket') && m?.isFinished === true && m?.seen !== true && m?.reportStatus !== 'viewed' && !isLocallyViewed(m))
+      .filter((m: any) => isMatchWithinClubLifetime(m, profile.createdAt) && (m?.type === 'basket' || m?.matchType === 'basket' || m?.matchType === 'cw-basket') && isMatchReportFinished(m) && m?.seen !== true && m?.reportStatus !== 'viewed' && !isLocallyViewed(m))
       .map((m: any) => ({ ...m, source: 'basket', isUnread: true }));
 
-    const tournament = personal
-      .filter((m: any) => (m?.type === 'tournament' || m?.matchType === 'tournament') && m?.isFinished === true && m?.seen !== true && m?.reportStatus !== 'viewed' && !isLocallyViewed(m))
+    const tournament = currentClubPersonal
+      .filter((m: any) => (m?.type === 'tournament' || m?.matchType === 'tournament') && isMatchReportFinished(m) && m?.seen !== true && m?.reportStatus !== 'viewed' && !isLocallyViewed(m))
       .map((m: any) => ({ ...m, source: 'tournament', isUnread: true }));
 
-    const trial = personal
-      .filter((m: any) => (m?.type === 'trial' || m?.matchType === 'trial' || m?.isTrial === true) && m?.isFinished === true && m?.seen !== true && m?.reportStatus !== 'viewed' && !isLocallyViewed(m))
+    const trial = currentClubPersonal
+      .filter((m: any) => (m?.type === 'trial' || m?.matchType === 'trial' || m?.isTrial === true) && isMatchReportFinished(m) && m?.seen !== true && m?.reportStatus !== 'viewed' && !isLocallyViewed(m))
       .map((m: any) => ({ ...m, source: 'trial', isUnread: true }));
 
     const unique = new Map<string, any>();
@@ -139,7 +161,7 @@ export default function ReportsPage() {
       const tb = new Date(b.playedAt || b.resolvedAt || b.startTime || 0).getTime();
       return tb - ta;
     });
-  }, [user, rank, profile, matchHistory, allSeasonMatches, nameMap, leagueLevel, groupId, personalHomeMatches, personalAwayMatches, cupHomeMatches, cupAwayMatches, tournamentHomeMatches, tournamentAwayMatches, trainingHomeMatches, trainingAwayMatches, associationHostMatches, associationChallengerMatches, friendlyHostReports, friendlyAwayReports]);
+  }, [user, rank, profile, matchHistory, allSeasonMatches, nameMap, leagueLevel, groupId, officialLeagueReports, personalHomeMatches, personalAwayMatches, cupHomeMatches, cupAwayMatches, tournamentHomeMatches, tournamentAwayMatches, trainingHomeMatches, trainingAwayMatches, associationHostMatches, associationChallengerMatches, friendlyHostReports, friendlyAwayReports]);
 
   // «Обзор матча» — это вход непосредственно в просмотр.
   // Промежуточная карточка со сведениями о матче больше не показывается.

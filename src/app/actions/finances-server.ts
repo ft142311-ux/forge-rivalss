@@ -9,8 +9,10 @@ import { getAdminDb } from '@/lib/firebase-admin';
 import { FinancialOpSchema } from '@/app/lib/validation-schemas';
 import { logger } from '@/app/lib/logger';
 import { requireServerActor } from '@/lib/server-auth';
+import { assertStagingSeasonOneResetNotInProgress } from '@/app/lib/staging-season-one-write-fence';
 
 function readFinancialBalance(value: unknown) {
+  if (typeof value === 'string' && value.trim().length === 0) throw new Error('INVALID_BALANCE');
   const balance = value === undefined || value === null
     ? 0
     : (typeof value === 'number' || typeof value === 'string') ? Number(value) : NaN;
@@ -28,10 +30,14 @@ export async function processFinancialOperation(idToken: string, data: unknown) 
   if (!validation.success) return { success: false, error: 'INVALID_INPUT' };
 
   const { idempotencyKey, amount, type, description } = validation.data;
+  // This server action is callable by an authenticated client. Currency credits
+  // must come from authoritative domain actions, never a generic client amount.
+  if (amount >= 0) return { success: false, error: 'FINANCIAL_DEBIT_REQUIRED' };
   const db = getAdminDb();
 
   try {
     return await db.runTransaction(async (transaction) => {
+      await assertStagingSeasonOneResetNotInProgress(transaction, db);
       const receiptRef = db.collection('system_v1').doc(`financial_op_${userId}_${idempotencyKey}`);
       const playerRef = db.collection('players_v14').doc(userId);
       const ledgerRef = db.collection('economy_transactions').doc(`financial_${userId}_${idempotencyKey}`);

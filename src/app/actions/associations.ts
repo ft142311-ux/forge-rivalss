@@ -3,6 +3,7 @@
 import { FieldValue } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { requireServerActor } from '@/lib/server-auth';
+import { assertStagingSeasonOneResetNotInProgress } from '@/app/lib/staging-season-one-write-fence';
 
 const COOLDOWN_MS = 14 * 24 * 60 * 60 * 1000;
 const text = (value: unknown, max = 80) => typeof value === 'string' ? value.trim().slice(0, max) : '';
@@ -54,6 +55,7 @@ export async function createAssociationAction(idToken: string, name: string, des
     const profileRef = db.collection('players_v14').doc(uid);
     const assocRef = db.collection('associations_v4').doc();
     await db.runTransaction(async (tx) => {
+      await assertStagingSeasonOneResetNotInProgress(tx, db);
       const profileSnap = await tx.get(profileRef);
       if (!profileSnap.exists) throw new Error('PLAYER_NOT_FOUND');
       const profile = profileSnap.data() || {};
@@ -101,6 +103,7 @@ export async function requestAssociationMembershipAction(idToken: string, associ
     const profileRef = db.collection('players_v14').doc(uid);
     const assocRef = db.collection('associations_v4').doc(associationId);
     await db.runTransaction(async (tx) => {
+      await assertStagingSeasonOneResetNotInProgress(tx, db);
       const [profileSnap, assocSnap] = await Promise.all([tx.get(profileRef), tx.get(assocRef)]);
       if (!profileSnap.exists) throw new Error('PLAYER_NOT_FOUND');
       if (!assocSnap.exists) throw new Error('ASSOCIATION_NOT_FOUND');
@@ -126,6 +129,7 @@ export async function cancelAssociationRequestAction(idToken: string, associatio
     const profileRef = db.collection('players_v14').doc(uid);
     const assocRef = db.collection('associations_v4').doc(associationId);
     await db.runTransaction(async (tx) => {
+      await assertStagingSeasonOneResetNotInProgress(tx, db);
       const [profileSnap, assocSnap] = await Promise.all([tx.get(profileRef), tx.get(assocRef)]);
       if (!profileSnap.exists || !assocSnap.exists) throw new Error('ASSOCIATION_NOT_FOUND');
       const requests = requestsOf(assocSnap.data());
@@ -153,6 +157,7 @@ export async function processAssociationRequestAction(idToken: string, associati
     const actorRef = db.collection('players_v14').doc(uid);
     const applicantRef = db.collection('players_v14').doc(applicantId);
     await db.runTransaction(async (tx) => {
+      await assertStagingSeasonOneResetNotInProgress(tx, db);
       const [assocSnap, actorSnap, applicantSnap] = await Promise.all([tx.get(assocRef), tx.get(actorRef), tx.get(applicantRef)]);
       if (!assocSnap.exists || !actorSnap.exists || !applicantSnap.exists) throw new Error('ASSOCIATION_OR_PLAYER_NOT_FOUND');
       const assoc = assocSnap.data() || {};
@@ -196,6 +201,7 @@ export async function leaveAssociationAction(idToken: string, associationId: str
     const assocRef = db.collection('associations_v4').doc(associationId);
     const profileRef = db.collection('players_v14').doc(uid);
     await db.runTransaction(async (tx) => {
+      await assertStagingSeasonOneResetNotInProgress(tx, db);
       const [assocSnap, profileSnap] = await Promise.all([tx.get(assocRef), tx.get(profileRef)]);
       if (!assocSnap.exists || !profileSnap.exists) throw new Error('ASSOCIATION_NOT_FOUND');
       const assoc = assocSnap.data() || {};
@@ -228,6 +234,7 @@ export async function kickAssociationMemberAction(idToken: string, associationId
     const actorRef = db.collection('players_v14').doc(uid);
     const targetRef = db.collection('players_v14').doc(memberId);
     await db.runTransaction(async (tx) => {
+      await assertStagingSeasonOneResetNotInProgress(tx, db);
       const [assocSnap, actorSnap, targetSnap] = await Promise.all([tx.get(assocRef), tx.get(actorRef), tx.get(targetRef)]);
       if (!assocSnap.exists || !actorSnap.exists || !targetSnap.exists) throw new Error('ASSOCIATION_OR_PLAYER_NOT_FOUND');
       const assoc = assocSnap.data() || {};
@@ -256,6 +263,7 @@ export async function setAssociationDeputyAction(idToken: string, associationId:
     const db = getAdminDb();
     const assocRef = db.collection('associations_v4').doc(associationId);
     await db.runTransaction(async (tx) => {
+      await assertStagingSeasonOneResetNotInProgress(tx, db);
       const snap = await tx.get(assocRef);
       if (!snap.exists) throw new Error('ASSOCIATION_NOT_FOUND');
       const assoc = snap.data() || {};
@@ -281,6 +289,7 @@ export async function disbandAssociationAction(idToken: string, associationId: s
     const db = getAdminDb();
     const assocRef = db.collection('associations_v4').doc(associationId);
     await db.runTransaction(async (tx) => {
+      await assertStagingSeasonOneResetNotInProgress(tx, db);
       const assocSnap = await tx.get(assocRef);
       if (!assocSnap.exists) throw new Error('ASSOCIATION_NOT_FOUND');
       const assoc = assocSnap.data() || {};

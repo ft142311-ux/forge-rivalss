@@ -1,57 +1,80 @@
 'use client';
 
+import Link from 'next/link';
+import { useMemo } from 'react';
 import { useGameState } from '../lib/store';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
-import { ChevronLeft, Newspaper, Radio } from 'lucide-react';
-import Link from 'next/link';
+import { Badge } from '@/components/ui/badge';
+import { ChevronLeft, Newspaper, Swords, Trophy, Radio } from 'lucide-react';
+
+function dateValue(value: any): number {
+  if (value == null) return 0;
+  if (typeof value === 'number') return value;
+  if (value instanceof Date) return value.getTime();
+  if (typeof value?.toMillis === 'function') return value.toMillis();
+  const parsed = new Date(value).getTime();
+  return Number.isFinite(parsed) ? parsed : 0;
+}
 
 export default function NewsPage() {
-  const { language } = useGameState();
+  const { language, matchHistory = [], trophies = [], clubName } = useGameState();
+  const ru = language === 'ru';
 
-  const t = {
-    ru: { title: "НОВОСТИ ПРОЕКТА", subtitle: "Оперативные сводки штаба" },
-    en: { title: "PROJECT NEWS", subtitle: "Operational headquarters briefings" }
-  }[language === 'ru' ? 'ru' : 'en'];
+  const feed = useMemo(() => {
+    const matches = (matchHistory || []).map((match: any) => ({
+      id: String(match.id || match.matchId || match.playedAt),
+      kind: 'match' as const,
+      title: ru ? 'Матч завершён' : 'Match completed',
+      description: ru ? `Матч против ${match.awayName || match.opponentName || 'соперника'} завершён.` : `Match against ${match.awayName || match.opponentName || 'opponent'} has finished.`,
+      score: match.seriesScore || match.score || (Number.isFinite(Number(match.scoreA)) && Number.isFinite(Number(match.scoreB)) ? `${match.scoreA}-${match.scoreB}` : ''),
+      date: match.playedAt || match.resolvedAt,
+      href: match.id ? `/match?id=${encodeURIComponent(String(match.id))}` : '/reports'
+    }));
+    const awards = (trophies || []).map((trophy: any) => ({
+      id: String(trophy.id || trophy.name || trophy.date),
+      kind: 'award' as const,
+      title: ru ? 'Новое достижение клуба' : 'New club achievement',
+      description: trophy.name || (ru ? 'Клуб получил награду.' : 'The club received an award.'),
+      score: '',
+      date: trophy.date,
+      href: '/awards'
+    }));
+    return [...matches, ...awards]
+      .sort((a, b) => dateValue(b.date) - dateValue(a.date))
+      .slice(0, 50);
+  }, [matchHistory, trophies, ru]);
 
   return (
-    <div className="max-w-md mx-auto px-4 pt-8 pb-32">
-      <header className="mb-8 flex items-center gap-4">
-        <Link href="/">
-          <Button variant="ghost" size="icon" className="rounded-full bg-secondary/50 border border-white/5">
-            <ChevronLeft className="w-6 h-6" />
-          </Button>
-        </Link>
+    <main className="max-w-2xl mx-auto px-4 pt-8 pb-28 space-y-5">
+      <header className="flex items-center gap-4">
+        <Link href="/"><Button variant="ghost" size="icon" className="rounded-full"><ChevronLeft className="w-6 h-6" /></Button></Link>
         <div>
-          <h1 className="text-2xl font-headline font-bold uppercase tracking-tighter text-white flex items-center gap-2">
-            <Newspaper className="w-6 h-6 text-primary" />
-            {t.title}
-          </h1>
-          <p className="text-muted-foreground text-[10px] uppercase tracking-widest font-black opacity-50">{t.subtitle}</p>
+          <h1 className="text-2xl font-headline font-bold uppercase tracking-tight flex items-center gap-2"><Newspaper className="w-6 h-6 text-primary" />{ru ? 'НОВОСТИ КЛУБА' : 'CLUB NEWS'}</h1>
+          <p className="text-[10px] uppercase tracking-widest text-muted-foreground">{ru ? 'Лента официальных результатов и достижений' : 'Official results and achievements feed'}</p>
         </div>
       </header>
 
-      <div className="space-y-4">
-        <Card className="glass-card border-primary/20 bg-primary/5">
-          <CardContent className="p-6 text-center space-y-4">
-            <div className="w-16 h-16 rounded-full bg-secondary/50 border border-white/5 flex items-center justify-center mx-auto">
-              <Radio className="w-8 h-8 text-primary animate-pulse" />
-            </div>
-            <div className="space-y-2">
-              <h3 className="text-sm font-bold uppercase text-white">Version 1.1.0 Deployed</h3>
-              <p className="text-[10px] text-muted-foreground leading-relaxed italic">
-                "Global synchronization protocols updated. Current cycle stability confirmed. Ready for new season deployment."
-              </p>
-            </div>
-            <p className="text-[8px] font-black text-primary/40 uppercase tracking-widest">Received: February 24, 2025</p>
-          </CardContent>
-        </Card>
+      <Card className="border-cyan-300/20 bg-gradient-to-br from-[#0c1b2b] via-[#0a1422] to-[#10102a]">
+        <CardContent className="p-4 flex items-center gap-3">
+          <div className="rounded-xl border border-cyan-300/20 bg-cyan-300/10 p-3"><Radio className="w-6 h-6 text-cyan-200" /></div>
+          <div><p className="text-sm font-black uppercase text-white">{clubName || (ru ? 'Ваш клуб' : 'Your club')}</p><p className="text-xs text-slate-400">{ru ? 'События формируются из подтверждённой истории клуба.' : 'Updates are generated from the club’s recorded history.'}</p></div>
+        </CardContent>
+      </Card>
 
-        <div className="py-20 text-center opacity-20">
-          <Newspaper className="w-12 h-12 mx-auto mb-4" />
-          <p className="text-[10px] uppercase font-black tracking-widest">End of Transmission</p>
-        </div>
-      </div>
-    </div>
+      <section className="space-y-3">
+        <div className="flex items-center justify-between"><h2 className="text-xs font-black uppercase tracking-widest">{ru ? 'ПОСЛЕДНИЕ СОБЫТИЯ' : 'LATEST UPDATES'}</h2><Badge variant="secondary">{feed.length}</Badge></div>
+        {feed.length ? feed.map(item => (
+          <Link href={item.href} key={item.kind + item.id}>
+            <Card className="mb-2 hover:border-primary/40 transition-colors"><CardContent className="p-4 flex items-start gap-3">
+              <div className="rounded-xl bg-secondary/60 p-2">{item.kind === 'award' ? <Trophy className="w-5 h-5 text-amber-400" /> : <Swords className="w-5 h-5 text-primary" />}</div>
+              <div className="min-w-0 flex-1"><div className="flex justify-between gap-2"><p className="font-bold text-sm">{item.title}</p>{item.score && <Badge variant="outline">{item.score}</Badge>}</div><p className="text-xs text-muted-foreground mt-1">{item.description}</p><p className="text-[10px] text-muted-foreground/70 mt-2">{item.date ? new Date(dateValue(item.date)).toLocaleString(ru ? 'ru-RU' : 'en-GB') : (ru ? 'Дата не указана' : 'Date unavailable')}</p></div>
+            </CardContent></Card>
+          </Link>
+        )) : (
+          <Card><CardContent className="p-8 text-center space-y-2"><Newspaper className="w-10 h-10 mx-auto text-muted-foreground/40" /><p className="font-bold">{ru ? 'Пока нет новостей клуба' : 'No club news yet'}</p><p className="text-xs text-muted-foreground">{ru ? 'Здесь появятся результаты матчей и награды после первых официальных событий.' : 'Match results and awards will appear here after the first official events.'}</p></CardContent></Card>
+        )}
+      </section>
+    </main>
   );
 }

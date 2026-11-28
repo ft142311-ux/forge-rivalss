@@ -14,7 +14,7 @@ test('prepared Season 2 receives its complete Pyramid Cup before publication in 
 }, async t => {
   assert.match(emulatorHost, /^(127[.]0[.]0[.]1|localhost):[0-9]+$/);
 
-  const [{ getAdminDb }, { getTableId, MAX_LEVELS, TEAMS_PER_GROUP }, { MATCH_COLLECTIONS }, { preparePyramidCupForSeason, runPyramidCupCycle }, { resolveUniversalMatchDocument }] = await Promise.all([
+  const [{ getAdminDb }, { getTableId, MAX_LEVELS, TEAMS_PER_GROUP }, { MATCH_COLLECTIONS }, { generatePyramidCup, preparePyramidCupForSeason, runPyramidCupCycle }, { resolveUniversalMatchDocument }] = await Promise.all([
     import('../src/lib/firebase-admin.ts'),
     import('../src/app/lib/leagues-data.ts'),
     import('../src/app/lib/match-storage.ts'),
@@ -63,6 +63,18 @@ test('prepared Season 2 receives its complete Pyramid Cup before publication in 
     preparedNextSeasonStart: new Date(seasonStart.getTime() + 15 * 86400000).toISOString(),
   });
 
+  // A stale/corrupted prepared-season projection must not let Cup preparation
+  // jump from active Season 1 directly to Season 3.
+  await configRef.update({ preparedSeasonNumber: 3 });
+  const skippedSeasonCup = await preparePyramidCupForSeason(3);
+  assert.deepEqual(skippedSeasonCup, {
+    success: false,
+    reason: 'PREPARED_SEASON_NOT_READY',
+    writesStarted: false,
+  });
+  assert.equal((await db.collection('cup_pyramid_v1').doc('cup_s3_lALPHA').get()).exists, false);
+  await configRef.update({ preparedSeasonNumber: season });
+
   const tableBatch = db.batch();
   const playerBatch = db.batch();
   let teamCount = 0;
@@ -91,7 +103,7 @@ test('prepared Season 2 receives its complete Pyramid Cup before publication in 
             name: `${name} ${role}`,
             role,
             currentRole: role,
-            overallRating: 25,
+            overallRating: id === humanUid ? 100 : 25,
             form: 100,
             fatigue: 100,
             tilt: 0,
@@ -115,6 +127,23 @@ test('prepared Season 2 receives its complete Pyramid Cup before publication in 
   await Promise.all([tableBatch.commit(), playerBatch.commit()]);
   assert.equal(teamCount, 120);
 
+  // The initial preflight can complete before a reset claims the world. The
+  // final creation transaction must re-read the marker and publish nothing.
+  await configRef.set({ stagingSeasonOneResetInProgress: true }, { merge: true });
+  await assert.rejects(
+    () => generatePyramidCup(season),
+    /STAGING_SEASON_ONE_RESET_IN_PROGRESS/,
+  );
+  const [cupDuringReset, snapshotsDuringReset, fixturesDuringReset] = await Promise.all([
+    cupRef.get(),
+    db.collection('cup_participant_snapshots_v1').doc(cupRef.id).collection('teams').get(),
+    db.collection(MATCH_COLLECTIONS.cup).where('cupId', '==', cupRef.id).get(),
+  ]);
+  assert.equal(cupDuringReset.exists, false);
+  assert.equal(snapshotsDuringReset.size, 0);
+  assert.equal(fixturesDuringReset.size, 0);
+  await configRef.set({ stagingSeasonOneResetInProgress: false }, { merge: true });
+
   // Capture every one of the 15 official league tables. Cup progression,
   // match resolution and champion rewards must never mutate league standings.
   const leagueTablesBeforeCup = await Promise.all(tableRefs.map(async ref => {
@@ -123,9 +152,19 @@ test('prepared Season 2 receives its complete Pyramid Cup before publication in 
     return JSON.stringify(snap.data());
   }));
 
-  const result = await preparePyramidCupForSeason(season);
+  // Two scheduler invocations can both pass the initial missing-Cup read.
+  // They must converge on the same complete bracket: one creates it and the
+  // other observes the winning atomic batch as an idempotent retry.
+  const [result, concurrentResult] = await Promise.all([
+    preparePyramidCupForSeason(season),
+    preparePyramidCupForSeason(season),
+  ]);
   assert.equal(result.success, true, JSON.stringify(result));
-  assert.equal(result.generated, true);
+  assert.equal(concurrentResult.success, true, JSON.stringify(concurrentResult));
+  assert.equal([result, concurrentResult].filter(value => value.generated).length, 1,
+    JSON.stringify({ result, concurrentResult }));
+  assert.equal([result, concurrentResult].filter(value => value.alreadyExists).length, 1,
+    JSON.stringify({ result, concurrentResult }));
   assert.equal(result.participants, 120);
   assert.equal(result.preliminaryMatches, 56);
   assert.equal(result.totalMatches, 119);
@@ -266,23 +305,22 @@ test('prepared Season 2 receives its complete Pyramid Cup before publication in 
   assert.equal(resolvedFixture.bestOf, 1);
   assert.equal(Number(resolvedFixture.scoreA) + Number(resolvedFixture.scoreB), 1);
   assert.equal(resolvedFixture.games.length, 1);
-  // The next assertions isolate bracket progression from the random winner
-  // produced by this single Match Core smoke test.
-  await db.collection(MATCH_COLLECTIONS.cup).doc(firstPairing.matchId).update({
-    winnerId: firstPairing.home.id,
-    scoreA: 1,
-    scoreB: 0,
-    seriesScore: '1-0',
-  });
+  assert.equal(resolvedFixture.winnerId, humanUid,
+    'the high-rated human roster must win its first BO1 through Match Core');
 
   // Move the isolated emulator fixture clock into an active, due window so
   // the real worker can advance every round without waiting for wall-clock days.
   const runtimeSeasonStart = new Date(Date.now() - 10 * 86400000);
   await cupRef.update({ seasonStart: runtimeSeasonStart.toISOString() });
+  // Round 1 is scheduled on season day 2 at 07:00 Moscow (04:00 UTC).
+  // Keep fixture timestamps aligned with the immutable schedule contract while
+  // moving the isolated clock far enough forward for the worker to resolve it.
+  const runtimeRoundOneStart = new Date(runtimeSeasonStart.getTime() + 86400000);
+  runtimeRoundOneStart.setUTCHours(4, 0, 0, 0);
   await Promise.all(firstRound.map(pairing => db.collection(MATCH_COLLECTIONS.cup).doc(pairing.matchId).update({
-    scheduledAt: runtimeSeasonStart,
-    startTime: runtimeSeasonStart,
-    scheduledStartAt: runtimeSeasonStart,
+    scheduledAt: runtimeRoundOneStart,
+    startTime: runtimeRoundOneStart,
+    scheduledStartAt: runtimeRoundOneStart,
   })));
   await configRef.set({
     activeSeasonNumber: season,
@@ -301,20 +339,12 @@ test('prepared Season 2 receives its complete Pyramid Cup before publication in 
     const currentCup = (await cupRef.get()).data();
     assert.equal(currentCup.currentRound, round);
     const pairings = currentCup.rounds[`r${round}`];
-    for (const pairing of pairings.filter(value => value.home && value.away)) {
+    const activePairings = pairings.filter(value => value.home && value.away);
+    for (const pairing of activePairings) {
       const fixtureRef = db.collection(MATCH_COLLECTIONS.cup).doc(pairing.matchId);
       const fixtureSnap = await fixtureRef.get();
       assert.equal(fixtureSnap.exists, true, `missing round ${round} fixture ${pairing.matchId}`);
-      if (fixtureSnap.data().isFinished !== true) {
-        await fixtureRef.update({
-          status: 'finished',
-          isFinished: true,
-          isProcessing: false,
-          winnerId: pairing.home.id,
-          scoreA: round === 7 ? 2 : 1,
-          scoreB: 0,
-        });
-      }
+      assert.equal(fixtureSnap.data().bestOf, 1, `round ${round} must be BO1`);
     }
     // Two workers may pick up the same due round concurrently. The
     // transaction's expected-round guard must allow exactly one advancement.
@@ -324,6 +354,29 @@ test('prepared Season 2 receives its complete Pyramid Cup before publication in 
     ]);
     assert.equal([advanced.advanced, duplicate.advanced].reduce((sum, value) => sum + Number(value || 0), 0), 1,
       JSON.stringify({ round, advanced, duplicate }));
+
+    // The Cup worker must resolve every due fixture through Match Core, not
+    // merely accept externally seeded winners. This also creates the real
+    // one-time match-report payload for every BO1 fixture.
+    const resolvedRoundFixtures = await Promise.all(activePairings.map(async pairing => ({
+      pairing,
+      match: (await db.collection(MATCH_COLLECTIONS.cup).doc(pairing.matchId).get()).data(),
+    })));
+    for (const { pairing, match } of resolvedRoundFixtures) {
+      assert.equal(match.isFinished, true, `round ${round} fixture did not finish: ${pairing.matchId}`);
+      assert.equal(match.status, 'finished');
+      assert.equal(match.bestOf, 1);
+      assert.equal(match.matchFormat, 'BO1');
+      assert.equal(match.games?.length, 1);
+      assert.ok(match.simulation && Array.isArray(match.simulation.games));
+      assert.equal(match.reportStatus, 'new');
+      assert.equal(match.seen, false);
+      assert.ok([pairing.home.id, pairing.away.id].includes(match.winnerId));
+      if (pairing.home.id === humanUid || pairing.away.id === humanUid) {
+        assert.equal(match.winnerId, humanUid, 'the stronger human roster must advance through every BO1 round');
+      }
+    }
+
     // The second worker may observe either the stale old round or the newly
     // committed next round; both are safe as long as it cannot advance twice.
     const nextCup = (await cupRef.get()).data();
@@ -355,28 +408,95 @@ test('prepared Season 2 receives its complete Pyramid Cup before publication in 
   assert.equal(finalCup.currentRound, 7);
   const finalPairing = finalCup.rounds.r7[0];
   const finalRef = db.collection(MATCH_COLLECTIONS.cup).doc(finalPairing.matchId);
+  assert.ok([finalPairing.home.id, finalPairing.away.id].includes(humanUid),
+    'the high-rated human club must reach the BO3 final');
   assert.equal((await finalRef.get()).data().bestOf, 3, 'the championship final must be BO3');
-  await finalRef.update({
-    status: 'finished',
-    isFinished: true,
-    isProcessing: false,
-    winnerId: finalPairing.home.id,
-    scoreA: 2,
-    scoreB: 0,
-  });
+  const finalistId = finalPairing.home.id === humanUid ? finalPairing.away.id : finalPairing.home.id;
+  economyRefs.push(db.collection('economy_transactions').doc(`pyramid_cup_S${season}_finalist_${finalistId}`));
+  // Legacy integer-string balances are accepted by the Cup settlement reader.
+  await db.collection('players_v14').doc(humanUid).update({ credits: '1000000' });
   const completed = await runPyramidCupCycle();
   assert.equal(completed.completed, true, JSON.stringify(completed));
+  const finalFixture = (await finalRef.get()).data();
+  assert.equal(finalFixture.status, 'finished');
+  assert.equal(finalFixture.isFinished, true);
+  assert.equal(finalFixture.bestOf, 3);
+  assert.equal(finalFixture.matchFormat, 'BO3');
+  assert.ok(finalFixture.games.length >= 2 && finalFixture.games.length <= 3,
+    'the final must be decided by a real best-of-three series');
+  assert.equal(Math.max(Number(finalFixture.scoreA), Number(finalFixture.scoreB)), 2);
+  assert.equal(finalFixture.winnerId, humanUid);
+  assert.equal(finalFixture.reportStatus, 'new');
+  assert.equal(finalFixture.seen, false);
   const completedCup = (await cupRef.get()).data();
   assert.equal(completedCup.status, 'completed');
   assert.equal(completedCup.winnerId, finalPairing.home.id);
   assert.equal(completedCup.winnerId, humanUid);
-  assert.equal(completedCup.winnerName, finalPairing.home.name);
+  assert.equal(completedCup.winnerName, finalPairing.home.id === humanUid ? finalPairing.home.name : finalPairing.away.name);
+
+  // Every one of the 119 Cup fixtures must contain an actual Match Core
+  // simulation and a fresh report; only the final is BO3.
+  const completedFixtureSnapshots = await Promise.all(fixtureRefs.map(ref => ref.get()));
+  assert.equal(completedFixtureSnapshots.length, 119);
+  assert.ok(completedFixtureSnapshots.every(snap => snap.exists));
+  const simulatedBo3Fixtures = completedFixtureSnapshots.filter(snap => snap.data().bestOf === 3);
+  assert.equal(simulatedBo3Fixtures.length, 1);
+  assert.equal(simulatedBo3Fixtures[0].id, finalRef.id);
+  for (const fixtureSnap of completedFixtureSnapshots) {
+    const fixture = fixtureSnap.data();
+    assert.equal(fixture.isFinished, true);
+    assert.ok(fixture.simulation && Array.isArray(fixture.simulation.games));
+    assert.equal(fixture.reportStatus, 'new');
+    assert.equal(fixture.seen, false);
+    if (fixture.bestOf === 1) assert.equal(fixture.games.length, 1);
+    if (fixture.bestOf === 3) assert.ok(fixture.games.length >= 2 && fixture.games.length <= 3);
+  }
+
   const championProfile = (await db.collection('players_v14').doc(humanUid).get()).data();
   assert.equal(championProfile.credits, 1_035_000);
   assert.ok(championProfile.trophies.some(trophy => trophy.id === `pyramid-cup-season-${season}`));
   const championLedger = (await economyRefs[0].get()).data();
   assert.equal(championLedger.amount, 35_000);
   assert.equal(championLedger.type, 'PYRAMID_CUP_CHAMPION_REWARD');
+
+  const championAfterFirstPayout = (await db.collection('players_v14').doc(humanUid).get()).data();
+  assert.equal(championAfterFirstPayout.credits, 1_035_000);
+
+  // Simulate an interrupted root completion. A replay receipt must not bypass
+  // the recipient-profile guard, even though the credits were already posted.
+  await cupRef.update({ status: 'active' });
+  await db.collection('players_v14').doc(humanUid).delete();
+  await assert.rejects(
+    () => runPyramidCupCycle(),
+    /CUP_PRIZE_RECIPIENT_PROFILE_MISSING/,
+  );
+  assert.equal((await cupRef.get()).data().status, 'active');
+  assert.deepEqual((await economyRefs[0].get()).data(), championLedger);
+
+  // Restore the profile with its already-credited balance but corrupt the Cup
+  // trophy payload. Replay must replace the forged record without re-crediting.
+  const cupTrophyId = `pyramid-cup-season-${season}`;
+  const championWithCorruptedCupTrophy = {
+    ...championAfterFirstPayout,
+    trophies: [
+      ...championAfterFirstPayout.trophies.filter(trophy => trophy.id !== cupTrophyId),
+      { id: cupTrophyId, name: 'Wrong award', type: 'other', date: 'invalid', season: season + 1 },
+    ],
+  };
+  await db.collection('players_v14').doc(humanUid).set(championWithCorruptedCupTrophy);
+  const resumedFinalization = await runPyramidCupCycle();
+  assert.equal(resumedFinalization.completed, true, JSON.stringify(resumedFinalization));
+  const resumedCup = (await cupRef.get()).data();
+  assert.equal(resumedCup.status, 'completed');
+  const resumedChampion = (await db.collection('players_v14').doc(humanUid).get()).data();
+  assert.equal(resumedChampion.credits, 1_035_000);
+  const repairedCupTrophies = resumedChampion.trophies.filter(trophy => trophy.id === cupTrophyId);
+  assert.equal(repairedCupTrophies.length, 1);
+  assert.equal(repairedCupTrophies[0].name, `Кубок Пирамиды — сезон ${season}`);
+  assert.equal(repairedCupTrophies[0].type, 'pyramid_cup_champion');
+  assert.equal(repairedCupTrophies[0].season, season);
+  assert.ok(Number.isFinite(Date.parse(repairedCupTrophies[0].date)));
+  assert.deepEqual((await economyRefs[0].get()).data(), championLedger);
 
   // A retry after completion must be a strict no-op: no second reward,
   // no duplicate trophy, and no mutation of the published champion record.

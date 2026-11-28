@@ -1,94 +1,72 @@
 'use client';
 
-import { useGameState } from './lib/store';
-import { 
-  Users, MessageSquare, ShoppingCart, 
-  CalendarDays, Medal, ArrowRightLeft, 
-  Shield, Construction, Briefcase, 
-  LineChart, Heart, Newspaper, Settings, Search, Tv, User as UserIcon, UserCheck,
-  Radar, LayoutList, Swords, Timer, Activity
+import { getLevelThreshold, useGameState } from './lib/store';
+import {
+  Users, ShoppingCart, CalendarDays, Medal, ArrowRightLeft,
+  Shield, Newspaper, User as UserIcon, Swords, Timer, Activity, ChevronRight
 } from 'lucide-react';
-import { Card, CardContent } from '@/components/ui/card';
-import { cn } from '@/lib/utils';
-import { useUser, useFirestore, useCollection, useMemoFirebase, useDoc } from '@/firebase';
+import { useUser, useFirestore, useMemoFirebase, useDoc } from '@/firebase';
 import { LoadingScreen } from '@/components/game/LoadingScreen';
-import { Badge } from '@/components/ui/badge';
 import { useState, useEffect, useMemo } from 'react';
-import { getMoscowTime, getGlobalSeasonInfo, isMatchLive } from './lib/time-utils';
-import { collection, query, where, doc } from 'firebase/firestore';
-import { getBotName, LEAGUES } from './lib/leagues-data';
+import { getMoscowTime, getGlobalSeasonInfo } from './lib/time-utils';
+import { doc } from 'firebase/firestore';
+import { getBotName } from './lib/leagues-data';
 import { PlaceHolderImages } from './lib/placeholder-images';
+import { isMatchReportFinished } from '@/app/lib/match-report-utils';
 
 export default function Home() {
   const { user, isUserLoading } = useUser();
   const db = useFirestore();
   const { 
-    language, isLoaded, isDataReady, matchHistory, 
-    allSeasonMatches, lastSeenMatchDay, rank, selectedLeagueId,
-    leagueLevel, groupId, clubLogo: myClubLogo, numericId
+    language, isLoaded, isDataReady, experiencePoints, managerLevel, clubName, 
+    allSeasonMatches, rank, selectedLeagueId,
+    leagueLevel, groupId, clubLogo: myClubLogo
   } = useGameState();
 
   const [now, setNow] = useState(getMoscowTime());
+  const [officialLeagueMatches, setOfficialLeagueMatches] = useState<any[] | null>(null);
 
   useEffect(() => {
-    const timer = setInterval(() => setNow(getMoscowTime()), 1000);
-    return () => clearInterval(timer);
+    const timer = window.setInterval(() => setNow(getMoscowTime()), 1000);
+    return () => window.clearInterval(timer);
   }, []);
-
-  const groupPlayersQuery = useMemoFirebase(() => {
-    if (!db || !selectedLeagueId) return null;
-    return query(collection(db, 'players_v14'), 
-      where('selectedLeagueId', '==', selectedLeagueId),
-      where('leagueLevel', '==', leagueLevel),
-      where('groupId', '==', groupId)
-    );
-  }, [db, selectedLeagueId, leagueLevel, groupId]);
-
-  const { data: groupPlayers } = useCollection(groupPlayersQuery);
-
-  const userProfileRef = useMemoFirebase(() => {
-    if (!db || !user?.uid) return null;
-    return doc(db, 'players_v14', user.uid);
-  }, [db, user?.uid]);
-
-  const { data: profile } = useDoc(userProfileRef);
-
   const seasonConfigRef = useMemoFirebase(() => {
     if (!db) return null;
     return doc(db, 'system_v1', 'season_config');
   }, [db]);
   const { data: seasonConfig } = useDoc(seasonConfigRef);
 
-  const nameMap = useMemo(() => {
-    const names: Record<number, string> = {};
-    const logos: Record<number, string> = {};
-    if (groupPlayers) {
-      groupPlayers.forEach(p => {
-        names[p.rank] = p.clubName || p.displayName;
-        logos[p.rank] = p.clubLogo;
-      });
+  const effectiveSeason = Math.max(1, Number((seasonConfig as any)?.activeSeasonNumber || 1));
+  useEffect(() => {
+    if (!user || !selectedLeagueId || !rank || Number(leagueLevel) < 1 || Number(leagueLevel) > 4 || Number(groupId) < 1) {
+      setOfficialLeagueMatches(null);
+      return;
     }
-    return { names, logos };
-  }, [groupPlayers]);
+    let cancelled = false;
+    const controller = new AbortController();
+    (async () => {
+      try {
+        const token = await user.getIdToken();
+        const response = await fetch('/api/league/matches', {
+          method: 'POST',
+          headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ leagueId: selectedLeagueId, level: Number(leagueLevel), group: Number(groupId), season: effectiveSeason }),
+          cache: 'no-store',
+          signal: controller.signal,
+        });
+        const result = await response.json();
+        if (!response.ok || result?.success !== true) throw new Error(result?.error || 'LEAGUE_MATCHES_UNAVAILABLE');
+        if (!cancelled) setOfficialLeagueMatches(Array.isArray(result.matches) ? result.matches : []);
+      } catch (error) {
+        if (!cancelled && !controller.signal.aborted) {
+          console.error('[HOME NEXT MATCH] official fixtures unavailable', error);
+          setOfficialLeagueMatches([]);
+        }
+      }
+    })();
+    return () => { cancelled = true; controller.abort(); };
+  }, [user, selectedLeagueId, leagueLevel, groupId, rank, effectiveSeason]);
 
-  const resolvedNextMatch = useMemo(() => {
-    if (!allSeasonMatches || !rank) return null;
-    const myMatches = allSeasonMatches
-      .filter(m => (Number(m.homeRank) === rank || Number(m.awayRank) === rank) && !m.isFinished)
-      .sort((a, b) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime());
-    const nowMs = now.getTime();
-    // The card is for the NEXT opponent, so prefer the next future match.
-    // A currently started match is shown as LIVE only when there is no future match.
-    const myNext = myMatches.find(m => new Date(m.startTime).getTime() > nowMs) || myMatches[0];
-    if (!myNext) return null;
-    const isHome = Number(myNext.homeRank) === rank;
-    const oppRank = isHome ? Number(myNext.awayRank) : Number(myNext.homeRank);
-    return {
-      match: myNext,
-      opponentName: nameMap.names[oppRank] || getBotName(leagueLevel, groupId, oppRank),
-      opponentLogo: nameMap.logos[oppRank] || null
-    };
-  }, [allSeasonMatches, rank, nameMap, leagueLevel, groupId]);
 
   const toMillis = (value: any): number => {
     if (value == null) return Number.NaN;
@@ -104,6 +82,26 @@ export default function Home() {
     return Number.NaN;
   };
 
+  const resolvedNextMatch = useMemo(() => {
+    const sourceMatches = officialLeagueMatches ?? allSeasonMatches ?? [];
+    if (!sourceMatches.length || !rank) return null;
+    const myMatches = sourceMatches
+      .filter(m => (Number(m.homeRank) === Number(rank) || Number(m.awayRank) === Number(rank)) && !isMatchReportFinished(m))
+      .sort((a, b) => toMillis(a.startTime) - toMillis(b.startTime));
+    const nowMs = now.getTime();
+    // The card is for the NEXT opponent, so prefer the next future match.
+    // A currently started match is shown as LIVE only when there is no future match.
+    const myNext = myMatches.find(m => toMillis(m.startTime) > nowMs) || myMatches[0];
+    if (!myNext) return null;
+    const isHome = Number(myNext.homeRank) === rank;
+    const oppRank = isHome ? Number(myNext.awayRank) : Number(myNext.homeRank);
+    return {
+      match: myNext,
+      opponentName: (isHome ? myNext.awayName : myNext.homeName) || getBotName(leagueLevel, groupId, oppRank),
+      opponentLogo: (isHome ? myNext.awayLogo : myNext.homeLogo) || null
+    };
+  }, [officialLeagueMatches, allSeasonMatches, rank, leagueLevel, groupId, now]);
+
   const getCountdown = (targetTimeIso: any) => {
     const targetMs = toMillis(targetTimeIso);
     if (!Number.isFinite(targetMs)) return '--:--:--';
@@ -117,67 +115,9 @@ export default function Home() {
     return 'LIVE';
   };
 
-  const totalUnreadCount = useMemo(() => {
-    if (!profile || !user || !rank) return 0;
-    
-    const regTime = profile.createdAt?.toMillis ? profile.createdAt.toMillis() : (profile.createdAt ? new Date(profile.createdAt).getTime() : 0);
-
-    let locallyViewed = new Set<string>();
-    if (typeof window !== 'undefined') {
-      try {
-        const raw = JSON.parse(localStorage.getItem('lote_game_state_v245:viewed-match-ids') || '[]');
-        if (Array.isArray(raw)) locallyViewed = new Set(raw.map(String));
-      } catch {}
-    }
-
-    const isLocallyViewed = (m: any) => m?.id ? locallyViewed.has(String(m.id)) : false;
-
-    const unreadLeague = (allSeasonMatches || []).filter(m => {
-      const isMyMatch = Number(m.homeRank) === rank || Number(m.awayRank) === rank;
-      const resolvedTime = m.resolvedAt?.toMillis ? m.resolvedAt.toMillis() : (m.resolvedAt ? new Date(m.resolvedAt).getTime() : 0);
-      const isUnread = m.isFinished && m.seen !== true && m.reportStatus !== 'viewed' && !isLocallyViewed(m);
-      return isMyMatch && isUnread && resolvedTime > regTime;
-    });
-
-    const unreadHistory = (matchHistory || []).filter(m => m?.isFinished !== false && m.seen !== true && m.reportStatus !== 'viewed' && !isLocallyViewed(m));
-
-    // Один и тот же отчет может одновременно присутствовать в local history
-    // и в allSeasonMatches. Считаем его только один раз.
-    const uniqueUnreadIds = new Set<string>();
-    [...unreadLeague, ...unreadHistory].forEach((m: any) => {
-      if (m?.id) uniqueUnreadIds.add(String(m.id));
-    });
-
-    return uniqueUnreadIds.size;
-  }, [allSeasonMatches, matchHistory, lastSeenMatchDay, rank, user, profile]);
-
   const mapCardBg = PlaceHolderImages.find(img => img.id === 'tactical-map-card')?.imageUrl;
-  const systemIconUrl = PlaceHolderImages.find(img => img.id === 'ui-system-icon')?.imageUrl;
 
   if (isUserLoading || !isLoaded || !isDataReady) return <LoadingScreen />;
-
-  const menuItems = [
-    { id: 'reports', label: language === 'ru' ? 'ОБЗОР МАТЧА' : 'MATCH REVIEW', href: '/reports', icon: Tv, color: 'text-primary', badge: totalUnreadCount > 0 ? totalUnreadCount : null },
-    { id: 'squad', label: language === 'ru' ? 'СОСТАВ КОМАНДЫ' : 'SQUAD', href: '/roster', icon: Users, color: 'text-blue-400' },
-    { id: 'transfers', label: language === 'ru' ? 'ТРАНСФЕРЫ' : 'TRANSFERS', href: '/transfers', icon: ArrowRightLeft, color: 'text-yellow-500' },
-    { id: 'training', label: language === 'ru' ? 'РАЗВИТИЕ' : 'INFRA', href: '/training', icon: Construction, color: 'text-orange-400' },
-    { id: 'staff', label: language === 'ru' ? 'ПЕРСОНАЛ' : 'STAFF', href: '/staff', icon: Briefcase, color: 'text-amber-500' },
-    { id: 'scouting', label: language === 'ru' ? 'ПОИСК ТАЛАНТОВ' : 'SCOUTING', href: '/youth-academy/scouting', icon: Radar, color: 'text-purple-400' },
-    { id: 'rankings', label: language === 'ru' ? 'ТАБЛИЦЫ' : 'RANKINGS', href: '/rankings', icon: LayoutList, color: 'text-green-400' },
-    { id: 'matches', label: language === 'ru' ? 'РАСПИСАНИЕ' : 'SCHEDULE', href: '/matches', icon: CalendarDays, color: 'text-red-400' },
-    { id: 'finances', label: language === 'ru' ? 'ФИНАНСЫ' : 'FINANCES', href: '/finances', icon: LineChart, color: 'text-emerald-400' },
-    { id: 'tournaments', label: language === 'ru' ? 'ТУРНИРЫ' : 'TOURNAMENTS', href: '/tournaments', icon: Swords, color: 'text-yellow-400' },
-    { id: 'fanclub', label: language === 'ru' ? 'ФАН БАЗА' : 'FANBASE', href: '/fanclub', icon: Heart, color: 'text-pink-400' },
-    { id: 'chats', label: language === 'ru' ? 'ЧАТЫ' : 'CHATS', href: '/chats', icon: MessageSquare, color: 'text-cyan-400' },
-    { id: 'friends', label: language === 'ru' ? 'ДРУЗЬЯ' : 'FRIENDS', href: '/managers', icon: UserCheck, color: 'text-indigo-400' },
-    { id: 'profile', label: language === 'ru' ? 'О СЕБЕ' : 'PROFILE', href: '/profile', icon: UserIcon, color: 'text-rose-400' },
-    { id: 'associations', label: language === 'ru' ? 'АССОЦИАЦИИ' : 'ALLIANCE', href: '/associations', icon: Shield, color: 'text-sky-400' },
-    { id: 'fans', label: language === 'ru' ? 'ФАН-БАЗА' : 'FAN BASE', href: '/fans', icon: Heart, color: 'text-pink-400' },
-    { id: 'shop', label: language === 'ru' ? 'МАГАЗИН' : 'SHOP', href: '/shop', icon: ShoppingCart, color: 'text-lime-400' },
-    { id: 'news', label: language === 'ru' ? 'НОВОСТИ' : 'NEWS', href: '/news', icon: Newspaper, color: 'text-slate-400' },
-    { id: 'system', label: language === 'ru' ? 'НАСТРОЙКИ' : 'SYSTEM', href: '/system', icon: Settings, color: 'text-primary', isSystem: true },
-    { id: 'search', label: language === 'ru' ? 'ПОИСК' : 'SEARCH', href: '/search', icon: Search, color: 'text-blue-500' },
-  ];
 
   const currentNextMatch = resolvedNextMatch?.match;
   const seasonInfo = getGlobalSeasonInfo();
@@ -223,101 +163,143 @@ export default function Home() {
     : currentNextMatch ? getCountdown(currentNextMatch.startTime) : '--:--:--';
   const cardTitle = showOffseason ? (language === 'ru' ? 'МЕЖСЕЗОНЬЕ' : 'OFFSEASON') : (language === 'ru' ? 'СЛЕДУЮЩИЙ СОПЕРНИК' : 'NEXT OPPONENT');
 
-  return (
-    <div className="relative min-h-[calc(100dvh-4rem-3.5rem)] h-[calc(100dvh-4rem-3.5rem)] flex flex-col overflow-hidden">
-      <div className="flex-1 w-full max-w-md mx-auto px-4 pt-4 flex flex-col z-10 overflow-hidden">
-        
-        {/* NEXT MATCH TACTICAL CARD */}
-        <Card className="relative overflow-hidden mb-4 border-white/20 bg-[#1a2b45] rounded-2xl shadow-[0_10px_30px_rgba(0,0,0,0.5)] shrink-0 min-h-[110px]">
-          {/* Background Map Image */}
-          {mapCardBg && (
-            <div className="absolute inset-0 z-0 opacity-60">
-               <img 
-                  src={mapCardBg} 
-                  alt="" 
-                  className="w-full h-full object-cover object-center"
-               />
-            </div>
-          )}
-          
-          {/* Dark Gradient Overlay for readability */}
-          <div className="absolute inset-0 bg-gradient-to-r from-[#1a2b45]/90 via-transparent to-transparent z-[1]" />
-          
-          <CardContent className="p-4 flex items-center justify-between relative z-10 h-full min-h-[110px]">
-            <div className="flex items-center gap-4">
-              {/* Opponent Logo */}
-              <div className="w-14 h-14 flex items-center justify-center shrink-0">
-                {!showOffseason && resolvedNextMatch?.opponentLogo ? (
-                  <img 
-                    src={resolvedNextMatch.opponentLogo} 
-                    alt="Opponent Logo" 
-                    className="w-full h-full object-contain drop-shadow-[0_2px_8px_rgba(0,0,0,0.8)]" 
-                  />
-                ) : (
-                  <img 
-                    src="https://i.ibb.co/tpcQnnj1/1000078926-no-bg-preview-carve-photos.png"
-                    alt="Bot Logo"
-                    className="w-full h-full object-contain drop-shadow-[0_2px_8px_rgba(0,0,0,0.8)]"
-                  />
-                )}
-              </div>
-              <div>
-                <div className="flex items-center gap-2 mb-0.5">
-                  <p className="text-[8px] font-black text-primary uppercase tracking-widest drop-shadow-[0_2px_3px_rgba(0,0,0,0.8)]">{cardTitle}</p>
-                </div>
-                <h2 className="text-base font-headline font-bold text-white uppercase tracking-tight truncate max-w-[130px] drop-shadow-[0_2px_4px_rgba(0,0,0,0.9)]">{showOffseason ? (language === 'ru' ? 'НОВЫЙ СЕЗОН' : 'NEW SEASON') : (resolvedNextMatch?.opponentName || (language === 'ru' ? 'ОЖИДАНИЕ СОПЕРНИКА...' : 'WAITING FOR OPPONENT...'))}</h2>
-                <p className="text-[8px] font-bold text-white/80 uppercase drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)]">{showOffseason ? (language === 'ru' ? 'ПОДГОТОВКА К НОВОМУ СЕЗОНУ' : 'NEW SEASON PREPARATION') : `${language === 'ru' ? 'ТУР' : 'TOUR'} ${currentNextMatch?.tour || '--'}`}</p>
-              </div>
-            </div>
-            <div className="text-right flex flex-col items-end">
-              <p className="text-[7px] font-black text-white uppercase tracking-widest mb-1 drop-shadow-[0_2px_3px_rgba(0,0,0,1)] flex items-center gap-1">
-                <Timer className="w-2.5 h-2.5" />
-                {language === 'ru' ? 'ДО МАТЧА' : 'UNTIL MATCH'}
-              </p>
-              <p className="text-xl font-headline font-black text-primary italic text-glow-blue tabular-nums leading-none drop-shadow-[0_2px_5px_rgba(0,0,0,1)]">
-                {cardCountdown}
-              </p>
-            </div>
-          </CardContent>
-        </Card>
+  const matchStartMs = currentNextMatch?.startTime ? toMillis(currentNextMatch.startTime) : Number.NaN;
+  const dashboardDateMs = showOffseason ? nextSeasonStartMs : matchStartMs;
+  const dashboardDate = Number.isFinite(dashboardDateMs) ? new Date(dashboardDateMs) : null;
+  const matchDateLabel = dashboardDate && Number.isFinite(dashboardDate.getTime())
+    ? `${dashboardDate.toLocaleDateString(language === 'ru' ? 'ru-RU' : 'en-US', { day: 'numeric', month: 'short', timeZone: 'Europe/Moscow' })} · ${dashboardDate.toLocaleTimeString(language === 'ru' ? 'ru-RU' : 'en-US', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Moscow' })}`
+    : (language === 'ru' ? 'Ожидается расписание' : 'Schedule pending');
+  const cardStatusLabel = showOffseason
+    ? (cardCountdown === 'PREPARING' || cardCountdown === 'ПОДГОТОВКА'
+        ? (language === 'ru' ? 'ПОДГОТОВКА' : 'PREPARING')
+        : `${language === 'ru' ? 'ДО МЕЖСЕЗОНЬЯ' : 'OFFSEASON IN'} ${cardCountdown}`)
+    : currentNextMatch
+      ? (cardCountdown === 'LIVE'
+          ? (language === 'ru' ? 'МАТЧ ИДЁТ' : 'LIVE NOW')
+          : `${language === 'ru' ? 'ДО НАЧАЛА' : 'STARTS IN'} ${cardCountdown}`)
+      : (language === 'ru' ? 'РАСПИСАНИЕ ОЖИДАЕТСЯ' : 'SCHEDULE PENDING');
+  const opponentLogo = resolvedNextMatch?.opponentLogo;
+  const mainOpponent = resolvedNextMatch?.opponentName || (language === 'ru' ? 'СОПЕРНИК НЕ ОПРЕДЕЛЁН' : 'OPPONENT TBD');
+  const xp = Math.max(0, Number(experiencePoints || 0));
+  const managerLevelValue = Math.max(1, Number(managerLevel || 1));
+  const managerXpThreshold = getLevelThreshold(managerLevelValue);
+  const managerXpProgress = Number.isFinite(managerXpThreshold) && managerXpThreshold > 0
+    ? Math.max(0, Math.min(100, (xp / managerXpThreshold) * 100))
+    : 0;
+  const managerXpRemaining = Math.max(0, managerXpThreshold - xp);
+  const menuCards = [
+    { id: 'team', title: language === 'ru' ? 'КОМАНДА' : 'TEAM', subtitle: language === 'ru' ? 'Управляй своим клубом' : 'Manage your club', href: '/roster', image: PlaceHolderImages.find(img => img.id === 'hero-tank')?.imageUrl, icon: Users, tone: 'text-primary' },
+    { id: 'matches', title: language === 'ru' ? 'МАТЧИ' : 'MATCHES', subtitle: language === 'ru' ? 'Просмотр и участие в играх' : 'View and play matches', href: '/matches', image: PlaceHolderImages.find(img => img.id === 'arena-starter')?.imageUrl, icon: CalendarDays, tone: 'text-primary' },
+    { id: 'transfers', title: language === 'ru' ? 'ТРАНСФЕРЫ' : 'TRANSFERS', subtitle: language === 'ru' ? 'Покупай и продавай игроков' : 'Buy and sell players', href: '/transfers', image: PlaceHolderImages.find(img => img.id === 'hero-mage')?.imageUrl, icon: ArrowRightLeft, tone: 'text-sky-300' },
+    { id: 'cups', title: language === 'ru' ? 'ТУРНИРЫ' : 'TOURNAMENTS', subtitle: language === 'ru' ? 'Соревнуйся за награды' : 'Compete for rewards', href: '/tournaments', image: PlaceHolderImages.find(img => img.id === 'hq-starter')?.imageUrl, icon: Medal, tone: 'text-amber-300' },
+  ];
+  const navItems = [
+    { label: language === 'ru' ? 'Главная' : 'Home', href: '/', icon: Activity },
+    { label: language === 'ru' ? 'Команда' : 'Team', href: '/roster', icon: Users },
+    { label: language === 'ru' ? 'Игроки' : 'Players', href: '/roster/squad', icon: UserIcon },
+    { label: language === 'ru' ? 'Турниры' : 'Cups', href: '/tournaments', icon: Medal },
+    { label: language === 'ru' ? 'Магазин' : 'Shop', href: '/shop', icon: ShoppingCart },
+  ];
 
-        {/* MAIN MENU GRID */}
-        <div className="grid grid-cols-4 gap-2 flex-1 mb-2">
-          {menuItems.map((item) => (
-            <a key={item.id} href={item.href} className="block">
-              <Card className="aspect-square glass-card border-white/5 hover:border-primary/40 hover:bg-primary/5 transition-all group flex flex-col items-center justify-center p-1 relative rounded-[1.25rem] overflow-hidden">
-                {item.isSystem ? (
-                  <div className="relative w-12 h-12 transition-transform duration-300 group-hover:scale-110">
-                     <img 
-                        src={systemIconUrl || "https://i.ibb.co/07QQCFT/1787830105436.png"} 
-                        alt="System" 
-                        className="w-full h-full object-contain"
-                     />
+  return (
+    <div className="relative min-h-[calc(100dvh-4rem-3.5rem)] overflow-y-auto overflow-x-hidden bg-[#050a12] pb-24 text-white">
+      <div className="pointer-events-none absolute inset-x-0 top-0 h-[560px] opacity-35" style={{ backgroundImage: `linear-gradient(180deg,rgba(3,8,16,.12),#050a12 95%),url('${mapCardBg || ''}')`, backgroundSize: 'cover', backgroundPosition: 'center' }} />
+      <div className="relative z-10 mx-auto flex w-full max-w-3xl flex-col gap-4 px-3 pb-6 pt-4 sm:px-5">
+        <section className="relative min-h-[330px] overflow-hidden rounded-[26px] border border-cyan-300/25 bg-[#071421] shadow-[0_18px_60px_rgba(0,0,0,.55)]">
+          {PlaceHolderImages.find(img => img.id === 'hero-carry')?.imageUrl && <img src={PlaceHolderImages.find(img => img.id === 'hero-carry')?.imageUrl} alt="" className="absolute inset-0 h-full w-full object-cover object-[center_25%] opacity-75" />}
+          <div className="absolute inset-0 bg-gradient-to-r from-[#03101b]/95 via-[#03101b]/70 to-transparent" />
+          <div className="absolute inset-0 bg-gradient-to-t from-[#04101a] via-transparent to-transparent" />
+          <div className="relative flex min-h-[330px] flex-col justify-end p-4 sm:p-6">
+            <div className="mb-auto flex items-center gap-2 pt-1 text-[11px] font-black uppercase tracking-[.18em] text-cyan-200">
+              <span className="h-2 w-2 animate-pulse rounded-full bg-cyan-300 shadow-[0_0_12px_#22d3ee]" />
+              {cardTitle}
+            </div>
+            <div className="mb-4 flex flex-wrap items-center gap-2 text-[10px] font-semibold text-slate-200 sm:text-xs">
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-black/35 px-3 py-1.5"><Timer className="h-4 w-4 text-cyan-300" />{matchDateLabel}</span>
+              <span className="rounded-full border border-white/15 bg-black/30 px-3 py-1.5">{showOffseason ? (language === 'ru' ? 'СЛЕДУЮЩИЙ СЕЗОН' : 'NEXT SEASON') : (language === 'ru' ? 'ЛИГА СЕЗОНА' : 'SEASON LEAGUE')}</span>
+              <span className={`rounded-full border px-3 py-1.5 font-black tabular-nums ${cardCountdown === 'LIVE' ? 'border-rose-400/40 bg-rose-500/15 text-rose-200' : showOffseason ? 'border-violet-300/30 bg-violet-300/10 text-violet-100' : 'border-cyan-300/25 bg-cyan-300/10 text-cyan-100'}`}>{cardStatusLabel}</span>
+            </div>
+            {showOffseason ? (
+              <div className="flex min-h-[120px] flex-col items-center justify-center gap-3 py-2 text-center">
+                <div className="flex h-20 w-20 items-center justify-center rounded-2xl border border-violet-300/25 bg-violet-300/10 text-violet-200 sm:h-24 sm:w-24"><CalendarDays className="h-12 w-12" /></div>
+                <span className="text-sm font-black uppercase tracking-wide text-violet-100">{language === 'ru' ? 'ПОДГОТОВКА К НОВОМУ СЕЗОНУ' : 'PREPARING FOR THE NEXT SEASON'}</span>
+              </div>
+            ) : (
+              <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2 sm:max-w-lg">
+                <div className="flex min-w-0 flex-col items-center gap-2">
+                  <div className="flex h-20 w-20 items-center justify-center rounded-2xl border border-cyan-300/20 bg-black/35 p-2 sm:h-24 sm:w-24">
+                    {myClubLogo ? <img src={myClubLogo} alt="" className="h-full w-full object-contain" /> : <Shield className="h-12 w-12 text-cyan-300" />}
                   </div>
-                ) : (
-                  <>
-                    <div className={cn("transition-transform duration-300 group-hover:scale-110", item.color)}>
-                      <item.icon className="w-7 h-7" />
-                    </div>
-                    <span className="text-[7px] font-black uppercase text-center text-muted-foreground group-hover:text-white mt-1.5 leading-none tracking-tighter">
-                      {item.label}
-                    </span>
-                  </>
-                )}
-                
-                {item.badge && (
-                  <div className="absolute top-1.5 right-1.5">
-                    <Badge className="bg-red-500 text-white text-[7px] h-3.5 min-w-[14px] px-1 font-black animate-pulse border-none shadow-lg">
-                      {item.badge}
-                    </Badge>
+                  <span className="max-w-full truncate text-center text-sm font-black uppercase sm:text-base">{clubName || (language === 'ru' ? 'МОЯ КОМАНДА' : 'MY TEAM')}</span>
+                </div>
+                <span className="text-2xl font-black italic text-white drop-shadow-[0_0_14px_rgba(34,211,238,.7)]">VS</span>
+                <div className="flex min-w-0 flex-col items-center gap-2">
+                  <div className="flex h-20 w-20 items-center justify-center rounded-2xl border border-amber-300/20 bg-black/35 p-2 sm:h-24 sm:w-24">
+                    {opponentLogo ? <img src={opponentLogo} alt="" className="h-full w-full object-contain" /> : <Swords className="h-12 w-12 text-amber-300" />}
                   </div>
-                )}
-              </Card>
+                  <span className="max-w-full truncate text-center text-sm font-black uppercase sm:text-base">{mainOpponent}</span>
+                </div>
+              </div>
+            )}
+            <a href={showOffseason ? "/roster" : "/matches"} className="mt-5 flex h-14 items-center justify-center gap-3 rounded-xl bg-gradient-to-r from-cyan-300 to-teal-400 text-base font-black uppercase tracking-wider text-[#031018] shadow-[0_8px_28px_rgba(20,220,200,.25)] transition hover:brightness-110 active:scale-[.99]">
+              <span className="text-xl">▶</span>{showOffseason ? (language === 'ru' ? 'ПОДГОТОВИТЬ КОМАНДУ' : 'PREPARE TEAM') : (language === 'ru' ? 'ПЕРЕЙТИ К МАТЧАМ' : 'GO TO MATCHES')}
+            </a>
+          </div>
+        </section>
+
+        <section className="grid grid-cols-2 gap-3">
+          {menuCards.map(item => (
+            <a key={item.id} href={item.href} className="group relative min-h-[150px] overflow-hidden rounded-2xl border border-slate-500/40 bg-[#0b1725] shadow-lg transition hover:-translate-y-0.5 hover:border-cyan-300/60">
+              {item.image && <img src={item.image} alt="" className="absolute inset-0 h-full w-full object-cover opacity-40 transition duration-500 group-hover:scale-105 group-hover:opacity-55" />}
+              <div className="absolute inset-0 bg-gradient-to-r from-[#07111e] via-[#07111e]/80 to-transparent" />
+              <div className="relative flex min-h-[150px] flex-col justify-between p-3 sm:p-4">
+                <item.icon className={`h-8 w-8 ${item.tone}`} />
+                <div className="pr-5">
+                  <h2 className="text-sm font-black tracking-wide sm:text-base">{item.title}</h2>
+                  <p className="mt-1 text-[11px] leading-snug text-slate-300 sm:text-xs">{item.subtitle}</p>
+                </div>
+                <ChevronRight className="absolute bottom-4 right-3 h-5 w-5 text-slate-300 transition group-hover:translate-x-1 group-hover:text-cyan-200" />
+              </div>
             </a>
           ))}
-        </div>
+        </section>
 
+        <a href="/profile" className="group relative flex min-h-[132px] items-center justify-between overflow-hidden rounded-2xl border border-violet-400/35 bg-gradient-to-r from-[#21134d] via-[#24105a] to-[#0d1634] p-4 shadow-[0_12px_38px_rgba(56,30,140,.25)]">
+          <div className="absolute -right-4 -top-12 h-48 w-48 rounded-full bg-violet-500/20 blur-3xl" />
+          <div className="relative flex items-center gap-3">
+            <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-violet-400/15 text-violet-200"><Medal className="h-10 w-10" /></div>
+            <div className="min-w-0 flex-1">
+              <p className="text-base font-black uppercase">{language === 'ru' ? 'ПРОФИЛЬ МЕНЕДЖЕРА' : 'MANAGER PROFILE'}</p>
+              <p className="mt-1 text-xs text-violet-100/80">{language === 'ru' ? `Уровень ${managerLevelValue}` : `Level ${managerLevelValue}`}</p>
+              <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-black/35">
+                <div className="h-full rounded-full bg-violet-300 transition-all duration-700" style={{ width: `${managerXpProgress}%` }} />
+              </div>
+              <p className="mt-1 text-[10px] text-violet-100/75">{xp.toLocaleString()} / {managerXpThreshold.toLocaleString()} XP · {language === 'ru' ? `ещё ${managerXpRemaining.toLocaleString()} до уровня` : `${managerXpRemaining.toLocaleString()} to next level`}</p>
+            </div>
+          </div>
+          <ChevronRight className="relative h-6 w-6 text-violet-100" />
+        </a>
+
+        <a href="/news" className="flex items-center gap-3 rounded-xl border border-slate-500/40 bg-[#0b1420]/90 px-4 py-3 text-sm text-slate-200 transition hover:border-cyan-300/50">
+          <span className="h-2 w-2 shrink-0 rounded-full bg-cyan-300 shadow-[0_0_10px_#22d3ee]" />
+          <Newspaper className="h-5 w-5 shrink-0 text-cyan-200" />
+          <span className="min-w-0 flex-1 truncate">{language === 'ru' ? 'Открой новости и события Forge-Rivals' : 'Read Forge-Rivals news and events'}</span>
+          <ChevronRight className="h-5 w-5 shrink-0 text-slate-400" />
+        </a>
       </div>
+
+      <nav className="fixed bottom-0 left-0 right-0 z-40 border-t border-white/10 bg-[#050a12]/95 pb-[env(safe-area-inset-bottom)] backdrop-blur-xl">
+        <div className="mx-auto grid h-[68px] max-w-3xl grid-cols-5">
+          {navItems.map(item => {
+            const active = item.href === '/';
+            return <a key={item.href} href={item.href} className={`relative flex flex-col items-center justify-center gap-1 text-[10px] font-bold transition ${active ? 'text-cyan-300' : 'text-slate-400 hover:text-white'}`}>
+              {active && <span className="absolute top-0 h-[2px] w-10 rounded-full bg-cyan-300 shadow-[0_0_12px_#22d3ee]" />}
+              <item.icon className="h-5 w-5" />
+              <span>{item.label}</span>
+            </a>;
+          })}
+        </div>
+      </nav>
     </div>
   );
 }

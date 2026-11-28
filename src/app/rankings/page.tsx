@@ -7,7 +7,7 @@ import { useGameState } from '../lib/store';
 import { 
   Trophy, ChevronLeft, ChevronRight, 
   Shield, Globe, Layers, RefreshCw,
-  ShieldAlert, ArrowUp, X, Crown, Vote, Loader2, Archive, CalendarDays
+  ShieldAlert, ArrowUp, X, Crown, Vote, Loader2, Archive, CalendarDays, Swords
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -34,7 +34,7 @@ export default function RankingsPage() {
   const { toast } = useToast();
   const { user } = useUser();
   const db = useFirestore();
-  const { isLoaded, language, seasonNumber, ownedPlayers } = useGameState();
+  const { isLoaded, language, seasonNumber, ownedPlayers, selectedLeagueId: storeLeagueId, leagueLevel: storeLeagueLevel, groupId: storeGroupId } = useGameState();
   
   const [activeTab, setActiveTab] = useState<RankingTab>('menu');
   const [cupRound, setCupRound] = useState(1);
@@ -44,7 +44,7 @@ export default function RankingsPage() {
   const [busyVote, setBusyVote] = useState<string | null>(null);
   const [tableLoadAttempt, setTableLoadAttempt] = useState(0);
   const [tableLoadTimedOut, setTableLoadTimedOut] = useState(false);
-  const [tableDiagnostic, setTableDiagnostic] = useState<Record<string, any> | null>(null);
+  const [tableError, setTableError] = useState<string | null>(null);
   const [selectedArchiveSeason, setSelectedArchiveSeason] = useState<number | null>(null);
   const [archiveGroup, setArchiveGroup] = useState('D1-G1');
 
@@ -69,6 +69,23 @@ export default function RankingsPage() {
   const { data: archiveDocuments, isLoading: isArchiveListLoading, error: archiveListError } = useCollection(archivesRef);
   const visibleArchives = useMemo(() => getVisibleSeasonArchives(archiveDocuments || []), [archiveDocuments]);
   const selectedArchive = visibleArchives.find((archive: any) => Number(archive.sourceSeason) === selectedArchiveSeason) || null;
+
+  // The rolling archive can change while this screen is open after a season
+  // activation. Keep the detail view attached to the one currently retained
+  // archive instead of leaving an empty detail screen for a pruned season.
+  useEffect(() => {
+    if (activeTab !== 'season_archive_detail') return;
+    const latestVisibleSeason = Number(visibleArchives[0]?.sourceSeason || 0);
+    if (!latestVisibleSeason) {
+      setSelectedArchiveSeason(null);
+      setActiveTab('season_archive');
+      return;
+    }
+    if (selectedArchiveSeason !== latestVisibleSeason) {
+      setSelectedArchiveSeason(latestVisibleSeason);
+      setArchiveGroup('D1-G1');
+    }
+  }, [activeTab, visibleArchives, selectedArchiveSeason]);
   const archiveMatchesRef = useMemoFirebase(() => {
     if (!db || !selectedArchiveSeason || !selectedArchive) return null;
     return collection(db, 'league_season_archives_v1', 'S' + selectedArchiveSeason, 'matches');
@@ -80,60 +97,79 @@ export default function RankingsPage() {
     .sort((a: any, b: any) => Number(a.tour || 0) - Number(b.tour || 0) || String(a.matchId || a.id).localeCompare(String(b.matchId || b.id)));
   const tableSeasonNumber = Math.max(1, Number((seasonConfig as any)?.activeSeasonNumber || seasonNumber || 1));
 
-  const contextLeagueId = String(navLeague || profile?.selectedLeagueId || "ALPHA");
-  const contextLevel = Number(navLevel || profile?.leagueLevel || MAX_LEVELS);
-  const contextGroup = Number(navGroup || profile?.groupId || 1);
+  const contextLeagueId = String(navLeague || storeLeagueId || profile?.selectedLeagueId || "ALPHA");
+  const contextLevel = Number(navLevel || storeLeagueLevel || profile?.leagueLevel || MAX_LEVELS);
+  const contextGroup = Number(navGroup || storeGroupId || profile?.groupId || 1);
 
   const tableId = `table_v140_S${tableSeasonNumber}_L${contextLeagueId}_V${contextLevel}_G${contextGroup}`;
-  const tableRef = useMemoFirebase(() => {
-    if (!db || !isLoaded) return null;
-    return doc(db, 'league_tables_v2', tableId);
-  }, [db, tableId, isLoaded, tableLoadAttempt]);
+  const [tableData, setTableData] = useState<any>(null);
+  const [isTableLoading, setIsTableLoading] = useState(false);
 
-  const { data: tableData, isLoading: isTableLoading, error: tableError } = useDoc(tableRef);
-
-  // When Firestore denies the standings read, ask the server to inspect only
-  // this authenticated account's retirement markers and canonical table.
+  // Standings are served through a token-authenticated, read-only Admin SDK
+  // projection. The browser never receives access to private player records.
   useEffect(() => {
-    if (!tableError || !user) {
-      setTableDiagnostic(null);
+    if (!isLoaded || !user) {
+      setTableData(null);
+      setTableError(null);
+      setIsTableLoading(false);
       return;
     }
-
     let cancelled = false;
+    const controller = new AbortController();
+    setIsTableLoading(true);
+    setTableError(null);
+    setTableLoadTimedOut(false);
+    const timeoutId = window.setTimeout(() => {
+      controller.abort();
+      if (!cancelled) {
+        setTableLoadTimedOut(true);
+        setIsTableLoading(false);
+        setTableError('REQUEST_TIMEOUT');
+      }
+    }, 12000);
+
     (async () => {
       try {
         const token = await user.getIdToken();
-        const response = await fetch('/api/diagnostics/league-table', {
+        const response = await fetch('/api/league/table', {
           method: 'POST',
-          headers: { Authorization: `Bearer ${token}` },
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ leagueId: contextLeagueId, level: contextLevel, group: contextGroup, scope: activeTab === 'my_league' ? 'mine' : 'browse' }),
           cache: 'no-store',
+          signal: controller.signal,
         });
         const result = await response.json();
-        if (!cancelled) setTableDiagnostic(result);
-      } catch {
-        if (!cancelled) setTableDiagnostic({ success: false, code: 'DIAGNOSTIC_UNAVAILABLE' });
+        if (!response.ok || result?.success !== true) throw new Error(result?.error || 'LEAGUE_TABLE_UNAVAILABLE');
+        if (!cancelled) {
+          if (activeTab === 'my_league' && result.level && result.group) {
+            setNavLeague(String(result.leagueId || 'ALPHA'));
+            setNavLevel(Number(result.level));
+            setNavGroup(Number(result.group));
+          }
+          setTableData(result.exists ? { stats: result.stats, viewer: result.viewer || null, level: result.level, group: result.group, leagueId: result.leagueId } : null);
+          setTableError(null);
+          setTableLoadTimedOut(false);
+        }
+      } catch (error: any) {
+        if (!cancelled && error?.name !== 'AbortError') {
+          setTableData(null);
+          setTableError(String(error?.message || 'LEAGUE_TABLE_UNAVAILABLE'));
+        }
+      } finally {
+        window.clearTimeout(timeoutId);
+        if (!cancelled) setIsTableLoading(false);
       }
     })();
 
-    return () => { cancelled = true; };
-  }, [tableError, user, tableId]);
+    return () => {
+      cancelled = true;
+      controller.abort();
+      window.clearTimeout(timeoutId);
+    };
+  }, [isLoaded, user, tableId, tableLoadAttempt, activeTab]);
 
   const pyramidCupRef = useMemoFirebase(() => db ? doc(db, 'cup_pyramid_v1', `cup_s${tableSeasonNumber}_lALPHA`) : null, [db, tableSeasonNumber]);
-  const { data: pyramidCup, isLoading: isPyramidCupLoading } = useDoc(pyramidCupRef);
-
-  // Never leave the group screen on an endless spinner if Firestore cannot
-  // complete the initial snapshot (offline emulator, network, or permissions).
-  useEffect(() => {
-    setTableLoadTimedOut(false);
-    if (!tableRef || !isTableLoading) return;
-
-    const timeoutId = window.setTimeout(() => {
-      setTableLoadTimedOut(true);
-    }, 12000);
-
-    return () => window.clearTimeout(timeoutId);
-  }, [tableRef, isTableLoading, tableLoadAttempt]);
+  const { data: pyramidCup, isLoading: isPyramidCupLoading, error: pyramidCupError } = useDoc(pyramidCupRef);
 
   const retryTableLoad = () => {
     setTableLoadTimedOut(false);
@@ -179,11 +215,11 @@ export default function RankingsPage() {
       promotion: "PROMOTION",
       relegation: "RELEGATION",
       menu: [
-        { id: 'my_league', label: 'League Standings', desc: `Division ${profile?.leagueLevel || '...'}.${profile?.groupId || '...'}`, icon: Shield, color: 'text-primary' },
+        { id: 'my_league', label: 'League Standings', desc: `Division ${storeLeagueLevel || profile?.leagueLevel || '...'}.${storeGroupId || profile?.groupId || '...'}`, icon: Shield, color: 'text-primary' },
         { id: 'my_pyramid', label: 'League Pyramid', desc: `Explore ${profile?.selectedLeagueId || 'ALPHA'}`, icon: Layers, color: 'text-accent' },
         { id: 'cup', label: 'Pyramid Cup', desc: 'Tournament bracket', icon: Trophy, color: 'text-yellow-500' },
         { id: 'all_pyramids', label: 'Global Map', desc: 'Browse all active leagues', icon: Globe, color: 'text-blue-400' },
-        { id: 'season_archive', label: language === 'ru' ? 'Архив сезонов' : 'Season Archive', desc: (language === 'ru' ? 'Завершённых сезонов: ' : '') + visibleArchives.length, icon: Archive, color: 'text-amber-400' },
+        { id: 'season_archive', label: language === 'ru' ? 'Архив сезонов' : 'Season Archive', desc: (language === 'ru' ? 'Предыдущий сезон: ' : 'Previous season: ') + (visibleArchives[0]?.sourceSeason || '—'), icon: Archive, color: 'text-amber-400' },
       ]
     },
     ru: {
@@ -201,7 +237,7 @@ export default function RankingsPage() {
         { id: 'my_pyramid', label: 'Пирамида Лиги', desc: `Изучить лигу ${profile?.selectedLeagueId || 'ALPHA'}`, icon: Layers, color: 'text-accent' },
         { id: 'cup', label: 'Кубок Пирамиды', desc: 'Сетка турнира', icon: Trophy, color: 'text-yellow-500' },
         { id: 'all_pyramids', label: 'Карта мира', desc: 'Все активные лиги мира', icon: Globe, color: 'text-blue-400' },
-        { id: 'season_archive', label: language === 'ru' ? 'Архив сезонов' : 'Season Archive', desc: (language === 'ru' ? 'Завершённых сезонов: ' : '') + visibleArchives.length, icon: Archive, color: 'text-amber-400' },
+        { id: 'season_archive', label: language === 'ru' ? 'Архив сезонов' : 'Season Archive', desc: (language === 'ru' ? 'Предыдущий сезон: ' : 'Previous season: ') + (visibleArchives[0]?.sourceSeason || '—'), icon: Archive, color: 'text-amber-400' },
       ]
     }
   }[language === 'ru' ? 'ru' : 'en'];
@@ -210,7 +246,11 @@ export default function RankingsPage() {
     if (activeTab === 'season_archive_detail') { setActiveTab('season_archive'); return; }
     if (activeTab === 'season_archive') { setActiveTab('menu'); return; }
     if (activeTab === 'season_top') { setActiveTab('menu'); return; }
-    if (activeTab === 'my_league' || activeTab === 'cup') { setActiveTab('menu'); return; }
+    if (activeTab === 'my_league' || activeTab === 'cup') {
+      setActiveTab('menu');
+      setNavLeague(null); setNavLevel(null); setNavGroup(null);
+      return;
+    }
     if (activeTab === 'my_pyramid' || activeTab === 'all_pyramids') {
       if (navGroup) { setNavGroup(null); return; }
       if (navLevel) { setNavLevel(null); return; }
@@ -337,7 +377,7 @@ export default function RankingsPage() {
         <Card className="glass-card border-white/5"><CardContent className="p-5 text-center text-xs text-muted-foreground">{language === 'ru' ? 'Архив недоступен. Вернитесь к списку сезонов.' : 'Archive unavailable. Return to the season list.'}</CardContent></Card>
       )}
 
-      {(activeTab === 'my_league' || navGroup) && (
+      {(activeTab === 'my_league' || ((activeTab === 'my_pyramid' || activeTab === 'all_pyramids') && navGroup !== null)) && (
         <div className="space-y-4 animate-in fade-in duration-500">
           <>
            <div className="flex items-center justify-end px-1">
@@ -364,15 +404,23 @@ export default function RankingsPage() {
                <ShieldAlert className="w-10 h-10 text-amber-400" />
                <p className="text-xs font-bold text-white">{t.loadFailed}</p>
                {tableError && (
-                 <p className="text-[10px] text-muted-foreground break-words">{tableError.message}</p>
+                 <p className="text-[10px] text-muted-foreground break-words">{tableError}</p>
                )}
-               {tableDiagnostic && (
-                 <p className="text-[10px] text-amber-200/80 break-words">
-                   {tableDiagnostic.success
-                     ? `Диагностика: проект ${tableDiagnostic.projectId || 'не определён'}; таблица Admin SDK ${tableDiagnostic.tableExists ? 'найдена' : 'не найдена'}; чтение по правилам ${tableDiagnostic.rulesProbe?.allowed ? 'разрешено' : `отклонено (${tableDiagnostic.rulesProbe?.status || tableDiagnostic.rulesProbe?.code || 'нет ответа'})`}; маркеры выхода/неактивности ${tableDiagnostic.accessFence?.pendingRetirement || tableDiagnostic.accessFence?.retired ? 'обнаружены' : 'отсутствуют'}.`
-                     : `Диагностика недоступна: ${tableDiagnostic.code || 'UNKNOWN'}`}
-                 </p>
-               )}
+               <Button variant="outline" className="border-amber-400/30" onClick={retryTableLoad}>
+                 <RefreshCw className="w-4 h-4 mr-2" />{t.retry}
+               </Button>
+             </div>
+           ) : activeTab === 'my_league' && tableData?.viewer?.standingsEntryPresent === false ? (
+             <div className="py-8 px-6 text-center border border-amber-400/20 bg-amber-400/5 rounded-3xl flex flex-col items-center gap-3">
+               <ShieldAlert className="w-9 h-9 text-amber-400" />
+               <p className="text-xs font-bold text-white">
+                 {language === 'ru' ? 'Клуб не найден в строке твоего места' : 'Your club is missing from its assigned standings slot'}
+               </p>
+               <p className="text-[10px] text-muted-foreground">
+                 {language === 'ru'
+                   ? `Профиль: дивизион ${tableData.level}, группа ${tableData.group}, место ${tableData.viewer.rank || '—'}. Повторная регистрация не требуется.`
+                   : `Assigned rank: ${tableData.viewer.rank || '—'}. Do not register again; the league slot needs repair.`}
+               </p>
                <Button variant="outline" className="border-amber-400/30" onClick={retryTableLoad}>
                  <RefreshCw className="w-4 h-4 mr-2" />{t.retry}
                </Button>
@@ -446,7 +494,7 @@ export default function RankingsPage() {
       )}
 
       {activeTab === 'cup' && (
-        <PyramidCupInline data={pyramidCup} loading={isPyramidCupLoading} round={cupRound} setRound={setCupRound} ru={language === 'ru'} />
+        <PyramidCupInline db={db} data={pyramidCup} loading={isPyramidCupLoading} error={pyramidCupError} round={cupRound} setRound={setCupRound} ru={language === 'ru'} />
       )}
 
       {activeTab === 'all_pyramids' && !navLeague && (
@@ -491,23 +539,55 @@ export default function RankingsPage() {
 }
 
 
-function PyramidCupInline({ data, loading, round, setRound, ru }: { data: any; loading: boolean; round: number; setRound: (round: number) => void; ru: boolean }) {
+function PyramidCupInline({ db, data, loading, error, round, setRound, ru }: { db: any; data: any; loading: boolean; error?: any; round: number; setRound: (round: number) => void; ru: boolean }) {
   const expectedMatches: Record<number, number> = { 1: 56, 2: 32, 3: 16, 4: 8, 5: 4, 6: 2, 7: 1 };
-  const expectedSlots: Record<number, number> = { 1: 64, 2: 32, 3: 16, 4: 8, 5: 4, 6: 2, 7: 1 };
   const rounds = (data?.rounds || {}) as Record<string, any[]>;
   const matches: any[] = Array.isArray(rounds[`r${round}`]) ? rounds[`r${round}`] : [];
+  const cupFixturesQuery = useMemoFirebase(() => {
+    if (!db || !data?.id) return null;
+    return query(collection(db, 'cup_matches'), where('cupId', '==', data.id));
+  }, [db, data?.id]);
+  const { data: cupFixtures } = useCollection(cupFixturesQuery);
+  const fixtureById = useMemo(() => new Map((cupFixtures || []).map((fixture: any) => [String(fixture.id), fixture])), [cupFixtures]);
   const labels: Record<number, string> = ru
     ? { 1: 'Предварительный раунд', 2: 'Раунд 1/64', 3: 'Раунд 1/32', 4: 'Раунд 1/16', 5: 'Четвертьфинал', 6: 'Полуфинал', 7: 'ФИНАЛ BO3' }
     : { 1: 'Preliminary round', 2: 'Round of 64', 3: 'Round of 32', 4: 'Round of 16', 5: 'Quarterfinal', 6: 'Semifinal', 7: 'BO3 FINAL' };
   if (loading) return <div className="py-16 text-center text-xs text-muted-foreground">{ru ? 'Загрузка сетки…' : 'Loading bracket…'}</div>;
-  if (!data) return <Card className="glass-card border-white/5"><CardContent className="p-6 text-center"><Trophy className="mx-auto mb-3 h-8 w-8 text-yellow-500" /><p className="text-xs font-bold uppercase">{ru ? 'Кубок ещё не создан' : 'Cup not generated yet'}</p><p className="mt-2 text-[10px] text-muted-foreground">{ru ? 'Сетка появится автоматически после запуска сезона.' : 'The bracket will appear automatically after the season starts.'}</p></CardContent></Card>;
+  if (error) {
+    const errorMessage = String(error?.message || error?.code || error || 'CUP_READ_FAILED');
+    return <Card className="glass-card border-amber-400/20"><CardContent className="p-6 text-center"><ShieldAlert className="mx-auto mb-3 h-8 w-8 text-amber-400" /><p className="text-xs font-bold uppercase">{ru ? 'Не удалось загрузить Кубок Пирамиды' : 'Could not load Pyramid Cup'}</p><p className="mt-2 break-words text-[10px] text-muted-foreground">{errorMessage}</p><p className="mt-2 text-[9px] text-muted-foreground">{ru ? 'Это ошибка чтения данных, а не подтверждение отсутствия турнира.' : 'This is a data read error, not confirmation that the tournament is missing.'}</p></CardContent></Card>;
+  }
+  if (!data) return <Card className="glass-card border-white/5"><CardContent className="p-6 text-center"><Trophy className="mx-auto mb-3 h-8 w-8 text-yellow-500" /><p className="text-xs font-bold uppercase">{ru ? 'Кубок ещё не создан' : 'Cup not generated yet'}</p><p className="mt-2 text-[10px] text-muted-foreground">{ru ? 'Документ турнира отсутствует для активного сезона.' : 'The tournament document is missing for the active season.'}</p></CardContent></Card>;
   return <div className="space-y-3">
     <div className="grid grid-cols-7 gap-1">{Array.from({ length: 7 }, (_, i) => i + 1).map(r => <Button key={r} size="sm" variant={round === r ? 'default' : 'outline'} className={cn('h-9 min-w-0 px-0 text-[10px] font-black', round === r ? 'hero-gradient border-none' : 'border-white/5 bg-secondary/20')} onClick={() => setRound(r)}>{r}</Button>)}</div>
     <div className="flex items-center justify-between px-1"><div><p className="text-[11px] font-black uppercase tracking-widest">{labels[round]}</p><p className="text-[8px] text-muted-foreground">{round === 1 ? (ru ? '56 матчей · 8 команд проходят дальше' : '56 matches · 8 teams advance') : (ru ? `${expectedMatches[round]} матчей` : `${expectedMatches[round]} matches`)}</p></div><span className="rounded-md border border-white/10 bg-secondary/30 px-2 py-1 text-[7px] font-black uppercase text-muted-foreground">{data.status === 'completed' ? (ru ? 'ЗАВЕРШЁН' : 'COMPLETED') : (ru ? 'АКТИВЕН' : 'ACTIVE')}</span></div>
-    <div className="space-y-2">{Array.from({ length: expectedSlots[round] }, (_, i) => matches[i] || ({ id: `placeholder-${round}-${i}`, status: 'pending', home: null, away: null })).map((m: any, i: number) => {
-      const hasTeams = Boolean(m.home && m.away);
-      const bye = m.status === 'bye' || (m.home && !m.away);
-      return <Card key={m.id || i} className="glass-card border-white/5 overflow-hidden"><CardContent className="p-3">{bye ? <div className="flex items-center justify-between"><span className="truncate text-[10px] font-bold uppercase">{m.home?.name || 'TBD'}</span><span className="text-[8px] font-black text-yellow-500">BYE</span></div> : <div className="grid grid-cols-[1fr_48px_1fr] items-center gap-2"><p className="truncate text-right text-[10px] font-bold uppercase">{m.home?.name || 'TBD'}</p><span className="text-center text-xs font-black">{m.scoreA != null && m.scoreB != null ? `${m.scoreA}:${m.scoreB}` : (hasTeams ? 'VS' : '—')}</span><p className="truncate text-left text-[10px] font-bold uppercase">{m.away?.name || 'TBD'}</p></div>}{m.technicalDecision && <p className="mt-1 text-center text-[7px] uppercase text-amber-400">{ru ? 'Технический результат' : 'Technical result'}</p>}</CardContent></Card>;
+    <div className="space-y-2">{Array.from({ length: expectedMatches[round] }, (_, i) => matches[i] || ({ id: `placeholder-${round}-${i}`, status: 'pending', home: null, away: null })).map((pairing: any, i: number) => {
+      const fixture = pairing.matchId ? fixtureById.get(String(pairing.matchId)) as any : null;
+      const match = { ...pairing, ...(fixture || {}) };
+      const home = match.home || (match.homeId ? { id: match.homeId, name: match.homeName } : null);
+      const away = match.away || (match.awayId ? { id: match.awayId, name: match.awayName } : null);
+      const finished = match.status === 'finished' || match.isFinished === true;
+      const hasScore = match.scoreA != null && match.scoreB != null;
+      const startValue = match.startTime || match.scheduledAt || match.scheduledStartAt;
+      const startDate = startValue?.toDate ? startValue.toDate() : startValue ? new Date(startValue) : null;
+      const dateLabel = startDate && Number.isFinite(startDate.getTime())
+        ? startDate.toLocaleString(ru ? 'ru-RU' : 'en-GB', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+        : (ru ? 'ДАТА УТОЧНЯЕТСЯ' : 'DATE TBA');
+      const bye = match.status === 'bye' || (home && !away);
+      const roundLabel = ru ? `ТУР ${round}` : `ROUND ${round}`;
+      const TeamMark = () => <div className="w-8 h-8 rounded-full bg-secondary/50 border border-white/5 flex items-center justify-center"><Shield className="w-4 h-4 text-muted-foreground/40" /></div>;
+      return <Card key={match.id || i} className={cn("glass-card border-white/5 transition-all overflow-hidden", finished && "border-green-500/10", match.technicalDecision && "border-amber-400/20")}><CardContent className="p-3">
+        <div className="flex justify-between items-center mb-3">
+          <Badge variant="outline" className="text-[7px] font-black h-4 px-1.5 uppercase border-white/10 opacity-70">{roundLabel}{round === 7 ? ' · BO3' : ' · BO1'}</Badge>
+          <span className="text-[8px] font-mono font-bold text-muted-foreground">{dateLabel}</span>
+        </div>
+        {bye ? <div className="flex items-center justify-between"><div className="flex items-center gap-2 min-w-0"><TeamMark /><span className="truncate text-[10px] font-bold uppercase">{home?.name || 'TBD'}</span></div><span className="text-[8px] font-black text-yellow-500">BYE</span></div> : <div className="grid grid-cols-[1fr_40px_1fr] items-center gap-2">
+          <div className="flex flex-col items-center gap-1 min-w-0"><TeamMark /><p className="text-[9px] font-bold uppercase truncate w-full text-center text-white">{home?.name || 'TBD'}</p></div>
+          <div className="flex justify-center items-center">{hasScore ? <span className="text-sm font-headline font-black italic">{match.scoreA}:{match.scoreB}</span> : <Swords className="w-4 h-4 text-accent/40" />}</div>
+          <div className="flex flex-col items-center gap-1 min-w-0"><TeamMark /><p className="text-[9px] font-bold uppercase truncate w-full text-center text-white">{away?.name || 'TBD'}</p></div>
+        </div>}
+        {match.technicalDecision && <p className="mt-2 text-center text-[7px] uppercase text-amber-400">{ru ? 'Технический результат' : 'Technical result'}</p>}
+      </CardContent></Card>;
     })}</div>
     <p className="text-center text-[8px] uppercase tracking-widest text-muted-foreground">{ru ? 'Сильнейшая команда играет AWAY · BO1 до финала' : 'Stronger team plays AWAY · BO1 until the final'}</p>
   </div>;

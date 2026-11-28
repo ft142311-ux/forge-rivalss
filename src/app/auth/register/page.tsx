@@ -57,16 +57,25 @@ export default function RegisterPage() {
 
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!auth || isProcessing) return;
+    if (isProcessing) return;
+    if (!auth) {
+      toast({ variant: "destructive", title: language === 'ru' ? "Сервис регистрации недоступен" : "Registration service unavailable" });
+      return;
+    }
 
     if (username.trim().length < 3) {
       toast({ variant: "destructive", title: t.errorShort });
       return;
     }
 
+    if (!email.trim() || password.length < 6) {
+      toast({ variant: "destructive", title: language === 'ru' ? "Введите корректный Email и пароль не короче 6 символов" : "Enter a valid email and a password of at least 6 characters" });
+      return;
+    }
+
     setIsProcessing(true);
     try {
-      await initiateEmailSignUp(auth, email, password);
+      await initiateEmailSignUp(auth, email.trim().toLowerCase(), password);
       localStorage.setItem('pending_club_name', username);
       
       toast({ title: t.success });
@@ -81,6 +90,10 @@ export default function RegisterPage() {
         errorMsg = language === 'ru' ? "Пароль слишком простой" : "Password too weak";
       } else if (error.code === 'auth/invalid-email') {
         errorMsg = language === 'ru' ? "Некорректный Email" : "Invalid email";
+      } else if (error.code === 'auth/too-many-requests') {
+        errorMsg = language === 'ru' ? "Слишком много попыток. Попробуйте позже" : "Too many attempts. Try again later";
+      } else if (error.code === 'auth/network-request-failed') {
+        errorMsg = language === 'ru' ? "Нет соединения с сервером авторизации" : "Could not reach authentication server";
       }
 
       toast({ 

@@ -1,5 +1,16 @@
 export type AuctionCurrency = 'credits' | 'crystals';
 
+/** Normalize manager IDs from persisted auction documents; blank legacy fields are not identities. */
+export function normalizeAuctionUserId(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+/** Resolve canonical and legacy bidder fields without letting a blank canonical value mask a valid UID alias. */
+export function resolveAuctionBidderId(lot: any): string {
+  if (!lot || typeof lot !== 'object') return '';
+  return normalizeAuctionUserId(lot.highestBidderId) || normalizeAuctionUserId(lot.highestBidderUid);
+}
+
 /** Legacy lots without a currency field are credit-denominated. */
 export function resolveAuctionCurrency(value: unknown): AuctionCurrency {
   if (value === undefined || value === null || value === '') return 'credits';
@@ -9,7 +20,7 @@ export function resolveAuctionCurrency(value: unknown): AuctionCurrency {
 
 /** A system seller is valid only when the lot is explicitly marked as a system lot. */
 export function isSystemAuctionSeller(sellerId: unknown, isSystem: unknown): boolean {
-  return sellerId === 'system' && isSystem === true;
+  return normalizeAuctionUserId(sellerId) === 'system' && isSystem === true;
 }
 
 export function normalizeAuctionBalance(value: unknown): number {
@@ -138,7 +149,7 @@ export function resolvePreviousAuctionBidEscrow({
  */
 export function canPruneUnbidSystemAuctionLot(lot: any): boolean {
   if (!lot || typeof lot !== 'object') return false;
-  if (String(lot.highestBidderId || lot.highestBidderUid || '').trim()) return false;
+  if (resolveAuctionBidderId(lot)) return false;
   const rawEscrow = lot.escrowedAmount;
   if (rawEscrow === undefined || rawEscrow === null || rawEscrow === 0 || rawEscrow === '0' || rawEscrow === '') {
     return true;

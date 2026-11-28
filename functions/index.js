@@ -114,6 +114,9 @@ exports.initializeClub = functions.region('us-central1').https.onCall(async (dat
         throw new functions.https.HttpsError('failed-precondition', 'SEASON_CONFIG_MISSING');
       }
       const config = configSnap.data();
+      if (config.stagingSeasonOneResetInProgress === true) {
+        throw new functions.https.HttpsError('failed-precondition', 'SEASON_ONE_RESET_IN_PROGRESS');
+      }
       const seasonNum = Number(config.activeSeasonNumber || 1);
       const phase = config.phase || 'UNKNOWN';
       console.log('[INIT] CONFIG READ OK. Season:', seasonNum, 'Phase:', phase);

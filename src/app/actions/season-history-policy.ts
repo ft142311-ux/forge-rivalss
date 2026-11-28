@@ -20,8 +20,8 @@ export type SeasonCatchUpPolicy = {
  *   silently skipped just because its archive is missing or corrupt.
  * - A genuinely incomplete season may be recorded as skipped without inventing
  *   scores, standings, awards, or promotion/relegation.
- * - Only the newest verified completed season is retained. Older verified
- *   archives are candidates for deletion only after the target season activates.
+ * - Only the newest verified completed season archive is retained. Older
+ *   verified archives are deleted only after the next season activates.
  * - Unknown state and integrity conflicts fail closed.
  *
  * This helper is pure. Callers must inspect persisted match data and archive

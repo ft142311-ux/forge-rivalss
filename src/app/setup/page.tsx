@@ -11,6 +11,28 @@ import { useGameState } from '@/app/lib/store';
 import { LoadingScreen } from '@/components/game/LoadingScreen';
 import { useUser, useFirebase } from '@/firebase';
 
+const SETUP_REQUEST_TIMEOUT_MS = 45_000;
+
+async function fetchSetupStage(input: RequestInfo | URL, init: RequestInit, stage: string): Promise<Response> {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), SETUP_REQUEST_TIMEOUT_MS);
+  const startedAt = Date.now();
+  try {
+    const response = await fetch(input, { ...init, signal: controller.signal });
+    console.info('[SETUP STAGE] request completed', { stage, status: response.status, durationMs: Date.now() - startedAt });
+    return response;
+  } catch (error: any) {
+    if (error?.name === 'AbortError') {
+      console.error('[SETUP STAGE] request timed out', { stage, timeoutMs: SETUP_REQUEST_TIMEOUT_MS });
+      throw new Error(stage === 'registration' ? 'REGISTRATION_REQUEST_TIMEOUT' : 'PROFILE_REQUEST_TIMEOUT');
+    }
+    console.error('[SETUP STAGE] request failed', { stage, durationMs: Date.now() - startedAt, name: error?.name || 'Error' });
+    throw error;
+  } finally {
+    window.clearTimeout(timeout);
+  }
+}
+
 /**
  * СТРАНИЦА ИНИЦИАЛИЗАЦИИ v166.
  * После успешной регистрации ждёт фактическую синхронизацию players_v14 вместо
@@ -28,6 +50,7 @@ export default function SetupPage() {
   const [isUpdating, setIsUpdating] = useState(false);
   const [step, setStep] = useState<'IDLE' | 'PROVISIONING' | 'SUCCESS'>('IDLE');
   const [error, setError] = useState<string | null>(null);
+  const [stageLabel, setStageLabel] = useState('');
 
   useEffect(() => {
     if (isInitialSyncDone && isTeamLoaded) {
@@ -35,6 +58,12 @@ export default function SetupPage() {
       router.replace('/');
     }
   }, [isInitialSyncDone, isTeamLoaded, router, user?.uid]);
+
+  // Heavy world diagnostics are intentionally not polled from the player setup page.
+  // The read-only endpoint remains available for controlled operator checks; calling
+  // it on every login adds multiple collection scans while registration is already active.
+
+  // World diagnostics are operator-only; setup must not launch broad scans.
 
   useEffect(() => {
     if (step !== 'SUCCESS' || isTeamLoaded) return;
@@ -57,6 +86,7 @@ export default function SetupPage() {
     setIsUpdating(true);
     setStep('PROVISIONING');
     setError(null);
+    setStageLabel(language === 'ru' ? 'Проверка сессии...' : 'Verifying session...');
     
     try {
       // Hosted and local registration now use the same authenticated
@@ -76,7 +106,8 @@ export default function SetupPage() {
       }
 
       const clubName = localStorage.getItem('pending_club_name') || '';
-      const response = await fetch('/api/registration/initialize', {
+      setStageLabel(language === 'ru' ? 'Выделение места в лиге...' : 'Allocating league slot...');
+      const response = await fetchSetupStage('/api/registration/initialize', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -84,7 +115,7 @@ export default function SetupPage() {
         },
         cache: 'no-store',
         body: JSON.stringify({ clubName }),
-      });
+      }, 'registration');
 
       const result = await response.json();
       if (!response.ok || !result?.success) {
@@ -95,11 +126,12 @@ export default function SetupPage() {
       // Registration is committed with Firebase Admin. Hydrate the initial
       // client state through an authenticated, owner-scoped server read rather
       // than waiting indefinitely for a browser Firestore listener.
-      const profileResponse = await fetch('/api/player/profile', {
+      setStageLabel(language === 'ru' ? 'Загрузка профиля клуба...' : 'Loading club profile...');
+      const profileResponse = await fetchSetupStage('/api/player/profile', {
         method: 'GET',
         headers: { Authorization: `Bearer ${idToken}` },
         cache: 'no-store',
-      });
+      }, 'profile');
       const profileResult = await profileResponse.json();
       if (!profileResponse.ok || !profileResult?.success || !profileResult?.profile) {
         throw new Error(
@@ -163,6 +195,8 @@ export default function SetupPage() {
       
       let errorMsg = "CLUB_INITIALIZATION_FAILED";
       const msg = e.message || "";
+      if (msg === 'REGISTRATION_REQUEST_TIMEOUT') errorMsg = 'REGISTRATION_REQUEST_TIMEOUT';
+      else if (msg === 'PROFILE_REQUEST_TIMEOUT') errorMsg = 'PROFILE_REQUEST_TIMEOUT';
       const details = e.details || {};
 
       // Анализ диагностических сообщений от HttpsError
@@ -247,7 +281,7 @@ export default function SetupPage() {
             <CardContent className="p-6">
                {step === 'PROVISIONING' ? (
                  <div className="space-y-4">
-                   <p className="text-[10px] text-primary font-black uppercase animate-pulse">{t.loading}</p>
+                   <p className="text-[10px] text-primary font-black uppercase animate-pulse">{stageLabel || t.loading}</p>
                    <Progress value={66} className="h-1" />
                  </div>
                ) : (

@@ -1,3 +1,5 @@
+import { timestampToMillis } from './timestamp-utils';
+
 /**
  * Pure presentation helpers shared by Match Preview, live text broadcast and
  * post-match statistics. These helpers only normalize already-stored results;
@@ -5,6 +7,26 @@
  */
 
 export type MatchReportScore = { home: number; away: number };
+
+/**
+ * A recycled league slot belongs to the current club only from the profile's
+ * creation instant onward. Prefer scheduled kickoff so a stale fixture
+ * resolved after registration cannot become a new unread report.
+ */
+export function hasValidClubCreatedAt(profileCreatedAt: any): boolean {
+  const createdAt = timestampToMillis(profileCreatedAt);
+  return Number.isFinite(createdAt) && createdAt > 0;
+}
+
+export function isMatchWithinClubLifetime(match: any, profileCreatedAt: any): boolean {
+  const createdAt = timestampToMillis(profileCreatedAt);
+  if (!Number.isFinite(createdAt) || createdAt <= 0) return true;
+
+  const matchAt = [match?.startTime, match?.playedAt, match?.resolvedAt]
+    .map(timestampToMillis)
+    .find(Number.isFinite);
+  return typeof matchAt === 'number' && matchAt >= createdAt;
+}
 
 export function resolveMatchSimulation(matchData: any): any | null {
   if (!matchData) return null;
@@ -54,4 +76,13 @@ export function getCompletedSeriesScore(games: any[], completedGameCount: number
     home: score.home + Number(game?.homeScore || 0),
     away: score.away + Number(game?.awayScore || 0),
   }), { home: 0, away: 0 });
+}
+
+
+/** Shared terminal-state predicate for every match-report surface. */
+export function isMatchReportFinished(match: any): boolean {
+  if (match?.isFinished === true) return true;
+  return ['finished', 'completed', 'resolved'].includes(
+    String(match?.status || '').trim().toLowerCase(),
+  );
 }

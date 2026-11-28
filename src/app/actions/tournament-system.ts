@@ -11,7 +11,11 @@ import { buildMatchTeamSnapshot, createDeterministicBotSquad } from '@/app/lib/m
 import { runMatchEngine } from '@/app/lib/match-engine';
 import { MATCH_COLLECTIONS } from '@/app/lib/match-storage';
 import { isTournamentMatchLeaseExpired, TOURNAMENT_MATCH_LEASE_MS } from '@/app/lib/tournament-match-lease';
-import { isTournamentStageMatchSetComplete } from '@/app/lib/tournament-stage-utils';
+import { isTournamentStageMatchSetComplete, resolveTournamentGroupOutcome } from '@/app/lib/tournament-stage-utils';
+import { getTournamentRegistrationCapacity, getTournamentRegistrationWindow, normalizeTournamentRegisteredIds } from '@/app/lib/tournament-registration-window';
+import { isTournamentStageFixtureCompatible } from '@/app/lib/tournament-stage-transition';
+import { tryCreateManagerXpAward, getManagerMatchXp, isEligibleManagerProfile } from '@/app/lib/manager-progression';
+
 
 const TOURNAMENTS = [
   { id: 'iron-kettle', name: 'Чугунный чайник', type: 'Тов', maxParticipants: 16, start: '10:00' },
@@ -153,14 +157,8 @@ function botTeam(tournamentId: string, index: number): Team {
 async function generateDailyTournamentsInternal() {
   const db = getAdminDb();
   const date = getMoscowDateString();
-  const created: string[] = [];
-
-  for (const template of TOURNAMENTS) {
+  const entries = TOURNAMENTS.map(template => {
     const id = `${date}_${template.id}`;
-    const ref = db.collection('tournaments_v1').doc(id);
-    const snap = await ref.get();
-    if (snap.exists) continue;
-
     const startAt = moscowDateAt(date, template.start);
     const data = {
       id,
@@ -184,11 +182,47 @@ async function generateDailyTournamentsInternal() {
       updatedAt: FieldValue.serverTimestamp(),
       version: 1,
     };
-    await ref.create(data);
-    created.push(id);
+    return { id, ref: db.collection('tournaments_v1').doc(id), data };
+  });
+  const configRef = db.collection('system_v1').doc('season_config');
+
+  // Read the reset marker and every deterministic tournament ID before the
+  // first write. This makes the entire daily set atomic and closes the direct
+  // ensureDailyTournamentsAction path as well as the cron path.
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const created = await db.runTransaction(async (tx: any) => {
+        const resetConfigSnap = await tx.get(configRef);
+        const resetState = resetConfigSnap.exists ? resetConfigSnap.data() || {} : {};
+        if (resetState.stagingSeasonOneResetInProgress === true ||
+            resetState.stagingFreshSeasonOneReset === true) {
+          throw new Error('STAGING_SEASON_ONE_RESET_IN_PROGRESS');
+        }
+
+        const snapshots = await Promise.all(entries.map(entry => tx.get(entry.ref)));
+        const createdIds: string[] = [];
+        entries.forEach((entry, index) => {
+          if (snapshots[index].exists) return;
+          tx.create(entry.ref, entry.data);
+          createdIds.push(entry.id);
+        });
+        return createdIds;
+      });
+      return { date, created };
+    } catch (error: any) {
+      // A competing worker can win a deterministic-ID create between the
+      // read and commit. Retry the whole atomic set so any still-missing IDs
+      // are created, while unrelated errors remain visible to the caller.
+      const code = error?.code;
+      const deterministicIdCollision = code === 6 ||
+        code === 'already-exists' ||
+        code === 'ALREADY_EXISTS';
+      if (deterministicIdCollision && attempt < 2) continue;
+      throw error;
+    }
   }
 
-  return { date, created };
+  throw new Error('TOURNAMENT_GENERATION_RETRY_EXHAUSTED');
 }
 
 export async function generateDailyTournaments(cronToken: string) {
@@ -197,7 +231,14 @@ export async function generateDailyTournaments(cronToken: string) {
   } catch {
     return { success: false, error: 'UNAUTHORIZED' };
   }
-  return generateDailyTournamentsInternal();
+  try {
+    return await generateDailyTournamentsInternal();
+  } catch (error: any) {
+    if (error?.message === 'STAGING_SEASON_ONE_RESET_IN_PROGRESS') {
+      return { success: true, skipped: true, reason: 'STAGING_SEASON_ONE_RESET_IN_PROGRESS', writesStarted: false };
+    }
+    throw error;
+  }
 }
 export async function ensureDailyTournamentsAction(idToken: string) {
   try {
@@ -217,14 +258,25 @@ export async function registerForTournamentAction(idToken: string, tournamentId:
     if (!manager) throw new Error('PLAYER_NOT_FOUND');
 
     await db.runTransaction(async (t: any) => {
+    const resetConfigSnap = await t.get(db.collection('system_v1').doc('season_config'));
+    const resetState = resetConfigSnap.exists ? resetConfigSnap.data() || {} : {};
+    if (resetState.stagingSeasonOneResetInProgress === true || resetState.stagingFreshSeasonOneReset === true) {
+      throw new Error('STAGING_SEASON_ONE_RESET_IN_PROGRESS');
+    }
       const snap = await t.get(ref);
       if (!snap.exists) throw new Error('TOURNAMENT_NOT_FOUND');
       const data = snap.data() || {};
       const now = Date.now();
-      const ids: string[] = Array.isArray(data.registeredIds) ? data.registeredIds : [];
-      if (data.status !== 'registration' || now >= Number(data.registrationCloseAt)) throw new Error('REGISTRATION_CLOSED');
+      const registrationWindow = getTournamentRegistrationWindow(data);
+      const capacity = getTournamentRegistrationCapacity(data.maxParticipants);
+      const ids = normalizeTournamentRegisteredIds(data.registeredIds);
+      if (data.status !== 'registration') throw new Error('REGISTRATION_CLOSED');
+      if (!registrationWindow) throw new Error('REGISTRATION_WINDOW_INVALID');
+      if (!capacity) throw new Error('INVALID_TOURNAMENT_CAPACITY');
+      if (now < registrationWindow.opensAt) throw new Error('REGISTRATION_NOT_OPEN');
+      if (now >= registrationWindow.closesAt) throw new Error('REGISTRATION_CLOSED');
       if (ids.includes(uid)) throw new Error('ALREADY_REGISTERED');
-      if (ids.length >= Number(data.maxParticipants)) throw new Error('TOURNAMENT_FULL');
+      if (ids.length >= capacity) throw new Error('TOURNAMENT_FULL');
       t.update(ref, {
         registeredIds: [...ids, uid],
         participantCount: ids.length + 1,
@@ -244,11 +296,19 @@ export async function unregisterFromTournamentAction(idToken: string, tournament
     const db = getAdminDb();
     const ref = db.collection('tournaments_v1').doc(tournamentId);
     await db.runTransaction(async (t: any) => {
+    const resetConfigSnap = await t.get(db.collection('system_v1').doc('season_config'));
+    const resetState = resetConfigSnap.exists ? resetConfigSnap.data() || {} : {};
+    if (resetState.stagingSeasonOneResetInProgress === true || resetState.stagingFreshSeasonOneReset === true) {
+      throw new Error('STAGING_SEASON_ONE_RESET_IN_PROGRESS');
+    }
       const snap = await t.get(ref);
       if (!snap.exists) throw new Error('TOURNAMENT_NOT_FOUND');
       const data = snap.data() || {};
       if (data.status !== 'registration') throw new Error('REGISTRATION_CLOSED');
-      const ids: string[] = Array.isArray(data.registeredIds) ? data.registeredIds : [];
+      const registrationWindow = getTournamentRegistrationWindow(data);
+      if (!registrationWindow) throw new Error('REGISTRATION_WINDOW_INVALID');
+      if (Date.now() >= registrationWindow.closesAt) throw new Error('REGISTRATION_CLOSED');
+      const ids = normalizeTournamentRegisteredIds(data.registeredIds);
       if (!ids.includes(uid)) throw new Error('NOT_REGISTERED');
       const next = ids.filter(id => id !== uid);
       t.update(ref, { registeredIds: next, participantCount: next.length, updatedAt: FieldValue.serverTimestamp() });
@@ -266,6 +326,11 @@ async function initializeTournament(db: any, tournamentId: string, now: number) 
   // A fresh initialization lease is exclusive. If its owner crashed, a later
   // cron cycle may reclaim it after the bounded lease expires.
   const tournament = await db.runTransaction(async (t: any) => {
+    const resetConfigSnap = await t.get(db.collection('system_v1').doc('season_config'));
+    const resetState = resetConfigSnap.exists ? resetConfigSnap.data() || {} : {};
+    if (resetState.stagingSeasonOneResetInProgress === true || resetState.stagingFreshSeasonOneReset === true) {
+      throw new Error('STAGING_SEASON_ONE_RESET_IN_PROGRESS');
+    }
     const snap = await t.get(ref);
     if (!snap.exists) return null;
     const data = snap.data() || {};
@@ -292,15 +357,15 @@ async function initializeTournament(db: any, tournamentId: string, now: number) 
   if (!tournament) return false;
 
   try {
-    const maxParticipants = Number(tournament.maxParticipants);
-    if (![16, 32].includes(maxParticipants)) throw new Error('INVALID_TOURNAMENT_CAPACITY');
+    const maxParticipants = getTournamentRegistrationCapacity(tournament.maxParticipants);
+    if (!maxParticipants) throw new Error('INVALID_TOURNAMENT_CAPACITY');
 
-    // Normalize legacy/malformed registration data and remove duplicate IDs.
-    const registeredIds: string[] = Array.from(new Set<string>(
-      (Array.isArray(tournament.registeredIds) ? tournament.registeredIds : [])
-        .filter((id: unknown): id is string => typeof id === 'string' && id.trim().length > 0)
-        .map((id: string) => id.trim())
-    )).slice(0, maxParticipants);
+    // Normalize legacy/malformed registration data, but never silently drop
+    // valid managers when the persisted roster exceeds the tournament limit.
+    const registeredIds = normalizeTournamentRegisteredIds(tournament.registeredIds);
+    if (registeredIds.length > maxParticipants) {
+      throw new Error('TOURNAMENT_PARTICIPANT_INTEGRITY_FAILED');
+    }
     const managerResults = await Promise.all(registeredIds.map(id => readManager(db, id)));
     const realTeams = managerResults.filter((team): team is Team => Boolean(team));
     const uniqueRealTeams = Array.from(new Map(realTeams.map(team => [team.id, team])).values());
@@ -363,6 +428,11 @@ async function initializeTournament(db: any, tournamentId: string, now: number) 
     // All participant, group, fixture and stage writes commit atomically after
     // the initialization token is revalidated. A reclaimed worker is fenced.
     await db.runTransaction(async (t: any) => {
+    const resetConfigSnap = await t.get(db.collection('system_v1').doc('season_config'));
+    const resetState = resetConfigSnap.exists ? resetConfigSnap.data() || {} : {};
+    if (resetState.stagingSeasonOneResetInProgress === true || resetState.stagingFreshSeasonOneReset === true) {
+      throw new Error('STAGING_SEASON_ONE_RESET_IN_PROGRESS');
+    }
       const fresh = await t.get(ref);
       const current = fresh.data() || {};
       if (!fresh.exists || current.status !== 'initializing' ||
@@ -391,6 +461,11 @@ async function initializeTournament(db: any, tournamentId: string, now: number) 
   } catch (error: any) {
     // A stale worker must not reset a newer worker's initialization lease.
     await db.runTransaction(async (t: any) => {
+    const resetConfigSnap = await t.get(db.collection('system_v1').doc('season_config'));
+    const resetState = resetConfigSnap.exists ? resetConfigSnap.data() || {} : {};
+    if (resetState.stagingSeasonOneResetInProgress === true || resetState.stagingFreshSeasonOneReset === true) {
+      throw new Error('STAGING_SEASON_ONE_RESET_IN_PROGRESS');
+    }
       const fresh = await t.get(ref);
       const current = fresh.data() || {};
       if (!fresh.exists || current.status !== 'initializing' ||
@@ -418,6 +493,11 @@ async function resolveTournamentMatch(db: any, tournamentId: string, matchId: st
   const matchRef = tournamentRef.collection('matches').doc(matchId);
   const processingToken = randomUUID();
   const claim = await db.runTransaction(async (t: any) => {
+    const resetConfigSnap = await t.get(db.collection('system_v1').doc('season_config'));
+    const resetState = resetConfigSnap.exists ? resetConfigSnap.data() || {} : {};
+    if (resetState.stagingSeasonOneResetInProgress === true || resetState.stagingFreshSeasonOneReset === true) {
+      throw new Error('STAGING_SEASON_ONE_RESET_IN_PROGRESS');
+    }
     const snap = await t.get(matchRef);
     if (!snap.exists) return false;
     const m = snap.data() || {};
@@ -432,7 +512,10 @@ async function resolveTournamentMatch(db: any, tournamentId: string, matchId: st
     // A crashed third attempt is made visibly retry-exhausted instead of
     // remaining in processing forever and blocking tournament progression.
     if (attempts >= 3) {
-      if (staleProcessing) {
+      // A normal failed third attempt is already in "error" state; a crashed
+      // third attempt remains "processing" until its lease expires. Both must
+      // become explicitly retry-exhausted, while an active worker stays fenced.
+      if (status !== 'processing' || staleProcessing) {
         t.update(matchRef, {
           status: 'error',
           processingToken: FieldValue.delete(),
@@ -474,11 +557,23 @@ async function resolveTournamentMatch(db: any, tournamentId: string, matchId: st
     if (!winnerId && m.stage !== 'groups') {
       winnerId = home.id === away.id ? home.id : (simulation.homeStrength >= simulation.awayStrength ? home.id : away.id);
     }
+    const groupOutcome = m.stage === 'groups'
+      ? resolveTournamentGroupOutcome(simulation.winnerSide, home.id, away.id)
+      : null;
+    if (m.stage === 'groups' && !groupOutcome) {
+      throw new Error('TOURNAMENT_GROUP_OUTCOME_INVALID');
+    }
+    const resolvedWinnerSide = winnerId === home.id ? 'home' : winnerId === away.id ? 'away' : 'draw';
 
     const homeScore = simulation.games.reduce((s, g) => s + g.homeScore, 0);
     const awayScore = simulation.games.reduce((s, g) => s + g.awayScore, 0);
 
     const finalized = await db.runTransaction(async (t: any) => {
+    const resetConfigSnap = await t.get(db.collection('system_v1').doc('season_config'));
+    const resetState = resetConfigSnap.exists ? resetConfigSnap.data() || {} : {};
+    if (resetState.stagingSeasonOneResetInProgress === true || resetState.stagingFreshSeasonOneReset === true) {
+      throw new Error('STAGING_SEASON_ONE_RESET_IN_PROGRESS');
+    }
       const fresh = await t.get(matchRef);
       const freshData = fresh.data() || {};
       if (!fresh.exists || freshData.status !== 'processing' || freshData.processingToken !== processingToken) return false;
@@ -500,6 +595,28 @@ async function resolveTournamentMatch(db: any, tournamentId: string, matchId: st
         throw new Error('TOURNAMENT_GROUP_STANDINGS_INTEGRITY_FAILED');
       }
 
+      // Read human manager profiles before the first write so XP and the match result commit atomically.
+      const humanTeams = [home, away].filter(team => !team.isBot && isEligibleManagerProfile(team.id, team));
+      const humanProfileSnaps = await Promise.all(humanTeams.map(team => t.get(db.collection('players_v14').doc(team.id))));
+      const managerXpSkipped: Array<{ userId: string; reason: string }> = [];
+      const managerXpPlans = humanTeams.flatMap((team, index) => {
+        const profileSnap = humanProfileSnaps[index];
+        if (!profileSnap.exists) return [];
+        const profileData = profileSnap.data() || {};
+        if (!isEligibleManagerProfile(team.id, profileData)) return [];
+        const attempt = tryCreateManagerXpAward(profileData, getManagerMatchXp('tournament', winnerId === team.id), 'tournament_match');
+        if (!attempt.award) {
+          if (attempt.skippedReason) managerXpSkipped.push({ userId: team.id, reason: attempt.skippedReason });
+          return [];
+        }
+        return [{
+          team,
+          profileRef: profileSnap.ref,
+          award: attempt.award,
+        }];
+      });
+      const managerXpAwards = managerXpPlans.map(({ team, award }) => ({ userId: team.id, ...award.receipt }));
+
       const finishedAt = FieldValue.serverTimestamp();
       const winnerName = winnerId === home.id ? home.name : winnerId === away.id ? away.name : null;
       t.update(matchRef, {
@@ -508,8 +625,15 @@ async function resolveTournamentMatch(db: any, tournamentId: string, matchId: st
         result: simulation,
         winnerId,
         winnerName,
+        winnerSide: resolvedWinnerSide,
+        seriesScore: simulation.seriesScore,
         homeScore,
         awayScore,
+        managerXpAwards,
+        managerXpSkipped,
+      });
+      managerXpPlans.forEach(({ profileRef, award }) => {
+        t.update(profileRef, { ...award.profilePatch, updatedAt: FieldValue.serverTimestamp() });
       });
 
       // Tournament reports are stored separately from league and cup matches.
@@ -532,9 +656,12 @@ async function resolveTournamentMatch(db: any, tournamentId: string, matchId: st
         awayScore,
         scoreA: homeScore,
         scoreB: awayScore,
-        seriesScore: `${homeScore}-${awayScore}`,
+        seriesScore: simulation.seriesScore,
         winnerId,
+        winnerSide: resolvedWinnerSide,
         winner: winnerName,
+        managerXpAwards,
+        managerXpSkipped,
         simulation,
         games: simulation.games,
         isFinished: true,
@@ -555,19 +682,22 @@ async function resolveTournamentMatch(db: any, tournamentId: string, matchId: st
         awayRow.against = Number(awayRow.against || 0) + homeScore;
         homeRow.diff = homeRow.for - homeRow.against;
         awayRow.diff = awayRow.for - awayRow.against;
-        if (homeScore === awayScore) {
+        if (!groupOutcome) throw new Error('TOURNAMENT_GROUP_OUTCOME_INVALID');
+        if (groupOutcome === 'draw') {
           homeRow.draws = Number(homeRow.draws || 0) + 1;
           awayRow.draws = Number(awayRow.draws || 0) + 1;
           homeRow.points = Number(homeRow.points || 0) + POINTS_DRAW;
           awayRow.points = Number(awayRow.points || 0) + POINTS_DRAW;
-        } else if (winnerId === home.id) {
+        } else if (groupOutcome === 'home_win') {
           homeRow.wins = Number(homeRow.wins || 0) + 1;
           homeRow.points = Number(homeRow.points || 0) + POINTS_WIN;
           awayRow.losses = Number(awayRow.losses || 0) + 1;
-        } else {
+        } else if (groupOutcome === 'away_win') {
           awayRow.wins = Number(awayRow.wins || 0) + 1;
           awayRow.points = Number(awayRow.points || 0) + POINTS_WIN;
           homeRow.losses = Number(homeRow.losses || 0) + 1;
+        } else {
+          throw new Error('TOURNAMENT_GROUP_OUTCOME_INVALID');
         }
         groupRows.sort((a: any, b: any) => b.points - a.points || b.diff - a.diff || b.wins - a.wins || a.name.localeCompare(b.name));
         t.update(groupRef, { teams: groupRows, updatedAt: FieldValue.serverTimestamp() });
@@ -580,6 +710,11 @@ async function resolveTournamentMatch(db: any, tournamentId: string, matchId: st
     // A worker whose lease was reclaimed must never overwrite the newer
     // worker's state or publish a stale result.
     await db.runTransaction(async (t: any) => {
+    const resetConfigSnap = await t.get(db.collection('system_v1').doc('season_config'));
+    const resetState = resetConfigSnap.exists ? resetConfigSnap.data() || {} : {};
+    if (resetState.stagingSeasonOneResetInProgress === true || resetState.stagingFreshSeasonOneReset === true) {
+      throw new Error('STAGING_SEASON_ONE_RESET_IN_PROGRESS');
+    }
       const fresh = await t.get(matchRef);
       const data = fresh.data() || {};
       if (!fresh.exists || data.status !== 'processing' || data.processingToken !== processingToken) return;
@@ -601,13 +736,45 @@ async function stageMatchesDone(tournamentRef: any, stage: string, expectedCount
   // Count alone is insufficient: a malformed set can contain the right number
   // of unique but out-of-range fixtures. Require the exact canonical matrix.
   if (snap.docs.length !== expectedCount) return false;
+
+  let groupTeamsById: Record<string, string[]> | undefined;
+  if (stage === 'groups') {
+    const groupsSnap = await tournamentRef.collection('groups').get();
+    const expectedGroupCount = maxParticipants / 4;
+    if (!Number.isInteger(expectedGroupCount) || groupsSnap.docs.length !== expectedGroupCount) return false;
+
+    const expectedGroupIds = new Set(
+      Array.from({ length: expectedGroupCount }, (_, index) => String.fromCharCode(65 + index)),
+    );
+    const allTeamIds = new Set<string>();
+    groupTeamsById = {};
+
+    for (const groupDoc of groupsSnap.docs) {
+      if (!expectedGroupIds.delete(groupDoc.id)) return false;
+      const groupData = groupDoc.data() || {};
+      if (String(groupData.groupId || groupDoc.id) !== groupDoc.id) return false;
+      const rows = Array.isArray(groupData.teams) ? groupData.teams : [];
+      if (rows.length !== 4 || rows.some((row: any) => !row?.id)) return false;
+
+      const teamIds = rows.map((row: any) => String(row.id).trim());
+      if (teamIds.some((id: string) => !id) || new Set(teamIds).size !== 4) return false;
+      for (const id of teamIds) {
+        if (allTeamIds.has(id)) return false;
+        allTeamIds.add(id);
+      }
+      groupTeamsById[groupDoc.id] = teamIds;
+    }
+
+    if (expectedGroupIds.size !== 0 || allTeamIds.size !== maxParticipants) return false;
+  }
+
   return isTournamentStageMatchSetComplete(
     snap.docs.map((doc: any) => ({ id: doc.id, data: doc.data() || {} })),
     stage,
     maxParticipants,
+    groupTeamsById,
   );
 }
-
 function expectedStageMatchCount(maxParticipants: number, stage: string) {
   if (stage === 'groups') return (maxParticipants / 4) * 6;
   if (stage === 'round_of_16') return maxParticipants === 32 ? 8 : 0;
@@ -626,6 +793,11 @@ async function syncTournamentHistoryForParticipant(db: any, participantId: strin
   const playerRef = db.collection('players_v14').doc(participantId);
   const archiveRef = db.collection('inactive_clubs_v1').doc(participantId);
   return db.runTransaction(async (t: any) => {
+    const resetConfigSnap = await t.get(db.collection('system_v1').doc('season_config'));
+    const resetState = resetConfigSnap.exists ? resetConfigSnap.data() || {} : {};
+    if (resetState.stagingSeasonOneResetInProgress === true || resetState.stagingFreshSeasonOneReset === true) {
+      throw new Error('STAGING_SEASON_ONE_RESET_IN_PROGRESS');
+    }
     const [playerSnap, archiveSnap] = await Promise.all([
       t.get(playerRef),
       t.get(archiveRef),
@@ -698,6 +870,11 @@ async function commitTournamentStageTransition(
 ) {
   const tournamentRef = db.collection('tournaments_v1').doc(tournamentId);
   return db.runTransaction(async (t: any) => {
+    const resetConfigSnap = await t.get(db.collection('system_v1').doc('season_config'));
+    const resetState = resetConfigSnap.exists ? resetConfigSnap.data() || {} : {};
+    if (resetState.stagingSeasonOneResetInProgress === true || resetState.stagingFreshSeasonOneReset === true) {
+      throw new Error('STAGING_SEASON_ONE_RESET_IN_PROGRESS');
+    }
     const tournamentSnap = await t.get(tournamentRef);
     if (!tournamentSnap.exists) return false;
     const current = tournamentSnap.data() || {};
@@ -709,8 +886,7 @@ async function commitTournamentStageTransition(
       const existing = existingSnaps[index];
       if (!existing.exists) continue;
       const data = existing.data() || {};
-      if (data.stage !== nextStage || String(data.homeId) !== String(fixture.homeId) ||
-          String(data.awayId) !== String(fixture.awayId) || Number(data.index) !== Number(fixture.index)) {
+      if (!isTournamentStageFixtureCompatible(data, fixture)) {
         throw new Error('TOURNAMENT_STAGE_FIXTURE_CONFLICT');
       }
     }
@@ -789,6 +965,11 @@ async function advanceTournament(db: any, tournament: any, now: number) {
     const finalMatch = finalSnap.docs[0]?.data();
     if (!finalMatch?.winnerId) return false;
     const completedTournament = await db.runTransaction(async (t: any) => {
+    const resetConfigSnap = await t.get(db.collection('system_v1').doc('season_config'));
+    const resetState = resetConfigSnap.exists ? resetConfigSnap.data() || {} : {};
+    if (resetState.stagingSeasonOneResetInProgress === true || resetState.stagingFreshSeasonOneReset === true) {
+      throw new Error('STAGING_SEASON_ONE_RESET_IN_PROGRESS');
+    }
       const fresh = await t.get(ref);
       if (!fresh.exists) return null;
       const current = fresh.data() || {};
@@ -838,8 +1019,21 @@ export async function runTournamentCycle(cronToken: string) {
   } catch {
     return { success: false, error: 'UNAUTHORIZED' };
   }
-  const generated = await generateDailyTournamentsInternal();
   const db = getAdminDb();
+  const resetConfig = await db.collection('system_v1').doc('season_config').get();
+  const resetState = resetConfig.exists ? resetConfig.data() || {} : {};
+  if (resetState.stagingSeasonOneResetInProgress === true || resetState.stagingFreshSeasonOneReset === true) {
+    return { success: true, skipped: true, reason: 'STAGING_SEASON_ONE_RESET_IN_PROGRESS' };
+  }
+  let generated: { date: string; created: string[] };
+  try {
+    generated = await generateDailyTournamentsInternal();
+  } catch (error: any) {
+    if (error?.message === 'STAGING_SEASON_ONE_RESET_IN_PROGRESS') {
+      return { success: true, skipped: true, reason: 'STAGING_SEASON_ONE_RESET_IN_PROGRESS', writesStarted: false };
+    }
+    throw error;
+  }
   const now = Date.now();
   // Retry participant history independently from active tournament stages.
   const pendingHistorySnap = await db.collection('tournaments_v1')

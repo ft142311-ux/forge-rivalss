@@ -11,8 +11,11 @@ test('cup technical fallback re-reads the match inside a transaction before writ
   const fallback = source.slice(start, end);
   assert.match(fallback, /db\.runTransaction\(async \(tx: any\) =>/);
   assert.match(fallback, /const snap = await tx\.get\(ref\)/);
-  assert.match(fallback, /const terminal = existing\.isFinished === true/);
-  assert.match(fallback, /\['finished', 'completed'\]\.includes\(String\(existing\.status \|\| ''\)\.toLowerCase\(\)\)/);
+  assert.match(fallback, /const terminal = isMatchReportFinished\(existing\)/);
+  assert.match(fallback, /const resetConfigSnap = await tx\.get\(db\.collection\('system_v1'\)\.doc\('season_config'\)\)/);
+  assert.match(fallback, /resetState\.stagingSeasonOneResetInProgress === true \|\| resetState\.stagingFreshSeasonOneReset === true/);
+  assert.ok(fallback.indexOf('resetConfigSnap') < fallback.indexOf('const snap = await tx.get(ref)'),
+    'reset marker must be read before the match can be changed');
   assert.match(fallback, /if \(terminal && existing\.winnerId\) \{/);
   assert.equal((fallback.match(/processingToken: FieldValue\.delete\(\)/g) || []).length, 3,
     'every terminal-repair and deadline-fallback path must clear stale processing leases');

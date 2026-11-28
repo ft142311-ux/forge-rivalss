@@ -13,8 +13,9 @@
     "test:core": "node scripts/test-v2-core.cjs",
     "test": "tsx --test tests/*.test.mjs",
     "scheduler:local": "node scripts/local-match-scheduler.cjs",
-    "test:registration:emulator": "firebase emulators:exec --only auth,firestore --project demo-forge-rivals \"tsx --test tests/registration-emulator.integration.test.mjs tests/registration-api.integration.test.mjs tests/club-inactivity-emulator.integration.test.mjs tests/season-activation-emulator.integration.test.mjs tests/season-publication-cleanup-emulator.integration.test.mjs tests/auction-expiry-emulator.integration.test.mjs\"",
-    "test:cup:emulator": "firebase emulators:exec --only firestore --project demo-forge-rivals-cup-test \"node --conditions=react-server --import tsx --test tests/cup-preparation-emulator.integration.test.mjs\""
+    "test:registration:emulator": "firebase emulators:exec --only auth,firestore --project demo-forge-rivals \"tsx --test tests/registration-emulator.integration.test.mjs tests/registration-api.integration.test.mjs tests/club-inactivity-emulator.integration.test.mjs tests/season-activation-emulator.integration.test.mjs tests/season-one-to-two-lifecycle-emulator.integration.test.mjs tests/season-publication-cleanup-emulator.integration.test.mjs tests/auction-expiry-emulator.integration.test.mjs tests/youth-academy-emulator.integration.test.mjs\"",
+    "test:cup:emulator": "firebase emulators:exec --only firestore --project demo-forge-rivals-cup-test \"node --conditions=react-server --import tsx --test tests/cup-preparation-emulator.integration.test.mjs\"",
+    "test:season:lifecycle:emulator": "firebase emulators:exec --only firestore --project demo-forge-rivals-season-lifecycle-test \"node --conditions=react-server --import tsx --test tests/full-season-one-to-two-emulator.integration.mjs\""
   },
   "dependencies": {
     "@genkit-ai/google-genai": "^1.28.0",
@@ -49,7 +50,7 @@
     "firebase-admin": "^12.0.0",
     "genkit": "^1.28.0",
     "lucide-react": "^0.475.0",
-    "next": "15.5.9",
+    "next": "15.5.29",
     "nodemailer": "^6.10.0",
     "patch-package": "^8.0.0",
     "react": "^19.2.1",
@@ -57,10 +58,10 @@
     "react-dom": "^19.2.1",
     "react-hook-form": "^7.54.2",
     "recharts": "^2.15.1",
+    "server-only": "0.0.1",
     "tailwind-merge": "^3.0.1",
     "tailwindcss-animate": "^1.0.7",
-    "zod": "^3.24.2",
-    "server-only": "0.0.1"
+    "zod": "^3.24.2"
   },
   "devDependencies": {
     "@types/node": "^20",

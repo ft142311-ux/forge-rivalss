@@ -1,6 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import { FieldPath, FieldValue } from 'firebase-admin/firestore';
-import { isSystemAuctionSeller, normalizeAuctionBalance, resolveAuctionCurrency, resolveAuctionEscrow, resolveAuctionPrice } from './auction-settlement';
+import { isSystemAuctionSeller, normalizeAuctionBalance, resolveAuctionCurrency, resolveAuctionEscrow, resolveAuctionPrice, normalizeAuctionUserId, resolveAuctionBidderId } from './auction-settlement';
+import { resolveMarketBidExpiryMs } from './market-bid-guards';
+import { readFoundationRoster } from '@/game/foundation/guards';
+import {
+  canAcceptYouthAuctionPurchase,
+  isYouthMarketLockOwnedByLot,
+  isYouthMarketLockValidForLot,
+} from './youth-academy-rules';
 
 /**
  * Finalizes expired transfer-market listings from the server only.
@@ -10,31 +17,29 @@ import { isSystemAuctionSeller, normalizeAuctionBalance, resolveAuctionCurrency,
  * reconciled. If the leading bidder is no longer eligible, the lot expires
  * without a sale and the seller's player is unlocked.
  */
-async function settleCandidate(candidate: any, db: any) {
+async function settleCandidate(candidate: any, db: any, nowMs = Date.now()) {
     const transferRef = db.collection('transfer_history').doc();
     try {
       const result = await db.runTransaction(async (tx: any) => {
         const lotRef = db.collection('market_v7').doc(candidate.id);
-        const lotSnap = await tx.get(lotRef);
+        const resetConfigRef = db.collection('system_v1').doc('season_config');
+        const [lotSnap, resetConfigSnap] = await Promise.all([tx.get(lotRef), tx.get(resetConfigRef)]);
+        // Recheck inside the settlement transaction: a sweep may have acquired
+        // its lease before the reset marker was asserted.
+        if (resetConfigSnap.exists && (resetConfigSnap.data()?.stagingSeasonOneResetInProgress === true ||
+            resetConfigSnap.data()?.stagingFreshSeasonOneReset === true)) {
+          return 'SKIPPED';
+        }
         if (!lotSnap.exists) return 'SKIPPED';
         const lot: any = lotSnap.data() || {};
         if (lot.status === 'settled' || lot.status === 'expired') return 'SKIPPED';
-        const rawExpiry = lot.expiresAt;
-        const expiryMs = rawExpiry && typeof rawExpiry.toMillis === 'function'
-          ? rawExpiry.toMillis()
-          : rawExpiry instanceof Date
-            ? rawExpiry.getTime()
-            : typeof rawExpiry === 'number'
-              ? rawExpiry
-              : typeof rawExpiry === 'string'
-                ? Date.parse(rawExpiry)
-                : NaN;
-        if (!Number.isFinite(expiryMs) || expiryMs > Date.now()) return 'SKIPPED';
+        const expiryMs = resolveMarketBidExpiryMs(lot.expiresAt);
+        if (expiryMs === null || expiryMs > nowMs) return 'SKIPPED';
 
-        const sellerId = String(lot.sellerId || '');
-        const bidderId = String(lot.highestBidderId || lot.highestBidderUid || '');
+        const sellerId = normalizeAuctionUserId(lot.sellerId);
+        const bidderId = resolveAuctionBidderId(lot);
         const price = resolveAuctionPrice(lot.currentBid, lot.startingPrice, lot.price);
-        const playerId = String(lot.heroData?.id || lot.playerId || '');
+        const playerId = String(lot.heroData?.id || '').trim() || String(lot.playerId || '').trim();
 
         const isSystemSeller = isSystemAuctionSeller(sellerId, lot.isSystem);
         const currency = resolveAuctionCurrency(lot.currency);
@@ -53,12 +58,47 @@ async function settleCandidate(candidate: any, db: any) {
         if (buyerSnap?.exists && rawBuyerPlayers !== undefined && rawBuyerPlayers !== null && !Array.isArray(rawBuyerPlayers)) {
           throw new Error('AUCTION_BUYER_ROSTER_INVALID');
         }
-        const sellerPlayers: any[] = Array.isArray(rawSellerPlayers) ? [...rawSellerPlayers] : [];
+        const sellerPlayers: any[] = lot.isYouth === true
+          ? readFoundationRoster(rawSellerPlayers ?? [])
+          : Array.isArray(rawSellerPlayers) ? [...rawSellerPlayers] : [];
         const sellerMatches = sellerPlayers.filter((player: any) => String(player?.id) === playerId).length;
         if (sellerMatches > 1) throw new Error('AUCTION_SELLER_PLAYER_DUPLICATE');
+        const sellerOwnedPlayers: any[] = lot.isYouth === true && sellerSnap?.exists
+          ? readFoundationRoster(seller.ownedPlayers ?? [])
+          : [];
+        const sellerHasCrossRosterDuplicate = lot.isYouth === true &&
+          sellerOwnedPlayers.some((player: any) => String(player?.id) === playerId);
         const sellerIndex = sellerPlayers.findIndex((player: any) => String(player?.id) === playerId);
+        const sellerPlayerLockId = sellerIndex >= 0
+          ? String(sellerPlayers[sellerIndex]?.transferMarketId || '').trim()
+          : '';
+        // A stale lot must not sell or unlock a player already reserved by a
+        // newer listing. Only non-youth legacy lots may omit their lock ID.
+        const sellerPlayerLockIdMatchesLot = lot.isYouth === true
+          ? isYouthMarketLockOwnedByLot(sellerIndex >= 0 ? sellerPlayers[sellerIndex] : null, candidate.id)
+          : !sellerPlayerLockId || sellerPlayerLockId === candidate.id;
+        const sellerLockUntilMs = sellerIndex >= 0
+          ? resolveMarketBidExpiryMs(sellerPlayers[sellerIndex]?.onTransferUntil)
+          : null;
+        const sellerPlayerLockCoversLot = lot.isYouth !== true ||
+          isYouthMarketLockValidForLot(
+            sellerIndex >= 0 ? sellerPlayers[sellerIndex] : null,
+            candidate.id,
+            expiryMs,
+            sellerLockUntilMs,
+          );
+        const sellerPlayerLockMatchesLot = sellerPlayerLockIdMatchesLot && sellerPlayerLockCoversLot;
         const systemPlayer: any = isSystemSeller && lot.heroData?.id === playerId ? lot.heroData : null;
-        const buyerPlayers: any[] = Array.isArray(rawBuyerPlayers) ? [...rawBuyerPlayers] : [];
+        const buyerPlayers: any[] = lot.isYouth === true
+          ? readFoundationRoster(rawBuyerPlayers ?? [])
+          : Array.isArray(rawBuyerPlayers) ? [...rawBuyerPlayers] : [];
+        const buyerYouthCapacityAvailable = lot.isYouth !== true ||
+          canAcceptYouthAuctionPurchase(buyerPlayers, buyer.academy, playerId);
+        const buyerOwnedPlayers: any[] = lot.isYouth === true && buyerSnap?.exists
+          ? readFoundationRoster(buyer.ownedPlayers ?? [])
+          : [];
+        const buyerDoesNotAlreadyOwnYouth = lot.isYouth !== true ||
+          !buyerOwnedPlayers.some((player: any) => String(player?.id) === playerId);
         const buyerBalance = normalizeAuctionBalance(buyer[currency]);
         const escrow = resolveAuctionEscrow({
           currency,
@@ -71,10 +111,10 @@ async function settleCandidate(candidate: any, db: any) {
         const escrowedAmount = escrow.amount;
         const hasRecordedEscrow = escrow.hasRecordedEscrow;
         const hasValidEscrow = escrow.hasValidEscrow;
-        const sellerExists = isSystemSeller ? Boolean(systemPlayer) : Boolean(sellerSnap?.exists && sellerMatches === 1);
+        const sellerExists = isSystemSeller ? Boolean(systemPlayer) : Boolean(sellerSnap?.exists && sellerMatches === 1 && sellerPlayerLockMatchesLot && !sellerHasCrossRosterDuplicate);
         const validSale = Boolean(
           sellerExists && buyerSnap?.exists && buyerRef && bidderId !== sellerId && price > 0 &&
-          (hasValidEscrow || buyerBalance >= price) &&
+          (hasValidEscrow || buyerBalance >= price) && buyerYouthCapacityAvailable && buyerDoesNotAlreadyOwnYouth &&
           !buyerPlayers.some((player: any) => String(player?.id) === playerId)
         );
 
@@ -134,7 +174,7 @@ async function settleCandidate(candidate: any, db: any) {
         // A malformed/legacy lot can name the seller as its own bidder. In that
         // case the buyer and seller references are the same document, so combine
         // the refund and unlock into one update rather than leaving the escrow stuck.
-        const shouldUnlockSellerPlayer = Boolean(sellerRef && sellerSnap?.exists && sellerIndex >= 0);
+        const shouldUnlockSellerPlayer = Boolean(sellerRef && sellerSnap?.exists && sellerIndex >= 0 && sellerPlayerLockIdMatchesLot);
         if (hasRecordedEscrow && buyerRef && buyerSnap?.exists) {
           const refundedBalance = buyerBalance + escrowedAmount;
           if (!Number.isSafeInteger(refundedBalance)) throw new Error('AUCTION_BALANCE_INVALID');
@@ -181,6 +221,11 @@ export async function runTransferMarketExpirySweepWithDb(
 ) {
   const now = options.now || (() => Date.now());
   const startedAt = now();
+  const initialConfig = await db.collection('system_v1').doc('season_config').get();
+  if (initialConfig.exists && (initialConfig.data()?.stagingSeasonOneResetInProgress === true ||
+      initialConfig.data()?.stagingFreshSeasonOneReset === true)) {
+    return { success: true, skipped: true, reason: 'STAGING_SEASON_ONE_RESET_IN_PROGRESS', scanned: 0, settled: 0 };
+  }
   const maxRuntimeMs = Number.isSafeInteger(options.maxRuntimeMs) && options.maxRuntimeMs! > 0
     ? options.maxRuntimeMs!
     : 210_000;
@@ -210,8 +255,13 @@ export async function runTransferMarketExpirySweepWithDb(
   let complete = false;
   let continuation = false;
 
+  const configRef = db.collection('system_v1').doc('season_config');
   const lease = await db.runTransaction(async (tx: any) => {
-    const snapshot = await tx.get(stateRef);
+    const [snapshot, configSnap] = await Promise.all([tx.get(stateRef), tx.get(configRef)]);
+    if (configSnap.exists && (configSnap.data()?.stagingSeasonOneResetInProgress === true ||
+        configSnap.data()?.stagingFreshSeasonOneReset === true)) {
+      return { acquired: false, cursorId: null, resetInProgress: true };
+    }
     const state = snapshot.exists ? snapshot.data() || {} : {};
     const activeUntil = typeof state.leaseUntilMs === 'number' ? state.leaseUntilMs : 0;
     if (typeof state.leaseOwner === 'string' && state.leaseOwner && activeUntil > now()) {
@@ -225,6 +275,13 @@ export async function runTransferMarketExpirySweepWithDb(
     }, { merge: true });
     return { acquired: true, cursorId: savedCursor };
   });
+
+  if (!lease.acquired && lease.resetInProgress) {
+    return {
+      success: true, complete: false, continuation: false, busy: false,
+      skipped: true, reason: 'STAGING_SEASON_ONE_RESET_IN_PROGRESS', scanned: 0, settled: 0,
+    };
+  }
 
   if (!lease.acquired) {
     return {
@@ -275,17 +332,8 @@ export async function runTransferMarketExpirySweepWithDb(
       for (const doc of page.docs) {
         const lot = doc.data() || {};
         if (lot.status === 'settled' || lot.status === 'expired') continue;
-        const raw = lot.expiresAt;
-        const expiresAt = raw && typeof raw.toMillis === 'function'
-          ? raw.toMillis()
-          : raw instanceof Date
-            ? raw.getTime()
-            : typeof raw === 'number'
-              ? raw
-              : typeof raw === 'string'
-                ? Date.parse(raw)
-                : NaN;
-        if (Number.isFinite(expiresAt) && expiresAt <= now()) pageDue.push(doc);
+        const expiresAt = resolveMarketBidExpiryMs(lot.expiresAt);
+        if (expiresAt !== null && expiresAt <= now()) pageDue.push(doc);
       }
 
       dueCount += pageDue.length;
@@ -297,7 +345,7 @@ export async function runTransferMarketExpirySweepWithDb(
           break;
         }
         const outcomes = await Promise.all(
-          pageDue.slice(offset, offset + concurrency).map((candidate) => settleCandidate(candidate, db)),
+          pageDue.slice(offset, offset + concurrency).map((candidate) => settleCandidate(candidate, db, now())),
         );
         for (const outcome of outcomes) {
           if (outcome.error) {

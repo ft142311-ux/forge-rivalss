@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { advanceAtMostOneSeasonBoundary, resolveSeasonActivationWindow, resolveSeasonLifecycleWindow } from '../src/app/actions/season-boundary.ts';
+import { advanceAtMostOneSeasonBoundary, resolveNextSeasonTarget, resolveSeasonActivationWindow, resolveSeasonLifecycleWindow } from '../src/app/actions/season-boundary.ts';
 
 test('a delayed scheduler advances only one season boundary per invocation', () => {
   const result = advanceAtMostOneSeasonBoundary(
@@ -244,4 +244,109 @@ test('CLEAN_S1_V1 uses the canonical Nov 9 to Nov 26 window and activates Season
   assert.equal(productionWindow.source, 'CANONICAL');
   assert.equal(productionWindow.seasonStart.toISOString(), '2026-09-21T15:00:00.000Z');
   assert.equal(productionWindow.nextSeasonStart.toISOString(), '2026-10-08T15:00:00.000Z');
+});
+
+
+test('CLEAN_S1_V1 preserves its persisted calendar for Season 2 and every later season', async () => {
+  const { resolveCanonicalSeasonDateWindow, deriveSeasonDatePlan } = await import('../src/app/actions/season-boundary.ts');
+  const canonicalStart = new Date('2026-10-08T15:00:00.000Z');
+  const canonicalNext = new Date('2026-10-23T15:00:00.000Z');
+
+  const seasonTwo = resolveCanonicalSeasonDateWindow({
+    worldGeneration: 'CLEAN_S1_V1',
+    activeSeasonNumber: 2,
+    persistedSeasonStart: new Date('2026-11-26T15:00:00.000Z'),
+    persistedNextSeasonStart: new Date('2026-12-11T15:00:00.000Z'),
+    canonicalSeasonStart: canonicalStart,
+    canonicalNextSeasonStart: canonicalNext,
+  });
+  assert.equal(seasonTwo.source, 'CLEAN_S1_V1');
+  assert.equal(seasonTwo.seasonStart.toISOString(), '2026-11-26T15:00:00.000Z');
+  assert.equal(seasonTwo.nextSeasonStart.toISOString(), '2026-12-11T15:00:00.000Z');
+
+  const seasonThree = resolveCanonicalSeasonDateWindow({
+    worldGeneration: 'CLEAN_S1_V1',
+    activeSeasonNumber: 3,
+    persistedSeasonStart: new Date('2026-12-11T15:00:00.000Z'),
+    persistedNextSeasonStart: new Date('2026-12-26T15:00:00.000Z'),
+    canonicalSeasonStart: canonicalStart,
+    canonicalNextSeasonStart: canonicalNext,
+  });
+  assert.equal(seasonThree.source, 'CLEAN_S1_V1');
+  const plan = deriveSeasonDatePlan(
+    3, seasonThree.seasonStart, seasonThree.nextSeasonStart,
+    new Date('2026-12-26T15:00:00.000Z'), 15,
+  );
+  assert.equal(plan.expectedSeasonNumber, 4);
+  assert.equal(plan.expectedSeasonStart.toISOString(), '2026-12-26T15:00:00.000Z');
+});
+
+test('CLEAN_S1_V1 rejects malformed later-season windows instead of silently accepting them', async () => {
+  const { resolveCanonicalSeasonDateWindow } = await import('../src/app/actions/season-boundary.ts');
+  const result = resolveCanonicalSeasonDateWindow({
+    worldGeneration: 'CLEAN_S1_V1',
+    activeSeasonNumber: 2,
+    persistedSeasonStart: new Date('2026-11-26T15:00:00.000Z'),
+    persistedNextSeasonStart: new Date('2026-12-10T15:00:00.000Z'),
+    canonicalSeasonStart: new Date('2026-10-08T15:00:00.000Z'),
+    canonicalNextSeasonStart: new Date('2026-10-23T15:00:00.000Z'),
+  });
+  assert.equal(result.source, 'CANONICAL');
+});
+
+test('season date planning has no artificial 1000-season ceiling', async () => {
+  const { deriveSeasonDatePlan } = await import('../src/app/actions/season-boundary.ts');
+  const start = new Date('2026-01-01T00:00:00.000Z');
+  const boundary = new Date(start.getTime() + 15 * 86400000);
+  const now = new Date(start.getTime() + 1001 * 15 * 86400000);
+  const plan = deriveSeasonDatePlan(1, start, boundary, now, 15);
+  assert.equal(plan.expectedSeasonNumber, 1002);
+  assert.equal(plan.completedSeasons.length, 1001);
+  assert.equal(plan.completedSeasons[0], 1);
+  assert.equal(plan.completedSeasons.at(-1), 1001);
+  assert.equal(resolveNextSeasonTarget(1, plan.expectedSeasonNumber), 2,
+    'a large date-derived catch-up projection must still prepare only Season 2');
+});
+
+
+test('a delayed scheduler advances the CLEAN_S1_V1 timeline one season at a time through S4', () => {
+  const timeline = [
+    ['2026-11-09T15:00:00.000Z', '2026-11-26T15:00:00.000Z', 17],
+    ['2026-11-26T15:00:00.000Z', '2026-12-11T15:00:00.000Z', 15],
+    ['2026-12-11T15:00:00.000Z', '2026-12-26T15:00:00.000Z', 15],
+    ['2026-12-26T15:00:00.000Z', '2027-01-10T15:00:00.000Z', 15],
+  ];
+  const now = new Date('2027-01-20T15:00:00.000Z');
+  let season = 1;
+  let start = new Date(timeline[0][0]);
+  let boundary = new Date(timeline[0][1]);
+
+  for (let index = 0; index < 3; index++) {
+    const cadence = timeline[index + 1][2];
+    const result = advanceAtMostOneSeasonBoundary(season, start, boundary, now, cadence);
+    assert.equal(result.advanced, true);
+    assert.equal(result.seasonNumber, season + 1,
+      'one invocation must never jump over an intermediate season');
+    assert.equal(result.seasonStart.toISOString(), timeline[index + 1][0]);
+    assert.equal(result.nextBoundary.toISOString(), timeline[index + 1][1]);
+    season = result.seasonNumber;
+    start = result.seasonStart;
+    boundary = result.nextBoundary;
+  }
+
+  assert.equal(season, 4);
+  assert.equal(start.toISOString(), '2026-12-26T15:00:00.000Z');
+  assert.equal(boundary.toISOString(), '2027-01-10T15:00:00.000Z');
+});
+
+test('every active season target is clamped to its immediate successor, regardless of stale projections', () => {
+  for (const activeSeason of [1, 2, 3, 4, 15, 100, 1001]) {
+    for (const staleTarget of [0, activeSeason, activeSeason + 2, activeSeason + 50, 1002]) {
+      assert.equal(
+        resolveNextSeasonTarget(activeSeason, staleTarget),
+        activeSeason + 1,
+        `S${activeSeason} must prepare only S${activeSeason + 1} (requested S${staleTarget})`,
+      );
+    }
+  }
 });

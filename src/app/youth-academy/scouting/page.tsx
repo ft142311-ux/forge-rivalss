@@ -45,7 +45,8 @@ export default function ScoutingPage() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [selectedPlayer, setSelectedPlayer] = useState<Player | null>(null);
 
-  const scoutLevel = Number(academy?.scoutsLevel || 0);
+  const rawScoutLevel = Number(academy?.scoutsLevel ?? 0);
+  const scoutLevel = Number.isSafeInteger(rawScoutLevel) && rawScoutLevel >= 0 ? Math.min(20, rawScoutLevel) : 0;
 
   const rolesRu: Record<string, string> = {
     'Carry': 'Керри',
@@ -124,25 +125,35 @@ export default function ScoutingPage() {
     }
   }[language as 'en' | 'ru'];
 
-  const academyLimit = 10 + (academy.youthBootcampLevel || 0);
+  const rawYouthBootcampLevel = Number(academy?.youthBootcampLevel ?? 0);
+  const academyLimit = 10 + (Number.isSafeInteger(rawYouthBootcampLevel) && rawYouthBootcampLevel >= 0 && rawYouthBootcampLevel <= 1000 ? rawYouthBootcampLevel : 0);
 
   const handleScout = async () => {
+    if (isProcessing) return;
     setIsProcessing(true);
-    setTimeout(() => {
-      scoutCandidates();
+    try {
+      const success = await scoutCandidates();
+      if (success) toast({ title: language === 'ru' ? "Сектора просканированы!" : "Sectors Scanned!" });
+    } finally {
       setIsProcessing(false);
-      toast({ title: language === 'ru' ? "Сектора просканированы!" : "Sectors Scanned!" });
-    }, 1500);
+    }
   };
 
-  const handleRecruit = (player: Player) => {
+  const handleRecruit = async (player: Player) => {
     if (youthAcademyPlayers.length >= academyLimit) {
       toast({ title: t.limitReached, variant: "destructive" });
       return;
     }
-    recruitCandidate(player.id);
-    toast({ title: t.success, description: t.successDesc });
-    setSelectedPlayer(null);
+    setIsProcessing(true);
+    try {
+      const success = await recruitCandidate(player.id);
+      if (success) {
+        toast({ title: t.success, description: t.successDesc });
+        setSelectedPlayer(null);
+      }
+    } finally {
+      setIsProcessing(false);
+    }
   };
 
   if (!isLoaded) return <LoadingScreen />;

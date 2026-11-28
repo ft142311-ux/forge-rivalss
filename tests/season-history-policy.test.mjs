@@ -57,7 +57,7 @@ test('incomplete elapsed seasons can be skipped without fabricating results', ()
   assert.deepEqual(result.archivesToPruneAfterActivation, []);
 });
 
-test('only the latest completed season is retained when later seasons are skipped', () => {
+test('only the newest completed season archive is retained when later seasons are skipped', () => {
   const result = resolveSeasonCatchUpPolicy([1, 2, 3, 4], {
     1: { status: 'completed', archiveValid: true },
     2: { status: 'completed', archiveValid: true },

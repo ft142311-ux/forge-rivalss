@@ -21,7 +21,7 @@ test('nuclear reset refuses to access Firestore unless the local emulator is exp
   assert.notEqual(hostGuardIndex, -1, 'missing loopback Firestore host guard');
   assert.ok(dbAccessIndex > modeGuardIndex, 'Admin DB must be initialized after emulator-mode guard');
   assert.ok(dbAccessIndex > hostGuardIndex, 'Admin DB must be initialized after loopback host guard');
-  assert.match(reset, /LOCAL_EMULATOR_REQUIRED/);
+  assert.match(reset, /LOCAL_DISPOSABLE_PROJECT_REQUIRED/);
   assert.match(reset, /LOCAL_FIRESTORE_EMULATOR_REQUIRED/);
 });
 

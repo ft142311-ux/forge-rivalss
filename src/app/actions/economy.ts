@@ -6,6 +6,7 @@ import { getAdminDb } from '@/lib/firebase-admin';
 import { getMoscowDateString } from '@/app/lib/time-utils';
 import { getDailyRewardForDay, getNextDailyRewardDay, getPremiumDailyCrystalBonus } from '@/app/lib/daily-reward';
 import { requireServerActor } from '@/lib/server-auth';
+import { assertStagingSeasonOneResetNotInProgress } from '@/app/lib/staging-season-one-write-fence';
 
 /**
  * @fileOverview Защищенный слой экономики.
@@ -34,6 +35,7 @@ export async function claimDailyRewardAction(idToken: string) {
 
   try {
     const result = await db.runTransaction(async (t) => {
+      await assertStagingSeasonOneResetNotInProgress(t, db);
       const receiptSnap = await t.get(receiptRef);
       if (receiptSnap.exists) return receiptSnap.data()?.result;
 
@@ -41,7 +43,7 @@ export async function claimDailyRewardAction(idToken: string) {
       if (!pSnap.exists) throw new Error("PLAYER_NOT_FOUND");
 
       const p = pSnap.data()!;
-      if (p.lastRewardClaimDate === today) throw new Error("ALREADY_CLAIMED");
+      if (p.lastRewardClaimDate === today) return { success: true, alreadyClaimed: true, rewardDay: Number(p.rewardDay || 1), claimedDate: today, credits: 0, crystals: 0, premiumBonus: 0 };
 
       const rewardDay = getNextDailyRewardDay(p.rewardDay, Boolean(p.lastRewardClaimDate));
       const { credits, crystals: baseCrystals } = getDailyRewardForDay(rewardDay);
@@ -55,7 +57,7 @@ export async function claimDailyRewardAction(idToken: string) {
       if (!Number.isSafeInteger(creditsAfter) || !Number.isSafeInteger(crystalsAfter)) {
         throw new Error('INVALID_BALANCE');
       }
-      const result = { success: true, credits, crystals, premiumBonus };
+      const result = { success: true, alreadyClaimed: false, rewardDay, claimedDate: today, credits, crystals, premiumBonus };
 
       t.update(playerRef, {
         credits: creditsAfter,
@@ -115,6 +117,7 @@ export async function purchasePremiumAction(idToken: string) {
     const { uid } = await requireServerActor(idToken);
     const db = getAdminDb();
     return await db.runTransaction(async (t) => {
+      await assertStagingSeasonOneResetNotInProgress(t, db);
       const playerRef = db.collection('players_v14').doc(uid);
       const playerSnap = await t.get(playerRef);
       if (!playerSnap.exists) throw new Error('PLAYER_NOT_FOUND');

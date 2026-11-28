@@ -24,6 +24,111 @@ export function shouldPersistSeasonTrophies(shouldAddLeagueCup: boolean, shouldA
 }
 
 
+/** Resolve a safe season-reward balance update; invalid data and overflow fail closed. */
+export function resolveSeasonAwardBalance(currentCredits: unknown, rewardAmount: unknown): {
+  balanceBefore: number;
+  balanceAfter: number;
+} | null {
+  let balanceBefore: number;
+  if (currentCredits === undefined || currentCredits === null) {
+    balanceBefore = 0;
+  } else {
+    if (typeof currentCredits !== 'number' && typeof currentCredits !== 'string') return null;
+    if (typeof currentCredits === 'string' && currentCredits.trim().length === 0) return null;
+    balanceBefore = Number(currentCredits);
+  }
+
+  if (!Number.isSafeInteger(balanceBefore) || balanceBefore < 0 ||
+      typeof rewardAmount !== 'number' || !Number.isSafeInteger(rewardAmount) || rewardAmount <= 0) {
+    return null;
+  }
+  const balanceAfter = balanceBefore + rewardAmount;
+  if (!Number.isSafeInteger(balanceAfter)) return null;
+  return { balanceBefore, balanceAfter };
+}
+
+
+export type SeasonAwardTrophyState = {
+  existingTrophies: unknown[];
+  shouldAddLeagueCup: boolean;
+  shouldAddPyramidCup: boolean;
+  needsRepair: boolean;
+};
+
+/**
+ * Validate the trophy collection and normalize only this season's two canonical
+ * awards. Unrelated trophies are preserved byte-for-byte; malformed collection
+ * shapes fail closed rather than being replaced with an empty array.
+ */
+export function resolveSeasonAwardTrophyState(
+  trophies: unknown,
+  sourceSeason: unknown,
+  prize: unknown,
+  isChampion: boolean,
+  isPyramidWinner: boolean,
+): SeasonAwardTrophyState | null {
+  const season = Number(sourceSeason);
+  if (!Number.isSafeInteger(season) || season < 1 ||
+      (typeof prize !== 'number' || !Number.isSafeInteger(prize) || prize <= 0) ||
+      (trophies !== undefined && trophies !== null && !Array.isArray(trophies))) {
+    return null;
+  }
+
+  const existing = Array.isArray(trophies) ? trophies : [];
+  const leagueId = `league-cup-season-${season}`;
+  const pyramidId = `pyramid-cup-season-${season}`;
+  const leagueName = `Кубок лиги — сезон ${season}`;
+  const pyramidName = `Кубок Пирамиды — сезон ${season}`;
+  const normalized: unknown[] = [];
+  let hasLeague = false;
+  let hasPyramid = false;
+  let needsRepair = false;
+
+  for (const item of existing) {
+    const record = item && typeof item === 'object' && !Array.isArray(item)
+      ? item as Record<string, unknown>
+      : null;
+    const id = record?.id;
+    if (id !== leagueId && id !== pyramidId) {
+      normalized.push(item);
+      continue;
+    }
+
+    const dateMs = typeof record?.date === 'string' ? Date.parse(record.date) : NaN;
+    const canonicalLeague = id === leagueId &&
+      record?.name === leagueName &&
+      record?.type === 'league_champion' &&
+      Number(record?.season) === season &&
+      Number(record?.division) === 1 &&
+      Number(record?.rank) === 1 &&
+      Number(record?.reward) === prize &&
+      Number.isFinite(dateMs);
+    const canonicalPyramid = id === pyramidId &&
+      record?.name === pyramidName &&
+      record?.type === 'pyramid_cup_champion' &&
+      Number(record?.season) === season &&
+      Number.isFinite(dateMs);
+
+    if (canonicalLeague && !hasLeague) {
+      normalized.push(item);
+      hasLeague = true;
+    } else if (canonicalPyramid && !hasPyramid) {
+      normalized.push(item);
+      hasPyramid = true;
+    } else {
+      needsRepair = true;
+    }
+  }
+
+  return {
+    existingTrophies: normalized,
+    shouldAddLeagueCup: Boolean(isChampion && !hasLeague),
+    shouldAddPyramidCup: Boolean(isPyramidWinner && !hasPyramid),
+    needsRepair,
+  };
+}
+
+
 /** Resolve whether a reward recipient is safe to pay or already paid. */
 export function resolveSeasonAwardRecipientState(
   playerExists: boolean,
@@ -35,15 +140,20 @@ export function resolveSeasonAwardRecipientState(
   if (!Number.isSafeInteger(season) || season < 1) return 'PROFILE_MISSING';
   if (!playerExists) return transactionExists === true ? 'ALREADY_APPLIED' : 'PROFILE_MISSING';
 
-  const awards = player?.seasonAwards && typeof player.seasonAwards === 'object'
-    ? player.seasonAwards
-    : {};
-  const hasAwardMarker = Boolean(awards[`S${season}`]);
+  const rawAwards = player?.seasonAwards;
+  if (rawAwards !== undefined && rawAwards !== null &&
+      (typeof rawAwards !== 'object' || Array.isArray(rawAwards))) return 'ACCOUNTING_CONFLICT';
+  const awards = rawAwards || {};
+  const marker = awards[`S${season}`];
+  if (marker !== undefined && marker !== null &&
+      (typeof marker !== 'object' || Array.isArray(marker))) return 'ACCOUNTING_CONFLICT';
+  const hasAwardMarker = Boolean(marker);
   const hasLedger = transactionExists === true;
   if (hasAwardMarker && hasLedger) return 'ALREADY_APPLIED';
   if (hasAwardMarker !== hasLedger) return 'ACCOUNTING_CONFLICT';
   return 'READY';
 }
+
 
 /**
  * Recovery carry-forward plans intentionally do not apply rewards or invent

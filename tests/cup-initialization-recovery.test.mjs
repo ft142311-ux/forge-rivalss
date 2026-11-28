@@ -4,18 +4,36 @@ import { readFileSync } from 'node:fs';
 
 const source = readFileSync(new URL('../src/app/actions/cup-engine.ts', import.meta.url), 'utf8');
 
-test('Pyramid Cup document and all preliminary fixtures are committed atomically', () => {
+test('Pyramid Cup document, snapshots and opening fixtures commit in one reset-fenced transaction', () => {
+  const helperStart = source.indexOf('export async function commitPyramidCupCreation');
+  const helperEnd = source.indexOf('export async function generatePyramidCup', helperStart);
+  assert.ok(helperStart >= 0 && helperEnd > helperStart);
+  const helper = source.slice(helperStart, helperEnd);
+  assert.ok(helper.includes('db.runTransaction(async (tx: any) =>'));
+  assert.ok(helper.includes('tx.get(configRef)'));
+  assert.ok(helper.includes('stagingSeasonOneResetInProgress'));
+  assert.ok(helper.includes('tx.create(snapshot.ref, snapshot.data)'));
+  assert.ok(helper.includes('tx.create(fixture.ref, fixture.data)'));
+  assert.ok(helper.includes('tx.create(cupRef, cupData)'));
+
   const start = source.indexOf('export async function generatePyramidCup');
   const end = source.indexOf('async function loadCup', start);
   assert.ok(start >= 0 && end > start);
   const generation = source.slice(start, end);
-  const firstFixtureWrite = generation.indexOf('batch.set(');
-  const cupCreate = generation.indexOf('batch.create(ref');
-  const commit = generation.indexOf('await batch.commit()');
-  assert.ok(firstFixtureWrite >= 0 && cupCreate > firstFixtureWrite);
-  assert.ok(commit > cupCreate);
-  assert.doesNotMatch(generation, /await ref\.create\(/);
-  assert.doesNotMatch(generation, /await ref\.update\(/);
+  assert.ok(generation.includes('commitPyramidCupCreation('));
+  assert.ok(!generation.includes('batch.commit('));
+});
+
+test('concurrent Cup initialization treats only a winning root-document conflict as idempotent', () => {
+  const start = source.indexOf('export async function generatePyramidCup');
+  const end = source.indexOf('export async function preparePyramidCupForSeason', start);
+  assert.ok(start >= 0 && end > start);
+  const generation = source.slice(start, end);
+  assert.ok(generation.includes("const code = String(error?.code ?? '').toLowerCase().replace(/_/g, '-')"));
+  assert.ok(generation.includes("if (code !== '6' && code !== 'already-exists') throw error;"));
+  assert.ok(generation.includes('competingCup = await ref.get()'));
+  assert.ok(generation.includes('if (!competingCup.exists) throw error;'));
+  assert.ok(generation.includes('return { success: true, alreadyExists: true, cupId: id }'));
 });
 
 test('interrupted cup initialization recreates only missing fixtures and preserves legacy matches', () => {
@@ -26,7 +44,9 @@ test('interrupted cup initialization recreates only missing fixtures and preserv
   assert.match(recovery, /db\.runTransaction\(async \(tx: any\) =>/);
   assert.match(recovery, /tx\.get\(entry\.dedicatedRef\)/);
   assert.match(recovery, /tx\.get\(entry\.legacyRef\)/);
-  assert.match(recovery, /snapshots\[index\]\.dedicated\.exists \|\| snapshots\[index\]\.legacy\.exists/);
+  assert.match(recovery, /const existing = snapshots\[index\]\.dedicated\.exists/);
+  assert.match(recovery, /snapshots\[index\]\.legacy\.exists \? snapshots\[index\]\.legacy\.data\(\) \|\| \{\} : null/);
+  assert.match(recovery, /isCupRoundFixtureCompatible\(existing, entry\.expectedFixture\)/);
   assert.match(recovery, /tx\.create\(entry\.dedicatedRef/);
   assert.match(recovery, /pairing\.matchId !== expectedId/);
 });
@@ -137,4 +157,73 @@ test('the scheduled Cup worker cannot race the initial Season 1 bootstrap', () =
   assert.match(source, /options\.allowInitialBootstrap !== true/);
   const calendar = readFileSync(new URL('../src/app/actions/season-calendar.ts', import.meta.url), 'utf8');
   assert.match(calendar, /generatePyramidCup\(1, \{ allowInitialBootstrap: true \}\)/);
+});
+
+
+test('interrupted-round recovery validates existing dedicated and legacy fixtures before trusting them', () => {
+  const helperStart = source.indexOf('function isCupRoundFixtureCompatible');
+  const repairStart = source.indexOf('async function repairCurrentRoundFixtures');
+  const repairEnd = source.indexOf('function assertValidCupRoundPairings', repairStart);
+  assert.ok(helperStart >= 0 && repairStart > helperStart && repairEnd > repairStart);
+  const recovery = source.slice(repairStart, repairEnd);
+  assert.ok(recovery.includes('const expectedFixture = buildCupRoundMatchData(season, round, pairing, scheduledAt)'));
+  assert.ok(recovery.includes('const existing = snapshots[index].dedicated.exists'));
+  assert.ok(recovery.includes('snapshots[index].legacy.exists ? snapshots[index].legacy.data() || {} : null'));
+  assert.ok(recovery.includes('isCupRoundFixtureCompatible(existing, entry.expectedFixture)'));
+  assert.ok(recovery.includes('CUP_FIXTURE_RECOVERY_CONFLICT'));
+  assert.ok(recovery.includes('tx.create(entry.dedicatedRef, entry.expectedFixture)'));
+});
+
+
+test('Pyramid Cup advancement and recovery reject missing or altered frozen roster snapshots', () => {
+  const compatibilityStart = source.indexOf('function isCupRoundFixtureCompatible');
+  const transitionStart = source.indexOf('async function commitCupRoundTransition');
+  const transitionEnd = source.indexOf('async function commitCupRoundState', transitionStart);
+  const recoveryStart = source.indexOf('async function repairCurrentRoundFixtures');
+  const recoveryEnd = source.indexOf('function assertValidCupRoundPairings', recoveryStart);
+  assert.ok(compatibilityStart >= 0 && transitionStart > compatibilityStart);
+  assert.ok(transitionEnd > transitionStart && recoveryStart > transitionEnd && recoveryEnd > recoveryStart);
+
+  const compatibility = source.slice(compatibilityStart, transitionStart);
+  const transition = source.slice(transitionStart, transitionEnd);
+  const recovery = source.slice(recoveryStart, recoveryEnd);
+  assert.match(compatibility, /isCupParticipantMatchSnapshotCompatible\(/);
+  assert.match(transition, /isValidCupParticipantMatchSnapshot\(snapshot, pairing\.home\.id\)/);
+  assert.match(transition, /isValidCupParticipantMatchSnapshot\(snapshot, pairing\.away\.id\)/);
+  assert.match(recovery, /CUP_PARTICIPANT_SNAPSHOT_INVALID_DURING_RECOVERY/);
+  assert.match(recovery, /isValidCupParticipantMatchSnapshot\(snapshot, pairing\.home\.id\)/);
+  assert.match(recovery, /isValidCupParticipantMatchSnapshot\(snapshot, pairing\.away\.id\)/);
+  assert.ok(recovery.indexOf('isValidCupParticipantMatchSnapshot') < recovery.indexOf('tx.create(entry.dedicatedRef'));
+});
+
+
+test('Cup generation, prepared-season publication and initial Season 1 activation share frozen-roster validation', () => {
+  const integrity = readFileSync(new URL('../src/app/lib/cup-participant-integrity.ts', import.meta.url), 'utf8');
+  const calendar = readFileSync(new URL('../src/app/actions/season-calendar.ts', import.meta.url), 'utf8');
+  const diagnostics = readFileSync(new URL('../src/app/api/admin/staging-cup-diagnostics/route.ts', import.meta.url), 'utf8');
+
+  const loadStart = source.indexOf('async function loadAllLeagueTeams');
+  const loadEnd = source.indexOf('function publicTeam', loadStart);
+  assert.ok(loadStart >= 0 && loadEnd > loadStart);
+  assert.match(source.slice(loadStart, loadEnd), /isValidCupParticipantMatchSnapshot\(persistedMatchSnapshot, team\.id\)/);
+
+  const prepareStart = source.indexOf('export async function preparePyramidCupForSeason');
+  const prepareEnd = source.indexOf('async function loadCup', prepareStart);
+  assert.ok(prepareStart >= 0 && prepareEnd > prepareStart);
+  const preparation = source.slice(prepareStart, prepareEnd);
+  assert.match(preparation, /isValidCupParticipantMatchSnapshot\(frozen/);
+  assert.match(preparation, /isCupParticipantMatchSnapshotCompatible\(/);
+  assert.match(preparation, /participantSnapshotById/);
+
+  const initialStart = calendar.indexOf('async function verifyInitialPyramidCup');
+  const initialEnd = calendar.indexOf('export async function ensureSeasonCalendar', initialStart);
+  assert.ok(initialStart >= 0 && initialEnd > initialStart);
+  const initial = calendar.slice(initialStart, initialEnd);
+  assert.match(initial, /isValidCupParticipantMatchSnapshot\(data\.matchSnapshot, teamId\)/);
+  assert.match(initial, /isCupParticipantMatchSnapshotCompatible\(/);
+  assert.match(initial, /participantSnapshotById/);
+
+  assert.match(integrity, /playerIds\.has\(playerId\)/);
+  assert.match(diagnostics, /isValidCupParticipantMatchSnapshot\(data\.matchSnapshot, id\)/);
+  assert.match(diagnostics, /isCupParticipantMatchSnapshotCompatible\(/);
 });

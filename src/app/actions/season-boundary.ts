@@ -72,10 +72,12 @@ export function resolveCanonicalSeasonDateWindow(input: {
 }) {
   const start = input.persistedSeasonStart;
   const next = input.persistedNextSeasonStart;
+  const expectedCleanWindowDays = input.activeSeasonNumber === 1 ? 17 : 15;
   const localWindowValid = input.worldGeneration === 'CLEAN_S1_V1' &&
-    input.activeSeasonNumber === 1 && start instanceof Date && next instanceof Date &&
+    Number.isSafeInteger(input.activeSeasonNumber) && input.activeSeasonNumber >= 1 &&
+    start instanceof Date && next instanceof Date &&
     Number.isFinite(start.getTime()) && Number.isFinite(next.getTime()) &&
-    next.getTime() - start.getTime() === 17 * 24 * 60 * 60 * 1000;
+    next.getTime() - start.getTime() === expectedCleanWindowDays * 24 * 60 * 60 * 1000;
 
   return localWindowValid
     ? { seasonStart: new Date(start!.getTime()), nextSeasonStart: new Date(next!.getTime()), source: 'CLEAN_S1_V1' as const }
@@ -83,9 +85,10 @@ export function resolveCanonicalSeasonDateWindow(input: {
 }
 
 /**
- * A deliberately marked clean emulator world may have a generated S1 start.
- * Accept its persisted S1->S2 boundary only when the canonical 17-day first
- * season span is intact; production/legacy worlds keep the fixed historical date.
+ * A deliberately marked clean emulator world may start Season 1 on a generated
+ * date. Preserve that timeline for every later season: S1 uses its validated
+ * 17-day span, and S2 onward uses the regular 15-day cadence. Production and
+ * legacy worlds continue to use their canonical historical dates.
  */
 export function isValidCleanSeasonOneBoundary(
   worldGeneration: unknown,
@@ -159,7 +162,7 @@ export function deriveSeasonDatePlan(
   let seasonNumber = activeSeasonNumber;
   let start = startMs;
   let boundary = nextMs;
-  for (let count = 0; count < 1000; count++) {
+  while (true) {
     const status: SeasonWindow['status'] = nowMs < start
       ? 'scheduled'
       : nowMs < boundary
@@ -181,11 +184,11 @@ export function deriveSeasonDatePlan(
         completedSeasons: seasons.filter(item => item.status === 'completed').map(item => item.seasonNumber),
       };
     }
+    if (!Number.isSafeInteger(seasonNumber + 1)) throw new Error('SEASON_NUMBER_EXHAUSTED');
     seasonNumber++;
     start = boundary;
     boundary += cadenceMs;
   }
-  throw new Error('SEASON_DATE_PLAN_LIMIT_EXCEEDED');
 }
 
 /** Read-only gate for seasons that have elapsed while the active marker lagged. */

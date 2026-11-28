@@ -2,7 +2,9 @@
  * Canonical stadium expansion pricing and duration for Forge-Rivals Beta.
  * A single project may add 500..50,000 seats in 500-seat increments.
  */
-export const ARENA_BASE_CAPACITY = 3000;
+export const ARENA_BASE_CAPACITY = 5000;
+// Existing clubs created before the 5,000-seat baseline remain expandable without migration.
+export const ARENA_MIN_SUPPORTED_CAPACITY = 3000;
 export const ARENA_EXPANSION_STEP = 500;
 export const ARENA_MAX_EXPANSION = 50000;
 
@@ -47,7 +49,7 @@ export function getArenaExpansionQuote(seats: number, currentCapacity = ARENA_BA
   if (!Number.isSafeInteger(seats) || seats < ARENA_EXPANSION_STEP || seats > ARENA_MAX_EXPANSION || seats % ARENA_EXPANSION_STEP !== 0) {
     throw new Error('INVALID_ARENA_EXPANSION_SIZE');
   }
-  if (!Number.isSafeInteger(currentCapacity) || currentCapacity < ARENA_BASE_CAPACITY) {
+  if (!Number.isSafeInteger(currentCapacity) || currentCapacity < ARENA_MIN_SUPPORTED_CAPACITY) {
     throw new Error('INVALID_ARENA_CAPACITY');
   }
 

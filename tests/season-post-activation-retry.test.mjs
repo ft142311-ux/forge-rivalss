@@ -66,7 +66,7 @@ function makePlan(season) {
   };
 }
 
-test('history cleanup keeps the currently activated rollover plan', () => {
+test('history cleanup retains only the currently activated rollover plan', () => {
   const result = resolveRolloverPlanPruneIds([
     { id: 'S1', plan: makePlan(1) },
     { id: 'S2', plan: makePlan(2) },

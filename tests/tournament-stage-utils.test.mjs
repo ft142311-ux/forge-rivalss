@@ -36,22 +36,40 @@ test('knockout fixture identity remains stable by stage and index', () => {
 
 
 test('group stage requires the exact A-D group, round and pair-index fixture matrix', () => {
+  const groupTeamsById = {};
+  const pairingsByRound = [
+    [[0, 1], [2, 3]],
+    [[0, 2], [1, 3]],
+    [[0, 3], [1, 2]],
+  ];
   const complete = [];
   for (const groupId of ['A', 'B', 'C', 'D']) {
+    const teamIds = Array.from({ length: 4 }, (_, index) => `team_${groupId}_${index + 1}`);
+    groupTeamsById[groupId] = teamIds;
     for (let round = 1; round <= 3; round++) {
       for (let index = 1; index <= 2; index++) {
+        const [homeIndex, awayIndex] = pairingsByRound[round - 1][index - 1];
         complete.push({
           id: `groups_${groupId}_${round}_${index}`,
-          data: { stage: 'groups', status: 'finished', groupId, round, index, homeId: `h_${groupId}_${round}_${index}`, awayId: `a_${groupId}_${round}_${index}`, winnerId: null },
+          data: {
+            stage: 'groups',
+            status: 'finished',
+            groupId,
+            round,
+            index,
+            homeId: teamIds[homeIndex],
+            awayId: teamIds[awayIndex],
+            winnerId: null,
+          },
         });
       }
     }
   }
-  assert.equal(isTournamentStageMatchSetComplete(complete, 'groups', 16), true);
+  assert.equal(isTournamentStageMatchSetComplete(complete, 'groups', 16, groupTeamsById), true);
   const malformed = complete.map(entry => ({ ...entry, data: { ...entry.data } }));
   malformed[0].data.groupId = 'Z';
-  assert.equal(isTournamentStageMatchSetComplete(malformed, 'groups', 16), false);
-  assert.equal(isTournamentStageMatchSetComplete(complete.slice(1), 'groups', 16), false);
+  assert.equal(isTournamentStageMatchSetComplete(malformed, 'groups', 16, groupTeamsById), false);
+  assert.equal(isTournamentStageMatchSetComplete(complete.slice(1), 'groups', 16, groupTeamsById), false);
 });
 
 test('knockout stage requires every expected index exactly once', () => {
@@ -67,9 +85,18 @@ test('knockout stage requires every expected index exactly once', () => {
 
 test('32-team group stage requires all eight groups and all 48 fixtures', () => {
   const entries = [];
+  const groupTeamsById = {};
+  const pairingsByRound = [
+    [[0, 1], [2, 3]],
+    [[0, 2], [1, 3]],
+    [[0, 3], [1, 2]],
+  ];
   for (const groupId of ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']) {
+    const teamIds = Array.from({ length: 4 }, (_, index) => `team_${groupId}_${index + 1}`);
+    groupTeamsById[groupId] = teamIds;
     for (let round = 1; round <= 3; round++) {
       for (let index = 1; index <= 2; index++) {
+        const [homeIndex, awayIndex] = pairingsByRound[round - 1][index - 1];
         entries.push({
           id: `groups_${groupId}_${round}_${index}`,
           data: {
@@ -77,8 +104,8 @@ test('32-team group stage requires all eight groups and all 48 fixtures', () => 
             groupId,
             round,
             index,
-            homeId: `home_${groupId}_${round}_${index}`,
-            awayId: `away_${groupId}_${round}_${index}`,
+            homeId: teamIds[homeIndex],
+            awayId: teamIds[awayIndex],
             winnerId: null,
           },
         });
@@ -87,14 +114,14 @@ test('32-team group stage requires all eight groups and all 48 fixtures', () => 
   }
 
   assert.equal(entries.length, 48);
-  assert.equal(isTournamentStageMatchSetComplete(entries, 'groups', 32), true);
+  assert.equal(isTournamentStageMatchSetComplete(entries, 'groups', 32, groupTeamsById), true);
 
   const missingHFixture = entries.filter(entry => entry.id !== 'groups_H_3_2');
-  assert.equal(isTournamentStageMatchSetComplete(missingHFixture, 'groups', 32), false);
+  assert.equal(isTournamentStageMatchSetComplete(missingHFixture, 'groups', 32, groupTeamsById), false);
 
   const duplicatePair = entries.map(entry => ({ ...entry, data: { ...entry.data } }));
   duplicatePair[47].data.index = 1;
-  assert.equal(isTournamentStageMatchSetComplete(duplicatePair, 'groups', 32), false);
+  assert.equal(isTournamentStageMatchSetComplete(duplicatePair, 'groups', 32, groupTeamsById), false);
 });
 
 test('16-team tournaments skip round of 16 while 32-team tournaments require it', () => {

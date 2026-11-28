@@ -3,7 +3,7 @@ import 'server-only';
 import { FieldValue } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { getGlobalSeasonInfo } from '@/app/lib/time-utils';
-import { resolveSeasonLifecycleWindow } from './season-boundary';
+import { resolveNextSeasonTarget, resolveSeasonLifecycleWindow } from './season-boundary';
 import { logger } from '@/app/lib/logger';
 import { activatePublishedSeason, ensureSeasonCalendar, publishPreparedSeason } from './season-calendar';
 import { runTournamentCycle } from './tournament-system';
@@ -11,7 +11,9 @@ import { preparePyramidCupForSeason, runPyramidCupCycle } from './cup-engine';
 import { resolveDailyMatches } from './autonomous-cycle';
 import { prepareSeasonRollover } from './season-rollover';
 import { validateRolloverPlan } from './season-rollover-plan';
+import { isRolloverPlanPublicationReady } from './season-awards-policy';
 import { isCalendarReady } from './season-calendar-gate';
+import { acquireSeasonOrchestratorLock, releaseSeasonOrchestratorLock } from './season-orchestrator-lock';
 
 /**
  * @fileOverview Глобальный оркестратор сезона v169.
@@ -21,13 +23,23 @@ import { isCalendarReady } from './season-calendar-gate';
  *   2) publishPreparedSeason() отдельно публикует следующий сезон;
  *   3) регистрация никогда не генерирует таблицы/слоты/матчи.
  */
-export async function runSeasonOrchestrator() {
+async function runSeasonOrchestratorUnlocked() {
   try {
+    const db = getAdminDb();
+    const resetConfigSnap = await db.collection('system_v1').doc('season_config').get();
+    const resetConfig = resetConfigSnap.exists ? resetConfigSnap.data() || {} : {};
+    if (resetConfig.stagingSeasonOneResetInProgress === true || resetConfig.stagingFreshSeasonOneReset === true) {
+      return {
+        action: 'WORLD_BUILDING' as const,
+        worldReady: false,
+        reason: 'STAGING_SEASON_ONE_RESET_IN_PROGRESS',
+        writesStarted: false,
+      };
+    }
     let world: any = await ensureSeasonCalendar();
     // Do not run the broad daily match resolver when the calendar is blocked on
     // season rollover. prepareSeasonRollover owns settlement of the prior season
     // and validates the canonical fixture set before allowing the new season.
-    const db = getAdminDb();
     let catchUp: any = { skipped: true, reason: 'ROLLOVER_GATE_FIRST' };
     const preparedWorldCanPublish = world?.prepared === true && world?.worldReady !== true;
     if (!world?.waitingForSeasonResults && !isCalendarReady(world) && !preparedWorldCanPublish) {
@@ -240,6 +252,41 @@ export async function runSeasonOrchestrator() {
 }
 
 
+
+/**
+ * Public scheduler entry point. The Firestore lease is acquired before any
+ * calendar, match, tournament, or cup work and released only by its owner.
+ */
+export async function runSeasonOrchestrator() {
+  const db = getAdminDb();
+  const lock = await acquireSeasonOrchestratorLock(db);
+  if (!lock.acquired) {
+    return {
+      action: 'ORCHESTRATOR_LOCKED' as const,
+      success: true,
+      skipped: true,
+      retryAfter: new Date(lock.expiresAtMs).toISOString(),
+      writesStarted: false,
+    };
+  }
+
+  try {
+    return await runSeasonOrchestratorUnlocked();
+  } finally {
+    // Cleanup is best-effort: a transient Firestore failure must not replace
+    // the scheduler's actual result with a rejected request. The lease has a
+    // bounded TTL and will become reclaimable if this delete cannot complete.
+    try {
+      await releaseSeasonOrchestratorLock(db, lock.ownerId, lock.token);
+    } catch (releaseError: any) {
+      logger.error('Failed to release season orchestrator lease; it will expire by TTL', {
+        ownerId: lock.ownerId,
+        error: releaseError?.message || String(releaseError),
+      });
+    }
+  }
+}
+
 /** Read the active season from the canonical config document. */
 export async function getActiveSeasonNumber(db: any = getAdminDb()): Promise<number> {
   const snap = await db.collection('system_v1').doc('season_config').get();
@@ -260,15 +307,20 @@ export async function buildNextSeasonWorld() {
   if (!snap.exists) return { success: false, action: 'WORLD_NOT_READY', reason: 'SEASON_CONFIG_MISSING' };
   const config = snap.data() || {};
   const sourceSeason = Number(config.activeSeasonNumber || 1);
+  const phase = String(config.phase || '').toUpperCase();
+  const nextSeasonPreparationPhases = ['FINALIZING', 'GENERATING_NEXT', 'WORLD_BUILDING', 'PREPARING_NEXT_SEASON', 'PREPARATION', 'PUBLISHED'];
+  const transitionRequested = nextSeasonPreparationPhases.includes(phase);
   const configuredTargets = [config.nextSeasonNumber, config.preparationTargetSeason]
     .map((value: any) => Number(value))
-    .filter((value: number) => Number.isSafeInteger(value) && value > sourceSeason && value <= sourceSeason + 1);
-  const targetSeason = configuredTargets.length ? Math.max(...configuredTargets) : sourceSeason;
+    .filter((value: number) => Number.isSafeInteger(value) && value > sourceSeason);
+  // Ignore any stale target beyond the immediate successor. During a transition
+  // phase, the build-only entry point must still prepare exactly sourceSeason + 1.
+  const targetSeason = configuredTargets.length || transitionRequested
+    ? resolveNextSeasonTarget(sourceSeason, configuredTargets.length ? Math.max(...configuredTargets) : sourceSeason + 1)
+    : sourceSeason;
   if (!Number.isSafeInteger(targetSeason) || targetSeason < sourceSeason || targetSeason > sourceSeason + 1) {
     return { success: false, action: 'WORLD_NOT_READY', sourceSeason, targetSeason, reason: 'INVALID_TARGET_SEASON' };
   }
-  const phase = String(config.phase || '').toUpperCase();
-  const nextSeasonPreparationPhases = ['FINALIZING', 'GENERATING_NEXT', 'WORLD_BUILDING', 'PREPARING_NEXT_SEASON', 'PREPARATION', 'PUBLISHED'];
   if (targetSeason === sourceSeason + 1 && !nextSeasonPreparationPhases.includes(phase)) {
     return {
       success: false,
@@ -288,7 +340,9 @@ export async function buildNextSeasonWorld() {
   if (targetSeason === sourceSeason + 1) {
     const planSnap = await db.collection('league_season_rollovers_v1').doc(`S${targetSeason}`).get();
     const savedPlan = planSnap.exists ? planSnap.data() || {} : null;
-    if (validateRolloverPlan(savedPlan, sourceSeason, targetSeason).valid) {
+    if (savedPlan?.mode !== 'recovery_carry_forward' &&
+        validateRolloverPlan(savedPlan, sourceSeason, targetSeason).valid &&
+        isRolloverPlanPublicationReady(savedPlan)) {
       rollover = { ready: true, alreadyPrepared: true, sourceSeason, targetSeason };
     } else {
       rollover = await prepareSeasonRollover(db, sourceSeason, targetSeason);

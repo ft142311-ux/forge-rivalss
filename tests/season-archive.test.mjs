@@ -108,6 +108,19 @@ test('archive list hides preparing, incomplete, and malformed future seasons and
   assert.notEqual(listed[0].marker, 'duplicate');
 });
 
+test('archive UI shows only the immediately preceding completed season', () => {
+  const archives = [1, 2, 3].map(season => {
+    const archive = makeSeasonArchive(season).archive;
+    archive.status = 'completed';
+    archive.completedAt = new Date().toISOString();
+    return archive;
+  });
+
+  assert.deepEqual(getVisibleSeasonArchives(archives).map(item => item.sourceSeason), [3]);
+  assert.deepEqual(getCompletedSeasonArchives(archives).map(item => item.sourceSeason), [3, 2, 1],
+    'internal validation can still inspect every archive before rolling cleanup');
+});
+
 test('recovered archive is visible but never treated as a completed season or final standings', () => {
   const startingParticipants = Object.fromEntries(expectedRolloverGroups().map(group => [group,
     Array.from({ length: 8 }, (_, i) => ({ id: `${group}-S2-${i + 1}`, rank: i + 1, name: `${group} team ${i + 1}` }))]));
@@ -152,7 +165,7 @@ test('recovered archive rejects invalid counters, timestamps, metadata, extra gr
 
 
 
-test('archive pruning retains the newest completed archive and only prunes fully verified older archives', async () => {
+test('archive cleanup retains only the newest completed archive', async () => {
   const { resolveArchivePrunePlan } = await import('../src/app/actions/season-archive.ts');
   const first = makeSeasonArchive(1);
   first.archive.status = 'completed';
@@ -246,7 +259,7 @@ test('recovered archive cleanup does not resume a legacy prune intent with a pen
   assert.deepEqual(finalized.pruneIds, ['S2']);
 });
 
-test('archive pruning resumes interrupted subcollection deletion only with a matching intent marker', async () => {
+test('matching legacy prune intent safely resumes deletion of an older archive', async () => {
   const { resolveArchivePrunePlan } = await import('../src/app/actions/season-archive.ts');
   const first = makeSeasonArchive(1);
   first.archive.status = 'completed';
@@ -268,7 +281,7 @@ test('archive pruning resumes interrupted subcollection deletion only with a mat
 
 
 
-test('archive pruning refuses to resume an interrupted deletion when any intent fence field changed', async () => {
+test('legacy prune metadata with mismatched intent fails closed', async () => {
   const { resolveArchivePrunePlan } = await import('../src/app/actions/season-archive.ts');
   const first = makeSeasonArchive(1);
   first.archive.status = 'completed';
@@ -288,7 +301,7 @@ test('archive pruning refuses to resume an interrupted deletion when any intent 
   ];
   for (const archive of variants) {
     const result = resolveArchivePrunePlan([
-      { id: 'S1', archive, matches: [] },
+      { id: 'S1', archive, matches: first.matches },
       { id: 'S2', archive: second.archive, matches: second.matches },
     ], 4, 2);
     assert.equal(result.ready, false);
@@ -297,7 +310,7 @@ test('archive pruning refuses to resume an interrupted deletion when any intent 
   }
 });
 
-test('archive pruning never resumes deletion of the newest retained completed archive', async () => {
+test('a legacy prune marker cannot delete the newest retained completed archive', async () => {
   const { resolveArchivePrunePlan } = await import('../src/app/actions/season-archive.ts');
   const retained = makeSeasonArchive(2);
   retained.archive.status = 'completed';
@@ -345,4 +358,55 @@ test('recovered season archive refuses incomplete or duplicate starting particip
   });
   assert.equal(result.ready, false);
   assert.equal(result.reason, 'CARRY_FORWARD_TEAM_OR_RANK_CONFLICT');
+});
+
+
+test('archive retention remains a rolling single-season window after many transitions', async () => {
+  const { resolveArchivePrunePlan } = await import('../src/app/actions/season-archive.ts');
+  const seasons = Array.from({ length: 5 }, (_, index) => makeSeasonArchive(index + 1));
+  const archives = seasons.map((entry, index) => {
+    entry.archive.status = 'completed';
+    entry.archive.completedAt = new Date(Date.UTC(2026, 0, index + 1)).toISOString();
+    return { id: `S${index + 1}`, archive: entry.archive, matches: entry.matches };
+  });
+  const result = resolveArchivePrunePlan(archives, 6, 5);
+  assert.equal(result.ready, true);
+  assert.equal(result.retainedArchiveSeason, 5);
+  assert.deepEqual(result.pruneIds, ['S1', 'S2', 'S3', 'S4']);
+});
+
+
+test('rolling archive pruning resumes after partial deletion across five completed seasons', async () => {
+  const { resolveArchivePrunePlan } = await import('../src/app/actions/season-archive.ts');
+  const seasons = Array.from({ length: 5 }, (_, index) => makeSeasonArchive(index + 1));
+  const archives = seasons.map((entry, index) => {
+    entry.archive.status = 'completed';
+    entry.archive.completedAt = new Date(Date.UTC(2026, 0, index + 1)).toISOString();
+    return { id: `S${index + 1}`, archive: entry.archive, matches: entry.matches };
+  });
+
+  const initial = resolveArchivePrunePlan(archives, 6, 5);
+  assert.equal(initial.ready, true);
+  assert.deepEqual(initial.pruneIds, ['S1', 'S2', 'S3', 'S4']);
+
+  // Simulate a worker that persisted deletion intent and removed only S1/S2
+  // before interruption. The retry must accept matching intents for S3/S4.
+  for (const item of archives.filter(item => ['S3', 'S4'].includes(item.id))) {
+    item.archive.pruneStatus = 'PRUNING';
+    item.archive.pruneTargetSeason = 6;
+    item.archive.pruneRetainedArchiveSeason = 5;
+    item.archive.prunePolicyVersion = 1;
+  }
+  const afterInterruption = archives.filter(item => !['S1', 'S2'].includes(item.id))
+    .map(item => item.id === 'S5' ? item : { ...item, matches: [] });
+  const resumed = resolveArchivePrunePlan(afterInterruption, 6, 5);
+  assert.equal(resumed.ready, true);
+  assert.deepEqual(resumed.pruneIds, ['S3', 'S4']);
+  assert.equal(resumed.retainedArchiveSeason, 5);
+
+  // Once obsolete archives are gone, postflight must accept only S5.
+  const postflight = resolveArchivePrunePlan([archives[4]], 6, 5);
+  assert.equal(postflight.ready, true);
+  assert.deepEqual(postflight.pruneIds, []);
+  assert.equal(postflight.retainedArchiveSeason, 5);
 });

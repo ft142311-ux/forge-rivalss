@@ -19,7 +19,7 @@ test('league access diagnostics verify identity and inspect only the caller reti
   assert.match(route, /retired:\s*retiredMarker\.exists/);
 });
 
-test('standings permission failures trigger the authenticated read-only diagnostic', () => {
-  assert.match(rankings, /api\/diagnostics\/league-table/);
-  assert.match(rankings, /Authorization/);
+test('rankings page uses the authenticated server-side public standings projection', () => {
+  assert.match(rankings, /fetch\('\/api\/league\/table'/);
+  assert.doesNotMatch(rankings, /api\/diagnostics\/league-table/);
 });

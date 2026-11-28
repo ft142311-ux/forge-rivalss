@@ -34,14 +34,21 @@ async function acquireLease(
   lockId: string,
   sourceSeason: number,
   targetSeason: number,
-  options: { ownerId?: string; token?: string; nowMs?: number; ttlMs?: number } = {},
+  options: { ownerId?: string; token?: string; nowMs?: number; ttlMs?: number; allowDuringStagingReset?: boolean } = {},
 ) {
   const ownerId = options.ownerId || randomUUID();
   const nowMs = Number(options.nowMs ?? Date.now());
   const ttlMs = Number(options.ttlMs ?? SEASON_ROLLOVER_LOCK_TTL_MS);
   const ref = db.collection('system_v1').doc(lockId);
+  const configRef = db.collection('system_v1').doc('season_config');
   return db.runTransaction(async (tx: any) => {
-    const snap = await tx.get(ref);
+    const [snap, configSnap] = await Promise.all([tx.get(ref), tx.get(configRef)]);
+    const config = configSnap.exists ? configSnap.data() || {} : {};
+    const resetInProgress = config.stagingSeasonOneResetInProgress === true ||
+      config.stagingFreshSeasonOneReset === true;
+    if (resetInProgress && options.allowDuringStagingReset !== true) {
+      return { acquired: false, ownerId, reason: 'STAGING_SEASON_ONE_RESET_IN_PROGRESS', expiresAtMs: 0 };
+    }
     const current = snap.exists ? snap.data() || {} : null;
     const hasLiveLease = Boolean(current) && !isSeasonRolloverLockStale(current, nowMs);
     // A matching ownerId alone is not proof that this is the same process:
@@ -136,8 +143,13 @@ export async function commitSeasonRolloverWrites(db: LockDb, ownerId: string, to
   if (writes.length === 0) return;
   if (writes.length > 450) throw new Error('SEASON_ROLLOVER_WRITE_CHUNK_TOO_LARGE');
   const lockRef = db.collection('system_v1').doc(SEASON_ROLLOVER_LOCK_ID);
+  const configRef = db.collection('system_v1').doc('season_config');
   await db.runTransaction(async (tx: any) => {
-    const snap = await tx.get(lockRef);
+    const [snap, configSnap] = await Promise.all([tx.get(lockRef), tx.get(configRef)]);
+    const config = configSnap.exists ? configSnap.data() || {} : {};
+    if (config.stagingSeasonOneResetInProgress === true || config.stagingFreshSeasonOneReset === true) {
+      throw new Error('STAGING_SEASON_ONE_RESET_IN_PROGRESS');
+    }
     const current = snap.exists ? snap.data() || {} : null;
     const nowMs = Date.now();
     if (!current || current.ownerId !== ownerId || current.token !== token || isSeasonRolloverLockStale(current, nowMs)) {
@@ -148,7 +160,7 @@ export async function commitSeasonRolloverWrites(db: LockDb, ownerId: string, to
   });
 }
 
-export async function acquireSeasonCalendarBuildLock(db: LockDb, sourceSeason: number, targetSeason: number, options: { ownerId?: string; token?: string; nowMs?: number; ttlMs?: number } = {}) {
+export async function acquireSeasonCalendarBuildLock(db: LockDb, sourceSeason: number, targetSeason: number, options: { ownerId?: string; token?: string; nowMs?: number; ttlMs?: number; allowDuringStagingReset?: boolean } = {}) {
   return acquireLease(db, SEASON_CALENDAR_BUILD_LOCK_ID, sourceSeason, targetSeason, { ...options, ttlMs: options.ttlMs ?? SEASON_CALENDAR_BUILD_LOCK_TTL_MS });
 }
 
@@ -157,12 +169,24 @@ export async function assertSeasonCalendarBuildLock(db: LockDb, ownerId: string,
 }
 
 /** Read the lease and apply one <=450-write chunk in the same transaction. */
-export async function commitSeasonCalendarWrites(db: LockDb, ownerId: string, token: string, writes: LeaseWrite[]) {
+export async function commitSeasonCalendarWrites(
+  db: LockDb,
+  ownerId: string,
+  token: string,
+  writes: LeaseWrite[],
+  options: { allowDuringStagingReset?: boolean } = {},
+) {
   if (writes.length === 0) return;
   if (writes.length > 450) throw new Error('SEASON_CALENDAR_WRITE_CHUNK_TOO_LARGE');
   const ref = db.collection('system_v1').doc(SEASON_CALENDAR_BUILD_LOCK_ID);
+  const configRef = db.collection('system_v1').doc('season_config');
   await db.runTransaction(async (tx: any) => {
-    const snap = await tx.get(ref);
+    const [snap, configSnap] = await Promise.all([tx.get(ref), tx.get(configRef)]);
+    const config = configSnap.exists ? configSnap.data() || {} : {};
+    if ((config.stagingSeasonOneResetInProgress === true || config.stagingFreshSeasonOneReset === true) &&
+        options.allowDuringStagingReset !== true) {
+      throw new Error('STAGING_SEASON_ONE_RESET_IN_PROGRESS');
+    }
     const current = snap.exists ? snap.data() || {} : null;
     const nowMs = Date.now();
     if (!current || current.ownerId !== ownerId || current.token !== token || isSeasonRolloverLockStale(current, nowMs)) {
@@ -196,6 +220,9 @@ export async function commitSeasonCalendarPublication(
     const planSnap = expected.planRef ? await tx.get(expected.planRef) : null;
     const lock = lockSnap.exists ? lockSnap.data() || {} : null;
     const config = configSnap.exists ? configSnap.data() || {} : null;
+    if (config?.stagingSeasonOneResetInProgress === true || config?.stagingFreshSeasonOneReset === true) {
+      throw new Error('STAGING_SEASON_ONE_RESET_IN_PROGRESS');
+    }
     if (!lock || lock.ownerId !== ownerId || lock.token !== token || isSeasonRolloverLockStale(lock, Date.now())) {
       throw new Error('SEASON_CALENDAR_BUILD_LOCK_LOST');
     }
@@ -249,6 +276,9 @@ export async function commitSeasonHistoryCleanupWrites(
     const currentLock = lockSnap.exists ? lockSnap.data() || {} : null;
     const config = configSnap.exists ? configSnap.data() || {} : null;
     const nowMs = Date.now();
+    if (config?.stagingSeasonOneResetInProgress === true || config?.stagingFreshSeasonOneReset === true) {
+      throw new Error('STAGING_SEASON_ONE_RESET_IN_PROGRESS');
+    }
     if (!currentLock || currentLock.ownerId !== ownerId || currentLock.token !== token ||
         isSeasonRolloverLockStale(currentLock, nowMs)) {
       throw new Error('SEASON_CALENDAR_BUILD_LOCK_LOST');
