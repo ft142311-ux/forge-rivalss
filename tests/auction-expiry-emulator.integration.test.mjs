@@ -1784,3 +1784,76 @@ test('Firestore Emulator refunds a Youth auction when the buyer already owns the
   assert.equal(buyer.get('ownedPlayers').length, 1);
   assert.equal(buyer.get('youthAcademyPlayers').length, 0);
 });
+
+
+
+test('Firestore Emulator refunds a Youth auction when the seller also owns the player in the senior roster', {
+  skip: !emulatorHost,
+}, async t => {
+  const { db } = await withIsolatedFirestore(t);
+  const now = Date.now();
+  const lotId = 'youth-seller-cross-roster-duplicate-lot';
+  const sellerId = 'youth-seller-cross-roster-duplicate-seller';
+  const buyerId = 'youth-seller-cross-roster-duplicate-buyer';
+  const playerId = 'youth-seller-cross-roster-duplicate-player';
+  const lockUntil = new Date(now + 60 * 60 * 1000).toISOString();
+  await db.collection('players_v14').doc(sellerId).set({
+    credits: 0,
+    youthAcademyPlayers: [{
+      id: playerId,
+      name: 'Duplicate Seller Youth',
+      proStats: {},
+      proTalents: {},
+      isYouth: true,
+      onTransferUntil: lockUntil,
+      transferMarketId: lotId,
+    }],
+    ownedPlayers: [{
+      id: playerId,
+      name: 'Duplicate Senior Player',
+      proStats: {},
+      proTalents: {},
+      isYouth: false,
+    }],
+  });
+  await db.collection('players_v14').doc(buyerId).set({
+    credits: 0,
+    academy: {},
+    youthAcademyPlayers: [],
+  });
+  const lotRef = db.collection('market_v7').doc(lotId);
+  await lotRef.set(expiredLot({
+    sellerId,
+    highestBidderId: buyerId,
+    currentBid: 1000,
+    startingPrice: 500,
+    currency: 'credits',
+    escrowCurrency: 'credits',
+    escrowedAmount: 1000,
+    expiresAt: new Date(now - 60_000).toISOString(),
+    heroData: { id: playerId, name: 'Duplicate Seller Youth' },
+    isYouth: true,
+  }));
+
+  const result = await runTransferMarketExpirySweepWithDb(db);
+  assert.equal(result.success, true);
+  assert.equal(result.sold, 0);
+  assert.equal(result.expiredWithoutSale, 1);
+  assert.equal((await lotRef.get()).exists, false);
+
+  const [seller, buyer] = await Promise.all([
+    db.collection('players_v14').doc(sellerId).get(),
+    db.collection('players_v14').doc(buyerId).get(),
+  ]);
+  assert.equal(seller.get('credits'), 0, 'a cross-roster duplicate must not pay the seller');
+  assert.equal(seller.get('youthAcademyPlayers').length, 1);
+  assert.equal(seller.get('youthAcademyPlayers')[0].transferMarketId, null);
+  assert.equal(seller.get('youthAcademyPlayers')[0].onTransferUntil, null);
+  assert.deepEqual(seller.get('ownedPlayers').map(player => player.id), [playerId]);
+  assert.equal(buyer.get('credits'), 1000, 'the buyer receives the full recorded escrow refund');
+  assert.deepEqual(buyer.get('youthAcademyPlayers'), []);
+  const refund = await db.collection('economy_transactions').where('referenceId', '==', lotId).get();
+  assert.equal(refund.size, 1);
+  assert.equal(refund.docs[0].get('type'), 'SPECIAL_AUCTION_SETTLEMENT_REFUND');
+  assert.equal((await db.collection('transfer_history').where('marketId', '==', lotId).get()).size, 0);
+});

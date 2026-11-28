@@ -6,10 +6,17 @@ const events = readFileSync(new URL('../src/app/events/page.tsx', import.meta.ur
 const awards = readFileSync(new URL('../src/app/awards/page.tsx', import.meta.url), 'utf8');
 const search = readFileSync(new URL('../src/app/search/page.tsx', import.meta.url), 'utf8');
 
-test('events page uses the current season fixture data and links to official match and tournament areas', () => {
-  assert.match(events, /allSeasonMatches/);
-  assert.match(events, /isFinished !== true/);
-  assert.match(events, /startTime \?\? match\.scheduledAt \?\? match\.date/);
+test('events page loads the authenticated current-season schedule and filters to the manager’s own fixtures', () => {
+  assert.match(events, /fetch\('\/api\/league\/matches'/);
+  assert.match(events, /Authorization: `Bearer \$\{token\}`/);
+  assert.match(events, /selectedLeagueId/);
+  assert.match(events, /match\.homeId === user\.uid \|\| match\.awayId === user\.uid/);
+  assert.match(events, /Number\(match\.homeRank\) === managerRank/);
+  assert.match(events, /Number\(match\.season\) === effectiveSeason/);
+  assert.match(events, /isFinished/);
+  assert.match(events, /scheduledStartAt/);
+  assert.match(events, /seasonDay/);
+  assert.doesNotMatch(events, /\bconst\s*\{[^}]*allSeasonMatches/s);
   assert.match(events, /href="\/matches"/);
   assert.match(events, /href="\/tournaments"/);
 });

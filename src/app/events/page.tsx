@@ -1,9 +1,10 @@
 'use client';
 
 import Link from 'next/link';
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { CalendarDays, ChevronLeft, Clock3, Medal, Swords, Trophy } from 'lucide-react';
 import { useGameState } from '../lib/store';
+import { useUser } from '@/firebase';
 import { LoadingScreen } from '@/components/game/LoadingScreen';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -19,24 +20,105 @@ function toMillis(value: any): number {
   return typeof seconds === 'number' ? seconds * 1000 : Number.NaN;
 }
 
+function isFinished(match: any): boolean {
+  const status = String(match?.status || '').trim().toLowerCase();
+  return match?.isFinished === true || ['finished', 'completed', 'resolved', 'cancelled', 'canceled'].includes(status);
+}
+
+function isLive(match: any): boolean {
+  const status = String(match?.status || '').trim().toLowerCase();
+  return match?.isLive === true || ['live', 'in_progress', 'processing'].includes(status);
+}
+
 export default function EventsPage() {
-  const { isLoaded, language, allSeasonMatches, nextMatch, seasonNumber, seasonDay } = useGameState();
+  const { user, isUserLoading } = useUser();
+  const {
+    isLoaded, language, selectedLeagueId, leagueLevel, groupId, rank,
+    seasonNumber, activeSeasonNumber, seasonDay,
+  } = useGameState();
   const ru = language !== 'en';
-  const now = Date.now();
+  const [fixtures, setFixtures] = useState<any[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [matchesError, setMatchesError] = useState<string | null>(null);
+  const effectiveSeason = Math.max(1, Number(activeSeasonNumber || seasonNumber || 1));
+
+  // Match Center uses this authenticated public projection too, so the Events
+  // page always reads the same canonical schedule as the match calendar.
+  useEffect(() => {
+    if (!isLoaded || isUserLoading || !user || !selectedLeagueId) {
+      setFixtures([]);
+      setIsLoading(false);
+      setMatchesError(null);
+      return;
+    }
+
+    let cancelled = false;
+    const controller = new AbortController();
+    setIsLoading(true);
+    setMatchesError(null);
+
+    (async () => {
+      try {
+        const token = await user.getIdToken();
+        const response = await fetch('/api/league/matches', {
+          method: 'POST',
+          headers: { Authorization: \`Bearer \${token}\`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            leagueId: selectedLeagueId,
+            level: Number(leagueLevel),
+            group: Number(groupId),
+            season: effectiveSeason,
+          }),
+          cache: 'no-store',
+          signal: controller.signal,
+        });
+        const result = await response.json();
+        if (!response.ok || result?.success !== true) {
+          throw new Error(result?.error || 'LEAGUE_MATCHES_UNAVAILABLE');
+        }
+        if (!cancelled) setFixtures(Array.isArray(result.matches) ? result.matches : []);
+      } catch (error: any) {
+        if (!cancelled && error?.name !== 'AbortError') {
+          setFixtures([]);
+          setMatchesError(String(error?.message || 'LEAGUE_MATCHES_UNAVAILABLE'));
+        }
+      } finally {
+        if (!cancelled) setIsLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [isLoaded, isUserLoading, user, selectedLeagueId, leagueLevel, groupId, effectiveSeason]);
 
   const events = useMemo(() => {
-    const source = Array.isArray(allSeasonMatches) ? allSeasonMatches : [];
-    return source
-      .filter((match: any) => match && match.isFinished !== true && match.status !== 'FINISHED')
-      .map((match: any) => ({ ...match, _time: toMillis(match.startTime ?? match.scheduledAt ?? match.date) }))
+    const managerRank = Number(rank);
+    return fixtures
+      .filter((match: any) => {
+        if (!match || isFinished(match)) return false;
+        const directIdentity = Boolean(user?.uid && (match.homeId === user.uid || match.awayId === user.uid));
+        const sameLeagueSlot = match.leagueId === selectedLeagueId &&
+          Number(match.level) === Number(leagueLevel) &&
+          Number(match.groupId) === Number(groupId) &&
+          Number(match.season) === effectiveSeason &&
+          Number.isSafeInteger(managerRank) && managerRank > 0 &&
+          (Number(match.homeRank) === managerRank || Number(match.awayRank) === managerRank);
+        return directIdentity || sameLeagueSlot;
+      })
+      .map((match: any) => ({
+        ...match,
+        _time: toMillis(match.startTime ?? match.scheduledStartAt ?? match.scheduledAt ?? match.date),
+      }))
       .filter((match: any) => Number.isFinite(match._time))
       .sort((a: any, b: any) => a._time - b._time)
       .slice(0, 20);
-  }, [allSeasonMatches]);
+  }, [fixtures, user?.uid, selectedLeagueId, leagueLevel, groupId, effectiveSeason, rank]);
 
-  if (!isLoaded) return <LoadingScreen />;
+  if (!isLoaded || isUserLoading) return <LoadingScreen />;
 
-  const next = events[0] || (nextMatch ? { ...nextMatch, _time: toMillis((nextMatch as any).startTime) } : null);
+  const next = events[0] || null;
 
   return (
     <main className="mx-auto max-w-3xl px-4 py-6 pb-24 space-y-5">
@@ -44,7 +126,7 @@ export default function EventsPage() {
         <Link href="/"><Button variant="ghost" size="icon" aria-label={ru ? 'Назад' : 'Back'}><ChevronLeft /></Button></Link>
         <div>
           <h1 className="text-2xl font-black tracking-tight flex items-center gap-2"><CalendarDays className="text-primary" />{ru ? 'СОБЫТИЯ' : 'EVENTS'}</h1>
-          <p className="text-xs text-muted-foreground">{ru ? 'Календарь матчей и соревнований клуба' : 'Club match and competition calendar'}</p>
+          <p className="text-xs text-muted-foreground">{ru ? 'Календарь матчей вашего клуба и соревнований' : 'Your club fixtures and competition calendar'}</p>
         </div>
       </header>
 
@@ -52,8 +134,8 @@ export default function EventsPage() {
         <CardContent className="p-4 flex items-center justify-between gap-3">
           <div>
             <p className="text-[10px] uppercase tracking-widest text-primary font-bold">{ru ? 'ТЕКУЩИЙ СЕЗОН' : 'CURRENT SEASON'}</p>
-            <p className="text-xl font-black">{ru ? 'Сезон' : 'Season'} {seasonNumber || 1}</p>
-            <p className="text-xs text-muted-foreground">{ru ? 'Игровой день' : 'Game day'} {seasonDay || 1}</p>
+            <p className="text-xl font-black">{ru ? 'Сезон' : 'Season'} {effectiveSeason}</p>
+            <p className="text-xs text-muted-foreground">{ru ? 'Игровой день' : 'Game day'} {Number.isFinite(Number(seasonDay)) ? seasonDay : 1}</p>
           </div>
           <Badge variant="outline">{ru ? 'Календарь' : 'Calendar'}</Badge>
         </CardContent>
@@ -70,13 +152,15 @@ export default function EventsPage() {
               <div>
                 <p className="text-[10px] text-muted-foreground uppercase">{ru ? 'ТУР' : 'ROUND'} {next.tour ?? '—'}</p>
                 <p className="font-bold mt-1">{next.homeName || next.homeClubName || (ru ? 'Хозяева' : 'Home')} <span className="text-primary">vs</span> {next.awayName || next.awayClubName || (ru ? 'Гости' : 'Away')}</p>
-                <p className="text-xs text-muted-foreground mt-2">{Number.isFinite(next._time) ? new Date(next._time).toLocaleString(ru ? 'ru-RU' : 'en-GB') : (ru ? 'Время уточняется' : 'Time to be confirmed')}</p>
+                <p className="text-xs text-muted-foreground mt-2">{new Date(next._time).toLocaleString(ru ? 'ru-RU' : 'en-GB')}</p>
               </div>
-              <Badge variant={next._time <= now ? 'default' : 'secondary'}>{next._time <= now ? (ru ? 'СЕЙЧАС' : 'LIVE') : (ru ? 'ОЖИДАЕТСЯ' : 'UPCOMING')}</Badge>
+              <Badge variant={isLive(next) ? 'default' : 'secondary'}>{isLive(next) ? 'LIVE' : (ru ? 'ОЖИДАЕТСЯ' : 'UPCOMING')}</Badge>
             </div>
           </CardContent></Card>
         ) : (
-          <Card><CardContent className="p-6 text-center text-sm text-muted-foreground">{ru ? 'Расписание следующих матчей пока не опубликовано.' : 'The next match schedule has not been published yet.'}</CardContent></Card>
+          <Card><CardContent className="p-6 text-center text-sm text-muted-foreground">
+            {isLoading ? (ru ? 'Загружаем расписание клуба…' : 'Loading your club schedule…') : matchesError ? (ru ? 'Не удалось загрузить расписание. Откройте матч-центр для повторной проверки.' : 'The schedule could not be loaded. Open Match Center to retry.') : (ru ? 'Расписание следующих матчей пока не опубликовано.' : 'The next match schedule has not been published yet.')}
+          </CardContent></Card>
         )}
       </section>
 
@@ -88,9 +172,9 @@ export default function EventsPage() {
               <p className="text-xs font-bold truncate">{match.homeName || match.homeClubName || '—'} <span className="text-primary">vs</span> {match.awayName || match.awayClubName || '—'}</p>
               <p className="text-[10px] text-muted-foreground mt-1">{ru ? 'Тур' : 'Round'} {match.tour ?? '—'} · {new Date(match._time).toLocaleString(ru ? 'ru-RU' : 'en-GB')}</p>
             </div>
-            <Badge variant="outline">{match._time <= now ? (ru ? 'LIVE' : 'LIVE') : (ru ? 'СКОРО' : 'SOON')}</Badge>
+            <Badge variant="outline">{isLive(match) ? 'LIVE' : (ru ? 'СКОРО' : 'SOON')}</Badge>
           </CardContent></Card>
-        )) : <p className="text-xs text-muted-foreground py-4 text-center">{ru ? 'Нет опубликованных предстоящих матчей.' : 'No upcoming fixtures have been published.'}</p>}
+        )) : !isLoading ? <p className="text-xs text-muted-foreground py-4 text-center">{ru ? 'Нет опубликованных предстоящих матчей.' : 'No upcoming fixtures have been published.'}</p> : null}
       </section>
 
       <div className="grid grid-cols-2 gap-3">

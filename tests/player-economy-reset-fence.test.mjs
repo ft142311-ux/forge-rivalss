@@ -11,7 +11,8 @@ test('player economy mutations are transactionally fenced during fresh Season 1 
     ['../src/app/actions/player-care.ts', 1],
     ['../src/app/actions/player-lifecycle.ts', 1],
     ['../src/app/actions/shop.ts', 8],
-    ['../src/app/actions/gameplay.ts', 5],
+    ['../src/app/actions/gameplay.ts', 4],
+    ['../src/app/lib/youth-academy.ts', 6],
     ['../src/app/lib/market-listing.ts', 2],
     ['../src/app/actions/p2-management.ts', 10],
     ['../src/app/actions/season-rollover.ts', 1],
@@ -26,7 +27,7 @@ test('player economy mutations are transactionally fenced during fresh Season 1 
     const fences = (source.match(/await assertStagingSeasonOneResetNotInProgress\(/g) || []).length;
     assert.equal(transactions, expectedTransactions, path + ' transaction count changed; review this fence test');
     assert.equal(fences, transactions, path + ' must fence every transaction');
-    assert.match(source, /import \{ assertStagingSeasonOneResetNotInProgress \} from '@\/app\/lib\/staging-season-one-write-fence'/);
+    assert.match(source, /import \{ assertStagingSeasonOneResetNotInProgress \} from ['\"](?:@\/app\/lib\/|\.\/)staging-season-one-write-fence['\"]/);
   }
 });
 
