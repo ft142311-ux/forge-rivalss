@@ -53,8 +53,8 @@ async function processManager(db: any, ref: DocumentReference, now: Date) {
     const cycleRef = db.collection(FOUNDATION_COLLECTIONS.cycles).doc(`${ref.id}_${periodKey}`);
     const eventRef = db.collection(FOUNDATION_COLLECTIONS.events).doc(`${ref.id}_${periodKey}`);
     const [cycleSnap, eventSnap] = await Promise.all([
-      t.get(cycleRef as any),
-      t.get(eventRef as any),
+      t.get(cycleRef),
+      t.get(eventRef),
     ]);
     if (cycleSnap.exists) return { processed: false };
 
