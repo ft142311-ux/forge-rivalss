@@ -52,8 +52,10 @@ export async function resolveFoundationEventAction(idToken: string, eventId: str
       const [freshEvent, freshManager] = await Promise.all([t.get(ref), t.get(managerRef)]);
       if (!freshEvent.exists) throw new Error('EVENT_NOT_FOUND');
       const eventData = assertFoundationDailyEventRecord(freshEvent.data() || {}, uid, period);
-      if (eventData.resolvedAt !== undefined && eventData.resolvedAt !== null) return { alreadyResolved: true };
+      // Authenticate the requested event identity before returning an
+      // idempotent result; a stale or foreign ID must not be accepted.
       if (eventData.event.id !== normalizedEventId) throw new Error('EVENT_MISMATCH');
+      if (eventData.resolvedAt !== undefined && eventData.resolvedAt !== null) return { alreadyResolved: true };
       if (!freshManager.exists) throw new Error('PLAYER_NOT_FOUND');
       const effects = choice === 'accept' ? eventData.event.effects : {};
       const managerData = freshManager.data() || {};

@@ -148,14 +148,17 @@ test('daily cycle verifies marker, receipt and event before treating a retry as 
   assert.match(process, /t\.create\(txRef/);
 });
 
-test('event reads and resolutions reject malformed state before returning or applying effects', () => {
+test('event reads and resolutions reject malformed state and mismatched IDs before idempotent return', () => {
   const resolverStart = advanced.indexOf('export async function resolveFoundationEventAction');
   const resolverEnd = advanced.indexOf('\nexport async function foundationFanAction', resolverStart);
   const resolver = advanced.slice(resolverStart, resolverEnd);
   const validation = resolver.indexOf('assertFoundationDailyEventRecord(');
+  const eventIdCheck = resolver.indexOf('if (eventData.event.id !== normalizedEventId)');
+  const resolvedCheck = resolver.indexOf('if (eventData.resolvedAt !== undefined && eventData.resolvedAt !== null)');
   const appliedEffects = resolver.indexOf('const effects = choice ===');
-  assert.ok(validation >= 0 && validation < appliedEffects);
-  assert.match(resolver, /eventData\.resolvedAt !== undefined && eventData\.resolvedAt !== null/);
+  assert.ok(validation >= 0 && validation < eventIdCheck);
+  assert.ok(eventIdCheck >= 0 && eventIdCheck < resolvedCheck);
+  assert.ok(resolvedCheck < appliedEffects);
 
   const getterStart = management.indexOf('export async function getFoundationDailyEventAction');
   const getterEnd = management.indexOf('\nexport async function getFoundationPlayerStatsAction', getterStart);

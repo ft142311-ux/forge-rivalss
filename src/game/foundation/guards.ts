@@ -1,7 +1,63 @@
+import { isPlayerSkillKey } from '../player-skills';
 import type { FoundationPlayerState } from './types';
 
 function isRecord(value: unknown): value is Record<string, any> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function developmentNumber(value: unknown, min: number, max: number): number {
+  const parsed =
+    typeof value === 'number'
+      ? value
+      : typeof value === 'string' && value.trim().length > 0
+        ? Number(value)
+        : Number.NaN;
+  if (!Number.isFinite(parsed) || parsed < min || parsed > max) {
+    throw new Error('FOUNDATION_PLAYER_DEVELOPMENT_INVALID');
+  }
+  return parsed;
+}
+
+function assertDevelopmentSkillMap(
+  player: Record<string, any>,
+  field: 'proStats' | 'proTalents' | 'trainingProgress' | 'skillCaps' | 'skillInclinations',
+  min: number,
+  max: number,
+): void {
+  const value = player[field];
+  // Missing/null maps are accepted for legacy player records. A present value
+  // must be a record so normalization cannot spread strings or arrays.
+  if (value === undefined || value === null) return;
+  if (!isRecord(value)) throw new Error('FOUNDATION_PLAYER_DEVELOPMENT_INVALID');
+
+  for (const [skill, rawValue] of Object.entries(value)) {
+    if (!isPlayerSkillKey(skill)) {
+      throw new Error('FOUNDATION_PLAYER_DEVELOPMENT_INVALID');
+    }
+    developmentNumber(rawValue, min, max);
+  }
+}
+
+/**
+ * Validate persisted player-development data before Foundation actions can
+ * normalize, train, score or rewrite a roster. Partial skill maps remain
+ * compatible with older records; malformed maps and out-of-domain values do
+ * not silently become zero or disappear during object spreading.
+ */
+export function assertFoundationPlayerDevelopmentRecord(value: unknown): void {
+  if (!isRecord(value)) throw new Error('FOUNDATION_PLAYER_DEVELOPMENT_INVALID');
+
+  assertDevelopmentSkillMap(value, 'proStats', 0, 100);
+  assertDevelopmentSkillMap(value, 'proTalents', 0, 100);
+  assertDevelopmentSkillMap(value, 'trainingProgress', 0, 1);
+  assertDevelopmentSkillMap(value, 'skillCaps', 0, 100);
+  assertDevelopmentSkillMap(value, 'skillInclinations', 0, 100);
+
+  for (const field of ['trainingPropensity', 'physical', 'resilience'] as const) {
+    const rawValue = value[field];
+    if (rawValue === undefined || rawValue === null) continue;
+    developmentNumber(rawValue, 0, 100);
+  }
 }
 
 /**
@@ -22,6 +78,7 @@ export function readFoundationRoster(value: unknown): FoundationPlayerState[] {
       throw new Error('FOUNDATION_ROSTER_INVALID');
     }
     ids.add(id);
+    assertFoundationPlayerDevelopmentRecord(player);
   }
 
   return value as FoundationPlayerState[];

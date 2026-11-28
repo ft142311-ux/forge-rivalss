@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { calculateSalary } from '../src/game/foundation/player-system.ts';
 import { resolveFoundationPlayerSalary } from '../src/game/foundation/economy.ts';
+import { readFoundationRoster } from '../src/game/foundation/guards.ts';
 import {
   applyFoundationDailyTrainingBonus,
   readFoundationDailyTrainingBonus,
@@ -104,4 +105,44 @@ test('daily cycle uses the same strict salary resolver before persisting normali
   const normalize = cycle.slice(start, end);
   assert.ok(normalize.includes('resolveFoundationPlayerSalary(normalized as any)'));
   assert.ok(!normalize.includes('calculateSalary(normalized)'));
+});
+
+
+test('Foundation roster rejects malformed player-development maps before any action can normalize or train them', () => {
+  const valid = player({
+    proStats: { lastHitting: 72, reflexes: 68 },
+    proTalents: { lastHitting: 80 },
+    trainingProgress: { lastHitting: 0.45 },
+    skillCaps: { lastHitting: 91 },
+    skillInclinations: { lastHitting: 75 },
+    trainingPropensity: 64,
+    physical: 70,
+    resilience: 82,
+  });
+  assert.equal(readFoundationRoster([valid])[0], valid);
+
+  const legacyPartial = player({ proStats: null, proTalents: undefined, trainingProgress: null });
+  assert.equal(readFoundationRoster([legacyPartial])[0], legacyPartial);
+
+  const invalidPlayers = [
+    player({ proStats: 'corrupt' }),
+    player({ proTalents: [] }),
+    player({ trainingProgress: { lastHitting: ' ' } }),
+    player({ trainingProgress: { lastHitting: 1.01 } }),
+    player({ trainingProgress: { unsupportedSkill: 0.2 } }),
+    player({ skillCaps: { lastHitting: -1 } }),
+    player({ skillInclinations: { lastHitting: 101 } }),
+    player({ proStats: { lastHitting: Number.POSITIVE_INFINITY } }),
+    player({ proTalents: { lastHitting: 'not-a-number' } }),
+    player({ trainingPropensity: 101 }),
+    player({ physical: -1 }),
+    player({ resilience: ' ' }),
+  ];
+
+  for (const invalid of invalidPlayers) {
+    assert.throws(
+      () => readFoundationRoster([invalid]),
+      /FOUNDATION_PLAYER_DEVELOPMENT_INVALID/,
+    );
+  }
 });
