@@ -5,10 +5,22 @@ import {
   calculateManagerProgress,
   createManagerXpAward,
   tryCreateManagerXpAward,
+  normalizeManagerProgress,
   getManagerMatchXp,
   getManagerProgressDisplay,
   isEligibleManagerProfile,
 } from '../src/app/lib/manager-progression.ts';
+
+test('manager progress normalization protects the UI from corrupt legacy values', () => {
+  assert.deepEqual(
+    normalizeManagerProgress({ managerLevel: 'bad', experiencePoints: -1 }),
+    { managerLevel: 1, experiencePoints: 0, valid: false, reason: 'MANAGER_PROGRESS_INVALID' },
+  );
+  assert.deepEqual(
+    normalizeManagerProgress({ managerLevel: '2', experiencePoints: '50' }),
+    { managerLevel: 2, experiencePoints: 50, valid: true, reason: null },
+  );
+});
 
 test('manager XP consumes the current level threshold and advances exactly at the boundary', () => {
   assert.deepEqual(calculateManagerProgress({ managerLevel: 1, experiencePoints: 699 }, 1), {

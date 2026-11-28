@@ -9,6 +9,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, ReactNode, useMemo, useRef } from 'react';
 import { Player, StaffMember, StaffRole, generateScoutedPlayer, getRandomStartingSquad } from './moba-data';
 import { getMoscowTime, getGlobalSeasonInfo, getMoscowDateString, getLevelThreshold } from './time-utils';
+import { normalizeManagerProgress } from '@/app/lib/manager-progression';
 import { useUser, initializeFirebase } from '@/firebase';
 import { doc, onSnapshot, setDoc, serverTimestamp } from 'firebase/firestore';
 import { claimDailyRewardAction, purchasePremiumAction } from '@/app/actions/economy';
@@ -254,7 +255,8 @@ export function GameStateProvider({ children }: { children: ReactNode }) {
     const unsubscribe = onSnapshot(playerRef, (snapshot) => {
       if (snapshot.exists()) {
         const d = snapshot.data();
-        const incomingManagerLevel = Number(d.managerLevel ?? 1);
+        const normalizedManagerProgress = normalizeManagerProgress(d);
+        const incomingManagerLevel = normalizedManagerProgress.managerLevel;
         const previousManagerLevel = managerLevelSnapshotRef.current;
         if (previousManagerLevel?.uid === user.uid && Number.isSafeInteger(incomingManagerLevel) && incomingManagerLevel > previousManagerLevel.level) {
           toast({
@@ -264,7 +266,7 @@ export function GameStateProvider({ children }: { children: ReactNode }) {
         }
         managerLevelSnapshotRef.current = {
           uid: user.uid,
-          level: Number.isSafeInteger(incomingManagerLevel) && incomingManagerLevel >= 1 ? incomingManagerLevel : 1,
+          level: normalizedManagerProgress.managerLevel,
         };
         console.info('[PLAYER SYNC] profile snapshot received', {
           uid: user.uid,
@@ -273,6 +275,8 @@ export function GameStateProvider({ children }: { children: ReactNode }) {
         });
         saveToLocal({
           ...d,
+          managerLevel: normalizedManagerProgress.managerLevel,
+          experiencePoints: normalizedManagerProgress.experiencePoints,
           isTeamLoaded: true,
           isInitialSyncDone: true,
           credits: Number(d.credits),

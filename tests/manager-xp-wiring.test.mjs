@@ -50,12 +50,15 @@ test('tournament XP is awarded only after the processing token and profile are v
 
 test('corrupt manager XP cannot block primary daily, league, Cup or tournament transactions', () => {
   for (const source of [economy, league, universal, tournaments]) {
-    assert.doesNotMatch(source, /createManagerXpAward\\(/);
+    assert.doesNotMatch(source, /createManagerXpAward\(/);
     assert.match(source, /tryCreateManagerXpAward/);
   }
 });
 
 test('manager level changes are announced and progress is visible in home and top bar', () => {
+  assert.match(store, /normalizeManagerProgress\(d\)/);
+  assert.match(store, /managerLevel: normalizedManagerProgress\.managerLevel/);
+  assert.match(store, /experiencePoints: normalizedManagerProgress\.experiencePoints/);
   assert.match(store, /managerLevelSnapshotRef/);
   assert.match(store, /НОВЫЙ УРОВЕНЬ МЕНЕДЖЕРА/);
   assert.match(home, /managerXpProgress/);

@@ -38,6 +38,23 @@ function readManagerProgress(profile: ManagerProfileProgress) {
 }
 
 /**
+ * Normalize manager progress for display only. Corrupt legacy values fall back
+ * to a safe visual baseline; transactional awards still use strict validation.
+ */
+export function normalizeManagerProgress(profile: ManagerProfileProgress) {
+  try {
+    return { ...readManagerProgress(profile), valid: true as const, reason: null };
+  } catch (error) {
+    return {
+      managerLevel: 1,
+      experiencePoints: 0,
+      valid: false as const,
+      reason: error instanceof Error ? error.message : 'MANAGER_PROGRESS_INVALID',
+    };
+  }
+}
+
+/**
  * XP is progress within the current manager level. Each level consumes its own
  * threshold, preserving the existing profile contract and getLevelThreshold UI.
  */
