@@ -8,6 +8,7 @@ const league = read('../src/app/actions/autonomous-cycle.ts');
 const universal = read('../src/app/actions/universal-match-resolver.ts');
 const tournaments = read('../src/app/actions/tournament-system.ts');
 const trial = read('../src/app/actions/trial-match-resolver.ts');
+const friendly = read('../src/app/actions/friendly-matchmaking.ts');
 const store = read('../src/app/lib/store.tsx');
 const home = read('../src/app/page.tsx');
 const topBar = read('../src/components/game/TopBar.tsx');
@@ -62,6 +63,18 @@ test('trial match XP is committed with the terminal match report exactly once', 
   assert.match(trial, /if \(managerXpAward\) tx\.update\(profileRef, managerXpAward\.profilePatch\)/);
   assert.match(trial, /if \(managerXpAward\) transaction\.update\(profileRef, managerXpAward\.profilePatch\)/);
   assert.match(trial, /managerXpAwards/);
+});
+
+test('association matches award 20/30 XP and friendly challenges award 10/15 XP to both managers', () => {
+  assert.match(friendly, /const isAssociationMatch = collectionName === MATCH_COLLECTIONS\\.association \\|\\| matchType === 'basket'/);
+  assert.match(friendly, /getManagerMatchXp\\(competition, report\\.winnerId === String\\(match\\.hostId\\)\\)/);
+  assert.match(friendly, /getManagerMatchXp\\(competition, report\\.winnerId === String\\(match\\.challengerId\\)\\)/);
+  assert.match(friendly, /tryCreateManagerXpAward\\(homeData/);
+  assert.match(friendly, /tryCreateManagerXpAward\\(awayData/);
+  assert.match(friendly, /if \\(homeXpAward\\) t\\.update\\(homeSnap\\.ref/);
+  assert.match(friendly, /if \\(awayXpAward\\) t\\.update\\(awaySnap\\.ref/);
+  assert.match(friendly, /managerXpAwards/);
+  assert.match(friendly, /managerXpSkipped/);
 });
 
 test('manager level changes are announced and progress is visible in home and top bar', () => {

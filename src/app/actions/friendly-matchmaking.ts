@@ -13,6 +13,7 @@ import { assertMatchDocumentId } from '@/app/lib/match-id';
 import { assertCronSecret } from '@/lib/server-cron-auth';
 import { timestampToMillis } from '@/app/lib/timestamp-utils';
 import { isMatchReportFinished } from '@/app/lib/match-report-utils';
+import { getManagerMatchXp, isEligibleManagerProfile, tryCreateManagerXpAward } from '@/app/lib/manager-progression';
 
 const LOBBY_TTL_MS = 5 * 60 * 1000;
 const MATCH_DELAY_MS = 5 * 60 * 1000;
@@ -320,7 +321,7 @@ async function resolveFriendlyMatchDocument(matchId: string, collectionName: 'fr
     });
 
     const [scoreA, scoreB] = simulation.seriesScore.split('-').map(Number);
-    const report = {
+    const report: Record<string, any> = {
       id: matchId,
       type: matchType,
       matchType,
@@ -362,6 +363,26 @@ async function resolveFriendlyMatchDocument(matchId: string, collectionName: 'fr
       updatedAt: now,
     };
 
+    const isAssociationMatch = collectionName === MATCH_COLLECTIONS.association || matchType === 'basket';
+    const competition = isAssociationMatch ? 'association' : 'friendly';
+    const xpSource = isAssociationMatch ? 'association_match' : 'friendly_match';
+    const homeXpAttempt = isEligibleManagerProfile(String(match.hostId), homeData)
+      ? tryCreateManagerXpAward(homeData, getManagerMatchXp(competition, report.winnerId === String(match.hostId)), xpSource)
+      : null;
+    const awayXpAttempt = isEligibleManagerProfile(String(match.challengerId), awayData)
+      ? tryCreateManagerXpAward(awayData, getManagerMatchXp(competition, report.winnerId === String(match.challengerId)), xpSource)
+      : null;
+    const homeXpAward = homeXpAttempt?.award ?? null;
+    const awayXpAward = awayXpAttempt?.award ?? null;
+    report.managerXpAwards = [
+      ...(homeXpAward ? [{ userId: String(match.hostId), ...homeXpAward.receipt }] : []),
+      ...(awayXpAward ? [{ userId: String(match.challengerId), ...awayXpAward.receipt }] : []),
+    ];
+    report.managerXpSkipped = [
+      ...(homeXpAttempt?.skippedReason ? [{ userId: String(match.hostId), reason: homeXpAttempt.skippedReason }] : []),
+      ...(awayXpAttempt?.skippedReason ? [{ userId: String(match.challengerId), reason: awayXpAttempt.skippedReason }] : []),
+    ];
+
     // Read both CW queue records before any transaction writes. The queue is
     // the cross-mode availability lock; release it only after the canonical
     // report and friendly match have been committed as finished.
@@ -374,6 +395,8 @@ async function resolveFriendlyMatchDocument(matchId: string, collectionName: 'fr
 
     // The mode-specific match document is also its report. Do not mirror
     // friendly/CW records into the league collection.
+    if (homeXpAward) t.update(homeSnap.ref, homeXpAward.profilePatch);
+    if (awayXpAward) t.update(awaySnap.ref, awayXpAward.profilePatch);
     t.set(matchRef, {
       ...report,
       hostId: String(match.hostId),

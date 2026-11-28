@@ -1,7 +1,7 @@
 import { getLevelThreshold } from './time-utils';
 
-export type ManagerXpSource = 'league_match' | 'pyramid_cup_match' | 'tournament_match' | 'trial_match';
-export type ManagerCompetition = 'league' | 'pyramid_cup' | 'tournament' | 'trial';
+export type ManagerXpSource = 'league_match' | 'pyramid_cup_match' | 'tournament_match' | 'trial_match' | 'association_match' | 'friendly_match';
+export type ManagerCompetition = 'league' | 'pyramid_cup' | 'tournament' | 'trial' | 'association' | 'friendly';
 
 export const MANAGER_XP_REWARDS = {
   leagueMatch: 50,
@@ -12,6 +12,10 @@ export const MANAGER_XP_REWARDS = {
   tournamentWinBonus: 10,
   trialMatch: 5,
   trialWinBonus: 5,
+  associationMatch: 20,
+  associationWinBonus: 10,
+  friendlyMatch: 10,
+  friendlyWinBonus: 5,
 } as const;
 
 export type ManagerProfileProgress = {
@@ -144,6 +148,10 @@ export function getManagerMatchXp(competition: ManagerCompetition, won: boolean)
       return MANAGER_XP_REWARDS.tournamentMatch + (won ? MANAGER_XP_REWARDS.tournamentWinBonus : 0);
     case 'trial':
       return MANAGER_XP_REWARDS.trialMatch + (won ? MANAGER_XP_REWARDS.trialWinBonus : 0);
+    case 'association':
+      return MANAGER_XP_REWARDS.associationMatch + (won ? MANAGER_XP_REWARDS.associationWinBonus : 0);
+    case 'friendly':
+      return MANAGER_XP_REWARDS.friendlyMatch + (won ? MANAGER_XP_REWARDS.friendlyWinBonus : 0);
   }
 }
 

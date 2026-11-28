@@ -97,6 +97,10 @@ test('manager XP reward table follows match-only rewards for league, Cup, tourna
   assert.equal(getManagerMatchXp('tournament', true), 30);
   assert.equal(getManagerMatchXp('trial', false), 5);
   assert.equal(getManagerMatchXp('trial', true), 10);
+  assert.equal(getManagerMatchXp('association', false), 20);
+  assert.equal(getManagerMatchXp('association', true), 30);
+  assert.equal(getManagerMatchXp('friendly', false), 10);
+  assert.equal(getManagerMatchXp('friendly', true), 15);
 });
 
 test('manager level thresholds start at 700 XP and double at every level', () => {
