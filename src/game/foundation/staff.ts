@@ -1,9 +1,13 @@
 import { STAFF_BONUSES } from './config';
+import { readFoundationNonNegativeInteger, readFoundationStaff } from './guards';
 
 export function staffBonuses(staff?: Record<string, any>) {
+  // Bonuses must only be granted to persisted, hired staff with a canonical
+  // role and valid payroll record. A truthy but malformed slot is not staff.
+  const validatedStaff = readFoundationStaff(staff);
   const result = { training: 0, match: 0, scouting: 0, youth: 0, injury: 0, recovery: 0, economy: 0 };
   for (const [role, bonus] of Object.entries(STAFF_BONUSES)) {
-    if (!staff?.[role]) continue;
+    if (!validatedStaff[role]) continue;
     for (const [key, value] of Object.entries(bonus)) (result as any)[key] += Number(value || 0);
   }
   return result;
@@ -32,6 +36,10 @@ export function buildingStaffRequirement(building: string) {
 }
 
 export function staffCapacity(hq?: Record<string, any>) {
-  const level = Math.max(1, Number(hq?.hrLevel || 1));
+  const storedLevel = readFoundationNonNegativeInteger(
+    hq?.hrLevel,
+    'FOUNDATION_HR_LEVEL_INVALID',
+  );
+  const level = Math.max(1, storedLevel);
   return level + 1;
 }
