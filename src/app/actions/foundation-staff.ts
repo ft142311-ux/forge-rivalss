@@ -5,6 +5,7 @@ import { getAdminDb } from '@/lib/firebase-admin';
 import { getFoundationManagerRef } from './foundation-manager-ref';
 import { requireServerActor } from '@/lib/server-auth';
 import { generateStaffMember } from '@/app/lib/moba-data';
+import { staffCapacity } from '@/game/foundation/staff';
 import { FOUNDATION_COLLECTIONS } from '@/game/foundation/config';
 import { assertStagingSeasonOneResetNotInProgress } from '@/app/lib/staging-season-one-write-fence';
 import {
@@ -50,16 +51,6 @@ function cleanRole(value: unknown): StaffRole {
 
 function staffCount(staff: Record<string, any>) {
   return Object.values(staff || {}).filter(Boolean).length;
-}
-
-function staffCapacity(hq: any) {
-  const rawLevel = hq?.hrLevel;
-  const storedLevel = rawLevel === undefined || rawLevel === null
-    ? 1
-    : readFoundationNonNegativeInteger(rawLevel, 'FOUNDATION_HR_LEVEL_INVALID');
-  const level = Math.max(1, storedLevel);
-  // HR level 1: recruiter + one specialist. Each further level adds one place.
-  return level + 1;
 }
 
 function buildingAvailable(data: any, building: string) {
@@ -202,3 +193,64 @@ export async function hireFoundationStaffAction(idToken: string, roleValue: stri
     return { success: false, error: errorOf(e) };
   }
 }
+
+/**
+ * Dismiss an active staff member without changing the club balance.
+ * The slot is cleared atomically, so the next daily payroll and bonus
+ * calculation stop including this employee. A separate staff-history record
+ * preserves the identity and final salary for audit/history screens.
+ */
+export async function dismissFoundationStaffAction(idToken: string, roleValue: string) {
+  try {
+    const { uid } = await requireServerActor(idToken);
+    const role = cleanRole(roleValue);
+    const db = getAdminDb();
+    const managerRef = getFoundationManagerRef(db, uid);
+    const historyRef = db.collection(FOUNDATION_COLLECTIONS.staff).doc();
+    const dismissedAt = new Date().toISOString();
+
+    return await db.runTransaction(async t => {
+      await assertStagingSeasonOneResetNotInProgress(t, db);
+      const managerSnap = await t.get(managerRef);
+      if (!managerSnap.exists) throw new Error('PLAYER_NOT_FOUND');
+
+      const data = managerSnap.data() || {};
+      const staff = { ...readFoundationStaff(data.staff) } as Record<string, any>;
+      const current = staff[role];
+
+      // Concurrent/retried requests are harmless: only the transaction that
+      // observes the occupied slot writes the history record.
+      if (!current) return { success: true, role, alreadyDismissed: true };
+
+      const member = readFoundationStaffMember(current, role);
+      staff[role] = null;
+
+      t.update(managerRef, {
+        staff,
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+      t.create(historyRef, {
+        kind: 'staff_history',
+        event: 'dismissed',
+        userId: uid,
+        staffId: member.id,
+        role,
+        salaryAtDismissal: member.salary,
+        hiredAt: member.hiredAt ?? null,
+        dismissedAt,
+        createdAt: FieldValue.serverTimestamp(),
+      });
+
+      return {
+        success: true,
+        role,
+        staffId: member.id,
+        salaryAtDismissal: member.salary,
+        dismissedAt,
+      };
+    });
+  } catch (e) {
+    return { success: false, error: errorOf(e) };
+  }
+}
+
