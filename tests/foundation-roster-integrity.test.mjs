@@ -142,13 +142,17 @@ test('daily cycle preserves an existing resolved event and never overwrites payr
   const eventRead = process.indexOf('t.get(eventRef)');
   const firstWrite = process.indexOf('t.update(ref, updates)');
 
+  const payrollRead = process.indexOf('t.get(txRef)');
   assert.ok(cycleRead >= 0 && cycleRead < firstWrite, 'cycle marker must be read before any writes');
   assert.ok(eventRead >= 0 && eventRead < firstWrite, 'existing event must be read before any writes');
+  assert.ok(payrollRead >= 0 && payrollRead < firstWrite, 'payroll receipt must be read before any writes');
   assert.ok(cycle.includes('type Firestore'), 'daily cycle must import the Admin Firestore type');
   assert.ok(cycle.includes("from 'firebase-admin/firestore'"), 'daily cycle must import Firestore from firebase-admin');
   assert.match(process, /async function processManager\(db: Firestore, ref: DocumentReference, now: Date\)/, 'transaction database must be typed so get() selects the document overload');
-  assert.doesNotMatch(process, /t\.get\((?:cycleRef|eventRef) as any\)/, 'document references must retain DocumentSnapshot typing');
-  assert.match(process, /const event = existingEventRecord\?\.event \|\| generatedEvent/);
+  assert.doesNotMatch(process, /t\.get\((?:cycleRef|eventRef|txRef) as any\)/, 'document references must retain DocumentSnapshot typing');
+  assert.match(process, /const \[cycleSnap, eventSnap, txSnap\]/);
+  assert.match(process, /assertFoundationDailyPayrollLedger\(cycleRecord, payrollRecord, ref\.id, periodKey\)/);
+  assert.match(process, /if \(cycleSnap\.exists \|\| txSnap\.exists\)/);
   assert.match(process, /if \(event && !eventSnap\.exists\)\s*\{\s*t\.create\(eventRef/);
   assert.match(process, /t\.create\(cycleRef/);
   assert.match(process, /t\.create\(txRef/);
@@ -156,6 +160,7 @@ test('daily cycle preserves an existing resolved event and never overwrites payr
   assert.doesNotMatch(process, /t\.set\(eventRef/);
 
   const resolver = actionBlock(advanced, 'resolveFoundationEventAction');
-  assert.match(resolver, /if \(eventData\.resolvedAt\) return \{ alreadyResolved: true \}/);
+  assert.match(resolver, /assertFoundationDailyEventRecord\(freshEvent\.data\(\) \|\| \{\}, uid, period\)/);
+  assert.match(resolver, /eventData\.resolvedAt !== undefined && eventData\.resolvedAt !== null/);
   assert.match(resolver, /resolvedAt: FieldValue\.serverTimestamp\(\), applied: choice === 'accept'/);
 });
