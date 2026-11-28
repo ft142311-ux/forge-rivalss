@@ -1,3 +1,5 @@
+import type { FoundationPlayerState } from './types';
+
 function isRecord(value: unknown): value is Record<string, any> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
@@ -7,7 +9,7 @@ function isRecord(value: unknown): value is Record<string, any> {
  * stored data into an empty squad. Player IDs are required and unique because
  * lineup, training, match and market flows all address players by ID.
  */
-export function readFoundationRoster(value: unknown): Record<string, any>[] {
+export function readFoundationRoster(value: unknown): FoundationPlayerState[] {
   if (!Array.isArray(value)) throw new Error('FOUNDATION_ROSTER_INVALID');
 
   const ids = new Set<string>();
@@ -22,7 +24,7 @@ export function readFoundationRoster(value: unknown): Record<string, any>[] {
     ids.add(id);
   }
 
-  return value as Record<string, any>[];
+  return value as FoundationPlayerState[];
 }
 
 /**

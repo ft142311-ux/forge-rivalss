@@ -22,7 +22,7 @@ test('daily foundation cycle validates roster, staff payroll and balances before
   const firstWrite = action.indexOf('t.update(ref, updates)');
   assert.ok(staffRead >= 0 && staffSalaryRead > staffRead && totalGuard > staffSalaryRead &&
     balanceRead > totalGuard && firstWrite > balanceRead);
-  assert.match(action, /readFoundationRoster\(data\.ownedPlayers\)/);
+  assert.match(cycle, /readFoundationRoster\(data\.ownedPlayers\)/);
   assert.match(action, /readFoundationNonNegativeInteger\(data\.crystals, 'FOUNDATION_BALANCE_INVALID'\)/);
   assert.match(guards, /Number\.isSafeInteger\(parsed\) \|\| parsed < 0/);
   assert.match(guards, /value\.trim\(\)\.length === 0/);
