@@ -7,6 +7,7 @@ import { assertStagingSeasonOneResetNotInProgress } from '@/app/lib/staging-seas
 import { getFoundationManagerRef } from './foundation-manager-ref';
 import { FOUNDATION_COLLECTIONS } from '@/game/foundation/config';
 import { readFoundationRoster } from '@/game/foundation/guards';
+import { assertFoundationDailyEventRecord } from '@/game/foundation/daily-cycle-integrity';
 import { expectedAttendance } from '@/game/foundation/fans';
 import { chooseGoldenPlayer, scoreGoldenPlayer } from '@/game/foundation/awards';
 import { setFoundationTrainingFocusAction as setFoundationTrainingFocusActionCanonical } from './foundation-management';
@@ -49,11 +50,11 @@ export async function resolveFoundationEventAction(idToken: string, eventId: str
       await assertStagingSeasonOneResetNotInProgress(t, db);
       const [freshEvent, freshManager] = await Promise.all([t.get(ref), t.get(managerRef)]);
       if (!freshEvent.exists) throw new Error('EVENT_NOT_FOUND');
-      const eventData = freshEvent.data() || {};
-      if (eventData.resolvedAt) return { alreadyResolved: true };
-      if (String(eventData.event?.id || '') !== normalizedEventId) throw new Error('EVENT_MISMATCH');
+      const eventData = assertFoundationDailyEventRecord(freshEvent.data() || {}, uid, period);
+      if (eventData.resolvedAt !== undefined && eventData.resolvedAt !== null) return { alreadyResolved: true };
+      if (eventData.event.id !== normalizedEventId) throw new Error('EVENT_MISMATCH');
       if (!freshManager.exists) throw new Error('PLAYER_NOT_FOUND');
-      const effects = choice === 'accept' ? (eventData.event?.effects || {}) : {};
+      const effects = choice === 'accept' ? eventData.event.effects : {};
       const managerData = freshManager.data() || {};
       const players = readFoundationRoster(managerData.ownedPlayers);
       const next = players.map((p: any) => ({

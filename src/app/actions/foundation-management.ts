@@ -14,6 +14,7 @@ import { isFoundationSkill } from '@/game/foundation/skills';
 import { resolveTrainingFinishTimeMs } from '@/app/lib/player-training-guards';
 import { assertStagingSeasonOneResetNotInProgress } from '@/app/lib/staging-season-one-write-fence';
 import { readFoundationNonNegativeInteger, readFoundationRoster, readFoundationStaff } from '@/game/foundation/guards';
+import { assertFoundationDailyEventRecord } from '@/game/foundation/daily-cycle-integrity';
 import type { FoundationRole } from '@/game/foundation/types';
 
 function errorOf(e: any) { return e?.message || 'FOUNDATION_ACTION_FAILED'; }
@@ -313,7 +314,10 @@ export async function getFoundationDailyEventAction(idToken: string) {
     return await db.runTransaction(async t => {
       await assertStagingSeasonOneResetNotInProgress(t, db);
       const [snap, managerSnap] = await Promise.all([t.get(ref), t.get(managerRef)]);
-      if (snap.exists) return { success: true, date: period, event: snap.data() };
+      if (snap.exists) {
+        const event = assertFoundationDailyEventRecord(snap.data() || {}, uid, period);
+        return { success: true, date: period, event };
+      }
       if (!managerSnap.exists) return { success: true, date: period, event: null };
       const data = managerSnap.data() || {};
       const event = deterministicDailyEvent({ ...data, id: uid } as any, period);

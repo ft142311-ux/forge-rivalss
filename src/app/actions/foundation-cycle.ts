@@ -11,6 +11,7 @@ import { deterministicDailyEvent } from '@/game/foundation/events';
 import { clamp } from '@/game/foundation/player-system';
 import { assertStagingSeasonOneResetNotInProgress } from '@/app/lib/staging-season-one-write-fence';
 import { readFoundationNonNegativeInteger, readFoundationRoster, readFoundationStaff, readFoundationStaffSalary } from '@/game/foundation/guards';
+import { assertFoundationDailyEventRecord, assertFoundationDailyPayrollLedger } from '@/game/foundation/daily-cycle-integrity';
 
 const CYCLE_VERSION = 1;
 const STAFF_SALARY_SHARE = 1;
@@ -52,23 +53,37 @@ async function processManager(db: Firestore, ref: DocumentReference, now: Date) 
     const data = snap.data() || {};
     const cycleRef = db.collection(FOUNDATION_COLLECTIONS.cycles).doc(`${ref.id}_${periodKey}`);
     const eventRef = db.collection(FOUNDATION_COLLECTIONS.events).doc(`${ref.id}_${periodKey}`);
-    const [cycleSnap, eventSnap] = await Promise.all([
+    const txRef = db.collection(FOUNDATION_COLLECTIONS.economy).doc(`foundation_salary_${ref.id}_${periodKey}`);
+    const [cycleSnap, eventSnap, txSnap] = await Promise.all([
       t.get(cycleRef),
       t.get(eventRef),
+      t.get(txRef),
     ]);
-    if (cycleSnap.exists) return { processed: false };
 
-    // A daily event may already have been created and resolved by the player
-    // before a delayed/retried cron reaches this manager. Never reset that
-    // resolution while processing payroll.
-    const existingEventRecord = eventSnap.exists ? eventSnap.data() || {} : null;
-    if (existingEventRecord && (
-      (existingEventRecord.userId !== undefined && existingEventRecord.userId !== ref.id) ||
-      (existingEventRecord.date !== undefined && existingEventRecord.date !== periodKey) ||
-      !existingEventRecord.event ||
-      typeof existingEventRecord.event.id !== 'string'
-    )) {
-      throw new Error('FOUNDATION_EVENT_RECORD_INVALID');
+    // Validate persisted event state even when the event was created before
+    // the delayed cron. A partially resolved event must never be applied again.
+    const existingEventRecord = eventSnap.exists
+      ? assertFoundationDailyEventRecord(eventSnap.data() || {}, ref.id, periodKey)
+      : null;
+
+    // The marker and its receipt are committed atomically. If only one exists,
+    // or their financial snapshots disagree, do not silently treat the day as
+    // complete and do not debit the manager a second time.
+    if (cycleSnap.exists || txSnap.exists) {
+      if (!cycleSnap.exists || !txSnap.exists) {
+        throw new Error('FOUNDATION_PAYROLL_LEDGER_MISMATCH');
+      }
+      const cycleRecord = cycleSnap.data() || {};
+      const payrollRecord = txSnap.data() || {};
+      assertFoundationDailyPayrollLedger(cycleRecord, payrollRecord, ref.id, periodKey);
+      if (
+        typeof cycleRecord.eventId === 'string' &&
+        cycleRecord.eventId.length > 0 &&
+        (!existingEventRecord || existingEventRecord.event.id !== cycleRecord.eventId)
+      ) {
+        throw new Error('FOUNDATION_DAILY_EVENT_LEDGER_MISMATCH');
+      }
+      return { processed: false };
     }
 
     const players = normalizePlayers(readFoundationRoster(data.ownedPlayers));
@@ -114,8 +129,7 @@ async function processManager(db: Firestore, ref: DocumentReference, now: Date) 
     t.update(ref, updates);
     // Create-only markers make a partially missing cycle marker or receipt
     // fail closed instead of overwriting a prior payroll transaction.
-    t.create(cycleRef, { userId: ref.id, date: periodKey, paid, playerSalary: grossPlayerSalary, staffSalary, eventId: event?.id || null, createdAt: FieldValue.serverTimestamp() });
-    const txRef = db.collection(FOUNDATION_COLLECTIONS.economy).doc(`foundation_salary_${ref.id}_${periodKey}`);
+    t.create(cycleRef, { userId: ref.id, date: periodKey, paid, unpaid, playerSalary: grossPlayerSalary, staffSalary, amountDue: totalDue, eventId: event?.id || null, createdAt: FieldValue.serverTimestamp() });
     t.create(txRef, {
       userId: ref.id,
       amount: -paid,
@@ -128,6 +142,7 @@ async function processManager(db: Firestore, ref: DocumentReference, now: Date) 
       paid,
       unpaid,
       periodKey,
+      eventId: event?.id || null,
       balanceBefore: before,
       balanceAfter: before - paid,
       timestamp: FieldValue.serverTimestamp(),
