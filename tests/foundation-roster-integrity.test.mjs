@@ -138,10 +138,13 @@ test('daily cycle preserves an existing resolved event and never overwrites payr
   const processStart = cycle.indexOf('async function processManager');
   const processEnd = cycle.indexOf('\nexport async function runFoundationDailyCycle', processStart);
   const process = cycle.slice(processStart, processEnd);
-  const eventRead = process.indexOf('t.get(eventRef as any)');
+  const cycleRead = process.indexOf('t.get(cycleRef)');
+  const eventRead = process.indexOf('t.get(eventRef)');
   const firstWrite = process.indexOf('t.update(ref, updates)');
 
+  assert.ok(cycleRead >= 0 && cycleRead < firstWrite, 'cycle marker must be read before any writes');
   assert.ok(eventRead >= 0 && eventRead < firstWrite, 'existing event must be read before any writes');
+  assert.doesNotMatch(process, /t\\.get\\((?:cycleRef|eventRef) as any\\)/, 'document references must retain DocumentSnapshot typing');
   assert.match(process, /const event = existingEventRecord\?\.event \|\| generatedEvent/);
   assert.match(process, /if \(event && !eventSnap\.exists\)\s*\{\s*t\.create\(eventRef/);
   assert.match(process, /t\.create\(cycleRef/);
